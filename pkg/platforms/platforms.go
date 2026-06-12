@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -145,6 +146,7 @@ type CmdEnv struct {
 	// for work tied to service lifetime rather than the current launcher lifetime.
 	ServiceCtx        context.Context
 	WaitForMediaReady func(context.Context) error
+	PlaybackManager   audio.PlaybackManager
 	Playlist          playlists.PlaylistController
 	Cfg               *config.Instance
 	Database          *database.Database

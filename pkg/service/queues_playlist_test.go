@@ -91,6 +91,8 @@ type servicePlaybackRecorder struct {
 	played  []string
 	stopped []string
 	paused  []string
+	resumed []string
+	states  map[string]audio.PlaybackState
 }
 
 func (r *servicePlaybackRecorder) Play(slot, _ string, _ audio.PlaybackOptions) error {
@@ -108,7 +110,8 @@ func (r *servicePlaybackRecorder) Pause(slot string) error {
 	return nil
 }
 
-func (*servicePlaybackRecorder) Resume(string) error {
+func (r *servicePlaybackRecorder) Resume(slot string) error {
+	r.resumed = append(r.resumed, slot)
 	return nil
 }
 
@@ -120,8 +123,11 @@ func (*servicePlaybackRecorder) Seek(string, time.Duration) error {
 	return nil
 }
 
-func (*servicePlaybackRecorder) State(string) audio.PlaybackState {
-	return audio.PlaybackState{}
+func (r *servicePlaybackRecorder) State(slot string) audio.PlaybackState {
+	if r.states == nil {
+		return audio.PlaybackState{}
+	}
+	return r.states[slot]
 }
 
 func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
@@ -306,6 +312,45 @@ func TestHandlePlaylist_BackgroundPausePausesPlayback(t *testing.T) {
 
 	assert.Equal(t, []string{mediaslot.Background}, recorder.paused)
 	assert.False(t, svc.State.GetBackgroundPlaylist().Playing)
+}
+
+func TestHandlePlaylist_BackgroundPlayResumesPausedPlayback(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{states: map[string]audio.PlaybackState{
+		mediaslot.Background: {Path: "track.mp3", Paused: true},
+	}}
+	svc.PlaybackManager = recorder
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	background.Playing = false
+	svc.State.SetBackgroundPlaylist(background)
+
+	playing := playlists.Play(*background)
+	handlePlaylist(svc, playing, nil)
+
+	assert.Equal(t, []string{mediaslot.Background}, recorder.resumed)
+	assert.Empty(t, recorder.played)
+	assert.True(t, svc.State.GetBackgroundPlaylist().Playing)
+}
+
+func TestHandlePlaylist_BackgroundPlayRelaunchesWhenNoPlaybackSource(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	background.Playing = false
+	svc.State.SetBackgroundPlaylist(background)
+
+	playing := playlists.Play(*background)
+	handlePlaylist(svc, playing, nil)
+
+	assert.Empty(t, recorder.resumed)
+	assert.True(t, svc.State.GetBackgroundPlaylist().Playing)
 }
 
 func TestStopNativePlaybackBeforePrimaryCommandStopsAndClearsPrimaryNativeAudio(t *testing.T) {

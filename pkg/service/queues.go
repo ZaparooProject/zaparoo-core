@@ -44,6 +44,46 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const maxLoggedPlaylistItems = 10
+
+type playlistLogEntry struct {
+	ID            string                   `json:"id"`
+	Name          string                   `json:"name"`
+	Slot          string                   `json:"slot"`
+	Index         int                      `json:"index"`
+	Playing       bool                     `json:"playing"`
+	Clear         bool                     `json:"clear,omitempty"`
+	Loop          bool                     `json:"loop,omitempty"`
+	LoopOne       bool                     `json:"loopOne,omitempty"`
+	ForceRelaunch bool                     `json:"forceRelaunch,omitempty"`
+	Total         int                      `json:"total"`
+	Showing       int                      `json:"showing"`
+	Truncated     int                      `json:"truncated,omitempty"`
+	Items         []playlists.PlaylistItem `json:"items"`
+}
+
+func playlistForLog(pls *playlists.Playlist) any {
+	if pls == nil {
+		return nil
+	}
+	showing := min(len(pls.Items), maxLoggedPlaylistItems)
+	return playlistLogEntry{
+		ID:            pls.ID,
+		Name:          pls.Name,
+		Slot:          pls.Slot,
+		Index:         pls.Index,
+		Playing:       pls.Playing,
+		Clear:         pls.Clear,
+		Loop:          pls.Loop,
+		LoopOne:       pls.LoopOne,
+		ForceRelaunch: pls.ForceRelaunch,
+		Total:         len(pls.Items),
+		Showing:       showing,
+		Truncated:     len(pls.Items) - showing,
+		Items:         pls.Items[:showing],
+	}
+}
+
 func runTokenZapScript(
 	svc *ServiceContext,
 	token tokens.Token, //nolint:gocritic // single-use parameter in service function
@@ -135,6 +175,7 @@ func runTokenZapScript(
 			svc.DB,
 			svc.State.LauncherManager(),
 			func(ctx context.Context) error { return waitForMediaReady(ctx, svc, mediaReadyGen) },
+			svc.PlaybackManager,
 			&cmdEnv,
 		)
 		if err != nil {
@@ -369,7 +410,7 @@ func handlePlaylist(
 			svc.State.SetActivePlaylist(pls)
 		}
 		if pls.Playing {
-			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
+			log.Info().Any("pls", playlistForLog(pls)).Msg("setting new playlist, launching token")
 			if slot == mediaslot.Background {
 				svc.State.SetBackgroundAutoPaused(false)
 			}
@@ -383,7 +424,7 @@ func handlePlaylist(
 				launchPlaylistMedia(svc, pls, activePlaylist, player)
 			}()
 		} else {
-			log.Info().Any("pls", pls).Msg("setting new playlist")
+			log.Info().Any("pls", playlistForLog(pls)).Msg("setting new playlist")
 		}
 		return
 	default:
@@ -402,7 +443,16 @@ func handlePlaylist(
 			svc.State.SetActivePlaylist(pls)
 		}
 		if pls.Playing {
-			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
+			if slot == mediaslot.Background && !activePlaylist.Playing && pls.Current() == activePlaylist.Current() &&
+				svc.PlaybackManager != nil && svc.PlaybackManager.State(mediaslot.Background).Path != "" {
+				log.Info().Any("pls", playlistForLog(pls)).Msg("resuming background playlist playback")
+				svc.State.SetBackgroundAutoPaused(false)
+				if err := svc.PlaybackManager.Resume(mediaslot.Background); err != nil {
+					log.Warn().Err(err).Msg("failed to resume background playlist playback")
+				}
+				return
+			}
+			log.Info().Any("pls", playlistForLog(pls)).Msg("updating playlist, launching token")
 			if slot == mediaslot.Background {
 				svc.State.SetBackgroundAutoPaused(false)
 			}
@@ -421,7 +471,7 @@ func handlePlaylist(
 					log.Warn().Err(err).Msg("failed to pause background playlist playback")
 				}
 			}
-			log.Info().Any("pls", pls).Msg("updating playlist")
+			log.Info().Any("pls", playlistForLog(pls)).Msg("updating playlist")
 		}
 		return
 	}

@@ -24,8 +24,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -336,6 +338,26 @@ func bgAdvArgs() zapscript.AdvArgs {
 	return aa.With(zapscript.KeySlot, "background")
 }
 
+type playlistPlaybackStub struct {
+	state      audio.PlaybackState
+	seekSlot   string
+	seekOffset time.Duration
+	seekCalled bool
+}
+
+func (*playlistPlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*playlistPlaybackStub) Stop(_ string) error                             { return nil }
+func (*playlistPlaybackStub) Pause(_ string) error                            { return nil }
+func (*playlistPlaybackStub) Resume(_ string) error                           { return nil }
+func (*playlistPlaybackStub) TogglePause(_ string) error                      { return nil }
+func (p *playlistPlaybackStub) State(_ string) audio.PlaybackState            { return p.state }
+func (p *playlistPlaybackStub) Seek(slot string, offset time.Duration) error {
+	p.seekCalled = true
+	p.seekSlot = slot
+	p.seekOffset = offset
+	return nil
+}
+
 // TestCommandSlot_InheritFromPlaylistSlot verifies that commandSlot inherits the
 // slot from the active playlist when no AdvArgs slot is set.
 func TestCommandSlot_InheritFromPlaylistSlot(t *testing.T) {
@@ -383,6 +405,26 @@ func TestCmdPlaylistPlay_BackgroundSlotResumesBackgroundPlaylist(t *testing.T) {
 
 	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
 		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs(), Args: []string{}},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Playing)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestCmdPlaylistPlay_FallsBackToBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+	pls.Playing = false
+
+	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{}},
 		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
 	})
 	require.NoError(t, err)
@@ -446,6 +488,38 @@ func TestCmdPlaylistNext_NoActivePlaylist(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCmdPlaylistNext_FallsBackToBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 1, result.Playlist.Index)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestCmdPlaylistNext_ExplicitPrimaryDoesNotFallback(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+	var aa zapscript.AdvArgs
+	aa = aa.With(zapscript.KeySlot, mediaslot.Primary)
+
+	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: aa},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.Error(t, err)
+}
+
 func TestCmdPlaylistPrevious_DecrementsIndex(t *testing.T) {
 	t.Parallel()
 
@@ -471,6 +545,57 @@ func TestCmdPlaylistPrevious_WrapsAround(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Playlist.Index, "previous from first item wraps to last")
+	<-queue
+}
+
+func TestCmdPlaylistPrevious_RestartsCurrentAudioTrack(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+	playback := &playlistPlaybackStub{state: audio.PlaybackState{
+		Path:     "track.mp3",
+		Position: 5 * time.Second,
+		Duration: time.Minute,
+		Playing:  true,
+	}}
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		PlaybackManager: playback,
+		Playlist:        playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.PlaylistChanged)
+	assert.True(t, playback.seekCalled)
+	assert.Equal(t, mediaslot.Primary, playback.seekSlot)
+	assert.Equal(t, -5*time.Second, playback.seekOffset)
+	select {
+	case queued := <-queue:
+		t.Fatalf("unexpected playlist queue update: %#v", queued)
+	default:
+	}
+}
+
+func TestCmdPlaylistPrevious_NearStartGoesToPreviousTrack(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+	playback := &playlistPlaybackStub{state: audio.PlaybackState{
+		Path:     "track.mp3",
+		Position: time.Second,
+		Duration: time.Minute,
+		Playing:  true,
+	}}
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		PlaybackManager: playback,
+		Playlist:        playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.False(t, playback.seekCalled)
+	assert.Equal(t, 1, result.Playlist.Index)
 	<-queue
 }
 

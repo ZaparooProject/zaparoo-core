@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -42,7 +43,11 @@ import (
 	"github.com/spf13/afero"
 )
 
-const plsHeader = "[playlist]"
+const (
+	plsHeader                        = "[playlist]"
+	maxLoggedPlaylistItems           = 10
+	playlistPreviousRestartThreshold = 3 * time.Second
+)
 
 func isPlsFile(path string) bool {
 	return filepath.Ext(strings.ToLower(path)) == ".pls"
@@ -69,6 +74,25 @@ type ArgPlaylist struct {
 	Items []ArgPlaylistItem `json:"items"`
 }
 
+type playlistItemsLog struct {
+	Total     int                      `json:"total"`
+	Showing   int                      `json:"showing"`
+	Truncated int                      `json:"truncated,omitempty"`
+	Items     []playlists.PlaylistItem `json:"items"`
+}
+
+func playlistItemsForLog(items []playlists.PlaylistItem) any {
+	if len(items) <= maxLoggedPlaylistItems {
+		return items
+	}
+	return playlistItemsLog{
+		Total:     len(items),
+		Showing:   maxLoggedPlaylistItems,
+		Truncated: len(items) - maxLoggedPlaylistItems,
+		Items:     items[:maxLoggedPlaylistItems],
+	}
+}
+
 func activePlaylistForSlot(env *platforms.CmdEnv, slot string) *playlists.Playlist {
 	if slot == mediaslot.Background {
 		return env.Playlist.Background
@@ -82,6 +106,44 @@ func commandSlot(env *platforms.CmdEnv) (string, error) {
 		return "", fmt.Errorf("normalize media slot: %w", err)
 	}
 	return slot, nil
+}
+
+func explicitCommandSlot(env *platforms.CmdEnv) (string, bool, error) {
+	rawSlot, ok := env.Cmd.AdvArgs.Raw()[string(zapscript.KeySlot)]
+	if !ok {
+		return "", false, nil
+	}
+	slot, err := mediaslot.Normalize(rawSlot)
+	if err != nil {
+		return "", true, fmt.Errorf("normalize media slot: %w", err)
+	}
+	return slot, true, nil
+}
+
+func commandSlotOrActiveFallback(env *platforms.CmdEnv) (string, error) {
+	slot, explicit, err := explicitCommandSlot(env)
+	if err != nil || explicit {
+		return slot, err
+	}
+	if env.Playlist.Active == nil && env.Playlist.Background != nil {
+		return mediaslot.Background, nil
+	}
+	return mediaslot.Primary, nil
+}
+
+func restartCurrentPlaylistTrack(env *platforms.CmdEnv, slot string) (bool, error) {
+	if env.PlaybackManager == nil {
+		return false, nil
+	}
+	state := env.PlaybackManager.State(slot)
+	if state.Path == "" || state.Position <= playlistPreviousRestartThreshold {
+		return false, nil
+	}
+	if err := env.PlaybackManager.Seek(slot, -state.Position); err != nil {
+		return false, fmt.Errorf("restart playlist track: %w", err)
+	}
+	log.Info().Str("slot", slot).Dur("position", state.Position).Msg("restarting current playlist track")
+	return true, nil
 }
 
 func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
@@ -267,6 +329,7 @@ func readPlaylistFolder(cfg *config.Instance, pl platforms.Platform, path string
 	}
 
 	files := make([]string, 0)
+	var matcher *helpers.LauncherMatcher
 	for _, file := range dir {
 		if file.IsDir() || filepath.Ext(file.Name()) == "" {
 			continue
@@ -275,7 +338,10 @@ func readPlaylistFolder(cfg *config.Instance, pl platforms.Platform, path string
 			continue
 		}
 		fullPath := filepath.Join(path, file.Name())
-		if _, err := helpers.FindLauncher(cfg, pl, fullPath); err != nil {
+		if matcher == nil {
+			matcher = helpers.NewLauncherMatcher(cfg, pl)
+		}
+		if _, err := matcher.FindLauncher(fullPath); err != nil {
 			continue
 		}
 		files = append(files, fullPath)
@@ -381,13 +447,16 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	hasPlaylistArg := len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != ""
 	slot, err := commandSlot(&env)
+	if !hasPlaylistArg {
+		slot, err = commandSlotOrActiveFallback(&env)
+	}
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 	active := activePlaylistForSlot(&env, slot)
-	if active != nil &&
-		(len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "") {
+	if active != nil && !hasPlaylistArg {
 		log.Info().Msg("starting paused playlist")
 		pls := playlists.Play(*active)
 		if queueErr := queuePlaylistUpdate(&env, pls); queueErr != nil {
@@ -404,7 +473,7 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Any("items", pls.Items).Msgf("play playlist: %v", env.Cmd.Args)
+	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("play playlist: %v", env.Cmd.Args)
 	pls = playlists.Play(*pls)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
@@ -423,7 +492,7 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Any("items", pls.Items).Msgf("load playlist: %s", env.Cmd.Args)
+	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("load playlist: %s", env.Cmd.Args)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -438,6 +507,9 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	var pls *playlists.Playlist
 	slot, err := commandSlot(&env)
+	if len(env.Cmd.Args) == 0 {
+		slot, err = commandSlotOrActiveFallback(&env)
+	}
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -501,7 +573,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		})
 	}
 
-	log.Info().Any("items", pls.Items).Msgf("open playlist: %s", env.Cmd.Args)
+	log.Info().Any("items", playlistItemsForLog(pls.Items)).Msgf("open playlist: %s", env.Cmd.Args)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -524,7 +596,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	slot, err := commandSlot(&env)
+	slot, err := commandSlotOrActiveFallback(&env)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -546,13 +618,18 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	slot, err := commandSlot(&env)
+	slot, err := commandSlotOrActiveFallback(&env)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
+	}
+	if restarted, restartErr := restartCurrentPlaylistTrack(&env, slot); restartErr != nil {
+		return platforms.CmdResult{}, restartErr
+	} else if restarted {
+		return platforms.CmdResult{}, nil
 	}
 
 	pls := playlists.Previous(*active)
@@ -568,7 +645,7 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	slot, err := commandSlot(&env)
+	slot, err := commandSlotOrActiveFallback(&env)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -606,7 +683,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	slot, err := commandSlot(&env)
+	slot, err := commandSlotOrActiveFallback(&env)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -639,7 +716,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	slot, err := commandSlot(&env)
+	slot, err := commandSlotOrActiveFallback(&env)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
