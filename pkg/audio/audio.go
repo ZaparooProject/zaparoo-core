@@ -233,6 +233,12 @@ func (s *oneshotSource) onDrained() {
 	}
 }
 
+// fail cancels playback and fires the drain callback, used when the device fails to open.
+func (s *oneshotSource) fail() {
+	s.cancel()
+	s.onDrained()
+}
+
 // decodeWAV decodes a WAV reader fully into PCM samples and closes the reader.
 func decodeWAV(r io.ReadCloser) ([][2]float64, error) {
 	streamer, format, err := wav.Decode(r)

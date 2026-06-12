@@ -89,16 +89,70 @@ func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bo
 }
 
 type drainCallbackRegistrar interface {
-	SetDrainCallback(slot string, fn func())
+	SetDrainCallback(slot string, fn func(natural bool))
 }
 
-func wireNativeAudioDrainCallbacks(playbackManager drainCallbackRegistrar, st *state.State) {
-	playbackManager.SetDrainCallback(mediaslot.Primary, func() {
-		st.SetActiveMedia(nil)
+func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
+	pm.SetDrainCallback(mediaslot.Primary, func(_ bool) {
+		svc.State.SetActiveMedia(nil)
 	})
-	playbackManager.SetDrainCallback(mediaslot.Background, func() {
-		st.SetBackgroundMedia(nil)
+	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
+		if !natural {
+			return
+		}
+		advanceBackgroundPlaylist(svc)
 	})
+}
+
+// advanceBackgroundPlaylist is called when a background track ends naturally.
+// It advances to the next track according to the playlist's repeat mode, or clears
+// the background state when the playlist has finished and repeat is off.
+func advanceBackgroundPlaylist(svc *ServiceContext) {
+	pls := svc.State.GetBackgroundPlaylist()
+	if pls == nil {
+		// Single-track background (not a playlist) — just clear media state.
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+
+	var next *playlists.Playlist
+	switch {
+	case pls.LoopOne:
+		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
+		next = &playlists.Playlist{
+			ID:            pls.ID,
+			Name:          pls.Name,
+			Slot:          pls.Slot,
+			Items:         pls.Items,
+			Index:         pls.Index,
+			Playing:       true,
+			Loop:          pls.Loop,
+			LoopOne:       pls.LoopOne,
+			ForceRelaunch: true,
+		}
+	case pls.Index+1 < len(pls.Items):
+		// More tracks remain — advance normally.
+		next = playlists.Next(*pls)
+		next.Playing = true
+	case pls.Loop:
+		// Last track finished and repeat=all — wrap back to the start.
+		next = playlists.Next(*pls) // Next already wraps to 0
+		next.Playing = true
+		if len(pls.Items) <= 1 {
+			// Single-item loop: same index after wrap, need ForceRelaunch.
+			next.ForceRelaunch = true
+		}
+	default:
+		// repeat=off, end of playlist — clear state and stop.
+		svc.State.SetBackgroundPlaylist(nil)
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+
+	select {
+	case svc.PlaylistQueue <- next:
+	case <-svc.State.GetContext().Done():
+	}
 }
 
 func Start(
@@ -181,7 +235,7 @@ func Start(
 		ConfirmQueue:        cfq,
 		BackgroundWG:        backgroundWG,
 	}
-	wireNativeAudioDrainCallbacks(playbackManager, st)
+	wireNativeAudioDrainCallbacks(playbackManager, svc)
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {

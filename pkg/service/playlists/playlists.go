@@ -34,6 +34,13 @@ type Playlist struct {
 	Index   int
 	Playing bool
 	Clear   bool // signals the queue handler to remove the active playlist for this slot
+	// Loop and LoopOne control end-of-playlist behaviour set at load time.
+	// Loop wraps back to the start; LoopOne repeats the current track.
+	Loop    bool
+	LoopOne bool
+	// ForceRelaunch bypasses the playlistNeedsUpdate dedup so the same track can be
+	// relaunched (needed for LoopOne and single-item Loop).
+	ForceRelaunch bool
 }
 
 func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
@@ -59,6 +66,8 @@ func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
@@ -74,6 +83,8 @@ func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves 
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
@@ -94,6 +105,8 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
@@ -105,6 +118,8 @@ func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		Items:   p.Items,
 		Index:   p.Index,
 		Playing: true,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
@@ -116,6 +131,8 @@ func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves imm
 		Items:   p.Items,
 		Index:   p.Index,
 		Playing: false,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 

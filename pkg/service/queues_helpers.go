@@ -126,9 +126,13 @@ func injectCommands(cmds []zapscript.Command, afterIndex int, newCmds []zapscrip
 
 // playlistNeedsUpdate determines if a playlist update requires action.
 // Returns false if the current item and playing state are unchanged.
+// ForceRelaunch bypasses dedup so the same track can be re-launched (e.g. repeat=one).
 func playlistNeedsUpdate(incoming, active *playlists.Playlist) bool {
 	if incoming == nil || active == nil {
 		return true // nil cases handled separately by caller
+	}
+	if incoming.ForceRelaunch {
+		return true
 	}
 	// No update needed if current item and playing state are the same
 	if incoming.Current() == active.Current() && incoming.Playing == active.Playing {

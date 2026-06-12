@@ -619,4 +619,16 @@ func TestPlaylistNeedsUpdate(t *testing.T) {
 
 		assert.True(t, result)
 	})
+
+	t.Run("ForceRelaunch bypasses same-state dedup", func(t *testing.T) {
+		t.Parallel()
+
+		incoming := makePlaylist("**launch:game.rom", true)
+		incoming.ForceRelaunch = true
+		active := makePlaylist("**launch:game.rom", true)
+
+		result := playlistNeedsUpdate(incoming, active)
+
+		assert.True(t, result, "ForceRelaunch must defeat same-state dedup")
+	})
 }

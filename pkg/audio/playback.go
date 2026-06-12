@@ -77,20 +77,21 @@ type PlaybackManager interface {
 type LongformPlaybackManager struct {
 	primary        *streamingSource
 	background     *streamingSource
-	drainCallbacks map[string]func()
+	drainCallbacks map[string]func(natural bool)
 	mu             syncutil.Mutex
 }
 
 // NewLongformPlaybackManager creates a new LongformPlaybackManager.
 func NewLongformPlaybackManager() *LongformPlaybackManager {
 	return &LongformPlaybackManager{
-		drainCallbacks: make(map[string]func()),
+		drainCallbacks: make(map[string]func(natural bool)),
 	}
 }
 
-// SetDrainCallback registers fn to be called when slot drains naturally (track ends).
+// SetDrainCallback registers fn to be called when a slot drains.
+// natural is true when the track reached EOF on its own; false when stopped or replaced.
 // This is not part of the PlaybackManager interface and is called at service startup.
-func (m *LongformPlaybackManager) SetDrainCallback(slot string, fn func()) {
+func (m *LongformPlaybackManager) SetDrainCallback(slot string, fn func(natural bool)) {
 	m.mu.Lock()
 	m.drainCallbacks[slot] = fn
 	m.mu.Unlock()
@@ -119,7 +120,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 
 	// Wire the drain callback on the source before registering with the device,
 	// so the callback is in place before the source could possibly drain.
-	src.onDrain = func() {
+	src.onDrain = func(natural bool) {
 		m.mu.Lock()
 		if m.getSourceLocked(slot) == src {
 			m.setSourceLocked(slot, nil)
@@ -128,7 +129,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		m.mu.Unlock()
 		_ = drainCb // capture for correctness; use the live callback from the map
 		if cb != nil {
-			cb()
+			cb(natural)
 		}
 	}
 
@@ -247,14 +248,11 @@ func (m *LongformPlaybackManager) setSourceLocked(slot string, src *streamingSou
 }
 
 func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
-	switch slot {
-	case "", mediaslot.Primary:
-		return mediaslot.Primary, nil
-	case mediaslot.Background:
-		return mediaslot.Background, nil
-	default:
-		return "", fmt.Errorf("unsupported media slot: %s", slot)
+	key, err := mediaslot.Normalize(slot)
+	if err != nil {
+		return "", fmt.Errorf("normalize slot: %w", err)
 	}
+	return key, nil
 }
 
 // streamingSource is a long-form audio source backed by a ring buffer prefilled by a
@@ -263,7 +261,7 @@ func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 type streamingSource struct {
 	resampler    beep.Streamer
 	decoder      beep.StreamSeekCloser
-	onDrain      func()
+	onDrain      func(natural bool)
 	file         *os.File
 	wakeCh       chan struct{}
 	doneCh       chan struct{}
@@ -408,7 +406,10 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 				s.mu.Unlock()
 			}
 			if !ok {
-				// Decoder exhausted; let ring drain naturally.
+				if err := s.decoder.Err(); err != nil {
+					log.Warn().Err(err).Str("path", s.path).Msg("audio decode error")
+				}
+				// Decoder exhausted or errored; let ring drain naturally.
 				s.mu.Lock()
 				s.eof = true
 				s.mu.Unlock()
@@ -469,11 +470,29 @@ func (s *streamingSource) isActive() bool {
 	return active
 }
 
-// onDrained is called by the device manager goroutine when this source drains.
-func (s *streamingSource) onDrained() {
-	if s.onDrain != nil {
-		s.onDrain()
+// fail cancels the prefetch goroutine and fires the drain callback, used when the
+// device fails to open. Does not block waiting for the goroutine to exit.
+func (s *streamingSource) fail() {
+	s.mu.Lock()
+	s.stopped = true
+	cancelFn := s.cancelFn
+	s.mu.Unlock()
+	if cancelFn != nil {
+		cancelFn()
 	}
+	s.onDrained()
+}
+
+// onDrained is called by the device manager goroutine when this source drains.
+// It determines whether the drain was natural (track reached EOF) or explicit (Stop/replace).
+func (s *streamingSource) onDrained() {
+	if s.onDrain == nil {
+		return
+	}
+	s.mu.Lock()
+	natural := !s.stopped
+	s.mu.Unlock()
+	s.onDrain(natural)
 }
 
 // setPaused sets the paused flag.

@@ -100,10 +100,21 @@ func TestStreamingSource_OnDrained(t *testing.T) {
 	// No callback: no panic.
 	s.onDrained()
 
-	called := false
-	s.onDrain = func() { called = true }
+	var gotNatural *bool
+	s.onDrain = func(natural bool) { gotNatural = &natural }
+
+	// stopped=false → natural drain
+	s.stopped = false
 	s.onDrained()
-	assert.True(t, called)
+	require.NotNil(t, gotNatural)
+	assert.True(t, *gotNatural)
+
+	// stopped=true → explicit stop
+	gotNatural = nil
+	s.stopped = true
+	s.onDrained()
+	require.NotNil(t, gotNatural)
+	assert.False(t, *gotNatural)
 }
 
 func TestStreamingSource_SetPaused(t *testing.T) {
@@ -293,7 +304,7 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 
 	m := NewLongformPlaybackManager()
 	drainCalls := 0
-	m.SetDrainCallback(mediaslot.Primary, func() { drainCalls++ })
+	m.SetDrainCallback(mediaslot.Primary, func(_ bool) { drainCalls++ })
 
 	require.NoError(t, m.Play("", firstPath, PlaybackOptions{}))
 	first := m.primary
@@ -440,8 +451,8 @@ func TestLongformPlaybackManager_SetDrainCallback(t *testing.T) {
 	m := NewLongformPlaybackManager()
 
 	var primaryCalled, backgroundCalled bool
-	m.SetDrainCallback(mediaslot.Primary, func() { primaryCalled = true })
-	m.SetDrainCallback(mediaslot.Background, func() { backgroundCalled = true })
+	m.SetDrainCallback(mediaslot.Primary, func(_ bool) { primaryCalled = true })
+	m.SetDrainCallback(mediaslot.Background, func(_ bool) { backgroundCalled = true })
 
 	m.mu.Lock()
 	pcb := m.drainCallbacks[mediaslot.Primary]
@@ -451,8 +462,8 @@ func TestLongformPlaybackManager_SetDrainCallback(t *testing.T) {
 	require.NotNil(t, pcb)
 	require.NotNil(t, bcb)
 
-	pcb()
-	bcb()
+	pcb(true)
+	bcb(true)
 	assert.True(t, primaryCalled)
 	assert.True(t, backgroundCalled)
 }

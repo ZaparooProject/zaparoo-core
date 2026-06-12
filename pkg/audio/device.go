@@ -152,6 +152,24 @@ func (d *sharedDevice) closeDevice() {
 	}
 }
 
+// failAllSources snapshots all registered sources, clears the list, clears opening,
+// and fires fail() on each in a goroutine. Called when the device fails to open so
+// prefetch goroutines exit and media state is cleared instead of leaking silently.
+func (d *sharedDevice) failAllSources() {
+	d.devMu.Lock()
+	srcs := make([]mixSource, len(d.sources))
+	copy(srcs, d.sources)
+	d.sources = d.sources[:0]
+	d.opening = false
+	d.devMu.Unlock()
+
+	for _, src := range srcs {
+		if f, ok := src.(interface{ fail() }); ok {
+			go f.fail()
+		}
+	}
+}
+
 // open initialises the malgo context and device, then runs the manager goroutine.
 // Runs in its own goroutine; waits for prevDone before opening to serialise ALSA access.
 func (d *sharedDevice) open() {
@@ -159,9 +177,7 @@ func (d *sharedDevice) open() {
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Error().Any("panic", rec).Msg("recovered panic in audio device open")
-			d.devMu.Lock()
-			d.opening = false
-			d.devMu.Unlock()
+			d.failAllSources()
 		}
 	}()
 
@@ -190,16 +206,12 @@ func (d *sharedDevice) open() {
 	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize audio context")
-		d.devMu.Lock()
-		d.opening = false
-		d.devMu.Unlock()
+		d.failAllSources()
 		return
 	}
 	if malgoCtx == nil {
 		log.Warn().Msg("malgo context is nil after initialization")
-		d.devMu.Lock()
-		d.opening = false
-		d.devMu.Unlock()
+		d.failAllSources()
 		return
 	}
 
@@ -234,9 +246,7 @@ func (d *sharedDevice) open() {
 	})
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize audio device")
-		d.devMu.Lock()
-		d.opening = false
-		d.devMu.Unlock()
+		d.failAllSources()
 		cancelFn()
 		go d.cleanup(done, malgoCtx, nil)
 		return
@@ -245,9 +255,7 @@ func (d *sharedDevice) open() {
 	if err := device.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start audio device")
 		device.Uninit()
-		d.devMu.Lock()
-		d.opening = false
-		d.devMu.Unlock()
+		d.failAllSources()
 		cancelFn()
 		go d.cleanup(done, malgoCtx, nil)
 		return
@@ -328,7 +336,18 @@ func (d *sharedDevice) cleanup(
 	d.devMu.Lock()
 	d.device = nil
 	d.malgoCtx = nil
+	// A source may have registered while a real device was tearing down (register saw
+	// device!=nil and skipped open). Re-trigger open so it isn't silently orphaned.
+	// Guard on device!=nil: init-failure paths call cleanup with device==nil (nothing ran).
+	needOpen := device != nil && len(d.sources) > 0 && !d.opening
+	if needOpen {
+		d.opening = true
+	}
 	d.devMu.Unlock()
+
+	if needOpen {
+		go d.open()
+	}
 }
 
 // onSamples is the malgo audio callback. It mixes all registered sources into the output

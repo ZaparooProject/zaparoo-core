@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -164,17 +165,17 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 }
 
 type testDrainCallbackRegistrar struct {
-	callbacks map[string]func()
+	callbacks map[string]func(natural bool)
 }
 
-func (r *testDrainCallbackRegistrar) SetDrainCallback(slot string, fn func()) {
+func (r *testDrainCallbackRegistrar) SetDrainCallback(slot string, fn func(natural bool)) {
 	if r.callbacks == nil {
-		r.callbacks = make(map[string]func())
+		r.callbacks = make(map[string]func(natural bool))
 	}
 	r.callbacks[slot] = fn
 }
 
-func TestWireNativeAudioDrainCallbacksClearsMediaState(t *testing.T) {
+func TestWireNativeAudioDrainCallbacks_ClearsMediaOnNaturalDrain(t *testing.T) {
 	t.Parallel()
 
 	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
@@ -197,15 +198,219 @@ func TestWireNativeAudioDrainCallbacksClearsMediaState(t *testing.T) {
 	require.NotNil(t, st.ActiveMedia())
 	require.NotNil(t, st.BackgroundMedia())
 
+	plq := make(chan *playlists.Playlist, 1)
+	svc := &ServiceContext{State: st, PlaylistQueue: plq}
 	registrar := &testDrainCallbackRegistrar{}
-	wireNativeAudioDrainCallbacks(registrar, st)
+	wireNativeAudioDrainCallbacks(registrar, svc)
 
 	require.Contains(t, registrar.callbacks, mediaslot.Primary)
 	require.Contains(t, registrar.callbacks, mediaslot.Background)
-	registrar.callbacks[mediaslot.Primary]()
-	registrar.callbacks[mediaslot.Background]()
+	// Primary callback clears ActiveMedia regardless of natural.
+	registrar.callbacks[mediaslot.Primary](true)
+	// Background callback with natural=true and no playlist clears BackgroundMedia.
+	registrar.callbacks[mediaslot.Background](true)
 	assert.Nil(t, st.ActiveMedia())
 	assert.Nil(t, st.BackgroundMedia())
+}
+
+func TestWireNativeAudioDrainCallbacks_NonNaturalBackgroundNoOp(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "background.mp3", "Background", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, st.BackgroundMedia())
+
+	plq := make(chan *playlists.Playlist, 1)
+	svc := &ServiceContext{State: st, PlaylistQueue: plq}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	// natural=false (explicit stop/replace) must not clear or advance anything.
+	registrar.callbacks[mediaslot.Background](false)
+	assert.NotNil(t, st.BackgroundMedia())
+}
+
+// newAdvanceTestSvc creates a minimal ServiceContext for advanceBackgroundPlaylist tests.
+func newAdvanceTestSvc(t *testing.T) (svc *ServiceContext, cleanup func()) {
+	t.Helper()
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	cleanup = func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	}
+	svc = &ServiceContext{
+		State:         st,
+		PlaylistQueue: make(chan *playlists.Playlist, 2),
+	}
+	return svc, cleanup
+}
+
+// makeMultiTrackPlaylist returns a playlist at the given index with 3 items.
+func makeMultiTrackPlaylist(idx int, loop, loopOne bool) *playlists.Playlist {
+	return &playlists.Playlist{
+		ID:      "bg-list",
+		Name:    "bg",
+		Slot:    mediaslot.Background,
+		Items:   []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}, {ZapScript: "c"}},
+		Index:   idx,
+		Playing: true,
+		Loop:    loop,
+		LoopOne: loopOne,
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatOffAdvancesWithinPlaylist(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(0, false, false) // idx=0, 2 more tracks remain
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	require.NotNil(t, svc.State.GetBackgroundPlaylist())
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 1, got.Index, "should advance to index 1")
+		assert.True(t, got.Playing)
+		assert.False(t, got.ForceRelaunch)
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatOffStopsAtEnd(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(2, false, false) // idx=2 is last
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	assert.Nil(t, svc.State.GetBackgroundPlaylist(), "playlist must be cleared")
+	assert.Nil(t, svc.State.BackgroundMedia(), "background media must be cleared")
+	select {
+	case got := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected enqueue: %+v", got)
+	default:
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatAllWrapsToFirst(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(2, true, false) // idx=2 is last, Loop=true
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 0, got.Index, "should wrap back to index 0")
+		assert.True(t, got.Playing)
+		assert.True(t, got.Loop)
+		assert.False(t, got.ForceRelaunch)
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatOneSameTrack(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := makeMultiTrackPlaylist(1, false, true) // idx=1, LoopOne=true
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 1, got.Index, "should stay on same index")
+		assert.True(t, got.LoopOne)
+		assert.True(t, got.ForceRelaunch, "ForceRelaunch must be set to defeat dedup")
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_RepeatAllSingleItemUsesForceRelaunch(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	pls := &playlists.Playlist{
+		ID:      "single",
+		Name:    "single",
+		Slot:    mediaslot.Background,
+		Items:   []playlists.PlaylistItem{{ZapScript: "only-track"}},
+		Index:   0,
+		Playing: true,
+		Loop:    true,
+	}
+	svc.State.SetBackgroundPlaylist(pls)
+
+	advanceBackgroundPlaylist(svc)
+
+	select {
+	case got := <-svc.PlaylistQueue:
+		assert.Equal(t, 0, got.Index, "single-item loop stays at index 0")
+		assert.True(t, got.Loop)
+		assert.True(t, got.ForceRelaunch, "single-item loop needs ForceRelaunch")
+	case <-time.After(time.Second):
+		t.Fatal("timeout: expected playlist on queue")
+	}
+}
+
+func TestAdvanceBackgroundPlaylist_NilPlaylistClearsBackgroundMedia(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+
+	// No playlist set — single-track background.
+	svc.State.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, svc.State.BackgroundMedia())
+
+	advanceBackgroundPlaylist(svc)
+
+	assert.Nil(t, svc.State.BackgroundMedia(), "single-track end must clear background media")
+	select {
+	case got := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected enqueue: %+v", got)
+	default:
+	}
 }
 
 func TestRebuildStartupSlugSearchCache_SkipsWhenLoaded(t *testing.T) {
