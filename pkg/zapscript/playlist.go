@@ -75,10 +75,10 @@ type ArgPlaylist struct {
 }
 
 type playlistItemsLog struct {
+	Items     []playlists.PlaylistItem `json:"items"`
 	Total     int                      `json:"total"`
 	Showing   int                      `json:"showing"`
 	Truncated int                      `json:"truncated,omitempty"`
-	Items     []playlists.PlaylistItem `json:"items"`
 }
 
 func playlistItemsForLog(items []playlists.PlaylistItem) any {
@@ -108,16 +108,16 @@ func commandSlot(env *platforms.CmdEnv) (string, error) {
 	return slot, nil
 }
 
-func explicitCommandSlot(env *platforms.CmdEnv) (string, bool, error) {
+func explicitCommandSlot(env *platforms.CmdEnv) (slot string, explicit bool, err error) {
 	rawSlot, ok := env.Cmd.AdvArgs.Raw()[string(zapscript.KeySlot)]
 	if !ok {
 		return "", false, nil
 	}
-	slot, err := mediaslot.Normalize(rawSlot)
+	normalizedSlot, err := mediaslot.Normalize(rawSlot)
 	if err != nil {
 		return "", true, fmt.Errorf("normalize media slot: %w", err)
 	}
-	return slot, true, nil
+	return normalizedSlot, true, nil
 }
 
 func commandSlotOrActiveFallback(env *platforms.CmdEnv) (string, error) {
