@@ -94,6 +94,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 	if slot == mediaslot.Background && params.Action == platforms.ControlStop {
 		env.State.SetBackgroundMedia(nil)
+		env.State.SetBackgroundPlaylist(nil)
 	}
 
 	return NoContent{}, nil

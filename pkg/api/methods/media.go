@@ -868,7 +868,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 				Slot:             mediaslot.Background,
 				LauncherControls: backgroundMedia.LauncherControls,
 			},
-			ZapScript: backgroundMedia.Path,
+			ZapScript: database.BuildTitleZapScript(backgroundMedia.SystemID, backgroundMedia.Name, nil),
 		})
 	}
 

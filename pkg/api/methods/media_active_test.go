@@ -472,7 +472,7 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	drainNotifications(t, ns)
 
 	background := models.NewActiveMedia(
-		platforms.NativeAudioLauncherID, "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID,
+		"Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID,
 	)
 	st.SetBackgroundMedia(background)
 
@@ -497,7 +497,7 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	assert.Equal(t, mediaslot.Background, resp.Active[0].Slot)
 	assert.Equal(t, "song.mp3", resp.Active[0].Path)
 	assert.Equal(t, "Song", resp.Active[0].Name)
-	assert.Equal(t, "song.mp3", resp.Active[0].ZapScript)
+	assert.Equal(t, "@Audio/Song", resp.Active[0].ZapScript)
 
 	mockMediaDB.AssertExpectations(t)
 }

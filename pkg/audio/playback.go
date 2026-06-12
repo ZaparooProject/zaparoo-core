@@ -120,7 +120,6 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	m.mu.Lock()
 	old := m.getSourceLocked(slot)
 	m.setSourceLocked(slot, src)
-	drainCb := m.drainCallbacks[key]
 	m.mu.Unlock()
 
 	// Wire the drain callback on the source before registering with the device,
@@ -132,7 +131,6 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		}
 		cb := m.drainCallbacks[key]
 		m.mu.Unlock()
-		_ = drainCb // capture for correctness; use the live callback from the map
 		if cb != nil {
 			cb(natural)
 		}
