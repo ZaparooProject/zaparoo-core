@@ -93,7 +93,10 @@ type drainCallbackRegistrar interface {
 }
 
 func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
-	pm.SetDrainCallback(mediaslot.Primary, func(_ bool) {
+	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
+		if !natural {
+			return
+		}
 		svc.State.SetActiveMedia(nil)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {

@@ -92,13 +92,18 @@ func NewLongformPlaybackManager() *LongformPlaybackManager {
 // natural is true when the track reached EOF on its own; false when stopped or replaced.
 // This is not part of the PlaybackManager interface and is called at service startup.
 func (m *LongformPlaybackManager) SetDrainCallback(slot string, fn func(natural bool)) {
+	key, err := m.slotKey(slot)
+	if err != nil {
+		return
+	}
 	m.mu.Lock()
-	m.drainCallbacks[slot] = fn
+	m.drainCallbacks[key] = fn
 	m.mu.Unlock()
 }
 
 func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) error {
-	if _, err := m.slotKey(slot); err != nil {
+	key, err := m.slotKey(slot)
+	if err != nil {
 		return err
 	}
 
@@ -115,7 +120,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	m.mu.Lock()
 	old := m.getSourceLocked(slot)
 	m.setSourceLocked(slot, src)
-	drainCb := m.drainCallbacks[slot]
+	drainCb := m.drainCallbacks[key]
 	m.mu.Unlock()
 
 	// Wire the drain callback on the source before registering with the device,
@@ -125,7 +130,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		if m.getSourceLocked(slot) == src {
 			m.setSourceLocked(slot, nil)
 		}
-		cb := m.drainCallbacks[slot]
+		cb := m.drainCallbacks[key]
 		m.mu.Unlock()
 		_ = drainCb // capture for correctness; use the live callback from the map
 		if cb != nil {

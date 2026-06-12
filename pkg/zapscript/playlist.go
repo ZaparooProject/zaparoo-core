@@ -493,7 +493,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 			name = "> " + name
 		}
 
-		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "||**playlist.play"
+		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "?slot=" + slot + "||**playlist.play?slot=" + slot
 
 		items = append(items, widgetmodels.PickerItem{
 			Name:      name,
