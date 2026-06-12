@@ -40,7 +40,7 @@ func Normalize(raw string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", Primary:
 		return Primary, nil
-	case Background:
+	case Background, "bg":
 		return Background, nil
 	default:
 		return "", fmt.Errorf("unsupported media slot: %s", raw)

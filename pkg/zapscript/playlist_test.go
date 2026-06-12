@@ -648,6 +648,100 @@ func TestLoadPlaylist_JSONArg(t *testing.T) {
 	<-queue
 }
 
+// repeatAdvArgs returns AdvArgs with the repeat key set.
+func repeatAdvArgs(repeat string) zapscript.AdvArgs {
+	var aa zapscript.AdvArgs
+	return aa.With(zapscript.KeyRepeat, repeat)
+}
+
+// jsonPlaylistArg is a minimal playlist JSON arg for repeat tests.
+const jsonPlaylistArg = `{"id":"rpt","name":"Repeat Test",` +
+	`"items":[{"name":"T1","zapscript":"**t1"},{"name":"T2","zapscript":"**t2"}]}`
+
+func TestLoadPlaylist_RepeatOff_DefaultBehaviourNoLoop(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Loop, "absent repeat means no loop")
+	assert.False(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_RepeatAll_SetsLoop(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: repeatAdvArgs("all")},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Loop)
+	assert.False(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_RepeatOne_SetsLoopOne(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: repeatAdvArgs("one")},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Loop)
+	assert.True(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_RepeatAllWithShuffle_BothApply(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	var aa zapscript.AdvArgs
+	aa = aa.With(zapscript.KeyRepeat, "all")
+	aa = aa.With(zapscript.KeyMode, "shuffle")
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: aa},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Loop, "repeat=all should set Loop")
+	assert.False(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_InvalidRepeat_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	_, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: repeatAdvArgs("forever")},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.Error(t, err, "invalid repeat value must be rejected")
+}
+
 func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 	t.Parallel()
 

@@ -39,6 +39,8 @@ func TestNormalize(t *testing.T) {
 		{name: "primary", raw: "primary", want: mediaslot.Primary},
 		{name: "background", raw: "background", want: mediaslot.Background},
 		{name: "trims case", raw: " Background ", want: mediaslot.Background},
+		{name: "bg alias", raw: "bg", want: mediaslot.Background},
+		{name: "bg alias uppercase", raw: " BG ", want: mediaslot.Background},
 	}
 
 	for _, tt := range tests {

@@ -326,6 +326,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 		}
 		pls.Slot = slot
+		pls.Loop = zapscript.IsRepeatAll(args.Repeat)
+		pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
 		return pls, nil
 	}
 
@@ -367,6 +369,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 	}
 	pls.Slot = slot
+	pls.Loop = zapscript.IsRepeatAll(args.Repeat)
+	pls.LoopOne = zapscript.IsRepeatOne(args.Repeat)
 	return pls, nil
 }
 
