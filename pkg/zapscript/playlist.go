@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -251,7 +252,7 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 	return playlistItems, nil
 }
 
-func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
+func readPlaylistFolder(cfg *config.Instance, pl platforms.Platform, path string) ([]playlists.PlaylistItem, error) {
 	if path == "" {
 		return nil, errors.New("no playlist path specified")
 	}
@@ -273,7 +274,11 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
 		if strings.HasPrefix(file.Name(), ".") {
 			continue
 		}
-		files = append(files, filepath.Join(path, file.Name()))
+		fullPath := filepath.Join(path, file.Name())
+		if _, err := helpers.FindLauncher(cfg, pl, fullPath); err != nil {
+			continue
+		}
+		files = append(files, fullPath)
 	}
 
 	if len(files) == 0 {
@@ -343,7 +348,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 			return nil, err
 		}
 	} else {
-		items, err = readPlaylistFolder(path)
+		items, err = readPlaylistFolder(env.Cfg, pl, path)
 		if err != nil {
 			return nil, err
 		}

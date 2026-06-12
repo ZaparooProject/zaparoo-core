@@ -74,6 +74,7 @@ type State struct {
 	activeMediaReadyCh    chan struct{}
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
+	onMediaStopHook       func()
 	launcherManager       *LauncherManager
 	bootUUID              string
 	lastScanned           tokens.Token
@@ -84,6 +85,7 @@ type State struct {
 	stopService           bool
 	restartRequested      bool
 	runZapScript          bool
+	backgroundAutoPaused  bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -191,6 +193,24 @@ func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStartHook = hook
+}
+
+func (s *State) SetOnMediaStopHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onMediaStopHook = hook
+}
+
+func (s *State) BackgroundAutoPaused() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundAutoPaused
+}
+
+func (s *State) SetBackgroundAutoPaused(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backgroundAutoPaused = v
 }
 
 // GetReader returns the Reader for a given ReaderID.
@@ -454,8 +474,9 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		return
 	}
 
-	// Capture hook reference inside lock
+	// Capture hook references inside lock
 	hook := s.onMediaStartHook
+	stopHook := s.onMediaStopHook
 
 	if media == nil {
 		// media has stopped
@@ -474,6 +495,9 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
+		if stopHook != nil {
+			go stopHook()
+		}
 		return
 	}
 

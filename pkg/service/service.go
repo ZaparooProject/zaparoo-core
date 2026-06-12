@@ -247,6 +247,17 @@ func Start(
 		}
 	})
 
+	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnMediaStopHook(func() {
+		if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
+			return
+		}
+		if resumeErr := svc.PlaybackManager.Resume(mediaslot.Background); resumeErr != nil {
+			log.Warn().Err(resumeErr).Msg("failed to resume background audio after game stop")
+		}
+		svc.State.SetBackgroundAutoPaused(false)
+	})
+
 	log.Info().Msg("loading mapping files")
 	mappingsStarted := time.Now()
 	err = cfg.LoadMappings(filepath.Join(helpers.DataDir(pl), config.MappingsDir))

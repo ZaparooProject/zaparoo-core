@@ -30,9 +30,10 @@ type Systems struct {
 }
 
 type SystemsDefault struct {
-	System     string `toml:"system"`
-	Launcher   string `toml:"launcher,omitempty"`
-	BeforeExit string `toml:"before_exit,omitempty"`
+	PauseOnLaunch *bool  `toml:"pause_on_launch,omitempty"`
+	System        string `toml:"system"`
+	Launcher      string `toml:"launcher,omitempty"`
+	BeforeExit    string `toml:"before_exit,omitempty"`
 }
 
 func (c *Instance) SystemDefaults() []SystemsDefault {
@@ -62,4 +63,14 @@ func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) 
 		}
 	}
 	return SystemsDefault{}, false
+}
+
+// AudioPauseOnLaunch reports whether background music should be paused when a
+// game launches on the primary slot. Defaults to true when unset.
+func (c *Instance) AudioPauseOnLaunch() bool {
+	entry, ok := c.LookupSystemDefaults(systemdefs.SystemAudio)
+	if !ok || entry.PauseOnLaunch == nil {
+		return true
+	}
+	return *entry.PauseOnLaunch
 }

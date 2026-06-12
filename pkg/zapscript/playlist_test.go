@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -576,15 +577,27 @@ func TestCmdPlaylistPause_BackgroundSlot(t *testing.T) {
 	<-queue
 }
 
+// initTestLauncherCache seeds GlobalLauncherCache with a launcher that accepts
+// the given extensions (no folder restriction) and cleans up after the test.
+// Call from non-parallel tests only, since the cache is global.
+func initTestLauncherCache(t *testing.T, extensions []string) {
+	t.Helper()
+	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "test-launcher", Extensions: extensions},
+	})
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(nil) })
+}
+
 func TestReadPlaylistFolder_ReturnsItems(t *testing.T) {
-	t.Parallel()
+	initTestLauncherCache(t, []string{".nes", ".sfc", ".md"})
 
 	dir := t.TempDir()
 	for _, name := range []string{"alpha.nes", "beta.sfc", "gamma.md"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte{}, 0o600))
 	}
 
-	items, err := readPlaylistFolder(dir)
+	mp := mocks.NewMockPlatform()
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 	assert.Equal(t, "alpha", items[0].Name)
@@ -592,22 +605,52 @@ func TestReadPlaylistFolder_ReturnsItems(t *testing.T) {
 }
 
 func TestReadPlaylistFolder_HiddenFilesSkipped(t *testing.T) {
-	t.Parallel()
+	initTestLauncherCache(t, []string{".rom"})
 
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".hidden"), []byte{}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "visible.rom"), []byte{}, 0o600))
 
-	items, err := readPlaylistFolder(dir)
+	mp := mocks.NewMockPlatform()
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "visible", items[0].Name)
 }
 
+func TestReadPlaylistFolder_NonPlayableFilesFiltered(t *testing.T) {
+	initTestLauncherCache(t, []string{".mp3", ".ogg", ".flac"})
+
+	dir := t.TempDir()
+	for _, name := range []string{"track1.mp3", "track2.ogg", "cover.jpg", "notes.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte{}, 0o600))
+	}
+
+	mp := mocks.NewMockPlatform()
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	require.NoError(t, err)
+	require.Len(t, items, 2, "only .mp3 and .ogg should survive the launcher filter")
+	assert.Equal(t, "track1", items[0].Name)
+	assert.Equal(t, "track2", items[1].Name)
+}
+
+func TestReadPlaylistFolder_AllFilesFilteredReturnsError(t *testing.T) {
+	initTestLauncherCache(t, []string{".mp3"})
+
+	dir := t.TempDir()
+	// Only cover art — no matching audio files
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte{}, 0o600))
+
+	mp := mocks.NewMockPlatform()
+	_, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no valid files found")
+}
+
 func TestReadPlaylistFolder_EmptyDir(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder(t.TempDir())
+	_, err := readPlaylistFolder(nil, nil, t.TempDir())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no valid files found")
 }
@@ -745,7 +788,7 @@ func TestLoadPlaylist_InvalidRepeat_ReturnsError(t *testing.T) {
 func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder("")
+	_, err := readPlaylistFolder(nil, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no playlist path specified")
 }
@@ -753,6 +796,6 @@ func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 func TestReadPlaylistFolder_NonexistentPath(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder(filepath.Join("nonexistent", "path", "12345"))
+	_, err := readPlaylistFolder(nil, nil, filepath.Join("nonexistent", "path", "12345"))
 	require.Error(t, err)
 }

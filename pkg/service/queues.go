@@ -116,6 +116,9 @@ func runTokenZapScript(
 		if stopErr := stopNativePlaybackBeforePrimaryCommand(svc, cmd, pls); stopErr != nil {
 			return stopErr
 		}
+		if pauseErr := pauseBackgroundForPrimaryLaunch(svc, cmd, pls); pauseErr != nil {
+			return pauseErr
+		}
 
 		result, err := zapscript.RunCommand(
 			svc.State.GetContext(),
@@ -214,6 +217,44 @@ func stopNativePlaybackBeforePrimaryCommand(
 		return fmt.Errorf("stop native audio before primary command: %w", err)
 	}
 	svc.State.SetActiveMedia(nil)
+	return nil
+}
+
+func pauseBackgroundForPrimaryLaunch(
+	svc *ServiceContext,
+	cmd gozapscript.Command,
+	activePlaylist *playlists.Playlist,
+) error {
+	if svc.PlaybackManager == nil {
+		return nil
+	}
+	if !svc.Config.AudioPauseOnLaunch() {
+		return nil
+	}
+	if !zapscript.IsMediaLaunchingCommand(cmd.Name) {
+		return nil
+	}
+
+	slot := cmd.AdvArgs.Get(gozapscript.KeySlot)
+	if slot == "" && activePlaylist != nil && activePlaylist.Slot != "" {
+		slot = activePlaylist.Slot
+	}
+	normalizedSlot, err := mediaslot.Normalize(slot)
+	if err != nil {
+		return fmt.Errorf("normalize media slot: %w", err)
+	}
+	if normalizedSlot != mediaslot.Primary {
+		return nil
+	}
+
+	if !svc.PlaybackManager.State(mediaslot.Background).Playing {
+		return nil
+	}
+
+	if err := svc.PlaybackManager.Pause(mediaslot.Background); err != nil {
+		return fmt.Errorf("pause background audio before primary launch: %w", err)
+	}
+	svc.State.SetBackgroundAutoPaused(true)
 	return nil
 }
 
@@ -325,6 +366,9 @@ func handlePlaylist(
 		}
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
+			if slot == mediaslot.Background {
+				svc.State.SetBackgroundAutoPaused(false)
+			}
 			if svc.BackgroundWG != nil {
 				svc.BackgroundWG.Add(1)
 			}
@@ -340,7 +384,7 @@ func handlePlaylist(
 		return
 	default:
 		// active playlist updated
-		if !playlistNeedsUpdate(pls, activePlaylist) {
+		if !pls.ForceRelaunch && !playlistNeedsUpdate(pls, activePlaylist) {
 			log.Debug().Msg("playlist current token unchanged, skipping")
 			return
 		}
@@ -355,6 +399,9 @@ func handlePlaylist(
 		}
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
+			if slot == mediaslot.Background {
+				svc.State.SetBackgroundAutoPaused(false)
+			}
 			if svc.BackgroundWG != nil {
 				svc.BackgroundWG.Add(1)
 			}
