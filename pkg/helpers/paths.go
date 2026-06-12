@@ -281,14 +281,17 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 	if needsDataDir && pl != nil {
 		normDataDir = NormalizePathForComparison(DataDir(pl))
 	}
-	normMediaPrefix := NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
+	normMediaPrefix := ""
+	if normDataDir != "" {
+		normMediaPrefix = NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
+	}
 
 	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
 	for i := range allLaunchers {
 		l := &allLaunchers[i]
 		lp := &launcherPrecomp{}
 
-		if l.SystemID != "" {
+		if l.SystemID != "" && normMediaPrefix != "" {
 			lp.normMediaPath = NormalizePathForComparison(filepath.Join(normMediaPrefix, strings.ToLower(l.SystemID)))
 		}
 
@@ -372,7 +375,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 		if pathHasPrefixNormalized(normPath, lc.normMediaPath) {
 			inDataDir = true
 		}
-	} else if l.SystemID != "" {
+	} else if l.SystemID != "" && m.normDataDir != "" {
 		normZaparooMedia := NormalizePathForComparison(
 			filepath.Join(m.normDataDir, config.MediaDir, strings.ToLower(l.SystemID)),
 		)

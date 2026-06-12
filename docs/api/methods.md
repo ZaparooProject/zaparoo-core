@@ -263,10 +263,11 @@ None.
 
 #### Result
 
-| Key      | Type                                      | Required | Description                            |
-| :------- | :---------------------------------------- | :------- | :------------------------------------- |
-| database | [IndexingStatus](#indexing-status-object) | Yes      | Status of the media database.           |
-| active   | [ActiveMedia](#active-media-object)[]     | Yes      | List of currently active media.         |
+| Key       | Type                                      | Required | Description                            |
+| :-------- | :---------------------------------------- | :------- | :------------------------------------- |
+| database  | [IndexingStatus](#indexing-status-object) | Yes      | Status of the media database.           |
+| active    | [ActiveMedia](#active-media-object)[]     | Yes      | List of currently active media.         |
+| playlists | [PlaylistState](#playlist-state-object)[] | No       | Currently active playlist slots.        |
 
 ##### Indexing status object
 
@@ -291,11 +292,26 @@ None.
 | systemName       | string   | Yes      | Display name of the system.                |
 | mediaPath        | string   | Yes      | Path to the media file.                    |
 | relativePath     | string   | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| positionMs       | number   | No       | Current playback position in milliseconds for native audio media. |
+| durationMs       | number   | No       | Total playback duration in milliseconds for native audio media. |
 | mediaName        | string   | Yes      | Display name of the media.                 |
 | slot             | string   | No       | Media slot for the item. Omitted or `primary` is foreground media; `background` is background audio. |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
 | zapScript        | string   | Yes      | ZapScript command to launch this media item. |
 | launcherControls | string[] | No       | List of control action names supported by the active launcher. Only present if the launcher supports controls. See [media.control](#mediacontrol). |
+
+##### Playlist state object
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| id      | string | Yes      | Playlist ID. |
+| name    | string | Yes      | Playlist display name. |
+| slot    | string | Yes      | Playlist slot, `primary` or `background`. |
+| repeat  | string | Yes      | Repeat mode: `none`, `all`, or `one`. |
+| items   | object[] | Yes    | Playlist items. |
+| index   | number | Yes      | Zero-based current item index. |
+| total   | number | Yes      | Total item count. |
+| playing | boolean | Yes    | Whether playlist slot is playing. |
 
 #### Example
 
@@ -948,7 +964,9 @@ Returns the currently active media.
 
 #### Parameters
 
-None.
+| Key  | Type   | Required | Description |
+| :--- | :----- | :------- | :---------- |
+| slot | string | No       | Media slot to query. Use `primary` or `background`. Defaults to `primary`. |
 
 #### Result
 

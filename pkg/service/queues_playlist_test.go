@@ -442,6 +442,32 @@ func TestRunTokenZapScript_BackgroundLaunchPreservesPrimaryPlaylist(t *testing.T
 	mockPlatform.AssertNumberOfCalls(t, "LaunchMedia", 1)
 }
 
+func TestRunTokenZapScript_BackgroundPlaylistCommandDoesNotBecomeCurrent(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	primary := makeServicePlaylist()
+	primary.Slot = mediaslot.Primary
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	plq := make(chan *playlists.Playlist, 2)
+	plsc := playlists.PlaylistController{Active: primary, Background: background, Current: primary, Queue: plq}
+	token := tokens.Token{
+		Text:     "**playlist.next?slot=background||**playlist.next",
+		ScanTime: time.Now(),
+	}
+
+	err := runTokenZapScript(svc, token, plsc, nil, false)
+	require.NoError(t, err)
+
+	first := <-plq
+	second := <-plq
+	assert.Equal(t, mediaslot.Background, first.Slot)
+	assert.Equal(t, 1, first.Index)
+	assert.Equal(t, mediaslot.Primary, second.Slot)
+	assert.Equal(t, 1, second.Index)
+}
+
 func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
 	t.Parallel()
 
@@ -450,9 +476,10 @@ func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
 	require.True(t, ok)
 
 	const readerID = "mock-removable-reader"
+	readerPath := filepath.Join(string(filepath.Separator), "dev", "mock-device")
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
-	mockReader.On("Path").Return("/dev/mock-device").Maybe()
+	mockReader.On("Path").Return(readerPath).Maybe()
 	mockReader.On("Capabilities").Return([]readers.Capability{
 		readers.CapabilityRemovable,
 	}).Maybe()

@@ -101,11 +101,24 @@ func activePlaylistForSlot(env *platforms.CmdEnv, slot string) *playlists.Playli
 }
 
 func commandSlot(env *platforms.CmdEnv) (string, error) {
-	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
-	if err != nil {
-		return "", fmt.Errorf("normalize media slot: %w", err)
+	if slot, explicit, err := explicitCommandSlot(env); err != nil || explicit {
+		return slot, err
 	}
-	return slot, nil
+	if env.Playlist.Current != nil && env.Playlist.Current.Slot != "" {
+		slot, err := mediaslot.Normalize(env.Playlist.Current.Slot)
+		if err != nil {
+			return "", fmt.Errorf("normalize media slot: %w", err)
+		}
+		return slot, nil
+	}
+	if env.Playlist.Active != nil && env.Playlist.Active.Slot != "" {
+		slot, err := mediaslot.Normalize(env.Playlist.Active.Slot)
+		if err != nil {
+			return "", fmt.Errorf("normalize media slot: %w", err)
+		}
+		return slot, nil
+	}
+	return mediaslot.Primary, nil
 }
 
 func explicitCommandSlot(env *platforms.CmdEnv) (slot string, explicit bool, err error) {
@@ -124,6 +137,13 @@ func commandSlotOrActiveFallback(env *platforms.CmdEnv) (string, error) {
 	slot, explicit, err := explicitCommandSlot(env)
 	if err != nil || explicit {
 		return slot, err
+	}
+	if env.Playlist.Current != nil && env.Playlist.Current.Slot != "" {
+		slot, err := mediaslot.Normalize(env.Playlist.Current.Slot)
+		if err != nil {
+			return "", fmt.Errorf("normalize media slot: %w", err)
+		}
+		return slot, nil
 	}
 	if env.Playlist.Active == nil && env.Playlist.Background != nil {
 		return mediaslot.Background, nil

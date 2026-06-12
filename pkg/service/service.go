@@ -174,6 +174,7 @@ func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
 	}
 	if resumeErr := svc.PlaybackManager.Resume(mediaslot.Background); resumeErr != nil {
 		log.Warn().Err(resumeErr).Msg("failed to resume background audio after game stop")
+		return
 	}
 	svc.State.SetBackgroundAutoPaused(false)
 }

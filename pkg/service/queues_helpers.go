@@ -91,7 +91,8 @@ func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
 }
 
 func commandTargetsBackgroundSlot(cmd zapscript.Command) bool {
-	if !zscript.IsMediaLaunchingCommand(cmd.Name) && !zscript.IsPlaylistCommand(cmd.Name) {
+	if !zscript.IsMediaLaunchingCommand(cmd.Name) && !zscript.IsPlaylistCommand(cmd.Name) &&
+		cmd.Name != zapscript.ZapScriptCmdStop {
 		return false
 	}
 	slot, err := mediaslot.Normalize(cmd.AdvArgs.Get(zapscript.KeySlot))
@@ -143,8 +144,9 @@ func playlistNeedsUpdate(incoming, active *playlists.Playlist) bool {
 	if incoming.ForceRelaunch {
 		return true
 	}
-	// No update needed if current item and playing state are the same
-	if incoming.Current() == active.Current() && incoming.Playing == active.Playing {
+	// No update needed if current item, playing state, and repeat mode are the same.
+	if incoming.Current() == active.Current() && incoming.Playing == active.Playing &&
+		incoming.Loop == active.Loop && incoming.LoopOne == active.LoopOne {
 		return false
 	}
 	return true

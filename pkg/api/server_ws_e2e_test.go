@@ -32,7 +32,13 @@ import (
 	"time"
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 	"github.com/stretchr/testify/assert"
@@ -126,6 +132,55 @@ func dialWS(t *testing.T, wsURL string) *websocket.Conn {
 		_ = resp.Body.Close()
 	}
 	return c
+}
+
+func TestWSInjectsPlaybackManager(t *testing.T) {
+	t.Parallel()
+
+	methodMap := NewMethodMap()
+	playbackManager := &apiPlaybackStub{}
+	err := methodMap.AddMethod("test.playback", func(env requests.RequestEnv) (any, error) {
+		assert.Same(t, playbackManager, env.PlaybackManager)
+		return map[string]bool{"ok": true}, nil
+	})
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	cfg, err := helpers.NewTestConfigWithPort(helpers.NewMemoryFS(), t.TempDir(), 0)
+	require.NoError(t, err)
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	m := newWebSocketSession()
+	m.HandleMessage(handleWSMessage(
+		methodMap, platform, cfg, st, make(chan tokens.Token, 1), make(chan chan error, 1), db,
+		nil, nil, playbackManager, nil, nil, nil, nil, nil,
+	))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer func() {
+		_ = m.Close()
+		srv.Close()
+	}()
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	conn := dialWS(t, "ws://"+u.Host+"/api")
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"test.playback","id":1}`)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Nil(t, resp.Error)
 }
 
 // TestWSEncryption_RemotePlaintextRejectedWhenEnabled pins:

@@ -858,6 +858,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	backgroundMedia := env.State.BackgroundMedia()
 	if backgroundMedia != nil && backgroundMedia.Path != "" {
 		bgEntry := models.ActiveMedia{
+			RelPath:          backgroundMedia.RelPath,
 			Started:          backgroundMedia.Started,
 			LauncherID:       backgroundMedia.LauncherID,
 			SystemID:         backgroundMedia.SystemID,

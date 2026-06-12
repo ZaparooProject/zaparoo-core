@@ -367,8 +367,8 @@ func TestHandleMedia_WithActiveMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
 		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-	mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(100, nil).Maybe()
 	ClearIndexingStatus()
 
 	env := requests.RequestEnv{
@@ -476,12 +476,14 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	background := models.NewActiveMedia(
 		"Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID,
 	)
+	relPath := "music/song.mp3"
+	background.RelPath = &relPath
 	st.SetBackgroundMedia(background)
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-	mockMediaDB.On("GetTotalMediaCount").Return(0, nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 	ClearIndexingStatus()
 
 	env := requests.RequestEnv{
@@ -497,6 +499,8 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, resp.Active, 1, "only background media")
 	assert.Equal(t, mediaslot.Background, resp.Active[0].Slot)
+	require.NotNil(t, resp.Active[0].RelPath)
+	assert.Equal(t, relPath, *resp.Active[0].RelPath)
 	assert.Equal(t, "song.mp3", resp.Active[0].Path)
 	assert.Equal(t, "Song", resp.Active[0].Name)
 	assert.Equal(t, "@Audio/Song", resp.Active[0].ZapScript)
@@ -716,8 +720,8 @@ func TestHandleMedia_PlaylistsIncludedInResponse(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-	mockMediaDB.On("GetTotalMediaCount").Return(0, nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 	ClearIndexingStatus()
 
 	env := requests.RequestEnv{
@@ -766,8 +770,8 @@ func TestHandleMedia_EmptyPlaylistsOmittedFromResponse(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-	mockMediaDB.On("GetTotalMediaCount").Return(0, nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 	ClearIndexingStatus()
 
 	env := requests.RequestEnv{
@@ -808,8 +812,8 @@ func TestHandleMedia_NativeAudioActiveEntryCarriesPosition(t *testing.T) {
 	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
 		Return(nil, nil).Maybe()
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-	mockMediaDB.On("GetTotalMediaCount").Return(0, nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+	mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 	ClearIndexingStatus()
 
 	env := requests.RequestEnv{

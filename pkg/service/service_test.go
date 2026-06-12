@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -288,6 +290,57 @@ func newAdvanceTestSvc(t *testing.T) (svc *ServiceContext, cleanup func()) {
 		PlaylistQueue: make(chan *playlists.Playlist, 2),
 	}
 	return svc, cleanup
+}
+
+type resumePlaybackStub struct {
+	resumeErr error
+	resumed   []string
+}
+
+func (*resumePlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*resumePlaybackStub) Stop(_ string) error                             { return nil }
+func (*resumePlaybackStub) Pause(_ string) error                            { return nil }
+func (*resumePlaybackStub) TogglePause(_ string) error                      { return nil }
+func (*resumePlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
+func (*resumePlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
+func (s *resumePlaybackStub) Resume(slot string) error {
+	s.resumed = append(s.resumed, slot)
+	return s.resumeErr
+}
+
+func TestResumeBackgroundAfterMediaStop_ClearsAutoPauseOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+	playback := &resumePlaybackStub{}
+	svc.PlaybackManager = playback
+	svc.State.SetBackgroundAutoPaused(true)
+
+	resumeBackgroundAfterMediaStop(svc)
+
+	assert.Equal(t, []string{mediaslot.Background}, playback.resumed)
+	assert.False(t, svc.State.BackgroundAutoPaused())
+}
+
+func TestResumeBackgroundAfterMediaStop_KeepsAutoPauseOnFailure(t *testing.T) {
+	t.Parallel()
+
+	svc, cleanup := newAdvanceTestSvc(t)
+	defer cleanup()
+	playback := &resumePlaybackStub{resumeErr: errors.New("resume failed")}
+	svc.PlaybackManager = playback
+	svc.State.SetBackgroundAutoPaused(true)
+
+	resumeBackgroundAfterMediaStop(svc)
+
+	assert.Equal(t, []string{mediaslot.Background}, playback.resumed)
+	assert.True(t, svc.State.BackgroundAutoPaused())
+	select {
+	case got := <-svc.PlaylistQueue:
+		t.Fatalf("unexpected playlist enqueue: %+v", got)
+	default:
+	}
 }
 
 // makeMultiTrackPlaylist returns a playlist at the given index with 3 items.

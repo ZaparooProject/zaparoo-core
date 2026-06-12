@@ -117,6 +117,24 @@ func TestActiveMedia_Equal(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "different slot",
+			a: &ActiveMedia{
+				SystemID:   "Audio",
+				SystemName: "Audio",
+				Path:       "/music/song.mp3",
+				Name:       "Song",
+				Slot:       "primary",
+			},
+			b: &ActiveMedia{
+				SystemID:   "Audio",
+				SystemName: "Audio",
+				Path:       "/music/song.mp3",
+				Name:       "Song",
+				Slot:       "background",
+			},
+			expected: false,
+		},
+		{
 			name: "different name and path",
 			a: &ActiveMedia{
 				SystemID:   "nes",

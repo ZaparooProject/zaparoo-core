@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,6 +28,15 @@ func TestCreateAudioScannerLauncher(t *testing.T) {
 	assert.Nil(t, launcher.Launch)
 	assert.Empty(t, launcher.Extensions)
 	assert.Empty(t, launcher.Folders)
+}
+
+func TestMiSTerAudioScanRootsIncludesMusicAndAudioFolders(t *testing.T) {
+	t.Parallel()
+
+	roots := misterAudioScanRoots(&config.Instance{})
+
+	assert.Contains(t, roots, filepath.Join(misterconfig.SDRootDir, "music"))
+	assert.Contains(t, roots, filepath.Join(misterconfig.SDRootDir, "games", "Audio"))
 }
 
 func TestScanMiSTerAudioPaths(t *testing.T) {

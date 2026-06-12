@@ -100,6 +100,30 @@ func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
 	assert.Equal(t, `c:\roms\custom\game.rom`, matcherSeen)
 }
 
+func TestLauncherMatcher_NilPlatformDoesNotSynthesizeMediaPaths(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:         "NESLauncher",
+		SystemID:   "NES",
+		Folders:    []string{"roms"},
+		Extensions: []string{".nes"},
+	}
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{launcher})
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, nil)
+	assert.False(t, matcher.MatchSystemFile("NES", filepath.Join("media", "nes", "game.nes")))
+}
+
 func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	tmpDir := t.TempDir()

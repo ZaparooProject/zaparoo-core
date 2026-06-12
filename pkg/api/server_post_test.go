@@ -28,9 +28,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -51,6 +53,16 @@ type fakeRequestTracker struct {
 
 func (f *fakeRequestTracker) RequestStarted() { f.started.Add(1) }
 func (f *fakeRequestTracker) RequestEnded()   { f.ended.Add(1) }
+
+type apiPlaybackStub struct{}
+
+func (*apiPlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*apiPlaybackStub) Stop(_ string) error                             { return nil }
+func (*apiPlaybackStub) Pause(_ string) error                            { return nil }
+func (*apiPlaybackStub) Resume(_ string) error                           { return nil }
+func (*apiPlaybackStub) TogglePause(_ string) error                      { return nil }
+func (*apiPlaybackStub) Seek(_ string, _ time.Duration) error            { return nil }
+func (*apiPlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
 
 // createTestPostHandler creates a POST handler with mocked dependencies for testing.
 // The returned tracker counts RequestStarted/RequestEnded calls so tests can
@@ -101,12 +113,50 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 
 	confirmQueue := make(chan chan error, 10)
 	tracker := &fakeRequestTracker{}
+	playbackManager := &apiPlaybackStub{}
 	handler := handlePostRequest(
 		methodMap, platform, cfg, st,
 		tokenQueue, confirmQueue, db,
-		nil, nil, nil, nil, nil, tracker,
+		nil, nil, playbackManager, nil, nil, tracker,
 	)
 	return handler, methodMap, tracker
+}
+
+func TestHandlePostRequest_InjectsPlaybackManager(t *testing.T) {
+	t.Parallel()
+
+	methodMap := NewMethodMap()
+	playbackManager := &apiPlaybackStub{}
+	err := methodMap.AddMethod("test.playback", func(env requests.RequestEnv) (any, error) {
+		assert.Same(t, playbackManager, env.PlaybackManager)
+		return map[string]bool{"ok": true}, nil
+	})
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfigWithPort(fs, t.TempDir(), 0)
+	require.NoError(t, err)
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	db := &database.Database{UserDB: helpers.NewMockUserDBI(), MediaDB: helpers.NewMockMediaDBI()}
+	tokenQueue := make(chan tokens.Token, 1)
+	confirmQueue := make(chan chan error, 1)
+	handler := handlePostRequest(
+		methodMap, platform, cfg, st, tokenQueue, confirmQueue, db,
+		nil, nil, playbackManager, nil, nil, nil,
+	)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.playback"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
 // TestHandlePostRequest_ValidRequest tests that a valid JSON-RPC request returns HTTP 200.

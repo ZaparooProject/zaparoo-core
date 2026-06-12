@@ -408,6 +408,9 @@ func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if with == nil {
 		return false
 	}
+	if a.Slot != with.Slot {
+		return false
+	}
 	if a.SystemID != with.SystemID {
 		return false
 	}

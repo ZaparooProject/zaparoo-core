@@ -71,7 +71,7 @@ var globalDevice = &sharedDevice{
 func (d *sharedDevice) register(src mixSource) {
 	d.devMu.Lock()
 	d.sources = append(d.sources, src)
-	needOpen := !d.opening && d.device == nil
+	needOpen := src.isActive() && !d.opening && d.device == nil
 	if needOpen {
 		d.opening = true
 	}
@@ -117,11 +117,19 @@ func (d *sharedDevice) releaseIfAllPaused() {
 	d.closeDevice()
 }
 
+func hasActiveSource(sources []mixSource) bool {
+	for _, src := range sources {
+		if src.isActive() {
+			return true
+		}
+	}
+	return false
+}
+
 // openIfNeeded re-opens the device when a paused source is resumed.
 func (d *sharedDevice) openIfNeeded() {
 	d.devMu.Lock()
-	hasSources := len(d.sources) > 0
-	needOpen := hasSources && !d.opening && d.device == nil
+	needOpen := hasActiveSource(d.sources) && !d.opening && d.device == nil
 	if needOpen {
 		d.opening = true
 	}
@@ -337,9 +345,9 @@ func (d *sharedDevice) cleanup(
 	d.device = nil
 	d.malgoCtx = nil
 	// A source may have registered while a real device was tearing down (register saw
-	// device!=nil and skipped open). Re-trigger open so it isn't silently orphaned.
+	// device!=nil and skipped open). Re-trigger open so active playback isn't silently orphaned.
 	// Guard on device!=nil: init-failure paths call cleanup with device==nil (nothing ran).
-	needOpen := device != nil && len(d.sources) > 0 && !d.opening
+	needOpen := device != nil && hasActiveSource(d.sources) && !d.opening
 	if needOpen {
 		d.opening = true
 	}

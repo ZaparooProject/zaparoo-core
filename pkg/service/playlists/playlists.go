@@ -155,5 +155,6 @@ func (p *Playlist) Current() PlaylistItem {
 type PlaylistController struct {
 	Active     *Playlist
 	Background *Playlist
+	Current    *Playlist
 	Queue      chan<- *Playlist
 }

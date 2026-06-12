@@ -36,18 +36,28 @@ type SystemsDefault struct {
 	BeforeExit    string `toml:"before_exit,omitempty"`
 }
 
+func cloneSystemDefaults(defaults []SystemsDefault) []SystemsDefault {
+	owned := make([]SystemsDefault, len(defaults))
+	copy(owned, defaults)
+	for i := range owned {
+		if owned[i].PauseOnLaunch != nil {
+			value := *owned[i].PauseOnLaunch
+			owned[i].PauseOnLaunch = &value
+		}
+	}
+	return owned
+}
+
 func (c *Instance) SystemDefaults() []SystemsDefault {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Systems.Default
+	return cloneSystemDefaults(c.vals.Systems.Default)
 }
 
 func (c *Instance) SetSystemDefaults(defaults []SystemsDefault) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	owned := make([]SystemsDefault, len(defaults))
-	copy(owned, defaults)
-	c.vals.Systems.Default = owned
+	c.vals.Systems.Default = cloneSystemDefaults(defaults)
 }
 
 func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) {

@@ -193,7 +193,9 @@ func TestEnrichPlaybackPosition_BackgroundSlotUsesBackgroundState(t *testing.T) 
 	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
 	enrichPlaybackPosition(env, entry, mediaslot.Background)
 	require.NotNil(t, entry.PositionMs)
+	require.NotNil(t, entry.DurationMs)
 	assert.Equal(t, bgPos.Milliseconds(), *entry.PositionMs)
+	assert.Equal(t, bgDur.Milliseconds(), *entry.DurationMs)
 }
 
 func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {

@@ -94,6 +94,18 @@ func TestSharedDeviceOnSamplesMixesClampsAndQueuesDrainedSources(t *testing.T) {
 	}
 }
 
+func TestSharedDeviceOpenIfNeededRequiresActiveSource(t *testing.T) {
+	t.Parallel()
+
+	d := &sharedDevice{sources: []mixSource{&testMixSource{active: false}}}
+	d.openIfNeeded()
+	assert.False(t, d.opening)
+
+	d.sources = append(d.sources, &testMixSource{active: true})
+	d.openIfNeeded()
+	assert.True(t, d.opening)
+}
+
 func TestSharedDeviceManageRemovesDrainedSourceAndNotifies(t *testing.T) {
 	t.Parallel()
 
