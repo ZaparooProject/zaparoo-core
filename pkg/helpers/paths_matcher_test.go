@@ -181,16 +181,17 @@ func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 
 func TestLauncherMatcher_MatchSystemFileForScanExcludes(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
 		{
 			ID:           "NESLauncher",
 			SystemID:     "NES",
 			Folders:      []string{"nes"},
-			Extensions:   []string{".rom", ".vhd"},
-			ScanExcludes: []string{"boot.rom", "boot.zip/boot.vhd"},
+			Extensions:   []string{".rom", ".vhd", ".sav", ".srm"},
+			ScanExcludes: []string{"boot.rom", "boot.zip/boot.vhd", "*.sav"},
 		},
 	})
 
@@ -208,15 +209,25 @@ func TestLauncherMatcher_MatchSystemFileForScanExcludes(t *testing.T) {
 
 	matcher := NewLauncherMatcher(cfg, mockPlatform)
 
-	assert.True(t, matcher.MatchSystemFile("NES", "/roms/nes/game.rom"))
-	assert.True(t, matcher.MatchSystemFileForScan("NES", "/roms/nes/game.rom"))
+	gamePath := filepath.Join(rootDir, "nes", "game.rom")
+	assert.True(t, matcher.MatchSystemFile("NES", gamePath))
+	assert.True(t, matcher.MatchSystemFileForScan("NES", gamePath))
 
-	assert.True(t, matcher.MatchSystemFile("NES", "/roms/nes/boot.rom"))
-	assert.False(t, matcher.MatchSystemFileForScan("NES", "/roms/nes/boot.rom"))
+	bootPath := filepath.Join(rootDir, "nes", "boot.rom")
+	assert.True(t, matcher.MatchSystemFile("NES", bootPath))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", bootPath))
 
-	zipBootPath := "/roms/nes/boot.zip/boot.vhd"
+	zipBootPath := filepath.Join(rootDir, "nes", "boot.zip", "boot.vhd")
 	assert.True(t, matcher.MatchSystemFile("NES", zipBootPath))
 	assert.False(t, matcher.MatchSystemFileForScan("NES", zipBootPath))
+
+	wildcardSavePath := filepath.Join(rootDir, "nes", "zelda.sav")
+	assert.True(t, matcher.MatchSystemFile("NES", wildcardSavePath))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", wildcardSavePath))
+
+	nonMatchingWildcardPath := filepath.Join(rootDir, "nes", "zelda.srm")
+	assert.True(t, matcher.MatchSystemFile("NES", nonMatchingWildcardPath))
+	assert.True(t, matcher.MatchSystemFileForScan("NES", nonMatchingWildcardPath))
 }
 
 func TestLauncherMatcher_RootSlashAndDotFolder(t *testing.T) {
