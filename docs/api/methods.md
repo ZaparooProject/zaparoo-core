@@ -2447,6 +2447,124 @@ Returns `null` on success.
 }
 ```
 
+## Profiles
+
+Profiles are lightweight device profiles: named buckets of preferences and limits, with no passwords or accounts. One profile is active per device at a time, switched via the API or by scanning an NFC card containing the profile's switch ID (`**profile.switch:<switchId>`).
+
+A profile may have an optional 4-8 digit PIN. Switching to a PIN-protected profile via the API requires the PIN; scanning the profile's physical card bypasses it (possession of the card is the authorization). Leaving a profile is always free — PINs gate entry only. To prevent a profile-less device from being an escape hatch, enable the `profilesRequireForLaunch` setting (see [settings](#settings)), which blocks media launches while no profile is active.
+
+When no profile is active the device behaves exactly as it did before profiles existed: global playtime limits apply and history is unattributed.
+
+##### Profile object
+
+| Key           | Type    | Required | Description                                                                                              |
+| :------------ | :------ | :------- | :------------------------------------------------------------------------------------------------------- |
+| profileId     | string  | Yes      | Unique identifier of the profile.                                                                        |
+| name          | string  | Yes      | Display name, e.g. "Dad" or "Kid A".                                                                     |
+| switchId      | string  | Yes      | Word phrase written to profile switch cards, e.g. `corn-arm-truck`. A selector, not a secret.            |
+| hasPin        | boolean | Yes      | True when the profile has a PIN set. The PIN itself is never returned.                                   |
+| limitsEnabled | boolean | No       | Playtime limits enabled override. Omitted = inherit the global setting.                                  |
+| dailyLimit    | string  | No       | Daily playtime limit override as a duration string (e.g. `2h30m`). Omitted = inherit; `0` = unlimited.   |
+| sessionLimit  | string  | No       | Session playtime limit override as a duration string. Omitted = inherit; `0` = unlimited.                |
+| createdAt     | number  | Yes      | Unix timestamp of profile creation.                                                                      |
+| lastUpdatedAt | number  | Yes      | Unix timestamp of last modification.                                                                     |
+
+### profiles
+
+List all profiles.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type                         | Required | Description       |
+| :------- | :--------------------------- | :------- | :---------------- |
+| profiles | [Profile](#profile-object)[] | Yes      | List of profiles. |
+
+### profiles.new
+
+Create a new profile. The switch ID is generated automatically and returned in the result — write it to a card as `**profile.switch:<switchId>`.
+
+#### Parameters
+
+| Key           | Type    | Required | Description                                                      |
+| :------------ | :------ | :------- | :---------------------------------------------------------------- |
+| name          | string  | Yes      | Display name.                                                    |
+| pin           | string  | No       | Optional 4-8 digit PIN required to switch to this profile via API. |
+| limitsEnabled | boolean | No       | Playtime limits enabled override.                                |
+| dailyLimit    | string  | No       | Daily limit duration override.                                   |
+| sessionLimit  | string  | No       | Session limit duration override.                                 |
+
+#### Result
+
+The created [profile object](#profile-object).
+
+### profiles.update
+
+Update a profile. Omitted fields are unchanged. If the updated profile is currently active, its limit changes apply immediately.
+
+#### Parameters
+
+| Key                | Type    | Required | Description                                                            |
+| :----------------- | :------ | :------- | :---------------------------------------------------------------------- |
+| profileId          | string  | Yes      | Profile to update.                                                     |
+| name               | string  | No       | New display name.                                                      |
+| pin                | string  | No       | Set or replace the PIN.                                                |
+| clearPin           | boolean | No       | Remove the PIN.                                                        |
+| limitsEnabled      | boolean | No       | Playtime limits enabled override.                                      |
+| dailyLimit         | string  | No       | Daily limit duration override.                                         |
+| sessionLimit       | string  | No       | Session limit duration override.                                       |
+| clearLimits        | boolean | No       | Reset all limit overrides back to inheriting the global config.        |
+| regenerateSwitchId | boolean | No       | Issue a new switch ID (lost-card replacement). Old cards stop working. |
+
+#### Result
+
+The updated [profile object](#profile-object).
+
+### profiles.delete
+
+Delete a profile. If it is the active profile, the device deactivates. Past play history keeps its attribution to the deleted profile.
+
+#### Parameters
+
+| Key       | Type   | Required | Description        |
+| :-------- | :----- | :------- | :----------------- |
+| profileId | string | Yes      | Profile to delete. |
+
+#### Result
+
+Null.
+
+### profiles.active
+
+Get the device's currently active profile.
+
+#### Parameters
+
+None.
+
+#### Result
+
+The active profile (a subset of the [profile object](#profile-object) without `switchId` and timestamps), or null when no profile is active.
+
+### profiles.switch
+
+Switch the device's active profile. Switching to a PIN-protected profile requires its PIN, whether selected by `profileId` or `switchId` — only physical card scans bypass the PIN. Calling with neither `profileId` nor `switchId` deactivates the current profile, which never requires a PIN.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                            |
+| :-------- | :----- | :------- | :------------------------------------------------------ |
+| profileId | string | No       | Profile to activate, by ID.                            |
+| switchId  | string | No       | Profile to activate, by switch ID.                     |
+| pin       | string | No       | The profile's PIN, when one is set.                    |
+
+#### Result
+
+The new active profile, or null when deactivated.
+
 ## Mappings
 
 Mappings are used to modify the contents of tokens before they're launched, based on different types of matching parameters. Stored mappings are queried before every launch and applied to the token if there's a match. This allows, for example, adding ZapScript to a read-only NFC tag based on its UID.

@@ -88,6 +88,7 @@ type LimitsManager struct {
 	db                    *database.Database
 	notificationsSend     chan<- models.Notification
 	cfg                   *config.Instance
+	limits                LimitsProvider
 	player                audio.Player
 	cancel                context.CancelFunc
 	state                 SessionState
@@ -128,6 +129,7 @@ func NewLimitsManager(
 		db:                  db,
 		platform:            platform,
 		cfg:                 cfg,
+		limits:              globalProvider{cfg: cfg},
 		clock:               clock,
 		player:              player,
 		ctx:                 ctx,
@@ -137,6 +139,12 @@ func NewLimitsManager(
 		sessionResetTimeout: sessionResetTimeout,
 		enabled:             false, // Start disabled, caller must enable
 	}
+}
+
+// SetLimitsProvider replaces the source of limit values, e.g. with the
+// profile-aware resolver. Must be called before Start.
+func (tm *LimitsManager) SetLimitsProvider(limits LimitsProvider) {
+	tm.limits = limits
 }
 
 // Broker is the interface for subscribing to notifications.
@@ -182,9 +190,13 @@ func (tm *LimitsManager) Stop() {
 	tm.wg.Wait()
 }
 
-// SetEnabled enables or disables limit enforcement at runtime.
-// When disabling, resets the session state completely (clears cooldown and cumulative time).
-// When re-enabling, session starts fresh but daily usage from history is still enforced.
+// SetEnabled records the runtime enabled state and, when disabling, resets
+// the session completely (clears cooldown and cumulative time). Whether
+// limits are actually enforced is decided by the LimitsProvider on every
+// check (global config, possibly overridden by the active profile) — this
+// flag exists for its session-reset side effect when the user toggles
+// limits off, and is kept in sync with global config by the settings
+// handler.
 func (tm *LimitsManager) SetEnabled(enabled bool) {
 	tm.enabledMu.Lock()
 	tm.enabled = enabled
@@ -211,6 +223,47 @@ func (tm *LimitsManager) SetEnabled(enabled bool) {
 			tm.warningsGiven = make(map[time.Duration]bool)
 		}
 		tm.mu.Unlock()
+	}
+}
+
+// ResetSession starts a fresh limit session, called when the active
+// profile changes: a different person is playing, so accumulated session
+// time belongs to the previous profile. Daily usage is unaffected — it is
+// recalculated from the (profile-attributed) history on every check.
+//
+// If a game is running, tracking restarts from now under the new profile's
+// limits rather than stopping: the running game's already-played time was
+// the previous profile's.
+func (tm *LimitsManager) ResetSession() {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if tm.cooldownTimer != nil {
+		tm.cooldownTimer.Stop()
+		tm.cooldownTimer = nil
+		log.Debug().Msg("playtime: cancelled cooldown timer (profile switched)")
+	}
+
+	switch tm.state {
+	case StateActive:
+		log.Info().Msg("playtime: profile switched mid-game, restarting session tracking")
+		now := tm.clock.Now()
+		tm.sessionStart = now
+		tm.sessionStartMono = time.Now()
+		tm.sessionStartReliable = helpers.IsClockReliable(now)
+		tm.sessionCumulativeTime = 0
+		tm.warningsGiven = make(map[time.Duration]bool)
+	case StateCooldown:
+		log.Info().Msg("playtime: profile switched, resetting session state")
+		tm.transitionTo(StateReset)
+		tm.sessionStart = time.Time{}
+		tm.sessionStartMono = time.Time{}
+		tm.sessionCumulativeTime = 0
+		tm.lastStopTime = time.Time{}
+		tm.sessionStartReliable = false
+		tm.warningsGiven = make(map[time.Duration]bool)
+	case StateReset:
+		tm.sessionCumulativeTime = 0
 	}
 }
 
@@ -264,6 +317,8 @@ func (tm *LimitsManager) handleNotifications(notifChan <-chan models.Notificatio
 				tm.OnMediaStarted()
 			case models.NotificationStopped:
 				tm.OnMediaStopped()
+			case models.NotificationProfilesActive:
+				tm.ResetSession()
 			}
 
 		case <-tm.ctx.Done():
@@ -274,7 +329,7 @@ func (tm *LimitsManager) handleNotifications(notifChan <-chan models.Notificatio
 
 // OnMediaStarted handles media.started events and begins time tracking.
 func (tm *LimitsManager) OnMediaStarted() {
-	if !tm.cfg.PlaytimeLimitsEnabled() {
+	if !tm.limits.PlaytimeLimitsEnabled() {
 		return
 	}
 
@@ -436,7 +491,7 @@ func (tm *LimitsManager) checkLoop() {
 // checkLimits evaluates all rules and handles warnings/limits.
 func (tm *LimitsManager) checkLimits() {
 	// Respect both config and runtime enabled state
-	if !tm.cfg.PlaytimeLimitsEnabled() || !tm.IsEnabled() {
+	if !tm.limits.PlaytimeLimitsEnabled() {
 		return
 	}
 
@@ -582,10 +637,14 @@ func (tm *LimitsManager) buildRuleContext(
 }
 
 // calculateDailyUsage queries the database for today's total play time.
+// When a profile is active, only history attributed to that profile is
+// counted; otherwise all history counts (device-level accounting).
 func (tm *LimitsManager) calculateDailyUsage(
 	todayStart time.Time,
 	currentSessionDuration time.Duration,
 ) (time.Duration, error) {
+	profileID := tm.limits.ActiveProfileID()
+
 	// Query media history for today
 	// Note: GetMediaHistory uses pagination, so we need to fetch all entries
 	var totalUsage time.Duration
@@ -593,7 +652,13 @@ func (tm *LimitsManager) calculateDailyUsage(
 	limit := 100
 
 	for {
-		entries, err := tm.db.UserDB.GetMediaHistory(nil, lastID, limit)
+		var entries []database.MediaHistoryEntry
+		var err error
+		if profileID != "" {
+			entries, err = tm.db.UserDB.GetMediaHistoryByProfile(profileID, lastID, limit)
+		} else {
+			entries, err = tm.db.UserDB.GetMediaHistory(nil, lastID, limit)
+		}
 		if err != nil {
 			return 0, fmt.Errorf("failed to query media history: %w", err)
 		}
@@ -654,11 +719,11 @@ done:
 func (tm *LimitsManager) createRules() []Rule {
 	rules := make([]Rule, 0, 2)
 
-	if limit := tm.cfg.SessionLimit(); limit > 0 {
+	if limit := tm.limits.SessionLimit(); limit > 0 {
 		rules = append(rules, &SessionLimitRule{Limit: limit})
 	}
 
-	if limit := tm.cfg.DailyLimit(); limit > 0 {
+	if limit := tm.limits.DailyLimit(); limit > 0 {
 		rules = append(rules, &DailyLimitRule{Limit: limit})
 	}
 
@@ -667,7 +732,7 @@ func (tm *LimitsManager) createRules() []Rule {
 
 // handleWarnings checks if warnings should be emitted based on remaining time.
 func (tm *LimitsManager) handleWarnings(remaining time.Duration) {
-	intervals := tm.cfg.WarningIntervals()
+	intervals := tm.limits.WarningIntervals()
 
 	// Sort intervals in descending order (largest first)
 	sort.Slice(intervals, func(i, j int) bool {
@@ -744,7 +809,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		// Calculate daily usage/remaining even during reset - this data is valid
 		// regardless of session state (the user has used time today and has
 		// time remaining in their daily allowance)
-		dailyLimit := tm.cfg.DailyLimit()
+		dailyLimit := tm.limits.DailyLimit()
 		if dailyLimit > 0 && helpers.IsClockReliable(now) {
 			year, month, day := now.Date()
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
@@ -776,8 +841,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 		// Calculate remaining times based on cumulative time
 		var sessionRemaining time.Duration
-		sessionLimit := tm.cfg.SessionLimit()
-		dailyLimit := tm.cfg.DailyLimit()
+		sessionLimit := tm.limits.SessionLimit()
+		dailyLimit := tm.limits.DailyLimit()
 
 		if sessionLimit > 0 {
 			sessionRemaining = sessionLimit - cumulativeTime
@@ -831,8 +896,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 	// Calculate session remaining time
 	var sessionRemaining time.Duration
-	sessionLimit := tm.cfg.SessionLimit()
-	dailyLimit := tm.cfg.DailyLimit()
+	sessionLimit := tm.limits.SessionLimit()
+	dailyLimit := tm.limits.DailyLimit()
 
 	if sessionLimit > 0 {
 		sessionRemaining = sessionLimit - ctx.SessionDuration
@@ -885,12 +950,12 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 // trying to stop games immediately after they launch.
 func (tm *LimitsManager) CheckBeforeLaunch() error {
 	// Check if limits are enabled (both config and runtime)
-	if !tm.cfg.PlaytimeLimitsEnabled() || !tm.IsEnabled() {
+	if !tm.limits.PlaytimeLimitsEnabled() {
 		return nil
 	}
 
-	dailyLimit := tm.cfg.DailyLimit()
-	sessionLimit := tm.cfg.SessionLimit()
+	dailyLimit := tm.limits.DailyLimit()
+	sessionLimit := tm.limits.SessionLimit()
 
 	// If no limits configured, allow launch
 	if dailyLimit == 0 && sessionLimit == 0 {

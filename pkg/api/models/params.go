@@ -130,6 +130,7 @@ type UpdateSettingsParams struct {
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
 	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  *bool               `json:"profilesRequireForLaunch"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -147,6 +148,45 @@ type NewClientParams struct {
 
 type DeleteClientParams struct {
 	ID string `json:"id" validate:"required,min=1"`
+}
+
+// NewProfileParams creates a profile. Nil limit fields inherit the global
+// config; a "0" duration means explicitly unlimited.
+type NewProfileParams struct {
+	PIN           *string `json:"pin" validate:"omitempty,numeric,min=4,max=8"`
+	LimitsEnabled *bool   `json:"limitsEnabled"`
+	DailyLimit    *string `json:"dailyLimit" validate:"omitempty,duration"`
+	SessionLimit  *string `json:"sessionLimit" validate:"omitempty,duration"`
+	Name          string  `json:"name" validate:"required,min=1,max=255"`
+}
+
+// UpdateProfileParams updates a profile. Omitted fields are unchanged.
+// ClearPIN removes the PIN; ClearLimits resets all limit overrides back to
+// inheriting global config; RegenerateSwitchID issues a new switch ID
+// (lost-card replacement).
+type UpdateProfileParams struct {
+	Name               *string `json:"name" validate:"omitempty,min=1,max=255"`
+	PIN                *string `json:"pin" validate:"omitempty,numeric,min=4,max=8"`
+	LimitsEnabled      *bool   `json:"limitsEnabled"`
+	DailyLimit         *string `json:"dailyLimit" validate:"omitempty,duration"`
+	SessionLimit       *string `json:"sessionLimit" validate:"omitempty,duration"`
+	ProfileID          string  `json:"profileId" validate:"required,min=1"`
+	ClearPIN           bool    `json:"clearPin"`
+	ClearLimits        bool    `json:"clearLimits"`
+	RegenerateSwitchID bool    `json:"regenerateSwitchId"`
+}
+
+type DeleteProfileParams struct {
+	ProfileID string `json:"profileId" validate:"required,min=1"`
+}
+
+// SwitchProfileParams switches the device's active profile. Exactly one of
+// ProfileID or SwitchID selects the target; both omitted (or null) means
+// deactivate. PIN is required when the target profile has one set.
+type SwitchProfileParams struct {
+	ProfileID *string `json:"profileId"`
+	SwitchID  *string `json:"switchId"`
+	PIN       *string `json:"pin"`
 }
 
 type MediaStartedParams struct {

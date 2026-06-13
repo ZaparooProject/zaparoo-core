@@ -1,0 +1,240 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package userdb
+
+import (
+	"testing"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func newTestProfile(profileID, switchID string) *database.Profile {
+	return &database.Profile{
+		ProfileID: profileID,
+		Name:      "Test Profile",
+		SwitchID:  switchID,
+		CreatedAt: 1700000000,
+		UpdatedAt: 1700000000,
+	}
+}
+
+func TestProfiles_CRUD_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	p := newTestProfile("profile-uuid-1", "corn-arm-truck")
+	limitsEnabled := true
+	daily := "2h30m"
+	p.LimitsEnabled = &limitsEnabled
+	p.DailyLimit = &daily
+	p.PINHash = "fake-pin-hash"
+
+	require.NoError(t, db.CreateProfile(p))
+	assert.Positive(t, p.DBID)
+
+	got, err := db.GetProfile("profile-uuid-1")
+	require.NoError(t, err)
+	assert.Equal(t, "Test Profile", got.Name)
+	assert.Equal(t, "corn-arm-truck", got.SwitchID)
+	assert.Equal(t, "fake-pin-hash", got.PINHash)
+	require.NotNil(t, got.LimitsEnabled)
+	assert.True(t, *got.LimitsEnabled)
+	require.NotNil(t, got.DailyLimit)
+	assert.Equal(t, "2h30m", *got.DailyLimit)
+	assert.Nil(t, got.SessionLimit)
+
+	bySwitch, err := db.GetProfileBySwitchID("corn-arm-truck")
+	require.NoError(t, err)
+	assert.Equal(t, "profile-uuid-1", bySwitch.ProfileID)
+
+	list, err := db.ListProfiles()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+
+	got.Name = "Renamed"
+	got.PINHash = ""
+	got.LimitsEnabled = nil
+	got.DailyLimit = nil
+	got.UpdatedAt = 1700000100
+	require.NoError(t, db.UpdateProfile(got))
+
+	updated, err := db.GetProfile("profile-uuid-1")
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed", updated.Name)
+	assert.Empty(t, updated.PINHash)
+	assert.Nil(t, updated.LimitsEnabled)
+	assert.Nil(t, updated.DailyLimit)
+
+	require.NoError(t, db.DeleteProfile("profile-uuid-1"))
+	_, err = db.GetProfile("profile-uuid-1")
+	require.ErrorIs(t, err, ErrProfileNotFound)
+}
+
+func TestProfiles_NotFoundErrors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	_, err := db.GetProfile("missing")
+	require.ErrorIs(t, err, ErrProfileNotFound)
+
+	_, err = db.GetProfileBySwitchID("missing-switch")
+	require.ErrorIs(t, err, ErrProfileNotFound)
+
+	err = db.UpdateProfile(newTestProfile("missing", "a-b-c"))
+	require.ErrorIs(t, err, ErrProfileNotFound)
+
+	err = db.DeleteProfile("missing")
+	require.ErrorIs(t, err, ErrProfileNotFound)
+}
+
+func TestProfiles_SwitchIDUnique(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, db.CreateProfile(newTestProfile("p1", "same-switch-id")))
+	err := db.CreateProfile(newTestProfile("p2", "same-switch-id"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UNIQUE")
+}
+
+func TestProfiles_DeleteClearsActiveState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, db.CreateProfile(newTestProfile("p1", "switch-one")))
+	require.NoError(t, db.CreateProfile(newTestProfile("p2", "switch-two")))
+	require.NoError(t, db.SetDeviceState(database.DeviceStateKeyActiveProfile, "p1"))
+
+	// Deleting a non-active profile keeps the active state.
+	require.NoError(t, db.DeleteProfile("p2"))
+	value, found, err := db.GetDeviceState(database.DeviceStateKeyActiveProfile)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, "p1", value)
+
+	// Deleting the active profile clears it.
+	require.NoError(t, db.DeleteProfile("p1"))
+	_, found, err = db.GetDeviceState(database.DeviceStateKeyActiveProfile)
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestDeviceState_SetGetDelete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	_, found, err := db.GetDeviceState("some_key")
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	require.NoError(t, db.SetDeviceState("some_key", "value1"))
+	value, found, err := db.GetDeviceState("some_key")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, "value1", value)
+
+	// Upsert overwrites.
+	require.NoError(t, db.SetDeviceState("some_key", "value2"))
+	value, found, err = db.GetDeviceState("some_key")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, "value2", value)
+
+	require.NoError(t, db.DeleteDeviceState("some_key"))
+	_, found, err = db.GetDeviceState("some_key")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestMediaHistory_ProfileAttribution(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	profileID := "profile-uuid-1"
+
+	attributed := &database.MediaHistoryEntry{
+		StartTime:  now,
+		SystemID:   "SNES",
+		SystemName: "Super Nintendo",
+		MediaPath:  "snes/game.sfc",
+		MediaName:  "Game",
+		LauncherID: "test",
+		PlayTime:   120,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		ProfileID:  &profileID,
+	}
+	_, err := db.AddMediaHistory(attributed)
+	require.NoError(t, err)
+
+	unattributed := &database.MediaHistoryEntry{
+		StartTime:  now,
+		SystemID:   "NES",
+		SystemName: "Nintendo",
+		MediaPath:  "nes/other.nes",
+		MediaName:  "Other",
+		LauncherID: "test",
+		PlayTime:   60,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	_, err = db.AddMediaHistory(unattributed)
+	require.NoError(t, err)
+
+	// Profile-scoped query returns only the attributed row.
+	scoped, err := db.GetMediaHistoryByProfile(profileID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, scoped, 1)
+	assert.Equal(t, "SNES", scoped[0].SystemID)
+	require.NotNil(t, scoped[0].ProfileID)
+	assert.Equal(t, profileID, *scoped[0].ProfileID)
+
+	// Unscoped query returns everything (device-level accounting).
+	all, err := db.GetMediaHistory(nil, 0, 10)
+	require.NoError(t, err)
+	assert.Len(t, all, 2)
+
+	// Unknown profile matches nothing.
+	none, err := db.GetMediaHistoryByProfile("unknown", 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}

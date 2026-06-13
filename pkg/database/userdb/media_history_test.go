@@ -83,6 +83,7 @@ func TestSqlAddMediaHistory_Success(t *testing.T) {
 			entry.CreatedAt.Unix(),
 			entry.UpdatedAt.Unix(),
 			nil,
+			nil,
 		).
 		WillReturnResult(sqlmock.NewResult(expectedDBID, 1))
 
@@ -139,6 +140,7 @@ func TestSqlAddMediaHistory_DatabaseError(t *testing.T) {
 			entry.ClockSource,
 			entry.CreatedAt.Unix(),
 			entry.UpdatedAt.Unix(),
+			nil,
 			nil,
 		).
 		WillReturnError(sqlmock.ErrCancelled)
@@ -246,19 +248,19 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "nes", "Nintendo Entertainment System",
 			"/games/mario.nes", "Super Mario Bros.", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil,
+			true, "system", startTime, startTime, nil, nil,
 		).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "snes", "Super Nintendo",
 			"/games/zelda.sfc", "The Legend of Zelda", "retroarch", 7200,
 			"boot-1", int64(2000), 7200, 7200, false,
-			true, "system", startTime, startTime, nil,
+			true, "system", startTime, startTime, nil, nil,
 		)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -266,7 +268,7 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 		WithArgs(int64(math.MaxInt64), limit). // lastID=0 becomes math.MaxInt64 in implementation
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, nil, lastID, limit)
+	entries, err := sqlGetMediaHistory(context.Background(), db, nil, nil, lastID, limit)
 	require.NoError(t, err)
 	assert.Len(t, entries, 2)
 	assert.Equal(t, int64(1), entries[0].DBID)
@@ -288,7 +290,7 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	})
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -296,7 +298,7 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 		WithArgs(int64(math.MaxInt64), limit). // lastID=0 becomes math.MaxInt64 in implementation
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, nil, lastID, limit)
+	entries, err := sqlGetMediaHistory(context.Background(), db, nil, nil, lastID, limit)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -384,7 +386,7 @@ func TestSqlGetMediaHistory_DatabaseError(t *testing.T) {
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
 		WillReturnError(sqlmock.ErrCancelled)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, nil, lastID, limit)
+	entries, err := sqlGetMediaHistory(context.Background(), db, nil, nil, lastID, limit)
 	require.Error(t, err)
 	assert.NotNil(t, entries) // Returns empty slice, not nil
 	assert.Empty(t, entries)
@@ -402,7 +404,7 @@ func TestSqlGetMediaHistory_SentinelUsesMaxInt64(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	})
 
 	// Verify that lastID=0 uses math.MaxInt64 as sentinel, not the old MaxInt32
@@ -411,7 +413,7 @@ func TestSqlGetMediaHistory_SentinelUsesMaxInt64(t *testing.T) {
 		WithArgs(int64(math.MaxInt64), 10).
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, nil, 0, 10)
+	entries, err := sqlGetMediaHistory(context.Background(), db, nil, nil, 0, 10)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -431,12 +433,12 @@ func TestSqlGetMediaHistory_LargeLastID(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	}).AddRow(
 		int64(math.MaxInt32)+50, "uuid-1", time.Now().Unix(), nil, "nes", "NES",
 		"/games/mario.nes", "Mario", "retroarch", 100,
 		"boot-1", int64(1000), 100, 100, false,
-		true, "system", time.Now().Unix(), time.Now().Unix(), nil,
+		true, "system", time.Now().Unix(), time.Now().Unix(), nil, nil,
 	)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -444,7 +446,7 @@ func TestSqlGetMediaHistory_LargeLastID(t *testing.T) {
 		WithArgs(lastID, limit).
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, nil, lastID, limit)
+	entries, err := sqlGetMediaHistory(context.Background(), db, nil, nil, lastID, limit)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
 	assert.Equal(t, int64(math.MaxInt32)+50, entries[0].DBID)
@@ -465,13 +467,13 @@ func TestSqlGetMediaHistory_SingleSystemFilter(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "SNES", "Super Nintendo",
 			"/games/zelda.sfc", "The Legend of Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil,
+			true, "system", startTime, startTime, nil, nil,
 		)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND SystemID = \?.*ORDER BY DBID DESC LIMIT`).
@@ -479,7 +481,7 @@ func TestSqlGetMediaHistory_SingleSystemFilter(t *testing.T) {
 		WithArgs(int64(math.MaxInt64), "SNES", 10).
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, []string{"SNES"}, 0, 10)
+	entries, err := sqlGetMediaHistory(context.Background(), db, []string{"SNES"}, nil, 0, 10)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
 	assert.Equal(t, "SNES", entries[0].SystemID)
@@ -500,19 +502,19 @@ func TestSqlGetMediaHistory_MultipleSystemIDs(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	}).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "SNES", "Super Nintendo",
 			"/games/zelda.sfc", "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil,
+			true, "system", startTime, startTime, nil, nil,
 		).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "NES", "NES",
 			"/games/mario.nes", "Mario", "retroarch", 1800,
 			"boot-1", int64(2000), 1800, 1800, false,
-			true, "system", startTime, startTime, nil,
+			true, "system", startTime, startTime, nil, nil,
 		)
 
 	mock.ExpectPrepare(
@@ -522,7 +524,7 @@ func TestSqlGetMediaHistory_MultipleSystemIDs(t *testing.T) {
 		WithArgs(int64(math.MaxInt64), "SNES", "NES", 10).
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, []string{"SNES", "NES"}, 0, 10)
+	entries, err := sqlGetMediaHistory(context.Background(), db, []string{"SNES", "NES"}, nil, 0, 10)
 	require.NoError(t, err)
 	assert.Len(t, entries, 2)
 	assert.Equal(t, "SNES", entries[0].SystemID)
@@ -544,13 +546,13 @@ func TestSqlGetMediaHistory_SystemFilterWithPagination(t *testing.T) {
 		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
-		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID",
 	}).
 		AddRow(
 			int64(8), "uuid-8", startTime, endTime, "SNES", "Super Nintendo",
 			"/games/zelda.sfc", "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil,
+			true, "system", startTime, startTime, nil, nil,
 		)
 
 	// lastID=10 + SystemID filter — both conditions in WHERE clause
@@ -559,7 +561,7 @@ func TestSqlGetMediaHistory_SystemFilterWithPagination(t *testing.T) {
 		WithArgs(int64(10), "SNES", 25).
 		WillReturnRows(rows)
 
-	entries, err := sqlGetMediaHistory(context.Background(), db, []string{"SNES"}, 10, 25)
+	entries, err := sqlGetMediaHistory(context.Background(), db, []string{"SNES"}, nil, 10, 25)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
 	assert.Equal(t, int64(8), entries[0].DBID)

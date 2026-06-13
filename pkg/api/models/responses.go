@@ -97,6 +97,7 @@ type SettingsResponse struct {
 	ErrorReporting            bool               `json:"errorReporting"`
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -583,6 +584,46 @@ type ClientsPairStartResponse struct {
 type ClientsPairedNotification struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
+}
+
+// ProfileResponse represents a device profile in API responses. The PIN
+// hash is never exposed — only whether a PIN is set. SwitchID is included:
+// it is a card selector, not a credential (API switching by SwitchID still
+// enforces the PIN; only physical card scans bypass it).
+type ProfileResponse struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	SwitchID      string  `json:"switchId"`
+	CreatedAt     int64   `json:"createdAt"`
+	LastUpdatedAt int64   `json:"lastUpdatedAt"`
+	HasPIN        bool    `json:"hasPin"`
+}
+
+// ProfilesResponse is the response for the profiles RPC method.
+type ProfilesResponse struct {
+	Profiles []ProfileResponse `json:"profiles"`
+}
+
+// ActiveProfile is a snapshot of the device's active profile, held in
+// service state and broadcast on the profiles.active notification. It
+// carries the resolved limit overrides so the playtime hot path never
+// touches the database. Nil limit fields mean "inherit global config".
+type ActiveProfile struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	HasPIN        bool    `json:"hasPin"`
+}
+
+// ProfilesActiveNotification is the payload for the profiles.active
+// notification. Profile is null when the device has no active profile.
+type ProfilesActiveNotification struct {
+	Profile *ActiveProfile `json:"profile"`
 }
 
 type SettingsAuthClaimResponse struct {

@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -52,6 +53,7 @@ const (
 type scanBehaviorEnv struct {
 	st         *state.State
 	cfg        *config.Instance
+	userDB     *testhelpers.MockUserDBI
 	scanQueue  chan readers.Scan
 	clock      *clockwork.FakeClock
 	launchCh   chan string
@@ -168,6 +170,7 @@ mode = "unrestricted"`))
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		Profiles:            profiles.NewService(db, st),
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 	}
@@ -199,6 +202,7 @@ mode = "unrestricted"`))
 	return &scanBehaviorEnv{
 		st:         st,
 		cfg:        cfg,
+		userDB:     mockUserDB,
 		scanQueue:  scanQueue,
 		clock:      fakeClock,
 		romsDir:    romsDir,

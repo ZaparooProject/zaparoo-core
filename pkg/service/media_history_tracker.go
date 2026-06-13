@@ -96,6 +96,12 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					CreatedAt:      now,
 					UpdatedAt:      now,
 				}
+				// Attribution is fixed at launch time: the row keeps this
+				// profile even if the active profile switches mid-game.
+				if activeProfile := t.st.ActiveProfile(); activeProfile != nil {
+					profileID := activeProfile.ProfileID
+					entry.ProfileID = &profileID
+				}
 				dbid, addErr := t.db.UserDB.AddMediaHistory(entry)
 				if addErr != nil {
 					log.Error().Err(addErr).Msg("failed to add media history entry")

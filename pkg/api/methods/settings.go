@@ -74,6 +74,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
 		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
+		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -221,6 +222,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LaunchGuardRequireConfirm != nil {
 		log.Debug().Bool("launchGuardRequireConfirm", *params.LaunchGuardRequireConfirm).Msg("updating setting")
 		env.Config.SetLaunchGuardRequireConfirm(*params.LaunchGuardRequireConfirm)
+	}
+
+	if params.ProfilesRequireForLaunch != nil {
+		log.Debug().Bool("profilesRequireForLaunch", *params.ProfilesRequireForLaunch).Msg("updating setting")
+		env.Config.SetProfilesRequireForLaunch(*params.ProfilesRequireForLaunch)
 	}
 
 	if params.ReadersConnect != nil {

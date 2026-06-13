@@ -237,7 +237,7 @@ func TestPropertyGetMediaHistoryLimitClamping(t *testing.T) {
 			MediaPath TEXT, MediaName TEXT, LauncherID TEXT, PlayTime INTEGER,
 			BootUUID TEXT, MonotonicStart INTEGER, DurationSec INTEGER, WallDuration INTEGER,
 			TimeSkewFlag INTEGER, ClockReliable INTEGER, ClockSource TEXT,
-			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT
+			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT
 		)
 	`)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestPropertyGetMediaHistoryLimitClamping(t *testing.T) {
 		limit := rapid.IntRange(-100, 200).Draw(t, "limit")
 
 		// The function should clamp limit to valid range
-		entries, err := sqlGetMediaHistory(ctx, db, nil, 0, limit)
+		entries, err := sqlGetMediaHistory(ctx, db, nil, nil, 0, limit)
 		require.NoError(t, err)
 
 		// With empty table, we get empty results regardless of limit
@@ -274,7 +274,7 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 			MediaPath TEXT, MediaName TEXT, LauncherID TEXT, PlayTime INTEGER,
 			BootUUID TEXT, MonotonicStart INTEGER, DurationSec INTEGER, WallDuration INTEGER,
 			TimeSkewFlag INTEGER, ClockReliable INTEGER, ClockSource TEXT,
-			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT
+			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT
 		)
 	`)
 	require.NoError(t, err)
@@ -296,7 +296,7 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 		lastID := int64(rapid.IntRange(-10, 30).Draw(t, "lastID"))
 		limit := rapid.IntRange(1, 100).Draw(t, "limit")
 
-		entries, err := sqlGetMediaHistory(ctx, db, nil, lastID, limit)
+		entries, err := sqlGetMediaHistory(ctx, db, nil, nil, lastID, limit)
 		require.NoError(t, err)
 
 		// Verify all returned entries have DBID < lastID (or lastID=0 means all)
