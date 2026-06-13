@@ -666,3 +666,89 @@ func TestKeyboardPressSequence_InterKeyDelay(t *testing.T) {
 	assert.Contains(t, rec.events, keyEvent{"down", 30})
 	assert.Contains(t, rec.events, keyEvent{"down", 48})
 }
+
+// TestKeyboardPressSequence_LongFormPressReleaseHoldSpecial verifies the verbose
+// macro forms support named special keys without typing braces in the token body.
+func TestKeyboardPressSequence_LongFormPressReleaseHoldSpecial(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	input := newRecordingLinuxInput(rec)
+
+	require.NoError(t, input.KeyboardPressSequence([]string{
+		"{press:enter}",
+		"{release:enter}",
+		"{hold:enter:0ms}",
+	}, 0))
+
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 28},
+		{kind: "up", code: 28},
+		{kind: "down", code: 28},
+		{kind: "up", code: 28},
+	}, rec.events)
+}
+
+// TestKeyboardPressSequence_MacroShiftedKeyUsesBaseCode verifies press/release
+// tokens can hold shifted characters by their base keycode without a shift run.
+func TestKeyboardPressSequence_MacroShiftedKeyUsesBaseCode(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	input := newRecordingLinuxInput(rec)
+
+	require.NoError(t, input.KeyboardPressSequence([]string{"{press:M}", "{release:M}"}, 0))
+
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 50},
+		{kind: "up", code: 50},
+	}, rec.events)
+}
+
+// TestKeyboardPressSequence_RejectsComboHoldToken verifies hold-style macros do
+// not accept combos, because releasing partially-held chords is ambiguous.
+func TestKeyboardPressSequence_RejectsComboHoldToken(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	input := newRecordingLinuxInput(rec)
+
+	err := input.KeyboardPressSequence([]string{"{hold:ctrl+a:0}"}, 0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not support combos")
+	assert.Empty(t, rec.events)
+}
+
+// TestKeyboardPressSequence_InvalidDelayToken verifies malformed inline delays
+// fail before later keys are emitted.
+func TestKeyboardPressSequence_InvalidDelayToken(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	input := newRecordingLinuxInput(rec)
+
+	err := input.KeyboardPressSequence([]string{"{delay:nope}", "a"}, 0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid delay token")
+	assert.Empty(t, rec.events)
+}
+
+// TestKeyboardPressSequence_ComboToken verifies braced combos still pass through
+// the normal combo path when not interpreted as inline macro tokens.
+func TestKeyboardPressSequence_ComboToken(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingKeyboard{}
+	input := newRecordingLinuxInput(rec)
+
+	require.NoError(t, input.KeyboardPressSequence([]string{"{ctrl+a}"}, 0))
+
+	assert.Equal(t, []keyEvent{
+		{kind: "down", code: 29},
+		{kind: "down", code: 30},
+		{kind: "up", code: 30},
+		{kind: "up", code: 29},
+	}, rec.events)
+}

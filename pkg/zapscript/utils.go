@@ -105,7 +105,7 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	default:
 		d, durErr := time.ParseDuration(env.Cmd.Args[0])
 		if durErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], err)
+			return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], durErr)
 		}
 		log.Info().Msgf("delaying for: %v", d)
 		time.Sleep(d)
