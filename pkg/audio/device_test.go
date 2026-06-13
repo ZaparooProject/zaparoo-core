@@ -99,11 +99,20 @@ func TestSharedDeviceOpenIfNeededRequiresActiveSource(t *testing.T) {
 
 	d := &sharedDevice{sources: []mixSource{&testMixSource{active: false}}}
 	d.openIfNeeded()
-	assert.False(t, d.opening)
+	d.devMu.Lock()
+	opening := d.opening
+	d.devMu.Unlock()
+	assert.False(t, opening)
 
 	d.sources = append(d.sources, &testMixSource{active: true})
 	d.openIfNeeded()
-	assert.True(t, d.opening)
+	// Read under devMu: failAllSources (called when ALSA is unavailable) also
+	// holds devMu when it clears d.opening, so the lock ensures we observe the
+	// value set by openIfNeeded before the background goroutine can clear it.
+	d.devMu.Lock()
+	opening = d.opening
+	d.devMu.Unlock()
+	assert.True(t, opening)
 }
 
 func TestSharedDeviceManageRemovesDrainedSourceAndNotifies(t *testing.T) {
