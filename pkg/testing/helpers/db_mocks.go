@@ -381,6 +381,18 @@ func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (i
 	return rowsHealed, nil
 }
 
+func (m *MockUserDBI) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
+	args := m.Called(dayStart)
+	total, ok := args.Get(0).(int64)
+	if !ok {
+		total = 0
+	}
+	if err := args.Error(1); err != nil {
+		return total, fmt.Errorf("mock UserDBI sum media play time for day failed: %w", err)
+	}
+	return total, nil
+}
+
 func (m *MockUserDBI) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
 	args := m.Called(msg)
 	if result, ok := args.Get(0).(*database.InboxMessage); ok {

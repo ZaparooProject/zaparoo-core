@@ -22,6 +22,8 @@ package config
 import (
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Playtime configures play time tracking and limits.
@@ -70,6 +72,9 @@ func (c *Instance) DailyLimit() time.Duration {
 	}
 	d, err := time.ParseDuration(c.vals.Playtime.Limits.Daily)
 	if err != nil {
+		log.Warn().
+			Str("value", c.vals.Playtime.Limits.Daily).
+			Msg("playtime: invalid daily limit duration in config, limit disabled")
 		return 0
 	}
 	return d
@@ -85,6 +90,9 @@ func (c *Instance) SessionLimit() time.Duration {
 	}
 	d, err := time.ParseDuration(c.vals.Playtime.Limits.Session)
 	if err != nil {
+		log.Warn().
+			Str("value", c.vals.Playtime.Limits.Session).
+			Msg("playtime: invalid session limit duration in config, limit disabled")
 		return 0
 	}
 	return d

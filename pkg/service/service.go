@@ -244,6 +244,9 @@ func Start(
 	log.Info().Msg("initializing playtime limits")
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
 	limitsManager.Start(notifBroker, st.Notifications)
+	// Restore session state from history so session limits survive restarts within
+	// the cooldown window. Must run after CloseHangingMediaHistory (called above).
+	limitsManager.RestoreSessionFromHistory(time.Now())
 	if cfg.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
 	}
@@ -436,7 +439,7 @@ func Start(
 		db:    db,
 		clock: clockwork.NewRealClock(),
 	}
-	historyNotifications, _ := notifBroker.Subscribe(100)
+	historyNotifications, _ := notifBroker.Subscribe(100, models.NotificationStarted, models.NotificationStopped)
 	historyListenDone := make(chan struct{})
 	go func() {
 		defer close(historyListenDone)

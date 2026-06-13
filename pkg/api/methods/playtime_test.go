@@ -79,14 +79,8 @@ func TestHandlePlaytime_ResetStateWithDailyFields(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
-		{
-			DBID:      1,
-			StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
-			EndTime:   timePtr(time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)),
-			PlayTime:  3600, // 1 hour
-		},
-	}, nil)
+	dayStart := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+	mockDB.On("SumMediaPlayTimeForDay", dayStart).Return(int64(3600), nil)
 
 	db := &database.Database{
 		UserDB: mockDB,
@@ -180,14 +174,8 @@ func TestHandlePlaytime_CooldownStateWithDailyFields(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
-		{
-			DBID:      1,
-			StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
-			EndTime:   timePtr(time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)),
-			PlayTime:  1800, // 30 minutes
-		},
-	}, nil)
+	dayStart := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+	mockDB.On("SumMediaPlayTimeForDay", dayStart).Return(int64(1800), nil)
 
 	db := &database.Database{
 		UserDB: mockDB,
@@ -324,9 +312,4 @@ func TestHandlePlaytime_UnreliableClockNilDailyFields(t *testing.T) {
 	assert.Nil(t, resp.DailyRemaining, "daily remaining should be nil when clock unreliable")
 
 	mockDB.AssertExpectations(t)
-}
-
-// timePtr returns a pointer to the given time
-func timePtr(t time.Time) *time.Time {
-	return &t
 }
