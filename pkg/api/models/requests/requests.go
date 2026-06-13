@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
@@ -45,6 +46,7 @@ type RequestEnv struct {
 	State           *state.State
 	Database        *database.Database
 	LimitsManager   *playtime.LimitsManager
+	Profiles        *profiles.Service
 	LauncherCache   *helpers.LauncherCache
 	Player          audio.Player
 	PlaybackManager audio.PlaybackManager

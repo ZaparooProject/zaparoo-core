@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
@@ -38,6 +39,7 @@ type ServiceContext struct {
 	Config              *config.Instance
 	State               *state.State
 	DB                  *database.Database
+	Profiles            *profiles.Service
 	PlaybackManager     audio.PlaybackManager
 	LaunchSoftwareQueue chan *tokens.Token
 	PlaylistQueue       chan *playlists.Playlist

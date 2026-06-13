@@ -408,3 +408,35 @@ Sent when a new inbox message is added to the server.
   }
 }
 ```
+
+## Profiles
+
+### profiles.active
+
+Sent when the device's active profile changes, including deactivation.
+
+#### Parameters
+
+| Key     | Type   | Required | Description                                                        |
+| :------ | :----- | :------- | :------------------------------------------------------------------ |
+| profile | object | Yes      | The new active profile, or null when the device deactivated.       |
+
+The profile object contains `profileId`, `name`, `hasPin` and any playtime limit overrides (`limitsEnabled`, `dailyLimit`, `sessionLimit`).
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "profiles.active",
+  "params": {
+    "profile": {
+      "profileId": "1ad28b9a-7aef-11ef-9817-020304050607",
+      "name": "Kid A",
+      "hasPin": true,
+      "limitsEnabled": true,
+      "dailyLimit": "2h"
+    }
+  }
+}
+```

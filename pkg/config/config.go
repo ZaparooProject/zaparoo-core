@@ -63,6 +63,7 @@ type Values struct {
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
 	Playtime       Playtime  `toml:"playtime,omitempty"`
+	Profiles       Profiles  `toml:"profiles,omitempty"`
 	Media          Media     `toml:"media,omitempty"`
 	ZapScript      ZapScript `toml:"zapscript,omitempty"`
 	Mappings       Mappings  `toml:"mappings,omitempty"`

@@ -493,6 +493,114 @@ func (m *MockUserDBI) CountClients() (int, error) {
 	return count, nil
 }
 
+func (m *MockUserDBI) CreateProfile(p *database.Profile) error {
+	args := m.Called(p)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI create profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetProfile(profileID string) (*database.Profile, error) {
+	args := m.Called(profileID)
+	if result, ok := args.Get(0).(*database.Profile); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI get profile failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get profile failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no profile is configured
+}
+
+func (m *MockUserDBI) GetProfileBySwitchID(switchID string) (*database.Profile, error) {
+	args := m.Called(switchID)
+	if result, ok := args.Get(0).(*database.Profile); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI get profile by switch ID failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get profile by switch ID failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no profile is configured
+}
+
+func (m *MockUserDBI) ListProfiles() ([]database.Profile, error) {
+	args := m.Called()
+	if profiles, ok := args.Get(0).([]database.Profile); ok {
+		if err := args.Error(1); err != nil {
+			return profiles, fmt.Errorf("mock UserDBI list profiles failed: %w", err)
+		}
+		return profiles, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list profiles failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) UpdateProfile(p *database.Profile) error {
+	args := m.Called(p)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteProfile(profileID string) error {
+	args := m.Called(profileID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetMediaHistoryByProfile(
+	profileID string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(profileID, lastID, limit)
+	history, ok := args.Get(0).([]database.MediaHistoryEntry)
+	if !ok {
+		history = []database.MediaHistoryEntry{}
+	}
+	if err := args.Error(1); err != nil {
+		return history, fmt.Errorf("mock UserDBI get media history by profile failed: %w", err)
+	}
+	return history, nil
+}
+
+func (m *MockUserDBI) SetDeviceState(key, value string) error {
+	args := m.Called(key, value)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set device state failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetDeviceState(key string) (value string, found bool, err error) {
+	args := m.Called(key)
+	if v, ok := args.Get(0).(string); ok {
+		value = v
+	}
+	found = args.Bool(1)
+	if err := args.Error(2); err != nil {
+		return value, found, fmt.Errorf("mock UserDBI get device state failed: %w", err)
+	}
+	return value, found, nil
+}
+
+func (m *MockUserDBI) DeleteDeviceState(key string) error {
+	args := m.Called(key)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete device state failed: %w", err)
+	}
+	return nil
+}
+
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock

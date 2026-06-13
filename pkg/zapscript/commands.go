@@ -109,6 +109,9 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdControl:    cmdControl,
 			zapscript.ZapScriptCmdScreenshot: cmdScreenshot,
 
+			zapscript.ZapScriptCmdProfileSwitch: cmdProfileSwitch,
+			zapscript.ZapScriptCmdProfileClear:  cmdProfileClear,
+
 			zapscript.ZapScriptCmdMisterINI:       forwardCmd,
 			zapscript.ZapScriptCmdMisterCore:      forwardCmd,
 			zapscript.ZapScriptCmdMisterScript:    forwardCmd,

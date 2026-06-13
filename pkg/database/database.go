@@ -74,6 +74,7 @@ type MediaHistoryEntry struct {
 	EndTime        *time.Time `json:"endTime,omitempty"`
 	SyncedAt       *time.Time `json:"syncedAt,omitempty"`
 	DeviceID       *string    `json:"deviceId,omitempty"`
+	ProfileID      *string    `json:"profileId,omitempty"`
 	BootUUID       string     `json:"bootUuid,omitempty"`
 	ClockSource    string     `json:"clockSource,omitempty"`
 	SystemID       string     `json:"systemId"`
@@ -122,6 +123,28 @@ type InboxMessage struct {
 	Severity  int       `json:"severity"`
 	ProfileID int64     `json:"profileId"`
 }
+
+// Profile represents a device profile: a named bucket of preferences and
+// limits with no credentials. PINHash is hidden from JSON
+// (API uses models.ProfileResponse instead). Nil limit fields mean
+// "inherit the global config value"; a "0" duration string means
+// "explicitly unlimited".
+type Profile struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	SwitchID      string  `json:"switchId"`
+	PINHash       string  `json:"-"`
+	DBID          int64   `json:"-"`
+	CreatedAt     int64   `json:"createdAt"`
+	UpdatedAt     int64   `json:"updatedAt"`
+}
+
+// DeviceStateKeyActiveProfile is the DeviceState key holding the
+// ProfileID of the device's active profile.
+const DeviceStateKeyActiveProfile = "active_profile_id"
 
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).
@@ -584,6 +607,16 @@ type UserDBI interface {
 	DeleteClient(clientID string) error
 	UpdateClientLastSeen(authToken string, lastSeenAt int64) error
 	CountClients() (int, error)
+	CreateProfile(p *Profile) error
+	GetProfile(profileID string) (*Profile, error)
+	GetProfileBySwitchID(switchID string) (*Profile, error)
+	ListProfiles() ([]Profile, error)
+	UpdateProfile(p *Profile) error
+	DeleteProfile(profileID string) error
+	GetMediaHistoryByProfile(profileID string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	SetDeviceState(key, value string) error
+	GetDeviceState(key string) (string, bool, error)
+	DeleteDeviceState(key string) error
 }
 
 type MediaDBI interface {

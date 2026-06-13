@@ -43,6 +43,15 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Thread-safe**: `config.Instance` uses `syncutil.RWMutex`
 - Maintain backward compatibility — use migrations for breaking changes
 
+## Profiles
+
+Device profiles are named buckets of preferences and limits, with no passwords or accounts. See `pkg/service/profiles/`.
+
+- **Active profile**: one per device, held as a snapshot in service state (`pkg/service/state/`) and persisted in the UserDB `DeviceState` table so it survives restarts. No active profile = pre-profiles behavior exactly.
+- **Switching**: via API (`profiles.switch`, PIN-checked) or by scanning a card containing `**profile.switch:<switchId>`. The switch ID is a word phrase (e.g. `corn-arm-truck`) generated from an embedded wordlist — a selector, never a credential. Card scans bypass the PIN: possession of the card is the authorization. PINs gate entry only; deactivating is always free.
+- **Playtime limits**: profiles can override the global daily/session limits. `pkg/service/playtime.LimitsManager` reads limits through a `LimitsProvider`; the profile-aware resolver (`pkg/service/profiles.LimitsResolver`) layers the active profile's overrides over global config. Daily usage accounting is scoped to the active profile via the `ProfileID` column on `MediaHistory` (rows are attributed at launch time). Switching profiles resets the limit session.
+- **Require-profile gate**: the `[profiles] require_for_launch` config setting blocks media launches while no profile is active (profile switch commands still run, so scanning a card unparks the device).
+
 ## Reader Auto-Detection
 
 10 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, rs232barcode, simpleserial, tty2oled

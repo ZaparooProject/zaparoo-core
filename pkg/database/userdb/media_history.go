@@ -61,7 +61,18 @@ func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) (
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, lastID, limit)
+	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, nil, lastID, limit)
+}
+
+// GetMediaHistoryByProfile retrieves media history entries attributed to a
+// specific profile, with pagination.
+func (db *UserDB) GetMediaHistoryByProfile(
+	profileID string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlGetMediaHistory(db.ctx, db.sql, nil, &profileID, lastID, limit)
 }
 
 // GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
@@ -118,8 +129,8 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		INSERT INTO MediaHistory(
 			ID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history insert statement: %w", err)
@@ -133,6 +144,10 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 	var deviceID any
 	if entry.DeviceID != nil {
 		deviceID = *entry.DeviceID
+	}
+	var profileID any
+	if entry.ProfileID != nil {
+		profileID = *entry.ProfileID
 	}
 
 	result, err := stmt.ExecContext(ctx,
@@ -154,6 +169,7 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		entry.CreatedAt.Unix(),
 		entry.UpdatedAt.Unix(),
 		deviceID,
+		profileID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute media history insert: %w", err)
@@ -215,7 +231,7 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 }
 
 func sqlGetMediaHistory(
-	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
+	ctx context.Context, db *sql.DB, systemIDs []string, profileID *string, lastID int64, limit int,
 ) ([]database.MediaHistoryEntry, error) {
 	if limit <= 0 {
 		limit = 25
@@ -232,7 +248,7 @@ func sqlGetMediaHistory(
 	}
 
 	conditions := []string{"DBID < ?"}
-	args := make([]any, 0, len(systemIDs)+2)
+	args := make([]any, 0, len(systemIDs)+3)
 	args = append(args, lastID)
 
 	if len(systemIDs) == 1 {
@@ -247,6 +263,11 @@ func sqlGetMediaHistory(
 		conditions = append(conditions, "SystemID IN ("+strings.Join(placeholders, ", ")+")")
 	}
 
+	if profileID != nil {
+		conditions = append(conditions, "ProfileID = ?")
+		args = append(args, *profileID)
+	}
+
 	where := strings.Join(conditions, " AND ")
 	args = append(args, limit)
 	queryStarted := time.Now()
@@ -257,7 +278,7 @@ func sqlGetMediaHistory(
 			DBID, ID, StartTime, EndTime, SystemID, SystemName,
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID
 		FROM MediaHistory
 		WHERE %s
 		ORDER BY DBID DESC
@@ -290,7 +311,7 @@ func sqlGetMediaHistory(
 		var endTimeUnix sql.NullInt64
 		var createdAtUnix, updatedAtUnix int64
 		var id, clockSource sql.NullString
-		var deviceID sql.NullString
+		var deviceID, rowProfileID sql.NullString
 
 		err = rows.Scan(
 			&entry.DBID,
@@ -313,6 +334,7 @@ func sqlGetMediaHistory(
 			&createdAtUnix,
 			&updatedAtUnix,
 			&deviceID,
+			&rowProfileID,
 		)
 		if err != nil {
 			return list, fmt.Errorf("failed to scan media history row: %w", err)
@@ -327,6 +349,10 @@ func sqlGetMediaHistory(
 		if deviceID.Valid {
 			deviceStr := deviceID.String
 			entry.DeviceID = &deviceStr
+		}
+		if rowProfileID.Valid {
+			profileStr := rowProfileID.String
+			entry.ProfileID = &profileStr
 		}
 
 		entry.StartTime = time.Unix(startTimeUnix, 0)

@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -240,11 +241,21 @@ func Start(
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
+	// Initialize profiles and restore the persisted active profile before
+	// the limits manager starts, so limit checks see the right profile.
+	log.Info().Msg("initializing profiles service")
+	profilesSvc := profiles.NewService(db, st)
+	if restoreErr := profilesSvc.RestoreOnBoot(); restoreErr != nil {
+		log.Error().Err(restoreErr).Msg("error restoring active profile")
+	}
+
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
+	limitsResolver := profiles.NewLimitsResolver(cfg, st)
+	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.Start(notifBroker, st.Notifications)
-	if cfg.PlaytimeLimitsEnabled() {
+	if limitsResolver.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
 	}
 
@@ -253,6 +264,7 @@ func Start(
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		Profiles:            profilesSvc,
 		PlaybackManager:     playbackManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
@@ -315,7 +327,7 @@ func Start(
 	apiDone := make(chan error, 1)
 	go func() {
 		apiDone <- api.StartWithReady(
-			pl, cfg, st, itq, cfq, db, limitsManager,
+			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
 			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
 			idleSched, apiReady,
 		)
