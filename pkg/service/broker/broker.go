@@ -34,7 +34,7 @@ import (
 // subscriberState manages a single subscription, including a drain goroutine that
 // delivers coalesced notifications when the output channel fills up.
 //
-// For coaleseable methods: if outChan is full when a notification arrives, the
+// For coalesceable methods: if outChan is full when a notification arrives, the
 // notification is stored in the coalesced map (replacing any prior pending
 // notification for the same method) and the drain goroutine is signalled. This
 // means slow consumers see only the latest value for high-frequency progress
@@ -42,22 +42,35 @@ import (
 //
 // For all other methods: broadcast falls back to a non-blocking send with a
 // drop warning (existing behaviour).
+//
+// methodFilter, when non-nil, limits delivery to the listed methods. Notifications
+// for methods not in the filter are silently skipped — they were never intended for
+// this subscriber, so no drop warning is emitted.
 type subscriberState struct {
-	outChan   chan models.Notification
-	coalesced map[string]models.Notification
-	signal    chan struct{}
-	stop      chan struct{}
-	stopped   chan struct{}
-	mu        syncutil.Mutex
+	outChan      chan models.Notification
+	coalesced    map[string]models.Notification
+	signal       chan struct{}
+	stop         chan struct{}
+	stopped      chan struct{}
+	methodFilter map[string]bool // nil = receive all methods
+	mu           syncutil.Mutex
 }
 
-func newSubscriberState(bufferSize int) *subscriberState {
+func newSubscriberState(bufferSize int, methods []string) *subscriberState {
+	var filter map[string]bool
+	if len(methods) > 0 {
+		filter = make(map[string]bool, len(methods))
+		for _, m := range methods {
+			filter[m] = true
+		}
+	}
 	s := &subscriberState{
-		outChan:   make(chan models.Notification, bufferSize),
-		coalesced: make(map[string]models.Notification),
-		signal:    make(chan struct{}, 1),
-		stop:      make(chan struct{}),
-		stopped:   make(chan struct{}),
+		outChan:      make(chan models.Notification, bufferSize),
+		coalesced:    make(map[string]models.Notification),
+		signal:       make(chan struct{}, 1),
+		stop:         make(chan struct{}),
+		stopped:      make(chan struct{}),
+		methodFilter: filter,
 	}
 	go s.run()
 	return s
@@ -90,6 +103,8 @@ func (s *subscriberState) run() {
 // It uses non-blocking sends to ensure that slow consumers cannot block the system.
 // For methods listed in coalesceable, a per-subscriber drain goroutine delivers the
 // latest notification whenever the output channel has space, preventing stale drops.
+// Subscribers may declare a method filter at subscribe time; notifications for
+// unlisted methods are skipped rather than queued or dropped with a warning.
 type Broker struct {
 	ctx          context.Context
 	source       <-chan models.Notification
@@ -142,7 +157,7 @@ func (b *Broker) Start() {
 	}()
 }
 
-// broadcast sends a notification to all subscribers.
+// broadcast sends a notification to all subscribers whose method filter admits it.
 // For coalesceable methods: tries a direct non-blocking send; if the channel is
 // full, stores the latest payload in the subscriber's coalesced slot and wakes
 // the drain goroutine so it can deliver when space opens.
@@ -154,6 +169,11 @@ func (b *Broker) broadcast(notif models.Notification) {
 	coalesce := b.coalesceable[notif.Method]
 
 	for id, sub := range b.subscribers {
+		// Skip subscribers that have declared a method filter and this method is not in it.
+		if sub.methodFilter != nil && !sub.methodFilter[notif.Method] {
+			continue
+		}
+
 		select {
 		case sub.outChan <- notif:
 			// Delivered directly.
@@ -180,21 +200,24 @@ func (b *Broker) broadcast(notif models.Notification) {
 // Subscribe creates a new subscription and returns a channel that will receive
 // notifications. The bufferSize determines how many notifications can be queued
 // before coalescing (for coalesceable methods) or dropping (for all others) kicks in.
+// The optional methods parameter limits delivery to those notification methods only;
+// omitting it subscribes to all methods (backward-compatible).
 //
 // Returns the notification channel and a subscription ID that can be used for unsubscribing.
-func (b *Broker) Subscribe(bufferSize int) (notifChan <-chan models.Notification, id int) {
+func (b *Broker) Subscribe(bufferSize int, methods ...string) (notifChan <-chan models.Notification, id int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	id = b.nextID
 	b.nextID++
 
-	sub := newSubscriberState(bufferSize)
+	sub := newSubscriberState(bufferSize, methods)
 	b.subscribers[id] = sub
 
 	log.Debug().
 		Int("subscriber_id", id).
 		Int("buffer_size", bufferSize).
+		Strs("method_filter", methods).
 		Msg("new subscriber registered")
 
 	notifChan = sub.outChan

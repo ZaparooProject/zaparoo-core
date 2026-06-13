@@ -109,6 +109,17 @@ func (db *UserDB) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64
 	return sqlHealTimestamps(db.ctx, db.sql, bootUUID, trueBootTime)
 }
 
+// SumMediaPlayTimeForDay returns the total seconds of completed play-time that
+// overlaps with the day starting at dayStart. Sessions that span midnight are
+// pro-rated: only the portion after dayStart is counted. The currently-active
+// session (EndTime IS NULL) is excluded; callers add it separately.
+func (db *UserDB) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql, dayStart)
+}
+
 /*
  * Internal SQL functions
  */
@@ -206,7 +217,9 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 		}
 	}()
 
-	_, err = stmt.ExecContext(ctx, endTime.Unix(), playTime, playTime, time.Now().Unix(), endTime.Unix(), dbid)
+	// Use endTime as UpdatedAt: both represent the moment the session ended.
+	endUnix := endTime.Unix()
+	_, err = stmt.ExecContext(ctx, endUnix, playTime, playTime, endUnix, endUnix, dbid)
 	if err != nil {
 		return fmt.Errorf("failed to execute media history close: %w", err)
 	}
@@ -450,10 +463,46 @@ func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) 
 	return rowsAffected, nil
 }
 
+func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Time) (int64, error) {
+	dayStartUnix := dayStart.Unix()
+
+	// Sum completed sessions that overlap [dayStart, ∞).
+	// Sessions spanning midnight are pro-rated: only the portion after dayStart counts.
+	// The active session (EndTime IS NULL) is excluded; callers add it separately.
+	stmt, err := db.PrepareContext(ctx, `
+		SELECT COALESCE(SUM(
+		    CASE
+		        WHEN StartTime < ? THEN EndTime - ?
+		        ELSE PlayTime
+		    END
+		), 0)
+		FROM MediaHistory
+		WHERE EndTime IS NOT NULL
+		  AND EndTime > ?;
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare daily play time sum statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var total int64
+	if scanErr := stmt.QueryRowContext(ctx, dayStartUnix, dayStartUnix, dayStartUnix).Scan(&total); scanErr != nil {
+		return 0, fmt.Errorf("failed to scan daily play time sum: %w", scanErr)
+	}
+
+	return total, nil
+}
+
 func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBootTime time.Time) (int64, error) {
 	trueBootUnix := trueBootTime.Unix()
 
-	// Heal MediaHistory timestamps
+	// Heal MediaHistory timestamps.
+	// Rows with MonotonicStart = 0 are skipped: they cannot be accurately healed
+	// (uptime was unavailable when the row was written), so we leave them as-is.
 	mediaStmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
 		SET StartTime = ? + MonotonicStart,
@@ -464,7 +513,7 @@ func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBoo
 		    ClockReliable = 1,
 		    ClockSource = 'healed',
 		    UpdatedAt = unixepoch()
-		WHERE BootUUID = ? AND ClockReliable = 0;
+		WHERE BootUUID = ? AND ClockReliable = 0 AND MonotonicStart > 0;
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history heal statement: %w", err)

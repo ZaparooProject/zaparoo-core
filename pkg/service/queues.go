@@ -589,16 +589,17 @@ func processTokenQueue(
 
 			// Only check playtime limits if the script contains media-launching commands
 			if hasMediaLaunchCmd {
-				if limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
-					log.Warn().Err(limitErr).Msg("playtime: launch blocked by daily limit")
+				if limitReason, limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
+					log.Warn().Err(limitErr).Msg("playtime: launch blocked by limit")
 
-					// Send playtime limit notification
-					notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
-						Reason: models.PlaytimeLimitReasonDaily,
-					})
+					if limitReason != "" {
+						notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
+							Reason: limitReason,
+						})
 
-					path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
-					helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+						path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
+						helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+					}
 
 					he.Success = false
 					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {

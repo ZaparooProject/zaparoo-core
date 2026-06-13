@@ -562,6 +562,7 @@ type UserDBI interface {
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)
 	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)
+	SumMediaPlayTimeForDay(dayStart time.Time) (int64, error)
 	AddMapping(m *Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error

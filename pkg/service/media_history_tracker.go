@@ -54,6 +54,38 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 	for notif := range notificationChan {
 		switch notif.Method {
 		case models.NotificationStarted:
+			// If a previous session is still open (e.g., a stop notification was
+			// dropped), close it now before creating the new entry. This prevents orphaned
+			// rows with no EndTime from accumulating in MediaHistory.
+			t.mu.RLock()
+			prevDBID := t.currentHistoryDBID
+			prevStartTime := t.currentMediaStartTime
+			prevStartTimeMono := t.currentMediaStartTimeMono
+			t.mu.RUnlock()
+
+			if prevDBID != 0 {
+				log.Warn().Int64("dbid", prevDBID).
+					Msg("media history: closing orphaned entry before new session starts")
+				endTime := t.clock.Now()
+				var playTime int
+				if !prevStartTimeMono.IsZero() {
+					playTime = int(time.Since(prevStartTimeMono).Seconds())
+				} else if !prevStartTime.IsZero() {
+					playTime = int(endTime.Sub(prevStartTime).Seconds())
+				}
+				if closeErr := t.db.UserDB.CloseMediaHistory(prevDBID, endTime, playTime); closeErr != nil {
+					log.Error().Err(closeErr).Int64("dbid", prevDBID).
+						Msg("media history: failed to close orphaned entry")
+				}
+				t.mu.Lock()
+				if t.currentHistoryDBID == prevDBID {
+					t.currentHistoryDBID = 0
+					t.currentMediaStartTime = time.Time{}
+					t.currentMediaStartTimeMono = time.Time{}
+				}
+				t.mu.Unlock()
+			}
+
 			// Media started - create new history entry
 			activeMedia := t.st.ActiveMedia()
 			if activeMedia != nil {
@@ -161,9 +193,10 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 }
 
 // updatePlayTime periodically updates the PlayTime for the currently active media
-// history entry every minute.
+// history entry every 15 seconds. This limits crash-loss to at most 15 seconds of
+// playtime and keeps the history accurate for users who care about tracking.
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
-	ticker := t.clock.NewTicker(1 * time.Minute)
+	ticker := t.clock.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {

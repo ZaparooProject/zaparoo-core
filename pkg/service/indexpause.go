@@ -44,7 +44,7 @@ func watchGameForIndexPause(
 	ns chan<- models.Notification,
 	pauser *syncutil.Pauser,
 ) {
-	notifChan, subID := b.Subscribe(10)
+	notifChan, subID := b.Subscribe(32, models.NotificationStarted, models.NotificationStopped)
 	defer b.Unsubscribe(subID)
 
 	gameActive := st.ActiveMedia() != nil
@@ -60,7 +60,7 @@ func watchGameForScrapePause(
 	ns chan<- models.Notification,
 	pauser *syncutil.Pauser,
 ) {
-	notifChan, subID := b.Subscribe(10)
+	notifChan, subID := b.Subscribe(32, models.NotificationStarted, models.NotificationStopped)
 	defer b.Unsubscribe(subID)
 
 	gameActive := st.ActiveMedia() != nil
