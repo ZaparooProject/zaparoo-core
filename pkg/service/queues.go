@@ -592,13 +592,14 @@ func processTokenQueue(
 				if limitReason, limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
 					log.Warn().Err(limitErr).Msg("playtime: launch blocked by limit")
 
-					// Send playtime limit notification with the actual reason (daily or session)
-					notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
-						Reason: limitReason,
-					})
+					if limitReason != "" {
+						notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
+							Reason: limitReason,
+						})
 
-					path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
-					helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+						path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
+						helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
+					}
 
 					he.Success = false
 					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {

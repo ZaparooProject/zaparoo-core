@@ -566,8 +566,8 @@ func (tm *LimitsManager) buildRuleContext(
 	bothClocksReliable := sessionStartWasReliable && currentClockReliable
 
 	var dailyUsage time.Duration
-	if bothClocksReliable {
-		// Both clocks appear valid - calculate daily usage normally
+	if bothClocksReliable && tm.cfg.DailyLimit() > 0 {
+		// Both clocks appear valid and a daily limit is configured - calculate daily usage.
 		year, month, day := now.Date()
 		todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
 
@@ -578,6 +578,11 @@ func (tm *LimitsManager) buildRuleContext(
 			sessionStartToday = todayStart
 		}
 		sessionDurationToday := now.Sub(sessionStartToday)
+
+		// Lower-bound clamp: prevent negative duration during wall-clock rollback.
+		if sessionDurationToday < 0 {
+			sessionDurationToday = 0
+		}
 
 		// Safety clamp: Session duration today cannot exceed total session duration.
 		// This prevents math errors when clock jumps (e.g., 1970 → 2025 mid-session).
@@ -591,7 +596,7 @@ func (tm *LimitsManager) buildRuleContext(
 			return RuleContext{}, fmt.Errorf("failed to calculate daily usage: %w", err)
 		}
 		dailyUsage = usage
-	} else {
+	} else if !bothClocksReliable {
 		// Clock unreliable - skip daily usage calculation.
 		// DailyLimitRule will skip enforcement when ClockReliable is false.
 		// This provides graceful degradation: session limits still work.

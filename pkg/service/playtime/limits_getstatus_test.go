@@ -456,10 +456,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		// DB still gets called in buildRuleContext when clock is reliable,
-		// but the result is not used when daily limit is 0
-		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
-			Return(int64(0), nil)
+		// No DB call expected - DailyLimit() == 0, so buildRuleContext skips the query.
 
 		db := &database.Database{
 			UserDB: mockDB,

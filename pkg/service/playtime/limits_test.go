@@ -168,7 +168,9 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 			UserDB: mockDB,
 		}
 
-		cfg := &config.Instance{}
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{Limits: config.PlaytimeLimits{Daily: "2h"}},
+		})
 
 		sessionStart := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
 		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
@@ -247,7 +249,9 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 			UserDB: mockDB,
 		}
 
-		cfg := &config.Instance{}
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{Limits: config.PlaytimeLimits{Daily: "2h"}},
+		})
 
 		// Session started yesterday at 11 PM
 		sessionStart := time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC)
@@ -368,11 +372,9 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 				UserDB: mockDB,
 			}
 
-			// Setup config with limits enabled
-			cfg := &config.Instance{}
-			*cfg = config.Instance{} // Initialize with defaults
-			// Note: We don't actually need limits enabled for buildRuleContext testing,
-			// just need the Instance to exist
+			cfg := newTestConfig(t, &config.Values{
+				Playtime: config.Playtime{Limits: config.PlaytimeLimits{Daily: "24h"}},
+			})
 
 			// Create LimitsManager with fake clock
 			fakeClock := clockwork.NewFakeClockAt(tt.currentTime)
