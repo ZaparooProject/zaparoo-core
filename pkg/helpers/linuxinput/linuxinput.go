@@ -89,8 +89,10 @@ func (k *Keyboard) Combo(keys ...int) error {
 		}
 	}
 	time.Sleep(k.Delay)
-	for _, key := range keys {
-		err := k.Device.KeyUp(key)
+	// Release in reverse order: base keys before modifiers, matching how a human
+	// would release a chord (last pressed = first released).
+	for i := len(keys) - 1; i >= 0; i-- {
+		err := k.Device.KeyUp(keys[i])
 		if err != nil {
 			return fmt.Errorf("failed to release combo key: %w", err)
 		}

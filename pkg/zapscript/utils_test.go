@@ -291,6 +291,37 @@ allow_execute = ["echo.*"]`))
 	require.NoError(t, err, "SourceControl command matching allowlist should succeed")
 }
 
+func TestParseMacroDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "plain milliseconds", input: "125", want: 125 * time.Millisecond},
+		{name: "go milliseconds", input: "125ms", want: 125 * time.Millisecond},
+		{name: "go compound", input: "1m30s", want: 90 * time.Second},
+		{name: "invalid", input: "nope", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseMacroDuration(tt.input)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestCmdDelay verifies delay command works correctly.
 func TestCmdDelay(t *testing.T) {
 	t.Parallel()
@@ -311,6 +342,24 @@ func TestCmdDelay(t *testing.T) {
 	require.NoError(t, err, "delay should succeed")
 	assert.Equal(t, platforms.CmdResult{}, result)
 	assert.GreaterOrEqual(t, elapsed, 50*time.Millisecond, "delay should wait at least 50ms")
+}
+
+func TestCmdDelay_GoDuration(t *testing.T) {
+	t.Parallel()
+
+	cmd := zapscript.Command{
+		Name: "delay",
+		Args: []string{"1ms"},
+	}
+	env := platforms.CmdEnv{Cmd: cmd}
+
+	start := time.Now()
+	result, err := cmdDelay(nil, env)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "delay should accept Go duration strings")
+	assert.Equal(t, platforms.CmdResult{}, result)
+	assert.GreaterOrEqual(t, elapsed, time.Millisecond)
 }
 
 func TestCmdDelay_MediaReady(t *testing.T) {
@@ -389,6 +438,7 @@ func TestCmdDelay_InvalidAmount(t *testing.T) {
 	_, err := cmdDelay(nil, env)
 
 	require.Error(t, err, "delay should fail with invalid amount")
+	assert.Contains(t, err.Error(), "invalid duration")
 }
 
 // TestCmdDelay_NoArgs verifies no args returns error.

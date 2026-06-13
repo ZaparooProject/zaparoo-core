@@ -55,7 +55,7 @@ func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 
 	log.Info().Int("key_count", len(args)).Msg("keyboard input via API")
 
-	if err := zapscript.PressKeyboardSequence(env.Platform, args); err != nil {
+	if err := zapscript.PressKeyboardSequence(env.Platform, args, 0); err != nil {
 		return nil, fmt.Errorf("keyboard press failed: %w", err)
 	}
 
@@ -76,7 +76,7 @@ func HandleInputGamepad(env requests.RequestEnv) (any, error) {
 
 	log.Info().Int("button_count", len(args)).Msg("gamepad input via API")
 
-	if err := zapscript.PressGamepadSequence(env.Platform, args); err != nil {
+	if err := zapscript.PressGamepadSequence(env.Platform, args, 0); err != nil {
 		return nil, fmt.Errorf("gamepad press failed: %w", err)
 	}
 

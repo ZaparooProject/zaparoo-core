@@ -20,7 +20,9 @@
 package zapscript
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -36,6 +38,30 @@ func newCfgFromTOML(t testing.TB, toml string) *config.Instance {
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(toml))
 	return cfg
+}
+
+type sequenceRecorder struct {
+	sequenceErr   error
+	sequenceArgs  []string
+	sequenceDelay time.Duration
+}
+
+type sequenceMockPlatform struct {
+	*mocks.MockPlatform
+	recorder *sequenceRecorder
+}
+
+func newSequenceMockPlatform() *sequenceMockPlatform {
+	return &sequenceMockPlatform{
+		MockPlatform: mocks.NewMockPlatform(),
+		recorder:     &sequenceRecorder{},
+	}
+}
+
+func (p *sequenceMockPlatform) KeyboardPressSequence(args []string, interKeyDelay time.Duration) error {
+	p.recorder.sequenceArgs = append([]string(nil), args...)
+	p.recorder.sequenceDelay = interKeyDelay
+	return p.recorder.sequenceErr
 }
 
 func TestIsSpecialKey(t *testing.T) {
@@ -401,4 +427,141 @@ block = []
 	_, err := cmdGamepad(mockPlatform, env)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInputNotAllowed)
+}
+
+func TestPressKeyboardSequence_UsesPlatformSequencer(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := newSequenceMockPlatform()
+	args := []string{"A", "{delay:0}"}
+
+	err := PressKeyboardSequence(mockPlatform, args, 7*time.Millisecond)
+
+	require.NoError(t, err)
+	assert.Equal(t, args, mockPlatform.recorder.sequenceArgs)
+	assert.Equal(t, 7*time.Millisecond, mockPlatform.recorder.sequenceDelay)
+}
+
+func TestPressKeyboardSequence_SequencerErrorIsWrapped(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := newSequenceMockPlatform()
+	mockPlatform.recorder.sequenceErr = errors.New("device failed")
+
+	err := PressKeyboardSequence(mockPlatform, []string{"a"}, time.Nanosecond)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "keyboard sequence")
+	assert.Contains(t, err.Error(), "device failed")
+}
+
+func TestPressGamepadSequence_PressesButtons(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("GamepadPress", "a").Return(nil).Once()
+	mockPlatform.On("GamepadPress", "start").Return(nil).Once()
+
+	err := PressGamepadSequence(mockPlatform, []string{"a", "start"}, time.Nanosecond)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "start"}, mockPlatform.GetGamepadPresses())
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestParseSpeedArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		speed string
+		want  time.Duration
+	}{
+		{name: "unset", want: 0},
+		{name: "milliseconds integer", speed: "25", want: 25 * time.Millisecond},
+		{name: "go duration", speed: "250ms", want: 250 * time.Millisecond},
+		{name: "invalid", speed: "bogus", want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			advArgs := gozapscript.NewAdvArgs(nil)
+			if tt.speed != "" {
+				advArgs = gozapscript.NewAdvArgs(map[string]string{"speed": tt.speed})
+			}
+
+			got := parseSpeedArg(platforms.CmdEnv{Cmd: gozapscript.Command{AdvArgs: advArgs}})
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCmdKeyboard_SpeedArgPassedToSequencer(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := newSequenceMockPlatform()
+	mockPlatform.On("ID").Return(platformids.Linux)
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+block = []
+`)
+	env := platforms.CmdEnv{
+		Cmd: gozapscript.Command{
+			Name:    gozapscript.ZapScriptCmdInputKeyboard,
+			Args:    []string{"{f1}"},
+			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"speed": "250ms"}),
+		},
+		Cfg: cfg,
+	}
+
+	_, err := cmdKeyboard(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"{f1}"}, mockPlatform.recorder.sequenceArgs)
+	assert.Equal(t, 250*time.Millisecond, mockPlatform.recorder.sequenceDelay)
+}
+
+func TestCmdGamepad_SpeedArgUsedForSequence(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return(platformids.Mister)
+	mockPlatform.On("GamepadPress", "start").Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cmd: gozapscript.Command{
+			Name:    gozapscript.ZapScriptCmdInputGamepad,
+			Args:    []string{"start"},
+			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"speed": "1ns"}),
+		},
+		Cfg: &config.Instance{},
+	}
+
+	_, err := cmdGamepad(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"start"}, mockPlatform.GetGamepadPresses())
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdInputText_UsesKeyboardSequence(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := newSequenceMockPlatform()
+	mockPlatform.On("ID").Return(platformids.Mister)
+	env := platforms.CmdEnv{
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdInputText,
+			Args: []string{"h", "i"},
+		},
+		Cfg: &config.Instance{},
+	}
+
+	_, err := cmdInputText(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h", "i"}, mockPlatform.recorder.sequenceArgs)
+	assert.Equal(t, defaultInterKeyDelay, mockPlatform.recorder.sequenceDelay)
 }
