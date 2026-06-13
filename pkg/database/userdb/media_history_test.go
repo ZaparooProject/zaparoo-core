@@ -891,3 +891,66 @@ func TestSqlGetMediaHistoryTop_MultipleSystemIDs(t *testing.T) {
 	assert.Equal(t, "NES", entries[1].SystemID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestSqlSumMediaPlayTimeForDay_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	dayStart := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+	dayStartUnix := dayStart.Unix()
+	expectedTotal := int64(3600)
+
+	rows := sqlmock.NewRows([]string{"total"}).AddRow(expectedTotal)
+	mock.ExpectPrepare(`SELECT COALESCE\(SUM`).
+		ExpectQuery().
+		WithArgs(dayStartUnix, dayStartUnix, dayStartUnix).
+		WillReturnRows(rows)
+
+	total, err := sqlSumMediaPlayTimeForDay(context.Background(), db, dayStart)
+	require.NoError(t, err)
+	assert.Equal(t, expectedTotal, total)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSumMediaPlayTimeForDay_NoSessions(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	dayStart := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+	dayStartUnix := dayStart.Unix()
+
+	// COALESCE returns 0 when no matching sessions exist.
+	rows := sqlmock.NewRows([]string{"total"}).AddRow(int64(0))
+	mock.ExpectPrepare(`SELECT COALESCE\(SUM`).
+		ExpectQuery().
+		WithArgs(dayStartUnix, dayStartUnix, dayStartUnix).
+		WillReturnRows(rows)
+
+	total, err := sqlSumMediaPlayTimeForDay(context.Background(), db, dayStart)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), total)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSumMediaPlayTimeForDay_DatabaseError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	dayStart := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectPrepare(`SELECT COALESCE\(SUM`).
+		ExpectQuery().
+		WillReturnError(sqlmock.ErrCancelled)
+
+	total, err := sqlSumMediaPlayTimeForDay(context.Background(), db, dayStart)
+	require.Error(t, err)
+	assert.Equal(t, int64(0), total)
+	assert.Contains(t, err.Error(), "failed to scan daily play time sum")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

@@ -474,3 +474,398 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestRestoreSessionFromHistory covers the session-restore path that reconstructs
+// cooldown state from MediaHistory entries after a service restart.
+func TestRestoreSessionFromHistory(t *testing.T) {
+	t.Parallel()
+
+	// All test cases use the default 20-minute session reset timeout (nil SessionReset = default).
+	baseCfg := func(t *testing.T) *config.Instance {
+		t.Helper()
+		//nolint:exhaustruct // only SessionResetTimeout (default) needed
+		cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+		require.NoError(t, err)
+		return cfg
+	}
+
+	t.Run("no entries - no restore", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{}, nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), clockwork.NewFakeClock(), newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(time.Now())
+
+		tm.mu.Lock()
+		assert.Equal(t, StateReset, tm.state)
+		assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("most recent entry still open - no restore", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 1, StartTime: time.Now().Add(-5 * time.Minute), EndTime: nil, PlayTime: 300},
+			}, nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), clockwork.NewFakeClock(), newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(time.Now())
+
+		tm.mu.Lock()
+		assert.Equal(t, StateReset, tm.state)
+		assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("last session outside cooldown window - no restore", func(t *testing.T) {
+		t.Parallel()
+
+		// Session ended 25 minutes ago; default cooldown is 20 minutes.
+		endTime := time.Now().Add(-25 * time.Minute)
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 1, StartTime: endTime.Add(-10 * time.Minute), EndTime: &endTime, PlayTime: 600},
+			}, nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), clockwork.NewFakeClock(), newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(time.Now())
+
+		tm.mu.Lock()
+		assert.Equal(t, StateReset, tm.state)
+		assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("single session within cooldown window - restored to cooldown", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+		// Session ended 5 minutes ago with 10 minutes of play time.
+		endTime := now.Add(-5 * time.Minute)
+		startTime := endTime.Add(-10 * time.Minute)
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 1, StartTime: startTime, EndTime: &endTime, PlayTime: 600},
+			}, nil)
+
+		fakeClock := clockwork.NewFakeClockAt(now)
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), fakeClock, newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(now)
+
+		tm.mu.Lock()
+		assert.Equal(t, StateCooldown, tm.state, "state should be restored to cooldown")
+		assert.Equal(t, 600*time.Second, tm.sessionCumulativeTime, "cumulative time should match PlayTime")
+		assert.Equal(t, endTime, tm.lastStopTime, "last stop time should be restored")
+		assert.NotNil(t, tm.cooldownTimer, "cooldown timer should be set")
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("multiple consecutive sessions - cumulative time accumulates", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+
+		// Most recent session (DBID 2): ended 3 minutes ago, 5 minutes play.
+		end2 := now.Add(-3 * time.Minute)
+		start2 := end2.Add(-5 * time.Minute)
+		// Previous session (DBID 1): ended 10 minutes ago (gap 7 min < 20 min), 8 minutes play.
+		end1 := now.Add(-10 * time.Minute)
+		start1 := end1.Add(-8 * time.Minute)
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// GetMediaHistory returns newest-first.
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 2, StartTime: start2, EndTime: &end2, PlayTime: 300},
+				{DBID: 1, StartTime: start1, EndTime: &end1, PlayTime: 480},
+			}, nil)
+
+		fakeClock := clockwork.NewFakeClockAt(now)
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), fakeClock, newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(now)
+
+		tm.mu.Lock()
+		assert.Equal(t, StateCooldown, tm.state)
+		// 300s + 480s = 780s total cumulative time
+		assert.Equal(t, 780*time.Second, tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("gap between sessions exceeds window - only most recent session counted", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+
+		// Most recent session (DBID 2): ended 3 minutes ago, 5 minutes play.
+		end2 := now.Add(-3 * time.Minute)
+		start2 := end2.Add(-5 * time.Minute)
+		// Previous session (DBID 1): ended 30 minutes ago (gap 25 min > 20 min), 10 minutes play.
+		end1 := now.Add(-30 * time.Minute)
+		start1 := end1.Add(-10 * time.Minute)
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 2, StartTime: start2, EndTime: &end2, PlayTime: 300},
+				{DBID: 1, StartTime: start1, EndTime: &end1, PlayTime: 600},
+			}, nil)
+
+		fakeClock := clockwork.NewFakeClockAt(now)
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), fakeClock, newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(now)
+
+		tm.mu.Lock()
+		assert.Equal(t, StateCooldown, tm.state)
+		// Only the most recent 300s session should be accumulated; gap breaks the chain.
+		assert.Equal(t, 300*time.Second, tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+}
+
+// TestCheckBeforeLaunch verifies that CheckBeforeLaunch correctly blocks launches
+// when daily or session limits have been reached or leave insufficient time.
+func TestCheckBeforeLaunch(t *testing.T) {
+	t.Parallel()
+
+	// reliableClock returns a time in 2025 so helpers.IsClockReliable returns true.
+	reliableTime := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+	todayStart := time.Date(2025, 6, 13, 0, 0, 0, 0, time.UTC)
+
+	t.Run("limits not enabled in config - allowed", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Daily:   "2h",
+					Session: "1h",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(nil, nil, cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer())
+		// PlaytimeLimitsEnabled() is false (Enabled == nil)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.NoError(t, err)
+		assert.Empty(t, reason)
+	})
+
+	t.Run("no limits configured - allowed", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "",
+					Session: "",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(nil, nil, cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer())
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.NoError(t, err)
+		assert.Empty(t, reason)
+	})
+
+	t.Run("daily limit fully consumed - blocked with daily reason", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// DB reports 2 hours already played today.
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(7200), nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonDaily, reason)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("daily limit with less than minimum viable session remaining - blocked", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// 30 seconds remaining (2h limit - 1h59m30s played). MinimumViableSession = 1 minute.
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(7170), nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonDaily, reason)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("session limit fully consumed - blocked with session reason", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Session: "1h",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(
+			nil, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		// Inject 1h of accumulated session time.
+		tm.mu.Lock()
+		tm.sessionCumulativeTime = time.Hour
+		tm.mu.Unlock()
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonSession, reason)
+	})
+
+	t.Run("session limit with less than minimum viable session remaining - blocked", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Session: "1h",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(
+			nil, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		// 59m30s used — 30 seconds remain, which is below MinimumViableSession (1 minute).
+		tm.mu.Lock()
+		tm.sessionCumulativeTime = 59*time.Minute + 30*time.Second
+		tm.mu.Unlock()
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonSession, reason)
+	})
+
+	t.Run("both limits have time remaining - allowed", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+					Session: "1h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// 30 minutes played today.
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(1800), nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		// 30 minutes of session cumulative time accumulated.
+		tm.mu.Lock()
+		tm.sessionCumulativeTime = 30 * time.Minute
+		tm.mu.Unlock()
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.NoError(t, err)
+		assert.Empty(t, reason)
+		mockDB.AssertExpectations(t)
+	})
+}
