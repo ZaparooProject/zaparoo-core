@@ -120,6 +120,7 @@ func lookupCmd(name string) (cmdFunc, bool) {
 
 			zapscript.ZapScriptCmdInputKeyboard: cmdKeyboard,
 			zapscript.ZapScriptCmdInputGamepad:  cmdGamepad,
+			zapscript.ZapScriptCmdInputText:     cmdInputText,
 			zapscript.ZapScriptCmdInputCoinP1:   cmdCoinP1,
 			zapscript.ZapScriptCmdInputCoinP2:   cmdCoinP2,
 			zapscript.ZapScriptCmdInputCoinP3:   cmdCoinP3,
