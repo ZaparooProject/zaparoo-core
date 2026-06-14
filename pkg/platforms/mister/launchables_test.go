@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,50 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 	} {
 		assert.True(t, seen[name], name)
 	}
+}
+
+func TestLaunchOtherCoreUsesInjectedLauncher(t *testing.T) {
+	corePath := filepath.Join("_Other", "Chess")
+	closed := false
+	var launched string
+	p := &Platform{
+		closeConsole: func() error {
+			closed = true
+			return nil
+		},
+		launchShortCore: func(path string) error {
+			launched = path
+			return nil
+		},
+	}
+
+	process, err := p.launchOtherCore(corePath)(&config.Instance{}, "", nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, process)
+	assert.True(t, closed)
+	assert.Equal(t, corePath, launched)
+}
+
+func TestLaunchOtherCoreReturnsInjectedLaunchError(t *testing.T) {
+	corePath := filepath.Join("_Other", "Chess")
+	launchErr := errors.New("launch failed")
+	closed := false
+	p := &Platform{
+		closeConsole: func() error {
+			closed = true
+			return errors.New("close failed")
+		},
+		launchShortCore: func(string) error {
+			return launchErr
+		},
+	}
+
+	process, err := p.launchOtherCore(corePath)(&config.Instance{}, "", nil)
+
+	require.ErrorIs(t, err, launchErr)
+	assert.Nil(t, process)
+	assert.True(t, closed)
 }
 
 func TestOtherCoreExists(t *testing.T) {

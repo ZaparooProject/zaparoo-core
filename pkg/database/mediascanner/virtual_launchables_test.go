@@ -74,9 +74,19 @@ func TestNewIndexLauncherCacheIncludesPlatformLaunchers(t *testing.T) {
 	assert.Len(t, allLaunchers, 2)
 	systemLaunchers := launcherCache.GetLaunchersBySystem(systemdefs.SystemCPS3)
 	require.Len(t, systemLaunchers, 2)
-	assert.True(t, helpers.PathIsLauncher(cfg, platform, &systemLaunchers[1], item.ZapScript()))
+
+	virtualLauncherID := "ZaparooVirtual-" + launchables.EncodeID(id)
+	var virtualLauncher *platforms.Launcher
+	for i := range systemLaunchers {
+		if systemLaunchers[i].ID == virtualLauncherID {
+			virtualLauncher = &systemLaunchers[i]
+			break
+		}
+	}
+	require.NotNil(t, virtualLauncher)
+	assert.True(t, helpers.PathIsLauncher(cfg, platform, virtualLauncher, item.ZapScript()))
 	wrongURI := "zaparoo://aaaaaaaaaaaaaaaaaaaaaaaaaa/Wrong"
-	assert.False(t, helpers.PathIsLauncher(cfg, platform, &systemLaunchers[1], wrongURI))
+	assert.False(t, helpers.PathIsLauncher(cfg, platform, virtualLauncher, wrongURI))
 	platform.AssertExpectations(t)
 }
 

@@ -76,6 +76,8 @@ type Platform struct {
 	activeMedia         func() *models.ActiveMedia
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
+	launchShortCore     func(string) error
+	closeConsole        func() error
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
@@ -85,7 +87,8 @@ type Platform struct {
 
 func NewPlatform() *Platform {
 	p := &Platform{
-		platformMu: syncutil.Mutex{},
+		platformMu:      syncutil.Mutex{},
+		launchShortCore: mgls.LaunchShortCore,
 	}
 	p.consoleManager = newConsoleManager(p)
 	return p
