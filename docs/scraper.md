@@ -2,7 +2,10 @@
 
 The scraper subsystem enriches existing MediaDB records with metadata from external sources. The filesystem scanner owns record creation; scrapers update records that already exist.
 
-The only current scraper implementation is `gamelist.xml`, which imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
+Current scraper implementations:
+
+- `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
+- `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
 
 ## Code Layout
 
@@ -10,6 +13,8 @@ The only current scraper implementation is `gamelist.xml`, which imports Emulati
 |---|---|
 | `pkg/database/scraper/` | Shared scrape types (`ScrapeOptions`, `ScrapeUpdate`), sentinel helper, and small channel startup helper |
 | `pkg/database/scraper/gamelistxml/` | EmulationStation `gamelist.xml` scraper loop, matcher, mapper, and companion-entry handling |
+| `pkg/database/scraper/localmedia/` | EmulationStation `media/` folder image-path importer |
+| `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB scraper read/write helpers, property/blob helpers, and metadata graph queries |
 | `pkg/api/methods/media_scrape.go` | JSON-RPC scrape start/status/cancel/resume handlers and scraper listing |

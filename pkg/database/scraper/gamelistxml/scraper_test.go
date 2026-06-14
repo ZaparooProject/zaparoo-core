@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -72,19 +73,19 @@ func TestCleanField_Empty(t *testing.T) {
 	assert.Empty(t, cleanField(""))
 }
 
-// --- resolveESPath ---
+// --- esmedia.ResolvePath ---
 
 func TestResolveESPath_RelativeDotSlash(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("./roms/mario.nes", root)
+	got := esmedia.ResolvePath("./roms/mario.nes", root)
 	assert.Equal(t, filepath.Join(root, "roms", "mario.nes"), got)
 }
 
 func TestResolveESPath_RelativeNoDot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("roms/mario.nes", root)
+	got := esmedia.ResolvePath("roms/mario.nes", root)
 	assert.Equal(t, filepath.Join(root, "roms", "mario.nes"), got)
 }
 
@@ -92,7 +93,7 @@ func TestResolveESPath_AbsoluteInsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	absPath := filepath.Join(root, "roms", "mario.nes")
-	got := resolveESPath(absPath, root)
+	got := esmedia.ResolvePath(absPath, root)
 	assert.Equal(t, absPath, got)
 }
 
@@ -100,20 +101,20 @@ func TestResolveESPath_AbsoluteOutsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	absPath := filepath.Join(root, "mario.nes")
-	got := resolveESPath(absPath, filepath.Join(root, "other"))
+	got := esmedia.ResolvePath(absPath, filepath.Join(root, "other"))
 	assert.Empty(t, got)
 }
 
 func TestResolveESPath_Empty(t *testing.T) {
 	t.Parallel()
-	got := resolveESPath("", t.TempDir())
+	got := esmedia.ResolvePath("", t.TempDir())
 	assert.Empty(t, got)
 }
 
 func TestResolveESPath_PathTraversal(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("../../etc/passwd", root)
+	got := esmedia.ResolvePath("../../etc/passwd", root)
 	// Relative paths that escape systemRootPath must be rejected.
 	assert.Empty(t, got, "path traversal outside root must return empty string")
 }
@@ -121,7 +122,7 @@ func TestResolveESPath_PathTraversal(t *testing.T) {
 func TestResolveESPath_TraversalToAbsolute(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("../../../etc/passwd", root)
+	got := esmedia.ResolvePath("../../../etc/passwd", root)
 	assert.Empty(t, got, "deep traversal outside root must return empty string")
 }
 
@@ -1778,13 +1779,13 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 	assert.True(t, found, "filesystem fallback boxartback property missing")
 }
 
-// --- resolveESPath additional ---
+// --- esmedia.ResolvePath additional ---
 
 func TestResolveESPath_HomeRelativeEscapesRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	// ~/... resolves to home dir, which is outside t.TempDir().
-	got := resolveESPath("~/games/mario.nes", root)
+	got := esmedia.ResolvePath("~/games/mario.nes", root)
 	assert.Empty(t, got, "home-relative path escaping system root must be rejected")
 }
 
@@ -1795,7 +1796,7 @@ func TestResolveESPath_HomeRelativeInsideRoot(t *testing.T) {
 		t.Skip("cannot determine home dir")
 	}
 	// Use home dir itself as the system root so ~/relative stays inside.
-	got := resolveESPath("~/games/mario.nes", home)
+	got := esmedia.ResolvePath("~/games/mario.nes", home)
 	assert.Equal(t, filepath.Join(home, "games", "mario.nes"), got)
 }
 
@@ -2225,7 +2226,7 @@ func TestLoadCompanionEntries_EntrySkippedNoIdNoPath(t *testing.T) {
 func TestLoadCompanionEntries_ChildPathTraversalRejected(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// Child path escapes root → resolveESPath returns "" → child skipped.
+	// Child path escapes root → esmedia.ResolvePath returns "" → child skipped.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
   <game id="1" source="ZaparooCompanion">
     <name>Parent</name>
