@@ -20,7 +20,6 @@
 package esmedia
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -77,17 +76,6 @@ func TestFallbackArtworkNames(t *testing.T) {
 	assert.Equal(t, []string{"Game.png", "Game.jpg", "Game.jpeg", "Game.webp"}, FallbackArtworkNames("Game"))
 	assert.Nil(t, FallbackArtworkNames(""))
 	assert.Nil(t, FallbackArtworkNames("."))
-}
-
-func TestStatMediaDirs(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "media", "boxart"), 0o750))
-	dirs := StatMediaDirs(root)
-
-	assert.Equal(t, filepath.Join(root, "media", "boxart"), dirs["boxart"])
-	assert.Nil(t, StatMediaDirs(filepath.Join(root, "missing")))
 }
 
 func TestStatMediaDirsFS(t *testing.T) {
