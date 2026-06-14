@@ -459,6 +459,9 @@ func (m *LauncherMatcher) pathIsLauncher(
 
 	for _, scheme := range l.Schemes {
 		if strings.HasPrefix(lp, scheme+":") {
+			if l.Test != nil {
+				return l.Test(m.cfg, path)
+			}
 			return true
 		}
 	}

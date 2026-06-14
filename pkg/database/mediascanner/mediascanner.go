@@ -575,6 +575,17 @@ type IndexStatus struct {
 // during key steps.
 //
 // Returns the total number of files indexed.
+func newIndexLauncherCache(
+	cfg *config.Instance,
+	platform platforms.Platform,
+) (*helpers.LauncherCache, []platforms.Launcher) {
+	allLaunchers := platform.Launchers(cfg)
+	allLaunchers = append(allLaunchers, launchables.DefaultRegistry.Launchers(platform)...)
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(allLaunchers)
+	return launcherCache, allLaunchers
+}
+
 func NewNamesIndex(
 	ctx context.Context,
 	platform platforms.Platform,
@@ -688,10 +699,7 @@ func NewNamesIndex(
 
 	// Build launcher metadata once so runnable-system filtering and scanner
 	// execution both use the same launcher set even when the global cache is stale.
-	allLaunchers := platform.Launchers(cfg)
-	allLaunchers = append(allLaunchers, launchables.DefaultRegistry.Launchers(platform)...)
-	launcherCache := &helpers.LauncherCache{}
-	launcherCache.InitializeFromSlice(allLaunchers)
+	launcherCache, allLaunchers := newIndexLauncherCache(cfg, platform)
 
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
