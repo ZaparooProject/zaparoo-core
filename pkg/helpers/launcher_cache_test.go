@@ -21,14 +21,62 @@ package helpers
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetLaunchableSystems_ReturnsCopy(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
+	systems := []launchables.VirtualSystem{
+		{ID: id, Name: "Chess", Category: "Other"},
+	}
+	cache := &LauncherCache{}
+	cache.setLaunchableSystems(systems)
+	systems[0].Name = "Mutated Source"
+
+	got := cache.GetLaunchableSystems()
+	require.Len(t, got, 1)
+	assert.Equal(t, id, got[0].ID)
+	assert.Equal(t, "Chess", got[0].Name)
+	assert.Equal(t, "Other", got[0].Category)
+
+	got[0].Name = "Mutated Result"
+	gotAgain := cache.GetLaunchableSystems()
+	require.Len(t, gotAgain, 1)
+	assert.Equal(t, "Chess", gotAgain[0].Name)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.Len(t, cache.GetLaunchableSystems(), 1)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestGetLaunchableSystems_EmptyCache(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	got := cache.GetLaunchableSystems()
+	assert.Empty(t, got)
+
+	got = append(got, launchables.VirtualSystem{Name: "Mutated Result"})
+	assert.Len(t, got, 1)
+	assert.Empty(t, cache.GetLaunchableSystems())
+}
 
 func TestGetLauncherByID_Found(t *testing.T) {
 	t.Parallel()

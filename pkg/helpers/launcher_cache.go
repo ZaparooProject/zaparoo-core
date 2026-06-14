@@ -151,6 +151,8 @@ func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
 
 // Refresh rebuilds the cache with updated launcher data.
 // This can be called via API to refresh the cache without restarting.
+// During refresh, concurrent GetLaunchableSystems calls may briefly see no
+// virtual systems while the cache is rebuilt; they reappear after initialization.
 func (lc *LauncherCache) Refresh(pl platforms.Platform, cfg *config.Instance) {
 	lc.Initialize(pl, cfg)
 }
