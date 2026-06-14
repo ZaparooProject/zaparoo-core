@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"html"
 	"math"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -46,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -76,31 +76,6 @@ type slugMediaSelection struct {
 	matchKind gamelistMatchKind
 	key       string
 	media     database.Media
-}
-
-// mediaDirCandidates maps each TagPropertyImage value to the ordered list of
-// media sub-directory names (under <systemRootPath>/media/) that may hold
-// artwork for that property. The first matching directory that contains the
-// expected filename wins.
-var fallbackArtworkExtensions = []string{".png", ".jpg", ".jpeg", ".webp"}
-
-var mediaDirCandidates = map[string][]string{
-	string(tags.TagPropertyImageImage):      {"image", "images"},
-	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "box2d", "boxart2dfront", "box2dfront"},
-	string(tags.TagPropertyImageBoxart3D):   {"boxart3d"},
-	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
-	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
-	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
-	string(tags.TagPropertyImageThumbnail): {
-		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
-	},
-	string(tags.TagPropertyImageMarquee): {"marquee", "marquees"},
-	string(tags.TagPropertyImageWheel):   {"wheel", "wheels", "logo", "logos"},
-	string(tags.TagPropertyImageFanart):  {"fanart", "fanarts"},
-	string(tags.TagPropertyImageTitleshot): {
-		"titleshot", "titleshots", "titlescreen", "titlescreens", "screenshottitle",
-	},
-	string(tags.TagPropertyImageMap): {"map", "maps"},
 }
 
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
@@ -422,7 +397,7 @@ outer:
 				continue
 			}
 
-			resolved := resolveESPath(game.Path, file.RootPath)
+			resolved := esmedia.ResolvePath(game.Path, file.RootPath)
 			if resolved == "" {
 				invalidPaths++
 				continue
@@ -1112,7 +1087,7 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		if p == nil {
 			p = findMediaFilePropFS(
 				g.filesystem(), key, fallbackNames,
-				mediaDirCandidates[string(propValue)], record.AvailableMediaDirs,
+				esmedia.ArtworkDirCandidates[string(propValue)], record.AvailableMediaDirs,
 			)
 		}
 		if p != nil {
@@ -1156,52 +1131,6 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		TitleTags:  titleTags,
 		TitleProps: titleProps,
 	}
-}
-
-// resolveESPath converts an EmulationStation path to an absolute filesystem path.
-//
-//   - "./relative" or "relative" → filepath.Join(systemRootPath, rest)
-//   - "~/..." → filepath.Join(os.UserHomeDir(), rest)
-//   - Already absolute → cleaned as-is
-//
-// Returns "" if the result is not absolute, input is empty, or the resolved path
-// escapes systemRootPath.
-func resolveESPath(esPath, systemRootPath string) string {
-	if esPath == "" {
-		return ""
-	}
-	rootAbs, err := filepath.Abs(systemRootPath)
-	if err != nil {
-		return ""
-	}
-	rootAbs = filepath.Clean(rootAbs)
-
-	var abs string
-	switch {
-	case strings.HasPrefix(esPath, "~/"):
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			return ""
-		}
-		abs = filepath.Join(home, esPath[2:])
-	case filepath.IsAbs(esPath):
-		abs = filepath.Clean(esPath)
-	default:
-		// Handles both "./relative" and "relative".
-		rel := strings.TrimPrefix(esPath, "./")
-		abs = filepath.Join(rootAbs, rel)
-	}
-
-	abs, err = filepath.Abs(abs)
-	if err != nil || !filepath.IsAbs(abs) {
-		return ""
-	}
-	abs = filepath.Clean(abs)
-	rel, err := filepath.Rel(rootAbs, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return ""
-	}
-	return abs
 }
 
 // normalizePlayers extracts the maximum player count from an ES players string.
@@ -1330,68 +1259,21 @@ func pathProp(typeTag, esPath, systemRootPath string, externalAssetRoots []strin
 // bound to the system ROM root. Absolute paths can also resolve under configured
 // external asset roots for platforms whose storage routes intentionally overlap.
 func resolveESAssetPath(esPath, systemRootPath string, externalAssetRoots []string) string {
-	abs, ok := resolveESPathAbs(esPath, systemRootPath)
+	abs, ok := esmedia.ResolvePathAbs(esPath, systemRootPath)
 	if !ok {
 		return ""
 	}
-	if pathWithinRoot(abs, systemRootPath) {
+	if esmedia.PathWithinRoot(abs, systemRootPath) {
 		return abs
 	}
 	if filepath.IsAbs(esPath) || strings.HasPrefix(esPath, "~/") {
 		for _, root := range externalAssetRoots {
-			if pathWithinRoot(abs, root) {
+			if esmedia.PathWithinRoot(abs, root) {
 				return abs
 			}
 		}
 	}
 	return ""
-}
-
-func resolveESPathAbs(esPath, systemRootPath string) (string, bool) {
-	if esPath == "" {
-		return "", false
-	}
-	rootAbs, err := filepath.Abs(systemRootPath)
-	if err != nil {
-		return "", false
-	}
-	rootAbs = filepath.Clean(rootAbs)
-
-	var abs string
-	switch {
-	case strings.HasPrefix(esPath, "~/"):
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			return "", false
-		}
-		abs = filepath.Join(home, esPath[2:])
-	case filepath.IsAbs(esPath):
-		abs = filepath.Clean(esPath)
-	default:
-		rel := strings.TrimPrefix(esPath, "./")
-		abs = filepath.Join(rootAbs, rel)
-	}
-
-	abs, err = filepath.Abs(abs)
-	if err != nil || !filepath.IsAbs(abs) {
-		return "", false
-	}
-	return filepath.Clean(abs), true
-}
-
-func pathWithinRoot(path, root string) bool {
-	pathAbs, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	pathAbs = filepath.Clean(pathAbs)
-	rootAbs = filepath.Clean(rootAbs)
-	rel, err := filepath.Rel(rootAbs, pathAbs)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // textProp creates a plain-text MediaProperty.
@@ -1407,22 +1289,11 @@ func textProp(typeTag, text string) database.MediaProperty {
 // directory name → absolute path for every sub-directory found. Returns nil
 // when media/ does not exist or cannot be read — callers treat nil as empty.
 func statMediaDirs(rootPath string) map[string]string {
-	return statMediaDirsFS(afero.NewOsFs(), rootPath)
+	return esmedia.StatMediaDirs(rootPath)
 }
 
 func statMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
-	mediaRoot := filepath.Join(rootPath, "media")
-	entries, err := afero.ReadDir(fs, mediaRoot)
-	if err != nil {
-		return nil
-	}
-	dirs := make(map[string]string, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			dirs[e.Name()] = filepath.Join(mediaRoot, e.Name())
-		}
-	}
-	return dirs
+	return esmedia.StatMediaDirsFS(fs, rootPath)
 }
 
 // findMediaFileProp searches for <stem>.png inside the first candidate
@@ -1440,51 +1311,11 @@ func findMediaFileProp(
 }
 
 func artworkFallbackNames(gamePath, systemRootPath string) []string {
-	resolved := resolveESPath(gamePath, systemRootPath)
-	if resolved == "" {
-		return nil
-	}
-
-	rootAbs, err := filepath.Abs(systemRootPath)
-	if err != nil {
-		return nil
-	}
-	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil
-	}
-
-	stem := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
-	if stem == "" || stem == "." {
-		return nil
-	}
-
-	flatNames := fallbackArtworkNames(stem)
-	dir := filepath.Dir(rel)
-	if dir == "." || dir == "" {
-		return flatNames
-	}
-
-	fallbackNames := make([]string, 0, len(flatNames)*2)
-	for _, flat := range flatNames {
-		nested := filepath.Join(dir, flat)
-		if nested != flat {
-			fallbackNames = append(fallbackNames, nested)
-		}
-	}
-	fallbackNames = append(fallbackNames, flatNames...)
-	return fallbackNames
+	return esmedia.ArtworkFallbackNames(gamePath, systemRootPath)
 }
 
 func fallbackArtworkNames(stem string) []string {
-	if stem == "" || stem == "." {
-		return nil
-	}
-	names := make([]string, 0, len(fallbackArtworkExtensions))
-	for _, ext := range fallbackArtworkExtensions {
-		names = append(names, stem+ext)
-	}
-	return names
+	return esmedia.FallbackArtworkNames(stem)
 }
 
 func findMediaFilePropFS(
@@ -1494,31 +1325,15 @@ func findMediaFilePropFS(
 	candidates []string,
 	availableDirs map[string]string,
 ) *database.MediaProperty {
-	if len(fallbackNames) == 0 {
+	file := esmedia.FindFileFS(fs, fallbackNames, candidates, availableDirs)
+	if file == nil {
 		return nil
 	}
-	for _, dir := range candidates {
-		dirPath, ok := availableDirs[dir]
-		if !ok {
-			continue
-		}
-		for _, name := range fallbackNames {
-			cleanName := filepath.Clean(name)
-			if name == "" || cleanName == "." || cleanName == ".." ||
-				strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
-				continue
-			}
-			candidate := filepath.Join(dirPath, name)
-			if exists, err := afero.Exists(fs, candidate); err == nil && exists {
-				return &database.MediaProperty{
-					TypeTag:     typeTag,
-					Text:        filepath.ToSlash(candidate),
-					ContentType: mimeFromExt(candidate),
-				}
-			}
-		}
+	return &database.MediaProperty{
+		TypeTag:     typeTag,
+		Text:        file.Path,
+		ContentType: file.ContentType,
 	}
-	return nil
 }
 
 func titleSlugKnown(indexes loadRecordIndexes, slug string) bool {
@@ -1867,7 +1682,7 @@ func companionEntriesFromParsed(
 					GameID:             game.ScreenScraperIDAttr,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
-				resolved := resolveESPath(game.Path, file.RootPath)
+				resolved := esmedia.ResolvePath(game.Path, file.RootPath)
 				if resolved == "" {
 					unresolvedChildPaths++
 					continue
@@ -2283,33 +2098,5 @@ func companionChildTags(c companionChild) []database.TagInfo {
 
 // mimeFromExt returns a MIME type based on file extension.
 func mimeFromExt(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".mp4":
-		return "video/mp4"
-	case ".mkv":
-		return "video/x-matroska"
-	case ".avi":
-		return "video/avi"
-	case ".pdf":
-		return "application/pdf"
-	case ".mp3":
-		return "audio/mpeg"
-	case ".m4a", ".m4b":
-		return "audio/mp4"
-	case ".mpg", ".mpeg":
-		return "video/mpeg"
-	case ".m4v":
-		return "video/mp4"
-	default:
-		return "application/octet-stream"
-	}
+	return esmedia.MimeFromExt(path)
 }

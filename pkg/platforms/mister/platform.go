@@ -19,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -1322,8 +1323,9 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.
