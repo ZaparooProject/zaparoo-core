@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -45,6 +46,7 @@ var GlobalLauncherCache = &LauncherCache{}
 // deduplication. This should be called once at startup after custom launchers are loaded.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance, extra ...platforms.Launcher) {
 	all := pl.Launchers(cfg)
+	all = append(all, launchables.DefaultRegistry.Launchers(pl)...)
 	for i := range extra {
 		if !launcherInSlice(all, extra[i].ID) {
 			all = append(all, extra[i])

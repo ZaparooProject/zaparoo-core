@@ -95,6 +95,9 @@ func PathIsLauncher(
 	for _, scheme := range l.Schemes {
 		// scheme is already lowercase in launcher definitions
 		if strings.HasPrefix(lp, scheme+":") {
+			if l.Test != nil {
+				return l.Test(cfg, path)
+			}
 			return true
 		}
 	}
