@@ -109,6 +109,19 @@ func TestScrape_ImportsLocalMediaFolderArtwork(t *testing.T) {
 	pl.AssertExpectations(t)
 }
 
+func TestOrderedScrapeSystemIDs(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		[]string{"SNES", "NES"},
+		orderedScrapeSystemIDs([]string{"NES", "SNES", "GB"}, []string{"SNES", "NES", "SNES", "PSX"}),
+	)
+	assert.Equal(t,
+		[]string{"NES", "SNES"},
+		orderedScrapeSystemIDs([]string{"NES", "SNES"}, nil),
+	)
+}
+
 func TestDeleteStaleLocalMediaProps_DeletesOnlyMissingLocalConventionProps(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +164,100 @@ func TestDeleteStaleLocalMediaProps_DeletesOnlyMissingLocalConventionProps(t *te
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrape_WriteErrorIncrementsProcessed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemRoot := filepath.Join(root, "nes")
+	romPath := filepath.Join(systemRoot, "Game.nes")
+	boxartPath := filepath.Join(systemRoot, "media", "boxart", "Game.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, os.MkdirAll(systemRoot, 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(boxartPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, boxartPath, []byte("boxart"), 0o600))
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	pl := mocks.NewMockPlatform()
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{{
+		ID:         "nes",
+		SystemID:   "NES",
+		Folders:    []string{"nes"},
+		Extensions: []string{".nes"},
+	}})
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("IndexedSystems").Return([]string{"NES"}, nil)
+	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 1, SystemID: "NES", Name: "NES"}, nil)
+	mockDB.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{
+		{DBID: 11, MediaTitleDBID: 101, Path: romPath, SystemID: "NES"},
+	}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(101), mock.Anything).
+		Return(assert.AnError).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	err = NewPlatformScraper().Scrape(
+		context.Background(), cfg, pl, fs, &database.Database{MediaDB: mockDB}, scraper.ScrapeOptions{}, nil, ch,
+	)
+	require.NoError(t, err)
+
+	var errUpdate scraper.ScrapeUpdate
+	for update := range ch {
+		if update.Err != nil {
+			errUpdate = update
+		}
+	}
+	assert.Equal(t, 1, errUpdate.Processed)
+	assert.Equal(t, 1, errUpdate.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrape_CleanupErrorIncrementsProcessed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemRoot := filepath.Join(root, "nes")
+	romPath := filepath.Join(systemRoot, "Game.nes")
+	require.NoError(t, os.MkdirAll(systemRoot, 0o750))
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	pl := mocks.NewMockPlatform()
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	pl.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{{
+		ID:         "nes",
+		SystemID:   "NES",
+		Folders:    []string{"nes"},
+		Extensions: []string{".nes"},
+	}})
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("IndexedSystems").Return([]string{"NES"}, nil)
+	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 1, SystemID: "NES", Name: "NES"}, nil)
+	mockDB.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{
+		{DBID: 11, MediaTitleDBID: 101, Path: romPath, SystemID: "NES"},
+	}, nil)
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(11)).Return(nil, assert.AnError).Once()
+
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	err = NewPlatformScraper().Scrape(
+		context.Background(), cfg, pl, afero.NewMemMapFs(), &database.Database{MediaDB: mockDB},
+		scraper.ScrapeOptions{Force: true}, nil, ch,
+	)
+	require.NoError(t, err)
+
+	var errUpdate scraper.ScrapeUpdate
+	for update := range ch {
+		if update.Err != nil {
+			errUpdate = update
+		}
+	}
+	assert.Equal(t, 1, errUpdate.Processed)
+	assert.Equal(t, 1, errUpdate.Skipped)
 	mockDB.AssertExpectations(t)
 }
 

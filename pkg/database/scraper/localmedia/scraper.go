@@ -204,6 +204,7 @@ func (s *scraperImpl) scrapeLoop(
 				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(ctx, media, system.ROMPaths, props)
 				if cleanupErr != nil {
 					skipped++
+					processed++
 					ch <- scraper.ScrapeUpdate{
 						Err:         cleanupErr,
 						SystemID:    system.ID,
@@ -234,6 +235,7 @@ func (s *scraperImpl) scrapeLoop(
 				}
 				if err := s.db.ApplyScrapeResult(ctx, media.DBID, media.MediaTitleDBID, write); err != nil {
 					skipped++
+					processed++
 					ch <- scraper.ScrapeUpdate{
 						Err:         fmt.Errorf("localmedia: write media %d: %w", media.DBID, err),
 						SystemID:    system.ID,

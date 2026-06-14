@@ -226,7 +226,7 @@ func ResolvePathAbs(esPath, systemRootPath string) (string, bool) {
 
 	var abs string
 	switch {
-	case strings.HasPrefix(esPath, "~/"):
+	case IsHomeRelativePath(esPath):
 		home, homeErr := os.UserHomeDir()
 		if homeErr != nil {
 			return "", false
@@ -244,6 +244,11 @@ func ResolvePathAbs(esPath, systemRootPath string) (string, bool) {
 		return "", false
 	}
 	return filepath.Clean(abs), true
+}
+
+// IsHomeRelativePath reports whether an ES path starts with ~/ or ~\.
+func IsHomeRelativePath(esPath string) bool {
+	return strings.HasPrefix(esPath, "~/") || strings.HasPrefix(esPath, `~\`)
 }
 
 // PathWithinRoot reports whether path is inside root after absolute-path cleanup.

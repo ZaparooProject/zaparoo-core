@@ -20,6 +20,7 @@
 package esmedia
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -78,6 +79,17 @@ func TestFallbackArtworkNames(t *testing.T) {
 	assert.Nil(t, FallbackArtworkNames("."))
 }
 
+func TestStatMediaDirs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "media", "boxart"), 0o750))
+	dirs := StatMediaDirs(root)
+
+	assert.Equal(t, filepath.Join(root, "media", "boxart"), dirs["boxart"])
+	assert.Nil(t, StatMediaDirs(filepath.Join(root, "missing")))
+}
+
 func TestStatMediaDirsFS(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +129,19 @@ func TestFindFileFS_UsesCandidateAndNameOrder(t *testing.T) {
 	assert.Equal(t, "image/jpeg", file.ContentType)
 }
 
+func TestFindFileFS_NotFound(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("roms", "nes")
+	boxartDir := filepath.Join(root, "media", "boxart")
+	require.NoError(t, fs.MkdirAll(boxartDir, 0o750))
+
+	file := FindFileFS(fs, []string{"Missing.png"}, []string{"boxart"}, map[string]string{"boxart": boxartDir})
+
+	assert.Nil(t, file)
+}
+
 func TestFindFileFS_RejectsTraversalNames(t *testing.T) {
 	t.Parallel()
 
@@ -144,13 +169,54 @@ func TestResolvePath(t *testing.T) {
 	assert.Empty(t, escaped)
 }
 
+func TestResolvePathAbs_Empty(t *testing.T) {
+	t.Parallel()
+
+	resolved, ok := ResolvePathAbs("", t.TempDir())
+	assert.False(t, ok)
+	assert.Empty(t, resolved)
+}
+
+func TestResolvePathAbs_Absolute(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "Assets", "Game.png")
+	resolved, ok := ResolvePathAbs(path, t.TempDir())
+	require.True(t, ok)
+	assert.Equal(t, path, resolved)
+}
+
 func TestResolvePathAbs_Home(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	resolved, ok := ResolvePathAbs(filepath.Join("~", "Assets", "Game.png"), t.TempDir())
 	require.True(t, ok)
 	assert.Equal(t, filepath.Join(home, "Assets", "Game.png"), resolved)
+}
+
+func TestResolvePathAbs_HomeBackslash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	resolved, ok := ResolvePathAbs(`~\Assets\Game.png`, t.TempDir())
+	require.True(t, ok)
+	expected := filepath.Clean(home + string(filepath.Separator) + `Assets\Game.png`)
+	assert.Equal(t, expected, resolved)
+	assert.True(t, IsHomeRelativePath(`~\Assets\Game.png`))
+}
+
+func TestResolvePath_HomeBackslashInsideRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	resolved := ResolvePath(`~\games\mario.nes`, home)
+	expected := filepath.Clean(home + string(filepath.Separator) + `games\mario.nes`)
+	assert.Equal(t, expected, resolved)
 }
 
 func TestPathWithinRoot(t *testing.T) {
@@ -164,11 +230,26 @@ func TestPathWithinRoot(t *testing.T) {
 func TestMimeFromExt(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "image/png", MimeFromExt("Game.PNG"))
-	assert.Equal(t, "image/jpeg", MimeFromExt("Game.jpeg"))
-	assert.Equal(t, "image/webp", MimeFromExt("Game.webp"))
-	assert.Equal(t, "application/pdf", MimeFromExt("Manual.pdf"))
-	assert.Equal(t, "application/octet-stream", MimeFromExt("Game.unknown"))
+	cases := map[string]string{
+		"Game.PNG":      "image/png",
+		"Game.jpeg":     "image/jpeg",
+		"Animation.gif": "image/gif",
+		"Game.webp":     "image/webp",
+		"Video.mp4":     "video/mp4",
+		"Video.mkv":     "video/x-matroska",
+		"Video.avi":     "video/avi",
+		"Manual.pdf":    "application/pdf",
+		"Song.mp3":      "audio/mpeg",
+		"Song.m4a":      "audio/mp4",
+		"Book.m4b":      "audio/mp4",
+		"Video.mpg":     "video/mpeg",
+		"Video.mpeg":    "video/mpeg",
+		"Video.m4v":     "video/mp4",
+		"Game.unknown":  "application/octet-stream",
+	}
+	for path, want := range cases {
+		assert.Equal(t, want, MimeFromExt(path), path)
+	}
 }
 
 func TestArtworkDirCandidates_ContainsExpectedESDirs(t *testing.T) {

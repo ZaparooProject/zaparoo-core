@@ -1266,7 +1266,7 @@ func resolveESAssetPath(esPath, systemRootPath string, externalAssetRoots []stri
 	if esmedia.PathWithinRoot(abs, systemRootPath) {
 		return abs
 	}
-	if filepath.IsAbs(esPath) || strings.HasPrefix(esPath, "~/") {
+	if filepath.IsAbs(esPath) || esmedia.IsHomeRelativePath(esPath) {
 		for _, root := range externalAssetRoots {
 			if esmedia.PathWithinRoot(abs, root) {
 				return abs
