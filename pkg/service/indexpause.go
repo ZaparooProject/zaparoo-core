@@ -23,11 +23,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
@@ -47,8 +49,8 @@ func watchGameForIndexPause(
 	notifChan, subID := b.Subscribe(32, models.NotificationStarted, models.NotificationStopped)
 	defer b.Unsubscribe(subID)
 
-	gameActive := st.ActiveMedia() != nil
-	handleIndexPauseNotifications(ctx, notifChan, ns, pauser, gameActive, methods.IsIndexing)
+	primaryActive := func() bool { return activeMediaPausesMediaWork(st.ActiveMedia()) }
+	handleIndexPauseNotifications(ctx, notifChan, ns, pauser, primaryActive(), methods.IsIndexing, primaryActive)
 }
 
 // watchGameForScrapePause mirrors media indexing pause behavior for metadata
@@ -63,8 +65,10 @@ func watchGameForScrapePause(
 	notifChan, subID := b.Subscribe(32, models.NotificationStarted, models.NotificationStopped)
 	defer b.Unsubscribe(subID)
 
-	gameActive := st.ActiveMedia() != nil
-	handleScrapePauseNotifications(ctx, notifChan, ns, pauser, gameActive, methods.IsScrapingRunning)
+	primaryActive := func() bool { return activeMediaPausesMediaWork(st.ActiveMedia()) }
+	handleScrapePauseNotifications(
+		ctx, notifChan, ns, pauser, primaryActive(), methods.IsScrapingRunning, primaryActive,
+	)
 }
 
 // handleIndexPauseNotifications is the core loop that pauses/resumes the
@@ -81,12 +85,13 @@ func handleIndexPauseNotifications(
 	pauser *syncutil.Pauser,
 	gameAlreadyActive bool,
 	isActive func() bool,
+	primaryActive ...func() bool,
 ) {
 	handleMediaPauseNotifications(
 		ctx, notifChan, pauser, gameAlreadyActive, isActive, "media indexing",
 		func(paused bool) {
 			sendIndexPauseNotification(ns, paused)
-		},
+		}, primaryActive...,
 	)
 }
 
@@ -97,13 +102,69 @@ func handleScrapePauseNotifications(
 	pauser *syncutil.Pauser,
 	gameAlreadyActive bool,
 	isActive func() bool,
+	primaryActive ...func() bool,
 ) {
 	handleMediaPauseNotifications(
 		ctx, notifChan, pauser, gameAlreadyActive, isActive, "media scraping",
 		func(paused bool) {
 			sendScrapePauseNotification(ns, paused)
-		},
+		}, primaryActive...,
 	)
+}
+
+func activeMediaPausesMediaWork(media *models.ActiveMedia) bool {
+	if media == nil {
+		return false
+	}
+	slot, err := mediaslot.Normalize(media.Slot)
+	if err != nil {
+		log.Warn().Err(err).Str("slot", media.Slot).Msg("active media has invalid slot; pausing media work")
+		return true
+	}
+	return slot == mediaslot.Primary
+}
+
+func notificationIsPrimarySlot(notif models.Notification) bool {
+	if len(notif.Params) == 0 {
+		return true
+	}
+
+	var payload struct {
+		Slot string `json:"slot"`
+	}
+	if err := json.Unmarshal(notif.Params, &payload); err != nil {
+		log.Warn().Err(err).Str("method", notif.Method).Msg("media pause notification has invalid payload")
+		return true
+	}
+
+	slot, err := mediaslot.Normalize(payload.Slot)
+	if err != nil {
+		log.Warn().Err(err).Str("method", notif.Method).Str("slot", payload.Slot).
+			Msg("media pause notification has invalid slot")
+		return true
+	}
+	return slot == mediaslot.Primary
+}
+
+func primaryActiveFunc(primaryActive []func() bool) func() bool {
+	if len(primaryActive) == 0 || primaryActive[0] == nil {
+		return nil
+	}
+	return primaryActive[0]
+}
+
+func shouldPauseForMediaStarted(notif models.Notification, primaryActive ...func() bool) bool {
+	if isPrimaryActive := primaryActiveFunc(primaryActive); isPrimaryActive != nil {
+		return isPrimaryActive()
+	}
+	return notificationIsPrimarySlot(notif)
+}
+
+func shouldResumeForMediaStopped(notif models.Notification, primaryActive ...func() bool) bool {
+	if isPrimaryActive := primaryActiveFunc(primaryActive); isPrimaryActive != nil {
+		return !isPrimaryActive()
+	}
+	return notificationIsPrimarySlot(notif)
 }
 
 func handleMediaPauseNotifications(
@@ -114,6 +175,7 @@ func handleMediaPauseNotifications(
 	isActive func() bool,
 	label string,
 	sendPauseNotification func(bool),
+	primaryActive ...func() bool,
 ) {
 	defer pauser.Resume()
 
@@ -133,12 +195,18 @@ func handleMediaPauseNotifications(
 			}
 			switch notif.Method {
 			case models.NotificationStarted:
+				if !shouldPauseForMediaStarted(notif, primaryActive...) {
+					continue
+				}
 				pauser.Pause()
 				log.Info().Msg(label + " paused: game started")
 				if isActive() {
 					sendPauseNotification(true)
 				}
 			case models.NotificationStopped:
+				if !shouldResumeForMediaStopped(notif, primaryActive...) || !pauser.IsPaused() {
+					continue
+				}
 				pauser.Resume()
 				log.Info().Msg(label + " resumed: game stopped")
 				if isActive() {

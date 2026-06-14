@@ -34,6 +34,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
@@ -161,6 +163,40 @@ launcher = "genesis-default"
 
 	require.NoError(t, err, "cmdLaunch should not return error")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_InheritsCurrentPlaylistBackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	absPath := filepath.Join(t.TempDir(), "song.mp3")
+
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		(*platforms.Launcher)(nil),
+		(*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		}),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{absPath},
+		},
+		Cfg: cfg,
+		Playlist: playlists.PlaylistController{
+			Current: &playlists.Playlist{Slot: mediaslot.Background},
+		},
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
 	mockPlatform.AssertExpectations(t)
 }
 

@@ -221,8 +221,149 @@ func TestAmigaScanner_IgnoresStaleListingRoot(t *testing.T) {
 	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, filepath.Join(validPath, "listings", "games.txt", "Valid Game"), results[0].Path)
+	assert.Equal(t, filepath.Join(validPath, "Games", "Valid Game"), results[0].Path)
 	assert.Equal(t, "Valid Game", results[0].Name)
+}
+
+func TestAmigaScanner_AddsGamesAndDemosSubfolders(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+	require.NoError(t, os.WriteFile(filepath.Join(validPath, "listings", "demos.txt"), []byte("Valid Demo\n"), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Games", "Valid Game"),
+		Name:  "Valid Game",
+		NoExt: true,
+	})
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Demos", "Valid Demo"),
+		Name:  "Valid Demo",
+		NoExt: true,
+	})
+}
+
+func TestAmigaScanner_FiltersListingFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+	initial := []platforms.ScanResult{{Path: filepath.Join(validPath, "listings", "games.txt")}}
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", initial)
+	require.NoError(t, err)
+	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(validPath, "listings", "games.txt")})
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Games", "Valid Game"),
+		Name:  "Valid Game",
+		NoExt: true,
+	})
+}
+
+func TestAmigaLauncher_DoesNotMatchListingBackupFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt")))
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt.bak")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt.bak")))
+}
+
+func TestAmigaScanner_AddsVirtualMGLFiles(t *testing.T) {
+	t.Parallel()
+
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	mglDir := t.TempDir()
+	amigaMGL := filepath.Join(mglDir, "Amiga.mgl")
+	amiga500MGL := filepath.Join(mglDir, "Amiga 500.mgl")
+	require.NoError(t, os.WriteFile(amigaMGL, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(amiga500MGL, []byte("test"), 0o600))
+
+	mglPaths := []string{
+		amigaMGL,
+		amiga500MGL,
+		filepath.Join(mglDir, "Missing.mgl"),
+	}
+	results := amigaVisionMGLScanResults(installPath, mglPaths)
+
+	assert.Equal(t, []platforms.ScanResult{
+		{Path: filepath.Join(installPath, "Amiga.mgl"), Name: "Amiga"},
+		{Path: filepath.Join(installPath, "Amiga 500.mgl"), Name: "Amiga 500"},
+	}, results)
+}
+
+func TestResolveAmigaVisionVirtualMGLPath(t *testing.T) {
+	mglDir := t.TempDir()
+	realMGL := filepath.Join(mglDir, "Amiga.mgl")
+	virtualMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga.mgl")
+	realVirtualMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga.mgl")
+	require.NoError(t, os.WriteFile(realMGL, []byte("test"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(realVirtualMGL), 0o700))
+	require.NoError(t, os.WriteFile(realVirtualMGL, []byte("test"), 0o600))
+
+	oldPaths := amigaVisionMGLPaths
+	amigaVisionMGLPaths = []string{realMGL}
+	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
+
+	missingMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga 500.mgl")
+	nonMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Readme.txt")
+
+	assert.Equal(t, realMGL, resolveAmigaVisionVirtualMGLPath(virtualMGL))
+	assert.Equal(t, realVirtualMGL, resolveAmigaVisionVirtualMGLPath(realVirtualMGL))
+	assert.Equal(t, missingMGL, resolveAmigaVisionVirtualMGLPath(missingMGL))
+	assert.Equal(t, nonMGL, resolveAmigaVisionVirtualMGLPath(nonMGL))
+}
+
+func TestAmigaLauncher_TestRequiresAmigaVisionVirtualPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+	nonAmigaVisionPath := filepath.Join(root, "other", "Amiga")
+	require.NoError(t, os.MkdirAll(filepath.Join(nonAmigaVisionPath, "Games"), 0o700))
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+
+	assert.True(t, amigaLauncher.Test(nil, filepath.Join(validPath, "Games", "Valid Game")))
+	assert.False(t, amigaLauncher.Test(nil, filepath.Join(nonAmigaVisionPath, "Games", "Other Game")))
 }
 
 func TestAmigaScanner_RequiresBootImage(t *testing.T) {

@@ -109,6 +109,33 @@ func checkInZip(path string) string {
 	return path
 }
 
+func resolveAmigaVisionVirtualMGLPath(path string) string {
+	if filepath.Ext(strings.ToLower(path)) != ".mgl" {
+		return path
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+
+	base := filepath.Base(path)
+	for _, mglPath := range amigaVisionMGLPaths {
+		if !strings.EqualFold(base, filepath.Base(mglPath)) {
+			continue
+		}
+		if _, err := os.Stat(mglPath); err == nil {
+			return mglPath
+		}
+	}
+	return path
+}
+
+func launchAmiga(pl platforms.Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	genericLaunch := launch(pl, systemdefs.SystemAmiga)
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		return genericLaunch(cfg, resolveAmigaVisionVirtualMGLPath(path), opts)
+	}
+}
+
 func launch(
 	pl platforms.Platform, coreID string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {

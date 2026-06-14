@@ -289,6 +289,89 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "test-scraper"}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	var scraperSawPaused bool
+	testScraper := platforms.Scraper{
+		ID:   "test-scraper",
+		Name: "Test Scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			scraperSawPaused = opts.Pauser != nil && opts.Pauser.IsPaused()
+			go func() {
+				ch <- scraper.ScrapeUpdate{Done: true}
+				close(ch)
+			}()
+			return nil
+		},
+	}
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{"test-scraper": testScraper})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+	background := models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID)
+	st.SetBackgroundMedia(background)
+
+	env := requests.RequestEnv{
+		Context:      context.Background(),
+		Platform:     pl,
+		State:        st,
+		Database:     &database.Database{MediaDB: mockDB},
+		Params:       json.RawMessage(`{"scraperId":"test-scraper"}`),
+		ScrapePauser: pauser,
+	}
+
+	result, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.False(t, scraperSawPaused)
+	assert.False(t, pauser.IsPaused())
+
+	var gotStart bool
+	timeout := time.After(2 * time.Second)
+	for !gotStart {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var payload models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &payload))
+			if payload.Scraping && !payload.Done {
+				assert.False(t, payload.Paused)
+				gotStart = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for initial media.scraping notification")
+		}
+	}
+
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning()
+	}, 2*time.Second, 10*time.Millisecond)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()

@@ -330,6 +330,29 @@ func newIndexingStatus() *indexingStatus {
 
 var statusInstance = newIndexingStatus()
 
+func activeMediaPausesMediaWork(media *models.ActiveMedia) bool {
+	if media == nil {
+		return false
+	}
+	slot, err := mediaslot.Normalize(media.Slot)
+	if err != nil {
+		log.Warn().Err(err).Str("slot", media.Slot).Msg("active media has invalid slot; pausing media work")
+		return true
+	}
+	return slot == mediaslot.Primary
+}
+
+func syncMediaWorkPauserWithActiveMedia(media *models.ActiveMedia, pauser *syncutil.Pauser) {
+	if pauser == nil {
+		return
+	}
+	if activeMediaPausesMediaWork(media) {
+		pauser.Pause()
+		return
+	}
+	pauser.Resume()
+}
+
 func GenerateMediaDB(
 	ctx context.Context,
 	pl platforms.Platform,
@@ -568,6 +591,12 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		if len(systems) == 0 {
 			return nil, models.ClientErrf("at least one system must be specified for selective indexing")
 		}
+	}
+
+	// Reconcile with current primary-media state before reporting initial
+	// paused status. This clears stale pauses left by non-primary media events.
+	if env.State != nil {
+		syncMediaWorkPauserWithActiveMedia(env.State.ActiveMedia(), env.IndexPauser)
 	}
 
 	// Use app-scoped context — indexing outlives the API request
