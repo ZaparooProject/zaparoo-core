@@ -24,6 +24,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/rs/zerolog/log"
 )
 
@@ -68,6 +70,15 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		}
 
 		respSystems = append(respSystems, sr)
+	}
+
+	for _, system := range helpers.GlobalLauncherCache.GetLaunchableSystems() {
+		respSystems = append(respSystems, models.System{
+			ID:        launchables.EncodeID(system.ID),
+			Name:      system.Name,
+			Category:  system.Category,
+			ZapScript: system.ZapScript(),
+		})
 	}
 
 	return models.SystemsResponse{

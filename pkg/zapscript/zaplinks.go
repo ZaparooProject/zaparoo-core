@@ -348,12 +348,11 @@ func checkZapLink(
 		return "", nil
 	}
 	value := cmd.Args[0]
-	platform := pl.ID()
-
 	if !isZapLink(value, db) {
 		return "", nil
 	}
 
+	platform := pl.ID()
 	log.Info().Msgf("checking zap link: %s", value)
 	body, err := getRemoteZapScript(value, platform)
 	if isOfflineError(err) {

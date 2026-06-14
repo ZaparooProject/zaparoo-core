@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/charlievieth/fastwalk"
 	sqlite3 "github.com/mattn/go-sqlite3"
@@ -574,6 +575,17 @@ type IndexStatus struct {
 // during key steps.
 //
 // Returns the total number of files indexed.
+func newIndexLauncherCache(
+	cfg *config.Instance,
+	platform platforms.Platform,
+) (*helpers.LauncherCache, []platforms.Launcher) {
+	allLaunchers := platform.Launchers(cfg)
+	allLaunchers = append(allLaunchers, launchables.Launchers(cfg, platform)...)
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(allLaunchers)
+	return launcherCache, allLaunchers
+}
+
 func NewNamesIndex(
 	ctx context.Context,
 	platform platforms.Platform,
@@ -687,9 +699,7 @@ func NewNamesIndex(
 
 	// Build launcher metadata once so runnable-system filtering and scanner
 	// execution both use the same launcher set even when the global cache is stale.
-	allLaunchers := platform.Launchers(cfg)
-	launcherCache := &helpers.LauncherCache{}
-	launcherCache.InitializeFromSlice(allLaunchers)
+	launcherCache, allLaunchers := newIndexLauncherCache(cfg, platform)
 
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
@@ -711,6 +721,9 @@ func NewNamesIndex(
 		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
 			anyScanners = append(anyScanners, &allLaunchers[i])
 		}
+	}
+	for _, item := range launchables.Media(cfg, platform) {
+		systemsWithScanners[item.SystemID] = true
 	}
 
 	existingSystems, getExistingSystemsErr := db.GetAllSystems()
@@ -1016,6 +1029,17 @@ func NewNamesIndex(
 				continue
 			}
 			files = append(files, results...)
+		}
+
+		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
+		// rows with zaparoo:// paths, so search, browse, paging, and missing-state
+		// handling stay in one place.
+		for _, item := range launchables.MediaForSystem(cfg, platform, systemID) {
+			files = append(files, platforms.ScanResult{
+				Path:  item.ZapScript(),
+				Name:  item.Name,
+				NoExt: true,
+			})
 		}
 
 		if len(files) == 0 {
