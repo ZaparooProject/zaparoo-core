@@ -71,6 +71,47 @@ func writeAmigaVisionTestInstall(t *testing.T, path, game string, withImage bool
 	}
 }
 
+func TestHookAmiga_WritesBootFileForVirtualBrowsePath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionTestInstall(t, validPath, "Valid Game", true)
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = hookAmiga(cfg, nil, filepath.Join(validPath, "Games", "Valid Game"))
+	require.NoError(t, err)
+
+	bootFile, err := os.ReadFile(filepath.Join(validPath, "shared", "ags_boot")) //nolint:gosec // Test temp path
+	require.NoError(t, err)
+	assert.Equal(t, "Valid Game\n", string(bootFile))
+}
+
+func TestHookAmiga_IgnoresNonAmigaVisionVirtualPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "games", "Amiga", "Games", "Other Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	override, err := hookAmiga(cfg, nil, path)
+	require.NoError(t, err)
+	assert.Empty(t, override)
+	assert.NoFileExists(t, filepath.Join(root, "games", "Amiga", "shared", "ags_boot"))
+}
+
 func TestPathToMGLDef(t *testing.T) {
 	t.Parallel()
 

@@ -36,6 +36,15 @@ import (
 func alwaysActive() bool { return true }
 func neverActive() bool  { return false }
 
+func mediaLifecycleNotification(t *testing.T, method, slot string) models.Notification {
+	t.Helper()
+	params, err := json.Marshal(struct {
+		Slot string `json:"slot"`
+	}{Slot: slot})
+	require.NoError(t, err)
+	return models.Notification{Method: method, Params: params}
+}
+
 // drainNotification reads a single notification from ns, failing if none
 // arrives within the timeout.
 func drainNotification(t *testing.T, ns <-chan models.Notification) models.Notification {
@@ -47,6 +56,19 @@ func drainNotification(t *testing.T, ns <-chan models.Notification) models.Notif
 		t.Fatal("expected notification but none received")
 		return models.Notification{}
 	}
+}
+
+func TestActiveMediaPausesMediaWork_BackgroundSlot(t *testing.T) {
+	media := models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", "native-audio")
+	media.Slot = "background"
+
+	assert.False(t, activeMediaPausesMediaWork(media))
+}
+
+func TestActiveMediaPausesMediaWork_PrimarySlot(t *testing.T) {
+	media := models.NewActiveMedia("NES", "NES", "game.nes", "Game", "NES")
+
+	assert.True(t, activeMediaPausesMediaWork(media))
 }
 
 func TestHandleIndexPauseNotifications_PausesOnStarted(t *testing.T) {
@@ -70,6 +92,186 @@ func TestHandleIndexPauseNotifications_PausesOnStarted(t *testing.T) {
 	var resp models.IndexingStatusResponse
 	require.NoError(t, json.Unmarshal(notif.Params, &resp))
 	assert.True(t, resp.Paused)
+}
+
+func TestHandleIndexPauseNotifications_PausesOnInvalidSlot(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStarted, "tertiary")
+
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+	notif := drainNotification(t, ns)
+	assert.Equal(t, models.NotificationMediaIndexing, notif.Method)
+}
+
+func TestHandleIndexPauseNotifications_PausesOnMalformedParams(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- models.Notification{Method: models.NotificationStarted, Params: []byte("{")}
+
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+	notif := drainNotification(t, ns)
+	assert.Equal(t, models.NotificationMediaIndexing, notif.Method)
+}
+
+func TestHandleIndexPauseNotifications_IgnoresStartedWhenNoPrimaryActive(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive, neverActive)
+
+	ch <- models.Notification{Method: models.NotificationStarted}
+
+	assert.Never(t, pauser.IsPaused, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent without primary media: %+v", notif)
+	default:
+	}
+}
+
+func TestHandleIndexPauseNotifications_PausesStartedWhenPrimaryActive(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive, alwaysActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStarted, "background")
+
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+	notif := drainNotification(t, ns)
+	assert.Equal(t, models.NotificationMediaIndexing, notif.Method)
+}
+
+func TestHandleIndexPauseNotifications_IgnoresStoppedWhenAlreadyUnpaused(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive, neverActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStopped, "background")
+
+	assert.Never(t, pauser.IsPaused, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent for no-op stopped event: %+v", notif)
+	default:
+	}
+}
+
+func TestHandleScrapePauseNotifications_IgnoresStoppedWhenAlreadyUnpaused(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleScrapePauseNotifications(ctx, ch, ns, pauser, false, alwaysActive, neverActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStopped, "background")
+
+	assert.Never(t, pauser.IsPaused, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent for no-op stopped event: %+v", notif)
+	default:
+	}
+}
+
+func TestHandleIndexPauseNotifications_DoesNotResumeStoppedWhilePrimaryActive(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive, alwaysActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStopped, "background")
+
+	assert.Never(t, func() bool { return !pauser.IsPaused() }, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent while primary remains active: %+v", notif)
+	default:
+	}
+}
+
+func TestHandleIndexPauseNotifications_IgnoresBackgroundStarted(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStarted, "background")
+
+	assert.Never(t, pauser.IsPaused, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent for background media: %+v", notif)
+	default:
+	}
+}
+
+func TestHandleIndexPauseNotifications_IgnoresBackgroundStoppedWhilePaused(t *testing.T) {
+	ch := make(chan models.Notification, 2)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleIndexPauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- models.Notification{Method: models.NotificationStarted}
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+	drainNotification(t, ns)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStopped, "background")
+
+	assert.Never(t, func() bool { return !pauser.IsPaused() }, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent for background media: %+v", notif)
+	default:
+	}
 }
 
 func TestHandleIndexPauseNotifications_ResumesOnStopped(t *testing.T) {
@@ -206,6 +408,46 @@ func TestHandleIndexPauseNotifications_NoNotificationWhenNotIndexing(t *testing.
 		t.Fatalf("unexpected notification sent when not indexing: %+v", notif)
 	case <-time.After(100 * time.Millisecond):
 		// expected — no notification
+	}
+}
+
+func TestHandleScrapePauseNotifications_IgnoresStartedWhenNoPrimaryActive(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleScrapePauseNotifications(ctx, ch, ns, pauser, false, alwaysActive, neverActive)
+
+	ch <- models.Notification{Method: models.NotificationStarted}
+
+	assert.Never(t, pauser.IsPaused, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent without primary media: %+v", notif)
+	default:
+	}
+}
+
+func TestHandleScrapePauseNotifications_IgnoresBackgroundStarted(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleScrapePauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- mediaLifecycleNotification(t, models.NotificationStarted, "background")
+
+	assert.Never(t, pauser.IsPaused, 100*time.Millisecond, 10*time.Millisecond)
+	select {
+	case notif := <-ns:
+		t.Fatalf("unexpected notification sent for background media: %+v", notif)
+	default:
 	}
 }
 

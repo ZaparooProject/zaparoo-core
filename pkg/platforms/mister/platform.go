@@ -52,6 +52,35 @@ import (
 	"github.com/spf13/afero"
 )
 
+const (
+	amigaVisionGamesListing   = "listings/games.txt"
+	amigaVisionDemosListing   = "listings/demos.txt"
+	amigaVisionGamesBrowseDir = "Games"
+	amigaVisionDemosBrowseDir = "Demos"
+)
+
+type amigaVisionListing struct {
+	Path      string
+	BrowseDir string
+}
+
+type amigaVisionVirtualPath struct {
+	InstallPath string
+	ListingName string
+	GameName    string
+}
+
+var (
+	amigaVisionListings = []amigaVisionListing{
+		{Path: amigaVisionGamesListing, BrowseDir: amigaVisionGamesBrowseDir},
+		{Path: amigaVisionDemosListing, BrowseDir: amigaVisionDemosBrowseDir},
+	}
+	amigaVisionMGLPaths = []string{
+		filepath.Join(misterconfig.SDRootDir, "_Computer", "Amiga.mgl"),
+		filepath.Join(misterconfig.SDRootDir, "_Computer", "Amiga 500.mgl"),
+	}
+)
+
 // arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
 type arcadeCardLaunchCache struct {
 	timestamp time.Time
@@ -1020,6 +1049,122 @@ func isPreferredAmigaVisionPath(path string) bool {
 	return strings.HasSuffix(strings.ToLower(filepath.Clean(path)), filepath.Join("games", "amiga"))
 }
 
+func isAmigaVisionListingFile(path string) bool {
+	cleanPath := filepath.ToSlash(strings.ToLower(filepath.Clean(path)))
+	for _, listing := range amigaVisionListings {
+		if strings.HasSuffix(cleanPath, "/"+filepath.ToSlash(listing.Path)) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterAmigaVisionListingFiles(results []platforms.ScanResult) []platforms.ScanResult {
+	filtered := make([]platforms.ScanResult, 0, len(results))
+	for _, result := range results {
+		if isAmigaVisionListingFile(result.Path) {
+			continue
+		}
+		filtered = append(filtered, result)
+	}
+	return filtered
+}
+
+func amigaVisionVirtualPathParts(path string) (amigaVisionVirtualPath, bool) {
+	dir := filepath.Dir(path)
+	switch strings.ToLower(filepath.Base(dir)) {
+	case strings.ToLower(amigaVisionGamesBrowseDir):
+		return amigaVisionVirtualPath{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..")),
+			ListingName: "games.txt",
+			GameName:    filepath.Base(path),
+		}, true
+	case strings.ToLower(amigaVisionDemosBrowseDir):
+		return amigaVisionVirtualPath{
+			InstallPath: filepath.Clean(filepath.Join(dir, "..")),
+			ListingName: "demos.txt",
+			GameName:    filepath.Base(path),
+		}, true
+	default:
+		return amigaVisionVirtualPath{}, false
+	}
+}
+
+func amigaVisionListingContainsGame(installPath, listingName, gameName string) bool {
+	f, err := os.Open(filepath.Join(installPath, "listings", listingName)) //nolint:gosec // Internal amiga listing path
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("unable to close amiga txt")
+		}
+	}()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if scanner.Text() == gameName {
+			return true
+		}
+	}
+	return false
+}
+
+func isAmigaVisionVirtualPath(path string) bool {
+	virtualPath, ok := amigaVisionVirtualPathParts(path)
+	if !ok {
+		return false
+	}
+	return hasAmigaVisionImage(virtualPath.InstallPath) ||
+		amigaVisionListingContainsGame(virtualPath.InstallPath, virtualPath.ListingName, virtualPath.GameName)
+}
+
+func scanAmigaVisionListingFile(path, installPath string, listing amigaVisionListing) []platforms.ScanResult {
+	f, err := os.Open(path) //nolint:gosec // Internal amiga games/demos path
+	if err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("unable to open amiga txt")
+		return nil
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("path", path).Msg("unable to close amiga txt")
+		}
+	}()
+
+	var results []platforms.ScanResult
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		name := strings.TrimSpace(scanner.Text())
+		if name == "" {
+			continue
+		}
+		results = append(results, platforms.ScanResult{
+			Path:  filepath.Join(installPath, listing.BrowseDir, name),
+			Name:  name,
+			NoExt: true,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("unable to scan amiga txt")
+	}
+	return results
+}
+
+func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platforms.ScanResult {
+	results := make([]platforms.ScanResult, 0, len(mglPaths))
+	for _, mglPath := range mglPaths {
+		if _, err := os.Stat(mglPath); err != nil {
+			continue
+		}
+		name := filepath.Base(mglPath)
+		results = append(results, platforms.ScanResult{
+			Path: filepath.Join(installPath, name),
+			Name: strings.TrimSuffix(name, filepath.Ext(name)),
+		})
+	}
+	return results
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Launchers is invoked from many hot paths (token scans, RPC handlers,
 	// indexing). The Refresh fast path stats only the snapshot directories
@@ -1028,20 +1173,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
 	cores.GlobalRBFCache.Refresh()
 
-	aGamesPath := "listings/games.txt"
-	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
 		ID:         systemdefs.SystemAmiga,
 		SystemID:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(_ *config.Instance, path string) bool {
-			if strings.Contains(path, aGamesPath) || strings.Contains(path, aDemosPath) {
+			lowerPath := filepath.ToSlash(strings.ToLower(path))
+			if strings.Contains(lowerPath, filepath.ToSlash(amigaVisionGamesListing)) ||
+				strings.Contains(lowerPath, filepath.ToSlash(amigaVisionDemosListing)) {
 				return true
 			}
-			return false
+
+			return isAmigaVisionVirtualPath(path)
 		},
-		Launch: launch(p, systemdefs.SystemAmiga),
+		Launch: launchAmiga(p),
 		Scanner: func(
 			ctx context.Context,
 			cfg *config.Instance,
@@ -1056,7 +1202,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			log.Info().Msg("starting amigavision scan")
 
-			var fullPaths []string
+			results = filterAmigaVisionListingFiles(results)
 
 			s, err := systemdefs.GetSystem(systemdefs.SystemAmiga)
 			if err != nil {
@@ -1078,35 +1224,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				default:
 				}
 
-				for _, txt := range []string{aGamesPath, aDemosPath} {
-					tp, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, txt))
-					if err == nil {
-						f, err := os.Open(tp) //nolint:gosec // Internal amiga games/demos path
-						if err != nil {
-							log.Warn().Err(err).Msg("unable to open amiga txt")
-							continue
-						}
-
-						scanner := bufio.NewScanner(f)
-						for scanner.Scan() {
-							fp := filepath.Join(sf.Path, txt, scanner.Text())
-							fullPaths = append(fullPaths, fp)
-						}
-
-						err = f.Close()
-						if err != nil {
-							log.Warn().Err(err).Msg("unable to close amiga txt")
-						}
+				for _, listing := range amigaVisionListings {
+					tp, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, listing.Path))
+					if err != nil {
+						continue
 					}
+					results = append(results, scanAmigaVisionListingFile(tp, sf.Path, listing)...)
 				}
-			}
-
-			for _, p := range fullPaths {
-				results = append(results, platforms.ScanResult{
-					Path:  p,
-					Name:  filepath.Base(p),
-					NoExt: true,
-				})
+				results = append(results, amigaVisionMGLScanResults(sf.Path, amigaVisionMGLPaths)...)
 			}
 
 			log.Debug().Int("results", len(results)).Msg("amigavision scan completed")

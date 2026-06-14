@@ -485,6 +485,10 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 	scrapeCtx, cancelFunc := context.WithCancel(env.State.GetContext())
 	scrapingStatusInstance.setCancelFunc(cancelFunc)
 
+	// Reconcile with current primary-media state before reporting initial
+	// paused status. This clears stale pauses left by non-primary media events.
+	syncMediaWorkPauserWithActiveMedia(env.State.ActiveMedia(), env.ScrapePauser)
+
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 	opts := scraper.ScrapeOptions{Systems: params.Systems, RunID: runID, Force: params.Force, Pauser: env.ScrapePauser}
 	ch := make(chan scraper.ScrapeUpdate, 32)

@@ -419,13 +419,9 @@ func getLaunchClosure(
 		action := env.Cmd.AdvArgs.Get(zapscript.KeyAction)
 		setName := env.Cmd.AdvArgs.Get(zapscript.KeySetName)
 		setNameSameDir := env.Cmd.AdvArgs.Get(zapscript.KeySetNameSameDir)
-		slot := env.Cmd.AdvArgs.Get(zapscript.KeySlot)
-		if slot == "" && env.Playlist.Active != nil && env.Playlist.Active.Slot != "" {
-			slot = env.Playlist.Active.Slot
-		}
-		normalizedSlot, err := mediaslot.Normalize(slot)
+		normalizedSlot, err := commandSlot(env)
 		if err != nil {
-			return fmt.Errorf("normalize media slot: %w", err)
+			return err
 		}
 
 		var opts *platforms.LaunchOptions
