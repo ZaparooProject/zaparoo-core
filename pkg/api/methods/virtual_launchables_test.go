@@ -27,12 +27,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +49,7 @@ func (p *apiLaunchablePlatform) Launchables(*config.Instance) []launchables.Laun
 
 func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
-	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockMediaDB.On("IndexedSystems").Return([]string{}, nil)
 	mockPlatform := &apiLaunchablePlatform{
 		MockPlatform: mocks.NewMockPlatform(),
@@ -66,6 +68,14 @@ func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 			},
 		},
 	}
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	originalCache := corehelpers.GlobalLauncherCache
+	cache := &corehelpers.LauncherCache{}
+	cache.Initialize(mockPlatform, &config.Instance{})
+	corehelpers.GlobalLauncherCache = cache
+	t.Cleanup(func() {
+		corehelpers.GlobalLauncherCache = originalCache
+	})
 
 	result, err := HandleSystems(requests.RequestEnv{
 		Platform: mockPlatform,

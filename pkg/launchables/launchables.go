@@ -253,40 +253,43 @@ func addID(seen map[uuid.UUID]string, id uuid.UUID, typ, name string) error {
 	return nil
 }
 
-// Systems returns virtual systems defined by this platform.
-func Systems(cfg *config.Instance, pl platforms.Platform) []VirtualSystem {
+// Available returns available virtual systems and media defined by this platform.
+func Available(cfg *config.Instance, pl platforms.Platform) ([]VirtualSystem, []VirtualMedia) {
 	defs := Launchables(cfg, pl)
 	if len(defs) == 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]VirtualSystem, 0, len(defs))
+	return split(defs)
+}
+
+func split(defs []Launchable) ([]VirtualSystem, []VirtualMedia) {
+	systems := make([]VirtualSystem, 0, len(defs))
+	media := make([]VirtualMedia, 0, len(defs))
 	for i := range defs {
 		switch entry := defs[i].(type) {
 		case VirtualSystem:
-			out = append(out, entry)
+			systems = append(systems, entry)
 		case *VirtualSystem:
-			out = append(out, *entry)
+			systems = append(systems, *entry)
+		case VirtualMedia:
+			media = append(media, entry)
+		case *VirtualMedia:
+			media = append(media, *entry)
 		}
 	}
-	return out
+	return systems, media
+}
+
+// Systems returns virtual systems defined by this platform.
+func Systems(cfg *config.Instance, pl platforms.Platform) []VirtualSystem {
+	systems, _ := Available(cfg, pl)
+	return systems
 }
 
 // Media returns virtual media defined by this platform.
 func Media(cfg *config.Instance, pl platforms.Platform) []VirtualMedia {
-	defs := Launchables(cfg, pl)
-	if len(defs) == 0 {
-		return nil
-	}
-	out := make([]VirtualMedia, 0, len(defs))
-	for i := range defs {
-		switch entry := defs[i].(type) {
-		case VirtualMedia:
-			out = append(out, entry)
-		case *VirtualMedia:
-			out = append(out, *entry)
-		}
-	}
-	return out
+	_, media := Available(cfg, pl)
+	return media
 }
 
 // MediaForSystem returns virtual media for a real Zaparoo system ID.
@@ -303,22 +306,21 @@ func MediaForSystem(cfg *config.Instance, pl platforms.Platform, systemID string
 
 // Launchers returns scheme launchers that execute platform-defined launchables.
 func Launchers(cfg *config.Instance, pl platforms.Platform) []platforms.Launcher {
-	defs := Launchables(cfg, pl)
-	if len(defs) == 0 {
+	systems, media := Available(cfg, pl)
+	return LaunchersFor(systems, media)
+}
+
+// LaunchersFor returns scheme launchers for already-filtered launchables.
+func LaunchersFor(systems []VirtualSystem, media []VirtualMedia) []platforms.Launcher {
+	if len(systems) == 0 && len(media) == 0 {
 		return nil
 	}
-	launchers := make([]platforms.Launcher, 0, len(defs))
-	for i := range defs {
-		switch entry := defs[i].(type) {
-		case VirtualSystem:
-			launchers = append(launchers, systemLauncher(entry))
-		case *VirtualSystem:
-			launchers = append(launchers, systemLauncher(*entry))
-		case VirtualMedia:
-			launchers = append(launchers, mediaLauncher(entry))
-		case *VirtualMedia:
-			launchers = append(launchers, mediaLauncher(*entry))
-		}
+	launchers := make([]platforms.Launcher, 0, len(systems)+len(media))
+	for i := range systems {
+		launchers = append(launchers, systemLauncher(systems[i]))
+	}
+	for i := range media {
+		launchers = append(launchers, mediaLauncher(media[i]))
 	}
 	return launchers
 }
