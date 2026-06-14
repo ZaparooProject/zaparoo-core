@@ -17,8 +17,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package launchables defines virtual launch targets exposed through existing
-// system and media API shapes without inserting synthetic system definitions.
+// Package launchables defines shared IDs and URI helpers for platform-owned
+// virtual launch targets.
 package launchables
 
 import (
@@ -46,45 +46,44 @@ var encodedIDRe = regexp.MustCompile(`^[a-z2-7]{26}$`)
 
 var uuidBase32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// LaunchFunc executes a code-defined virtual target. The path argument is the
-// zaparoo:// URI that selected this launchable.
-type LaunchFunc func(*config.Instance, platforms.Platform, string, *platforms.LaunchOptions) (*os.Process, error)
+// LaunchFunc executes a platform-defined virtual target. The path argument is
+// the zaparoo:// URI that selected this launchable.
+type LaunchFunc func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error)
+
+// Launchable is implemented by all platform-defined virtual launch targets.
+type Launchable interface {
+	isLaunchable()
+}
+
+// Provider is optionally implemented by platforms with launchable targets.
+type Provider interface {
+	Launchables(*config.Instance) []Launchable
+}
 
 // VirtualSystem is a launch-only entry returned from the systems endpoint.
 // ID is encoded into zaparoo:// URIs and must be globally unique.
 type VirtualSystem struct {
-	Launch      LaunchFunc
-	Name        string
-	Category    string
-	PlatformIDs []string
-	ID          uuid.UUID
+	Launch LaunchFunc
+	// Test reports whether the launchable is available. Nil means always available.
+	Test     func(*config.Instance) bool
+	Name     string
+	Category string
+	ID       uuid.UUID
 }
 
 // VirtualMedia is a single launch-only media-shaped entry attached to a real
 // Zaparoo system and indexed into MediaDB as a virtual URI path.
 type VirtualMedia struct {
-	Launch      LaunchFunc
-	SystemID    string
-	Name        string
-	PlatformIDs []string
-	ID          uuid.UUID
+	Launch LaunchFunc
+	// Test reports whether the launchable is available. Nil means always available.
+	Test     func(*config.Instance) bool
+	SystemID string
+	Name     string
+	ID       uuid.UUID
 }
 
-// Registry contains all code-defined virtual launch targets.
-type Registry struct {
-	byID    map[uuid.UUID]string
-	systems []VirtualSystem
-	media   []VirtualMedia
-}
-
-// SystemDefinitions is the central code-defined list of launch-only systems.
-var SystemDefinitions = []VirtualSystem{}
-
-// MediaDefinitions is the central code-defined list of virtual media items.
-var MediaDefinitions = []VirtualMedia{}
-
-// DefaultRegistry is used by API handlers, indexing, and virtual launchers.
-var DefaultRegistry = MustNewRegistry(SystemDefinitions, MediaDefinitions)
+func (VirtualSystem) isLaunchable() {}
+func (VirtualMedia) isLaunchable()  {}
 
 // EncodeID converts a UUID to canonical lowercase RFC 4648 base32 without padding.
 func EncodeID(id uuid.UUID) string {
@@ -123,50 +122,113 @@ func makeURI(id uuid.UUID, name string) string {
 	return fmt.Sprintf("%s://%s/%s", Scheme, EncodeID(id), url.PathEscape(name))
 }
 
-// NewRegistry validates and indexes virtual launch definitions.
-func NewRegistry(systems []VirtualSystem, media []VirtualMedia) (*Registry, error) {
-	r := &Registry{
-		byID:    make(map[uuid.UUID]string, len(systems)+len(media)),
-		systems: append([]VirtualSystem(nil), systems...),
-		media:   append([]VirtualMedia(nil), media...),
+// Launchables returns validated launchables defined by a platform.
+func Launchables(cfg *config.Instance, pl platforms.Platform) []Launchable {
+	provider, ok := pl.(Provider)
+	if !ok {
+		return nil
 	}
-
-	for i := range r.systems {
-		entry := &r.systems[i]
-		if err := validateCommon(entry.ID, entry.Name, entry.Launch); err != nil {
-			return nil, fmt.Errorf("virtual system %q: %w", entry.Name, err)
-		}
-		if entry.Category == "" {
-			return nil, fmt.Errorf("virtual system %q: category is required", entry.Name)
-		}
-		if err := r.addID(entry.ID, "system", entry.Name); err != nil {
-			return nil, err
-		}
+	defs := provider.Launchables(cfg)
+	if len(defs) == 0 {
+		return nil
 	}
-
-	for i := range r.media {
-		entry := &r.media[i]
-		if err := validateCommon(entry.ID, entry.Name, entry.Launch); err != nil {
-			return nil, fmt.Errorf("virtual media %q: %w", entry.Name, err)
-		}
-		if _, err := systemdefs.GetSystem(entry.SystemID); err != nil {
-			return nil, fmt.Errorf("virtual media %q: invalid system %q: %w", entry.Name, entry.SystemID, err)
-		}
-		if err := r.addID(entry.ID, "media", entry.Name); err != nil {
-			return nil, err
-		}
-	}
-
-	return r, nil
-}
-
-// MustNewRegistry panics when registry definitions are invalid.
-func MustNewRegistry(systems []VirtualSystem, media []VirtualMedia) *Registry {
-	r, err := NewRegistry(systems, media)
-	if err != nil {
+	if err := validateLaunchables(defs); err != nil {
 		panic(err)
 	}
-	return r
+	return filterAvailable(cfg, defs)
+}
+
+func filterAvailable(cfg *config.Instance, defs []Launchable) []Launchable {
+	out := make([]Launchable, 0, len(defs))
+	for i := range defs {
+		switch entry := defs[i].(type) {
+		case VirtualSystem:
+			if entry.Test == nil || entry.Test(cfg) {
+				out = append(out, entry)
+			}
+		case *VirtualSystem:
+			if entry.Test == nil || entry.Test(cfg) {
+				out = append(out, entry)
+			}
+		case VirtualMedia:
+			if entry.Test == nil || entry.Test(cfg) {
+				out = append(out, entry)
+			}
+		case *VirtualMedia:
+			if entry.Test == nil || entry.Test(cfg) {
+				out = append(out, entry)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validateLaunchables(defs []Launchable) error {
+	seen := make(map[uuid.UUID]string, len(defs))
+	for i := range defs {
+		switch entry := defs[i].(type) {
+		case VirtualSystem:
+			if err := validateSystem(entry); err != nil {
+				return err
+			}
+			if err := addID(seen, entry.ID, "system", entry.Name); err != nil {
+				return err
+			}
+		case *VirtualSystem:
+			if entry == nil {
+				return errors.New("nil virtual system")
+			}
+			if err := validateSystem(*entry); err != nil {
+				return err
+			}
+			if err := addID(seen, entry.ID, "system", entry.Name); err != nil {
+				return err
+			}
+		case VirtualMedia:
+			if err := validateMedia(entry); err != nil {
+				return err
+			}
+			if err := addID(seen, entry.ID, "media", entry.Name); err != nil {
+				return err
+			}
+		case *VirtualMedia:
+			if entry == nil {
+				return errors.New("nil virtual media")
+			}
+			if err := validateMedia(*entry); err != nil {
+				return err
+			}
+			if err := addID(seen, entry.ID, "media", entry.Name); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported launchable type %T", defs[i])
+		}
+	}
+	return nil
+}
+
+func validateSystem(entry VirtualSystem) error {
+	if err := validateCommon(entry.ID, entry.Name, entry.Launch); err != nil {
+		return fmt.Errorf("virtual system %q: %w", entry.Name, err)
+	}
+	if entry.Category == "" {
+		return fmt.Errorf("virtual system %q: category is required", entry.Name)
+	}
+	return nil
+}
+
+func validateMedia(entry VirtualMedia) error {
+	if err := validateCommon(entry.ID, entry.Name, entry.Launch); err != nil {
+		return fmt.Errorf("virtual media %q: %w", entry.Name, err)
+	}
+	if _, err := systemdefs.GetSystem(entry.SystemID); err != nil {
+		return fmt.Errorf("virtual media %q: invalid system %q: %w", entry.Name, entry.SystemID, err)
+	}
+	return nil
 }
 
 func validateCommon(id uuid.UUID, name string, launch LaunchFunc) error {
@@ -182,41 +244,45 @@ func validateCommon(id uuid.UUID, name string, launch LaunchFunc) error {
 	return nil
 }
 
-func (r *Registry) addID(id uuid.UUID, typ, name string) error {
+func addID(seen map[uuid.UUID]string, id uuid.UUID, typ, name string) error {
 	label := typ + ":" + name
-	if existing, ok := r.byID[id]; ok {
+	if existing, ok := seen[id]; ok {
 		return fmt.Errorf("duplicate launchable id %s for %s and %s", EncodeID(id), existing, label)
 	}
-	r.byID[id] = label
+	seen[id] = label
 	return nil
 }
 
-// Systems returns virtual systems available for this platform.
-func (r *Registry) Systems(pl platforms.Platform) []VirtualSystem {
-	if len(r.systems) == 0 {
+// Systems returns virtual systems defined by this platform.
+func Systems(cfg *config.Instance, pl platforms.Platform) []VirtualSystem {
+	defs := Launchables(cfg, pl)
+	if len(defs) == 0 {
 		return nil
 	}
-	platformID := platformID(pl)
-	out := make([]VirtualSystem, 0, len(r.systems))
-	for i := range r.systems {
-		entry := &r.systems[i]
-		if platformMatches(platformID, entry.PlatformIDs) {
+	out := make([]VirtualSystem, 0, len(defs))
+	for i := range defs {
+		switch entry := defs[i].(type) {
+		case VirtualSystem:
+			out = append(out, entry)
+		case *VirtualSystem:
 			out = append(out, *entry)
 		}
 	}
 	return out
 }
 
-// Media returns virtual media available for this platform.
-func (r *Registry) Media(pl platforms.Platform) []VirtualMedia {
-	if len(r.media) == 0 {
+// Media returns virtual media defined by this platform.
+func Media(cfg *config.Instance, pl platforms.Platform) []VirtualMedia {
+	defs := Launchables(cfg, pl)
+	if len(defs) == 0 {
 		return nil
 	}
-	platformID := platformID(pl)
-	out := make([]VirtualMedia, 0, len(r.media))
-	for i := range r.media {
-		entry := &r.media[i]
-		if platformMatches(platformID, entry.PlatformIDs) {
+	out := make([]VirtualMedia, 0, len(defs))
+	for i := range defs {
+		switch entry := defs[i].(type) {
+		case VirtualMedia:
+			out = append(out, entry)
+		case *VirtualMedia:
 			out = append(out, *entry)
 		}
 	}
@@ -224,8 +290,8 @@ func (r *Registry) Media(pl platforms.Platform) []VirtualMedia {
 }
 
 // MediaForSystem returns virtual media for a real Zaparoo system ID.
-func (r *Registry) MediaForSystem(pl platforms.Platform, systemID string) []VirtualMedia {
-	media := r.Media(pl)
+func MediaForSystem(cfg *config.Instance, pl platforms.Platform, systemID string) []VirtualMedia {
+	media := Media(cfg, pl)
 	out := make([]VirtualMedia, 0, len(media))
 	for i := range media {
 		if media[i].SystemID == systemID {
@@ -235,44 +301,44 @@ func (r *Registry) MediaForSystem(pl platforms.Platform, systemID string) []Virt
 	return out
 }
 
-// Launchers returns scheme launchers that execute code-defined launchables.
-func (r *Registry) Launchers(pl platforms.Platform) []platforms.Launcher {
-	if len(r.systems) == 0 && len(r.media) == 0 {
+// Launchers returns scheme launchers that execute platform-defined launchables.
+func Launchers(cfg *config.Instance, pl platforms.Platform) []platforms.Launcher {
+	defs := Launchables(cfg, pl)
+	if len(defs) == 0 {
 		return nil
 	}
-	platformID := platformID(pl)
-	launchers := make([]platforms.Launcher, 0, len(r.systems)+len(r.media))
-	for i := range r.systems {
-		entry := &r.systems[i]
-		if platformMatches(platformID, entry.PlatformIDs) {
-			launchers = append(launchers, systemLauncher(pl, entry))
-		}
-	}
-	for i := range r.media {
-		entry := &r.media[i]
-		if platformMatches(platformID, entry.PlatformIDs) {
-			launchers = append(launchers, mediaLauncher(pl, entry))
+	launchers := make([]platforms.Launcher, 0, len(defs))
+	for i := range defs {
+		switch entry := defs[i].(type) {
+		case VirtualSystem:
+			launchers = append(launchers, systemLauncher(entry))
+		case *VirtualSystem:
+			launchers = append(launchers, systemLauncher(*entry))
+		case VirtualMedia:
+			launchers = append(launchers, mediaLauncher(entry))
+		case *VirtualMedia:
+			launchers = append(launchers, mediaLauncher(*entry))
 		}
 	}
 	return launchers
 }
 
-func systemLauncher(pl platforms.Platform, entry *VirtualSystem) platforms.Launcher {
+func systemLauncher(entry VirtualSystem) platforms.Launcher {
 	return platforms.Launcher{
 		ID:      launcherID(entry.ID),
 		Schemes: []string{Scheme},
 		Test:    pathMatchesID(entry.ID),
-		Launch:  launchWith(pl, entry.ID, entry.Launch),
+		Launch:  launchWith(entry.ID, entry.Launch),
 	}
 }
 
-func mediaLauncher(pl platforms.Platform, entry *VirtualMedia) platforms.Launcher {
+func mediaLauncher(entry VirtualMedia) platforms.Launcher {
 	return platforms.Launcher{
 		ID:       launcherID(entry.ID),
 		SystemID: entry.SystemID,
 		Schemes:  []string{Scheme},
 		Test:     pathMatchesID(entry.ID),
-		Launch:   launchWith(pl, entry.ID, entry.Launch),
+		Launch:   launchWith(entry.ID, entry.Launch),
 	}
 }
 
@@ -288,7 +354,6 @@ func pathMatchesID(id uuid.UUID) func(*config.Instance, string) bool {
 }
 
 func launchWith(
-	pl platforms.Platform,
 	id uuid.UUID,
 	launch LaunchFunc,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
@@ -300,27 +365,8 @@ func launchWith(
 		if !ok || pathID != id {
 			return nil, fmt.Errorf("zaparoo URI %q does not match launcher %s", path, launcherID(id))
 		}
-		return launch(cfg, pl, path, opts)
+		return launch(cfg, path, opts)
 	}
-}
-
-func platformID(pl platforms.Platform) string {
-	if pl == nil {
-		return ""
-	}
-	return pl.ID()
-}
-
-func platformMatches(platformID string, allowed []string) bool {
-	if len(allowed) == 0 {
-		return true
-	}
-	for _, id := range allowed {
-		if strings.EqualFold(platformID, id) {
-			return true
-		}
-	}
-	return false
 }
 
 // ParseURI extracts the UUID from a zaparoo URI. The path is decorative.

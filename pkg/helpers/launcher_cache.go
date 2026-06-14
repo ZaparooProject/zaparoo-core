@@ -46,7 +46,7 @@ var GlobalLauncherCache = &LauncherCache{}
 // deduplication. This should be called once at startup after custom launchers are loaded.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance, extra ...platforms.Launcher) {
 	all := pl.Launchers(cfg)
-	all = append(all, launchables.DefaultRegistry.Launchers(pl)...)
+	all = append(all, launchables.Launchers(cfg, pl)...)
 	for i := range extra {
 		if !launcherInSlice(all, extra[i].ID) {
 			all = append(all, extra[i])

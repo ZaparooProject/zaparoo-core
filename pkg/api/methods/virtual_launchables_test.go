@@ -36,39 +36,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func withLaunchablesRegistry(t *testing.T, registry *launchables.Registry) {
-	t.Helper()
-	oldRegistry := launchables.DefaultRegistry
-	launchables.DefaultRegistry = registry
-	t.Cleanup(func() {
-		launchables.DefaultRegistry = oldRegistry
-	})
+type apiLaunchablePlatform struct {
+	*mocks.MockPlatform
+	defs []launchables.Launchable
+}
+
+func (p *apiLaunchablePlatform) Launchables(*config.Instance) []launchables.Launchable {
+	return p.defs
 }
 
 func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
-	registry := launchables.MustNewRegistry([]launchables.VirtualSystem{
-		{
-			ID:          id,
-			Name:        "Chess",
-			Category:    "Other",
-			PlatformIDs: []string{"test-platform"},
-			Launch: func(
-				*config.Instance,
-				platforms.Platform,
-				string,
-				*platforms.LaunchOptions,
-			) (*os.Process, error) {
-				return &os.Process{}, nil
-			},
-		},
-	}, nil)
-	withLaunchablesRegistry(t, registry)
-
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("IndexedSystems").Return([]string{}, nil)
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform := &apiLaunchablePlatform{
+		MockPlatform: mocks.NewMockPlatform(),
+		defs: []launchables.Launchable{
+			launchables.VirtualSystem{
+				ID:       id,
+				Name:     "Chess",
+				Category: "Other",
+				Launch: func(
+					*config.Instance,
+					string,
+					*platforms.LaunchOptions,
+				) (*os.Process, error) {
+					return &os.Process{}, nil
+				},
+			},
+		},
+	}
 
 	result, err := HandleSystems(requests.RequestEnv{
 		Platform: mockPlatform,
@@ -85,5 +82,4 @@ func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 	assert.Equal(t, "Other", response.Systems[0].Category)
 	assert.Equal(t, "zaparoo://"+launchables.EncodeID(id)+"/Chess", response.Systems[0].ZapScript)
 	mockMediaDB.AssertExpectations(t)
-	mockPlatform.AssertExpectations(t)
 }

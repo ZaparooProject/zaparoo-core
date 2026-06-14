@@ -37,34 +37,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func withMediascannerLaunchablesRegistry(t *testing.T, registry *launchables.Registry) {
-	t.Helper()
-	oldRegistry := launchables.DefaultRegistry
-	launchables.DefaultRegistry = registry
-	t.Cleanup(func() {
-		launchables.DefaultRegistry = oldRegistry
-	})
+type mediascannerLaunchablePlatform struct {
+	*mocks.MockPlatform
+	defs []launchables.Launchable
+}
+
+func (p *mediascannerLaunchablePlatform) Launchables(*config.Instance) []launchables.Launchable {
+	return p.defs
 }
 
 func testVirtualLaunch() launchables.LaunchFunc {
-	return func(*config.Instance, platforms.Platform, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 		return &os.Process{}, nil
 	}
 }
 
-func TestNewIndexLauncherCacheIncludesRegistryLaunchers(t *testing.T) {
+func TestNewIndexLauncherCacheIncludesPlatformLaunchers(t *testing.T) {
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
 	item := launchables.VirtualMedia{
-		ID:          id,
-		SystemID:    systemdefs.SystemCPS3,
-		Name:        "Street Fighter III: 3rd Strike",
-		PlatformIDs: []string{"test-platform"},
-		Launch:      testVirtualLaunch(),
+		ID:       id,
+		SystemID: systemdefs.SystemCPS3,
+		Name:     "Street Fighter III: 3rd Strike",
+		Launch:   testVirtualLaunch(),
 	}
-	withMediascannerLaunchablesRegistry(t, launchables.MustNewRegistry(nil, []launchables.VirtualMedia{item}))
-
-	platform := mocks.NewMockPlatform()
-	platform.On("ID").Return("test-platform")
+	platform := &mediascannerLaunchablePlatform{
+		MockPlatform: mocks.NewMockPlatform(),
+		defs:         []launchables.Launchable{item},
+	}
 	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
 		{ID: "NativeLauncher", SystemID: systemdefs.SystemCPS3},
 	})
@@ -84,13 +83,11 @@ func TestNewIndexLauncherCacheIncludesRegistryLaunchers(t *testing.T) {
 func TestNewNamesIndexIndexesVirtualMediaAndPreservesVirtualSystems(t *testing.T) {
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
 	item := launchables.VirtualMedia{
-		ID:          id,
-		SystemID:    systemdefs.SystemCPS3,
-		Name:        "Street Fighter III: 3rd Strike",
-		PlatformIDs: []string{"test-platform"},
-		Launch:      testVirtualLaunch(),
+		ID:       id,
+		SystemID: systemdefs.SystemCPS3,
+		Name:     "Street Fighter III: 3rd Strike",
+		Launch:   testVirtualLaunch(),
 	}
-	withMediascannerLaunchablesRegistry(t, launchables.MustNewRegistry(nil, []launchables.VirtualMedia{item}))
 
 	fs := testhelpers.NewMemoryFS()
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
@@ -99,8 +96,10 @@ func TestNewNamesIndexIndexesVirtualMediaAndPreservesVirtualSystems(t *testing.T
 	db, cleanup := testhelpers.NewTestDatabase(t)
 	defer cleanup()
 
-	platform := mocks.NewMockPlatform()
-	platform.On("ID").Return("test-platform")
+	platform := &mediascannerLaunchablePlatform{
+		MockPlatform: mocks.NewMockPlatform(),
+		defs:         []launchables.Launchable{item},
+	}
 	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
 	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
 

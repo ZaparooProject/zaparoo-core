@@ -580,7 +580,7 @@ func newIndexLauncherCache(
 	platform platforms.Platform,
 ) (*helpers.LauncherCache, []platforms.Launcher) {
 	allLaunchers := platform.Launchers(cfg)
-	allLaunchers = append(allLaunchers, launchables.DefaultRegistry.Launchers(platform)...)
+	allLaunchers = append(allLaunchers, launchables.Launchers(cfg, platform)...)
 	launcherCache := &helpers.LauncherCache{}
 	launcherCache.InitializeFromSlice(allLaunchers)
 	return launcherCache, allLaunchers
@@ -722,7 +722,7 @@ func NewNamesIndex(
 			anyScanners = append(anyScanners, &allLaunchers[i])
 		}
 	}
-	for _, item := range launchables.DefaultRegistry.Media(platform) {
+	for _, item := range launchables.Media(cfg, platform) {
 		systemsWithScanners[item.SystemID] = true
 	}
 
@@ -1031,10 +1031,10 @@ func NewNamesIndex(
 			files = append(files, results...)
 		}
 
-		// 4. Registry-backed virtual media. These are indexed as normal MediaDB
+		// 4. Platform-defined virtual media. These are indexed as normal MediaDB
 		// rows with zaparoo:// paths, so search, browse, paging, and missing-state
 		// handling stay in one place.
-		for _, item := range launchables.DefaultRegistry.MediaForSystem(platform, systemID) {
+		for _, item := range launchables.MediaForSystem(cfg, platform, systemID) {
 			files = append(files, platforms.ScanResult{
 				Path:  item.ZapScript(),
 				Name:  item.Name,

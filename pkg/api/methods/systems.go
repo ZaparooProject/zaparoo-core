@@ -71,7 +71,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		respSystems = append(respSystems, sr)
 	}
 
-	for _, system := range launchables.DefaultRegistry.Systems(env.Platform) {
+	for _, system := range launchables.Systems(env.Config, env.Platform) {
 		respSystems = append(respSystems, models.System{
 			ID:        launchables.EncodeID(system.ID),
 			Name:      system.Name,
