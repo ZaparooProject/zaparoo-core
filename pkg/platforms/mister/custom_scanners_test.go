@@ -285,6 +285,26 @@ func TestAmigaScanner_FiltersListingFiles(t *testing.T) {
 	})
 }
 
+func TestAmigaLauncher_DoesNotMatchListingBackupFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt")))
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt.bak")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt.bak")))
+}
+
 func TestAmigaScanner_AddsVirtualMGLFiles(t *testing.T) {
 	t.Parallel()
 

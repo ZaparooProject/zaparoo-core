@@ -1179,9 +1179,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(_ *config.Instance, path string) bool {
-			lowerPath := filepath.ToSlash(strings.ToLower(path))
-			if strings.Contains(lowerPath, filepath.ToSlash(amigaVisionGamesListing)) ||
-				strings.Contains(lowerPath, filepath.ToSlash(amigaVisionDemosListing)) {
+			if isAmigaVisionListingFile(path) {
 				return true
 			}
 
