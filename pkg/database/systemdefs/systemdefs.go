@@ -263,6 +263,7 @@ const (
 	SystemGameboy2P         = "Gameboy2P"
 	SystemGameCube          = "GameCube"
 	SystemGameGear          = "GameGear"
+	SystemGameGear2P        = "GameGear2P"
 	SystemGameNWatch        = "GameNWatch"
 	SystemGameCom           = "GameCom"
 	SystemGBA               = "GBA"
@@ -559,6 +560,9 @@ var Systems = map[string]System{
 		ID:      SystemGameGear,
 		Aliases: []string{"GG"},
 		Slugs:   []string{"segagamegear"},
+	},
+	SystemGameGear2P: {
+		ID: SystemGameGear2P,
 	},
 	SystemGameNWatch: {
 		ID:    SystemGameNWatch,

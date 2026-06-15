@@ -1177,6 +1177,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemGameGear),
 		},
 		{
+			ID:         systemdefs.SystemGameGear2P,
+			SystemID:   systemdefs.SystemGameGear2P,
+			Folders:    []string{"GameGear2P"},
+			Extensions: []string{".gg"},
+			Launch:     launch(pl, systemdefs.SystemGameGear2P),
+		},
+		{
 			ID:         systemdefs.SystemGameNWatch,
 			SystemID:   systemdefs.SystemGameNWatch,
 			Folders:    []string{"GameNWatch"},

@@ -417,6 +417,21 @@ var Systems = map[string]Core{
 			},
 		},
 	},
+	"GameGear2P": {
+		ID:      "GameGear2P",
+		SetName: "GameGear2P",
+		RBF:     "_Console/GameGear2P",
+		Slots: []Slot{
+			{
+				Exts: []string{".gg"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  2,
+				},
+			},
+		},
+	},
 	"GameNWatch": {
 		ID:  "GameNWatch",
 		RBF: "_Console/GnW",
