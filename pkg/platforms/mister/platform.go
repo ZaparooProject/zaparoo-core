@@ -216,7 +216,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	// path when nfc.csv is absent; <10ms parse otherwise).
 	uids, texts, err := LoadCsvMappings()
 	if err != nil {
-		log.Error().Msgf("error loading mappings: %s", err)
+		// A malformed nfc.csv is user-supplied data, not a code fault; log at
+		// Warn so it stays out of Sentry while remaining visible locally.
+		log.Warn().Msgf("error loading mappings: %s", err)
 	} else {
 		p.SetDB(uids, texts)
 		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")

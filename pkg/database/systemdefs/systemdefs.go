@@ -20,6 +20,7 @@
 package systemdefs
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
+
+// ErrUnknownSystem is returned when a system ID cannot be resolved. When this
+// originates from a user-supplied value (e.g. a system named in ZapScript), the
+// token-launch path logs it at Warn rather than Error.
+var ErrUnknownSystem = errors.New("unknown system")
 
 // The Systems list contains all the supported systems such as consoles,
 // computers and media types that are indexable by Zaparoo. This is the reference
@@ -100,7 +106,7 @@ func GetSystem(id string) (*System, error) {
 	if system, ok := Systems[id]; ok {
 		return &system, nil
 	}
-	return nil, fmt.Errorf("unknown system: %s", id)
+	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
 }
 
 // buildLookupMap initializes the system lookup map with all possible lookup keys.
@@ -194,7 +200,7 @@ func LookupSystem(id string) (*System, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("unknown system: %s", id)
+	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
 }
 
 func AllSystems() []System {

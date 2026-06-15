@@ -53,6 +53,11 @@ func isPlsFile(path string) bool {
 	return filepath.Ext(strings.ToLower(path)) == ".pls"
 }
 
+// ErrNoPlaylistActive is returned by playlist control commands when no playlist
+// is active for the requested slot. This is an expected user condition (firing a
+// playlist command with nothing playing), so callers log it at Warn, not Error.
+var ErrNoPlaylistActive = errors.New("no playlist active")
+
 var (
 	plsFileRe  = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
 	plsTitleRe = regexp.MustCompile(`^Title([1-9]\d*)\s*=\s*(.*)$`)
@@ -622,7 +627,7 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, errors.New("no playlist active")
+		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
 	pls := playlists.Next(*active)
@@ -644,7 +649,7 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, errors.New("no playlist active")
+		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 	if restarted, restartErr := restartCurrentPlaylistTrack(&env, slot); restartErr != nil {
 		return platforms.CmdResult{}, restartErr
@@ -671,7 +676,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, errors.New("no playlist active")
+		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
 	if len(env.Cmd.Args) == 0 {
@@ -709,7 +714,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, errors.New("no playlist active")
+		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
 	if err := queuePlaylistUpdate(&env, &playlists.Playlist{Slot: slot, Clear: true}); err != nil {
@@ -742,7 +747,7 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 	}
 	active := activePlaylistForSlot(&env, slot)
 	if active == nil {
-		return platforms.CmdResult{}, errors.New("no playlist active")
+		return platforms.CmdResult{}, ErrNoPlaylistActive
 	}
 
 	pls := playlists.Pause(*active)
