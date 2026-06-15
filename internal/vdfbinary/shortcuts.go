@@ -7,6 +7,7 @@ package vdfbinary
 import (
 	"errors"
 	"io"
+	"sort"
 	"strconv"
 )
 
@@ -36,15 +37,23 @@ func ParseShortcuts(buf io.Reader) ([]Shortcut, error) {
 		return []Shortcut{}, errors.New("could not find 'shortcuts' in parsed vdf")
 	}
 
-	shortcuts := make([]Shortcut, len(shortcutsMap))
-
-	for i := range shortcuts {
-		key := strconv.Itoa(i)
-
-		s, ok := shortcutsMap[key]
-		if !ok {
-			return []Shortcut{}, errors.New("vdf that should be an array does not have the corresponding index")
+	// Collect the numeric indices actually present and sort them, rather than
+	// assuming a contiguous 0..N-1 sequence — third-party tools (EmuDeck,
+	// Lutris) can leave gaps or non-numeric keys.
+	indices := make([]int, 0, len(shortcutsMap))
+	for k := range shortcutsMap {
+		idx, err := strconv.Atoi(k)
+		if err != nil {
+			continue // skip non-numeric keys defensively
 		}
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+
+	shortcuts := make([]Shortcut, 0, len(indices))
+
+	for _, idx := range indices {
+		s := shortcutsMap[strconv.Itoa(idx)]
 
 		appID, ok := s.GetUint("appid")
 		if !ok {
@@ -89,7 +98,7 @@ func ParseShortcuts(buf io.Reader) ([]Shortcut, error) {
 			}
 		}
 
-		shortcuts[i] = Shortcut{
+		shortcuts = append(shortcuts, Shortcut{
 			AppID:    appID,
 			AppName:  appName,
 			Exe:      exe,
@@ -97,7 +106,7 @@ func ParseShortcuts(buf io.Reader) ([]Shortcut, error) {
 			IsHidden: isHidden,
 			StartDir: startDir,
 			Tags:     tags,
-		}
+		})
 	}
 
 	return shortcuts, nil

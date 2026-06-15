@@ -3,6 +3,8 @@ package vdfbinary_test
 import (
 	"bytes"
 	_ "embed"
+	"encoding/binary"
+	"strconv"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/vdfbinary"
@@ -314,28 +316,90 @@ func TestParseShortcuts_CorruptedFile(t *testing.T) {
 func TestParseShortcuts_NonSequentialIndex(t *testing.T) {
 	t.Parallel()
 
-	// shortcuts { 1 { ... } } - starts at 1 instead of 0
+	// shortcuts { 1 { ... } } - starts at 1 instead of 0. Third-party tools can
+	// leave non-zero starting indices; this should parse rather than error.
 	var buf bytes.Buffer
 	buf.WriteByte(0x00)          //nolint:revive // never fails
 	buf.WriteString("shortcuts") //nolint:revive // never fails
 	buf.WriteByte(0x00)          //nolint:revive // never fails
+	writeEntry(&buf, "1", 0x04030201, "Only Game")
+	buf.WriteByte(0x08) //nolint:revive // never fails (end shortcuts)
+	buf.WriteByte(0x08) //nolint:revive // never fails (end root)
 
-	buf.WriteByte(0x00)  //nolint:revive // never fails
-	buf.WriteString("1") //nolint:revive // never fails
-	buf.WriteByte(0x00)  //nolint:revive // never fails
+	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, uint32(0x04030201), shortcuts[0].AppID)
+	assert.Equal(t, "Only Game", shortcuts[0].AppName)
+}
 
-	buf.WriteByte(0x02)                       //nolint:revive // never fails
-	buf.WriteString("appid")                  //nolint:revive // never fails
-	buf.WriteByte(0x00)                       //nolint:revive // never fails
-	buf.Write([]byte{0x01, 0x00, 0x00, 0x00}) //nolint:revive // never fails
+func TestParseShortcuts_GappedIndices(t *testing.T) {
+	t.Parallel()
 
-	buf.WriteByte(0x08) //nolint:revive // never fails
-	buf.WriteByte(0x08) //nolint:revive // never fails
-	buf.WriteByte(0x08) //nolint:revive // never fails
+	// shortcuts { 0 {...} 2 {...} } - a gap where index 1 was deleted. Both
+	// present entries should parse, in ascending index order.
+	var buf bytes.Buffer
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	writeEntry(&buf, "0", 100, "First")
+	writeEntry(&buf, "2", 300, "Third")
+	buf.WriteByte(0x08) //nolint:revive // never fails (end shortcuts)
+	buf.WriteByte(0x08) //nolint:revive // never fails (end root)
 
-	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "index")
+	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Len(t, shortcuts, 2)
+	assert.Equal(t, "First", shortcuts[0].AppName)
+	assert.Equal(t, "Third", shortcuts[1].AppName)
+}
+
+func TestParseShortcuts_NonNumericKeySkipped(t *testing.T) {
+	t.Parallel()
+
+	// shortcuts { 0 {...} junk {...} } - a non-numeric key should be skipped,
+	// not fail the whole file.
+	var buf bytes.Buffer
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	writeEntry(&buf, "0", 100, "Real")
+	writeEntry(&buf, "junk", 999, "Ignored")
+	buf.WriteByte(0x08) //nolint:revive // never fails (end shortcuts)
+	buf.WriteByte(0x08) //nolint:revive // never fails (end root)
+
+	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "Real", shortcuts[0].AppName)
+}
+
+// TestParseShortcuts_NumberAcrossBufferBoundary is the regression test for the
+// intermittent, size-dependent parse failures: a 4-byte number value whose bytes
+// straddle a 4096-byte bufio refill boundary previously caused a short read and
+// failed the whole file ("number did not have the required amount of bytes").
+func TestParseShortcuts_NumberAcrossBufferBoundary(t *testing.T) {
+	t.Parallel()
+
+	// Straddle positions for the 4096 and 8192 boundaries: a value starting at
+	// these offsets crosses the boundary part-way through its 4 bytes.
+	for _, valueStart := range []int{4093, 4094, 4095, 8189, 8190, 8191} {
+		t.Run(strconv.Itoa(valueStart), func(t *testing.T) {
+			t.Parallel()
+
+			data := buildVDFWithAppIDAt(valueStart, 0xDEADBEEF)
+
+			// Sanity-check the construction actually straddles a boundary.
+			require.NotEqual(t, valueStart/4096, (valueStart+3)/4096,
+				"test fixture should straddle a 4096 boundary")
+
+			shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(data))
+			require.NoError(t, err)
+			require.Len(t, shortcuts, 1)
+			assert.Equal(t, uint32(0xDEADBEEF), shortcuts[0].AppID)
+			assert.Equal(t, "Boundary Game", shortcuts[0].AppName)
+		})
+	}
 }
 
 func TestParseShortcuts_EmptyShortcutsMap(t *testing.T) {
@@ -352,6 +416,77 @@ func TestParseShortcuts_EmptyShortcutsMap(t *testing.T) {
 	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.NoError(t, err)
 	assert.Empty(t, shortcuts)
+}
+
+// writeStr writes a string field (marker 0x01, null-terminated key and value).
+func writeStr(buf *bytes.Buffer, key, val string) {
+	buf.WriteByte(0x01)  //nolint:revive // never fails
+	buf.WriteString(key) //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString(val) //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+}
+
+// writeEntry writes one shortcut entry map (appid, AppName, Exe, StartDir) keyed
+// by the given index string.
+func writeEntry(buf *bytes.Buffer, key string, appID uint32, name string) {
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString(key) //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+
+	buf.WriteByte(0x02)      //nolint:revive // never fails
+	buf.WriteString("appid") //nolint:revive // never fails
+	buf.WriteByte(0x00)      //nolint:revive // never fails
+	idb := make([]byte, 4)
+	binary.LittleEndian.PutUint32(idb, appID)
+	buf.Write(idb) //nolint:revive // never fails
+
+	writeStr(buf, "AppName", name)
+	writeStr(buf, "Exe", "/path/to/game")
+	writeStr(buf, "StartDir", "/path/to")
+
+	buf.WriteByte(0x08) //nolint:revive // never fails (end entry)
+}
+
+// buildVDFWithAppIDAt builds a single-shortcut binary VDF where the appid's
+// 4-byte value begins exactly at file offset valueStart, by padding a filler
+// string field. Used to place a number value across a bufio refill boundary.
+func buildVDFWithAppIDAt(valueStart int, appID uint32) []byte {
+	var buf bytes.Buffer
+
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+
+	// filler string field sized so the appid value lands at valueStart.
+	// bytes before value = 11 (header) + 3 (entry) + (9 + pad) (filler) + 7 (appid field)
+	pad := valueStart - 30
+	buf.WriteByte(0x01)                       //nolint:revive // never fails
+	buf.WriteString("filler")                 //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write(bytes.Repeat([]byte{'A'}, pad)) //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+
+	buf.WriteByte(0x02)      //nolint:revive // never fails
+	buf.WriteString("appid") //nolint:revive // never fails
+	buf.WriteByte(0x00)      //nolint:revive // never fails
+	idb := make([]byte, 4)
+	binary.LittleEndian.PutUint32(idb, appID)
+	buf.Write(idb) //nolint:revive // never fails
+
+	writeStr(&buf, "AppName", "Boundary Game")
+	writeStr(&buf, "Exe", "/path/to/game")
+	writeStr(&buf, "StartDir", "/path/to")
+
+	buf.WriteByte(0x08) //nolint:revive // never fails (end entry)
+	buf.WriteByte(0x08) //nolint:revive // never fails (end shortcuts)
+	buf.WriteByte(0x08) //nolint:revive // never fails (end root)
+
+	return buf.Bytes()
 }
 
 // buildShortcutVDF builds a binary VDF with a single shortcut using the given key names.
