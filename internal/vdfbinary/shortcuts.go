@@ -37,23 +37,27 @@ func ParseShortcuts(buf io.Reader) ([]Shortcut, error) {
 		return []Shortcut{}, errors.New("could not find 'shortcuts' in parsed vdf")
 	}
 
-	// Collect the numeric indices actually present and sort them, rather than
-	// assuming a contiguous 0..N-1 sequence — third-party tools (EmuDeck,
-	// Lutris) can leave gaps or non-numeric keys.
-	indices := make([]int, 0, len(shortcutsMap))
+	// Collect the keys actually present and sort them by numeric value, rather
+	// than assuming a contiguous 0..N-1 sequence — third-party tools (EmuDeck,
+	// Lutris) can leave gaps or non-numeric keys. The original key strings are
+	// preserved for lookup so non-canonical numeric keys (e.g. "01") still match.
+	keys := make([]string, 0, len(shortcutsMap))
 	for k := range shortcutsMap {
-		idx, err := strconv.Atoi(k)
-		if err != nil {
+		if _, err := strconv.Atoi(k); err != nil {
 			continue // skip non-numeric keys defensively
 		}
-		indices = append(indices, idx)
+		keys = append(keys, k)
 	}
-	sort.Ints(indices)
+	sort.Slice(keys, func(i, j int) bool {
+		a, _ := strconv.Atoi(keys[i])
+		b, _ := strconv.Atoi(keys[j])
+		return a < b
+	})
 
-	shortcuts := make([]Shortcut, 0, len(indices))
+	shortcuts := make([]Shortcut, 0, len(keys))
 
-	for _, idx := range indices {
-		s := shortcutsMap[strconv.Itoa(idx)]
+	for _, key := range keys {
+		s := shortcutsMap[key]
 
 		appID, ok := s.GetUint("appid")
 		if !ok {
