@@ -458,7 +458,13 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 	if res.Cancelled {
 		return nil, ErrWriteCancelled
 	} else if res.Err != nil {
-		log.Error().Msgf("error writing to tag: %s", res.Err)
+		// Expected user conditions (no tag presented, unsupported tag) log at
+		// Warn; genuine hardware write failures stay at Error for Sentry.
+		if errors.Is(res.Err, readers.ErrTagNotDetected) || errors.Is(res.Err, readers.ErrUnsupportedTagType) {
+			log.Warn().Msgf("error writing to tag: %s", res.Err)
+		} else {
+			log.Error().Msgf("error writing to tag: %s", res.Err)
+		}
 		return nil, res.Err
 	}
 
@@ -932,7 +938,7 @@ func (r *Reader) writeTag(req *WriteRequest) {
 	if count == 0 {
 		log.Warn().Msgf("could not detect a tag")
 		req.Result <- WriteRequestResult{
-			Err: errors.New("could not detect a tag"),
+			Err: readers.ErrTagNotDetected,
 		}
 		return
 	}
@@ -975,9 +981,9 @@ func (r *Reader) writeTag(req *WriteRequest) {
 			return
 		}
 	default:
-		log.Error().Msgf("unsupported tag type: %s", cardType)
+		log.Warn().Msgf("unsupported tag type: %s", cardType)
 		req.Result <- WriteRequestResult{
-			Err: fmt.Errorf("unsupported tag type: %s", cardType),
+			Err: fmt.Errorf("%w: %s", readers.ErrUnsupportedTagType, cardType),
 		}
 		return
 	}
