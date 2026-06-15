@@ -334,7 +334,9 @@ func (p *Platform) StartPost(
 
 		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
 		if err != nil {
-			log.Error().Msgf("failed to download arcade database: %s", err)
+			// Non-fatal: an embedded arcade database is used as a fallback. Download
+			// failures are usually network/rate-limit issues, not code faults.
+			log.Warn().Msgf("failed to download arcade database: %s", err)
 		}
 
 		if arcadeDbUpdated {

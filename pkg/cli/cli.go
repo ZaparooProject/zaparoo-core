@@ -22,6 +22,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -126,6 +127,18 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	}
 }
 
+// logClientCommandError logs a failure from a CLI local-client command. A
+// refused connection means the Zaparoo service isn't running — an expected user
+// situation already surfaced on stderr — so it logs at Warn to stay out of
+// Sentry; any other failure logs at Error.
+func logClientCommandError(err error, msg string) {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		log.Warn().Err(err).Msg(msg)
+		return
+	}
+	log.Error().Err(err).Msg(msg)
+}
+
 func runFlag(cfg *config.Instance, value string) {
 	data, err := json.Marshal(&models.RunParams{
 		Text: &value,
@@ -137,7 +150,7 @@ func runFlag(cfg *config.Instance, value string) {
 
 	_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(data))
 	if err != nil {
-		log.Error().Err(err).Msg("error running")
+		logClientCommandError(err, "error running")
 		_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
 		os.Exit(1)
 	}
@@ -175,7 +188,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		_, err = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
 		if err != nil {
-			log.Error().Err(err).Msg("error writing tag")
+			logClientCommandError(err, "error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
 			enableRun()
 			os.Exit(1)
@@ -201,7 +214,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			cfg, models.NotificationTokensAdded,
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("error waiting for notification")
+			logClientCommandError(err, "error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
 			close(sigs)
 			enableRun()
@@ -238,7 +251,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		resp, err := client.LocalClient(context.Background(), cfg, method, params)
 		if err != nil {
-			log.Error().Err(err).Msg("error calling API")
+			logClientCommandError(err, "error calling API")
 			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
 			os.Exit(1)
 		}
@@ -289,7 +302,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 		if err != nil {
-			log.Error().Err(err).Msg("error reloading settings")
+			logClientCommandError(err, "error reloading settings")
 			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
 			os.Exit(1)
 		}

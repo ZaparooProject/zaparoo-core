@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -856,4 +857,47 @@ func TestWaitForAPI_Timeout(t *testing.T) {
 
 	assert.False(t, result)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+}
+
+// TestIsExpectedWebsocketClose verifies that expected disconnects (including the
+// 1006 abnormal closure that was flooding Sentry) are classified for below-Error
+// logging, while genuine read faults are not.
+func TestIsExpectedWebsocketClose(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err      error
+		name     string
+		expected bool
+	}{
+		{name: "net closed", err: net.ErrClosed, expected: true},
+		{
+			name:     "abnormal closure 1006",
+			err:      &websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "unexpected EOF"},
+			expected: true,
+		},
+		{
+			name:     "normal closure",
+			err:      &websocket.CloseError{Code: websocket.CloseNormalClosure},
+			expected: true,
+		},
+		{
+			name:     "going away",
+			err:      &websocket.CloseError{Code: websocket.CloseGoingAway},
+			expected: true,
+		},
+		{
+			name:     "protocol error stays visible",
+			err:      &websocket.CloseError{Code: websocket.CloseProtocolError},
+			expected: false,
+		},
+		{name: "generic error", err: errors.New("boom"), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, isExpectedWebsocketClose(tt.err))
+		})
+	}
 }

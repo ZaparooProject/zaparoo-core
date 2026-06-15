@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -1020,6 +1021,12 @@ func NewNamesIndex(
 			if scanErr != nil {
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
+				}
+				if errors.Is(scanErr, syscall.ECONNREFUSED) {
+					// The scanner's backing service (e.g. Kodi) isn't running.
+					// Expected on devices without it; keep out of Sentry.
+					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
+					continue
 				}
 				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
