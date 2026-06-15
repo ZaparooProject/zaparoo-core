@@ -145,8 +145,9 @@ func (p *Platform) StartPost(
 		if err != nil {
 			if attempt == maxRetries {
 				log.Warn().Err(err).Msg("ES API unavailable after retries, continuing without active media detection")
-				p.setActiveMedia(nil)
-				return nil
+				// Don't return: the background tracker (started below) keeps
+				// polling and detects games once the ES API becomes available.
+				break
 			}
 
 			delay := time.Duration(1<<attempt) * baseDelay
@@ -165,15 +166,13 @@ func (p *Platform) StartPost(
 			systemID, err := fromBatoceraSystem(gameResp.SystemName)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to convert system %s, setting no active media", gameResp.SystemName)
-				p.setActiveMedia(nil)
-				return nil
+				break
 			}
 
 			systemMeta, err := assets.GetSystemMetadata(systemID)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to get system metadata for %s, setting no active media", systemID)
-				p.setActiveMedia(nil)
-				return nil
+				break
 			}
 
 			game = models.NewActiveMedia(

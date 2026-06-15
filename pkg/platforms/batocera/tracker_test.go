@@ -59,6 +59,69 @@ func TestBackgroundTracker_StartsCorrectly(t *testing.T) {
 	}
 }
 
+// TestBackgroundTracker_StartsWhenESAPIUnavailableAtStartup is a regression test
+// for #936: when the ES API is unavailable during the startup probe (e.g.
+// EmulationStation hasn't finished booting), StartPost must still start the
+// background tracker. Previously it returned early and the tracker never ran, so
+// externally launched games were never detected for the whole session.
+func TestBackgroundTracker_StartsWhenESAPIUnavailableAtStartup(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Real clock so the short startup backoff actually elapses and the tracker
+	// ticker fires; maxStartupRetries keeps the failing probe fast (~100ms).
+	platform := &Platform{
+		clock:             clockwork.NewRealClock(),
+		maxStartupRetries: 1,
+	}
+
+	var mediaMu syncutil.RWMutex
+	var capturedMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		mediaMu.Lock()
+		capturedMedia = media
+		mediaMu.Unlock()
+	}
+	activeMedia := func() *models.ActiveMedia {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia
+	}
+
+	// No mock ES API server is running yet, so the startup probe on :1234 is
+	// refused and exhausts its retries.
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
+	require.NoError(t, err)
+	defer func() {
+		if platform.stopTracker != nil {
+			_ = platform.stopTracker()
+		}
+	}()
+
+	// Regression assertion: the tracker must start despite the failed probe.
+	require.NotNil(t, platform.stopTracker,
+		"tracker should start even when the ES API is unavailable at startup")
+
+	// The ES API now comes up with an externally launched game. The already
+	// running tracker should pick it up on its next poll.
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	mockESAPI.WithRunningGame(&esapi.RunningGameResponse{
+		Name:       "Sonic the Hedgehog",
+		Path:       "/userdata/roms/genesis/sonic.md",
+		SystemName: "megadrive",
+	})
+
+	require.Eventually(t, func() bool {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia != nil && capturedMedia.Path == "/userdata/roms/genesis/sonic.md"
+	}, 6*time.Second, 100*time.Millisecond,
+		"tracker should detect the externally launched game once the ES API is available")
+}
+
 // TestBackgroundTracker_DetectsExternalGameLaunch tests that the tracker detects
 // when a game is launched externally (not by Zaparoo)
 func TestBackgroundTracker_DetectsExternalGameLaunch(t *testing.T) {
