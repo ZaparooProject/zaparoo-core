@@ -734,11 +734,13 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	result, err = mediaDB.RandomGameWithQuery(context.Background(), &query)
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
+	assert.NotZero(t, result.MediaID)
 
 	// Test that cache is working - second call should use cache
 	result2, err := mediaDB.RandomGameWithQuery(context.Background(), &query)
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result2.SystemID)
+	assert.NotZero(t, result2.MediaID)
 }
 
 func TestMediaDB_LookupsRespectCanceledContext(t *testing.T) {

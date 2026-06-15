@@ -530,7 +530,8 @@ func sqlSearchMediaPathExact(
 		select
 			Systems.SystemID,
 			MediaTitles.Name,
-			Media.Path
+			Media.Path,
+			Media.DBID
 		from Systems
 		inner join MediaTitles
 			on Systems.DBID = MediaTitles.SystemDBID
@@ -569,6 +570,7 @@ func sqlSearchMediaPathExact(
 			&result.SystemID,
 			&result.Name,
 			&result.Path,
+			&result.MediaID,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
@@ -634,7 +636,8 @@ func sqlSearchMediaPathParts(
 	stmt, err := db.PrepareContext(ctx, `
 		select
 			Systems.SystemID,
-			Media.Path
+			Media.Path,
+			Media.DBID
 		from Systems
 		inner join MediaTitles
 			on Systems.DBID = MediaTitles.SystemDBID
@@ -674,6 +677,7 @@ func sqlSearchMediaPathParts(
 		if scanErr := rows.Scan(
 			&result.SystemID,
 			&result.Path,
+			&result.MediaID,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
@@ -1353,13 +1357,13 @@ func sqlSearchMediaBySlugIn(
 func sqlGetRandomMediaForTitle(ctx context.Context, db sqlQueryable, titleDBID int64) (database.SearchResult, error) {
 	var row database.SearchResult
 	err := db.QueryRowContext(ctx, `
-		SELECT Systems.SystemID, Media.Path
+		SELECT Systems.SystemID, Media.Path, Media.DBID
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		WHERE Media.MediaTitleDBID = ? AND Media.IsMissing = 0
 		ORDER BY RANDOM() LIMIT 1
-	`, titleDBID).Scan(&row.SystemID, &row.Path)
+	`, titleDBID).Scan(&row.SystemID, &row.Path, &row.MediaID)
 	if err != nil {
 		return row, fmt.Errorf("failed to get random media for title %d: %w", titleDBID, err)
 	}
@@ -1399,7 +1403,7 @@ func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.Syst
 
 	// Step 3: Get the first media item with DBID >= targetDBID
 	selectQuery := `
-		SELECT Systems.SystemID, Media.Path
+		SELECT Systems.SystemID, Media.Path, Media.DBID
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -1410,11 +1414,12 @@ func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.Syst
 	err = db.QueryRowContext(ctx, selectQuery, system.ID, targetDBID).Scan(
 		&row.SystemID,
 		&row.Path,
+		&row.MediaID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
 		selectQuery = `
-			SELECT Systems.SystemID, Media.Path
+			SELECT Systems.SystemID, Media.Path, Media.DBID
 			FROM Media
 			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -1425,6 +1430,7 @@ func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.Syst
 		err = db.QueryRowContext(ctx, selectQuery, system.ID, targetDBID).Scan(
 			&row.SystemID,
 			&row.Path,
+			&row.MediaID,
 		)
 	}
 	if err != nil {
@@ -1473,7 +1479,7 @@ func sqlRandomGameWithQueryAndStats(
 	// Step 3: Get the first media item with DBID >= targetDBID
 	//nolint:gosec // whereClause is built from safe conditions, no user input
 	selectQuery := fmt.Sprintf(`
-		SELECT Systems.SystemID, Media.Path
+		SELECT Systems.SystemID, Media.Path, Media.DBID
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -1486,11 +1492,12 @@ func sqlRandomGameWithQueryAndStats(
 	err = db.QueryRowContext(ctx, selectQuery, args...).Scan(
 		&row.SystemID,
 		&row.Path,
+		&row.MediaID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
 		selectQuery = fmt.Sprintf(`
-			SELECT Systems.SystemID, Media.Path
+			SELECT Systems.SystemID, Media.Path, Media.DBID
 			FROM Media
 			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -1502,6 +1509,7 @@ func sqlRandomGameWithQueryAndStats(
 		err = db.QueryRowContext(ctx, selectQuery, args...).Scan(
 			&row.SystemID,
 			&row.Path,
+			&row.MediaID,
 		)
 	}
 	if err != nil {

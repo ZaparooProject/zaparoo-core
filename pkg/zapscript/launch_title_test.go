@@ -1593,6 +1593,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			int64(123), mock.AnythingOfType("string")). // strategy string
 			Return(nil).Once()
 
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+			Return([]database.MediaProperty{}, nil).Once()
+
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 		).Return(nil)
@@ -1651,6 +1654,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			mock.Anything, systemID, slug, tags1, int64(100), mock.AnythingOfType("string")).
 			Return(nil).Once()
 
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(100)).
+			Return([]database.MediaProperty{}, nil).Once()
+
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 		).Return(nil).Once()
@@ -1685,6 +1691,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, systemID, slug, tags2, int64(200), mock.AnythingOfType("string")).
 			Return(nil).Once()
+
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(200)).
+			Return([]database.MediaProperty{}, nil).Once()
 
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -1776,6 +1785,9 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil),
 			int64(123), mock.AnythingOfType("string")).
 			Return(nil).Maybe()
+
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+			Return([]database.MediaProperty{}, nil).Once()
 
 		// Platform launch fails
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).

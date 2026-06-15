@@ -853,7 +853,6 @@ func buildMediaEntry(
 		Tags:     result.Tags,
 		HasCover: result.HasCover,
 	}
-
 	zapScript := result.ZapScript()
 	entry.ZapScript = &zapScript
 

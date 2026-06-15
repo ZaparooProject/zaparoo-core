@@ -20,7 +20,11 @@
 //nolint:revive // custom validation tags (letter, duration, etc.) are unknown to revive
 package models
 
-import "github.com/ZaparooProject/go-zapscript"
+import (
+	"encoding/json"
+
+	"github.com/ZaparooProject/go-zapscript"
+)
 
 type SearchParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
@@ -205,6 +209,13 @@ type MediaTagsUpdateParams struct {
 	Path    string   `json:"path"   validate:"omitempty,min=1"`
 	Add     []string `json:"add,omitempty" validate:"omitempty,dive,min=1"`
 	Remove  []string `json:"remove,omitempty" validate:"omitempty,dive,min=1"`
+}
+
+type MediaMetaUpdateParams struct {
+	MediaID *int64          `json:"mediaId,omitempty"`
+	System  string          `json:"system" validate:"omitempty,min=1"`
+	Path    string          `json:"path"   validate:"omitempty,min=1"`
+	Media   json.RawMessage `json:"media,omitempty"`
 }
 
 type MediaImageParams struct {

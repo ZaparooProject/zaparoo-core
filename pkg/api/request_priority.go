@@ -40,6 +40,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 
 	switch method {
 	case models.MethodMediaTagsUpdate,
+		models.MethodMediaMetaUpdate,
 		models.MethodMediaHistoryLatest,
 		models.MethodRun,
 		models.MethodRunScript,
@@ -94,5 +95,6 @@ func isImageAPIMethod(method string) bool {
 }
 
 func isMediaDBTransactionAPIMethod(method string) bool {
-	return strings.EqualFold(method, models.MethodMediaTagsUpdate)
+	return strings.EqualFold(method, models.MethodMediaTagsUpdate) ||
+		strings.EqualFold(method, models.MethodMediaMetaUpdate)
 }

@@ -61,6 +61,7 @@ const (
 	MethodMediaSearch          = "media.search"
 	MethodMediaTags            = "media.tags"
 	MethodMediaTagsUpdate      = "media.tags.update"
+	MethodMediaMetaUpdate      = "media.meta.update"
 	MethodMediaActive          = "media.active"
 	MethodMediaHistory         = "media.history"
 	MethodMediaHistoryLatest   = "media.history.latest"

@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -39,6 +40,108 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+func launcherOverridePropertyTypeTag() string {
+	return tags.PropertyTypeTag(tags.TagPropertyLauncherOverride)
+}
+
+func applyMediaLauncherOverride(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	mediaDBID int64,
+	systemID string,
+) string {
+	return applyMediaLauncherOverrideWithReplace(pl, env, mediaDBID, systemID, false)
+}
+
+func applyMediaLauncherOverrideWithReplace(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	mediaDBID int64,
+	systemID string,
+	replaceCurrent bool,
+) string {
+	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
+	if (current != "" && !replaceCurrent) || mediaDBID == 0 {
+		return current
+	}
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return ""
+	}
+
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	props, err := env.Database.MediaDB.GetMediaPropertyMetadata(ctx, mediaDBID)
+	if err != nil {
+		log.Warn().Err(err).Int64("mediaDBID", mediaDBID).Msg("failed to read media launcher override")
+		return ""
+	}
+	for _, prop := range props {
+		if prop.TypeTag != launcherOverridePropertyTypeTag() {
+			continue
+		}
+		launcherRef := strings.TrimSpace(prop.Text)
+		if launcherRef == "" {
+			return ""
+		}
+		launcherID, found := resolveLauncherRefForSystem(pl, env, launcherRef, systemID)
+		if !found {
+			log.Warn().
+				Str("system", systemID).
+				Str("launcher", launcherRef).
+				Int64("mediaDBID", mediaDBID).
+				Msg("media launcher override not found")
+			return ""
+		}
+		log.Info().
+			Str("system", systemID).
+			Str("launcher", launcherID).
+			Int64("mediaDBID", mediaDBID).
+			Msg("using media launcher override")
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, launcherID)
+		return launcherID
+	}
+	return ""
+}
+
+func applyMediaLauncherOverrideForPath(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	replaceCurrent bool,
+) string {
+	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
+	if current != "" && !replaceCurrent {
+		return current
+	}
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return current
+	}
+	launcher, found := inferLauncherForPath(pl, env, path)
+	if !found || launcher.SystemID == "" {
+		return current
+	}
+
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	system, err := env.Database.MediaDB.FindSystemBySystemID(launcher.SystemID)
+	if err != nil {
+		log.Debug().Err(err).Str("system", launcher.SystemID).Msg("failed to resolve launch path system")
+		return current
+	}
+	media, err := env.Database.MediaDB.FindMediaBySystemAndPath(ctx, system.DBID, path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return current
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("failed to resolve launch path media")
+		return current
+	}
+	if media == nil {
+		return current
+	}
+	return applyMediaLauncherOverrideWithReplace(pl, env, media.DBID, launcher.SystemID, replaceCurrent)
+}
 
 func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
 	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
@@ -223,6 +326,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
 
+		applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
 		applySystemDefaultLauncher(pl, &env, game.SystemID)
 		if launchErr := launch(game.Path); launchErr != nil {
 			return platforms.CmdResult{
@@ -275,6 +379,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 
+		applyMediaLauncherOverride(pl, &env, searchResult.MediaID, searchResult.SystemID)
 		applySystemDefaultLauncher(pl, &env, searchResult.SystemID)
 		if launchErr := launch(searchResult.Path); launchErr != nil {
 			return platforms.CmdResult{
@@ -321,6 +426,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
 			}
 
+			applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
 			applySystemDefaultLauncher(pl, &env, game.SystemID)
 			if launchErr := launch(game.Path); launchErr != nil {
 				return platforms.CmdResult{
@@ -347,6 +453,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				fmt.Errorf("failed to get random game matching '%s': %w", searchQuery, randomErr)
 		}
 
+		applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
 		applySystemDefaultLauncher(pl, &env, game.SystemID)
 		if launchErr := launch(game.Path); launchErr != nil {
 			return platforms.CmdResult{
@@ -386,6 +493,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
 
+	applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
 	applySystemDefaultLauncher(pl, &env, game.SystemID)
 	if err := launch(game.Path); err != nil {
 		return platforms.CmdResult{
@@ -481,6 +589,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if err := ParseAdvArgs(pl, &env, &args); err != nil {
 		return platforms.CmdResult{}, err
 	}
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 
 	if dler, ok := isValidRemoteFileURL(path); ok && args.System != "" {
 		installPath, err := installer.InstallRemoteFile(
@@ -513,6 +622,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// if it's an absolute path, just try launch it
 	if filepath.IsAbs(path) {
 		log.Debug().Msgf("launching absolute path: %s", path)
+		applyMediaLauncherOverrideForPath(pl, &env, path, !explicitLauncher)
 		applySystemDefaultLauncherForPath(pl, &env, path)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -522,6 +632,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// match for uri style launch syntax
 	if helpers.ReURI.MatchString(path) {
 		log.Debug().Msgf("launching uri: %s", path)
+		applyMediaLauncherOverrideForPath(pl, &env, path, !explicitLauncher)
 		applySystemDefaultLauncherForPath(pl, &env, path)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -534,6 +645,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var p string
 	if p, findErr = findFile(afero.NewOsFs(), pl, env.Cfg, path); findErr == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
+		applyMediaLauncherOverrideForPath(pl, &env, p, !explicitLauncher)
 		applySystemDefaultLauncherForPath(pl, &env, p)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -598,6 +710,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		var fp string
 		if fp, systemFindErr = findFile(afero.NewOsFs(), pl, env.Cfg, systemPath); systemFindErr == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
+			applyMediaLauncherOverrideForPath(pl, &env, fp, !explicitLauncher)
 			applySystemDefaultLauncherForPath(pl, &env, fp)
 			return platforms.CmdResult{
 				MediaChanged: true,
@@ -632,6 +745,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		log.Info().Msgf("found result: %s", res[0].Path)
 
 		game := res[0]
+		applyMediaLauncherOverrideWithReplace(pl, &env, game.MediaID, game.SystemID, !explicitLauncher)
 		applySystemDefaultLauncher(pl, &env, game.SystemID)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -685,6 +799,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
 		}
 
+		applyMediaLauncherOverride(pl, &env, res[0].MediaID, res[0].SystemID)
 		applySystemDefaultLauncher(pl, &env, res[0].SystemID)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -732,6 +847,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
 	}
 
+	applyMediaLauncherOverride(pl, &env, res[0].MediaID, res[0].SystemID)
 	applySystemDefaultLauncher(pl, &env, res[0].SystemID)
 	return platforms.CmdResult{
 		MediaChanged: true,
@@ -801,6 +917,8 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, err
 	}
 
+	mediaID := mediaIDForHistoryEntry(&env, &entry)
+	applyMediaLauncherOverride(pl, &env, mediaID, entry.SystemID)
 	applySystemDefaultLauncher(pl, &env, entry.SystemID)
 	launch := getLaunchClosure(pl, &env)
 
@@ -819,4 +937,26 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, nil
+}
+
+func mediaIDForHistoryEntry(env *platforms.CmdEnv, entry *database.MediaHistoryEntry) int64 {
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return 0
+	}
+	ctx, cancel := mediaDBLookupContext(env)
+	defer cancel()
+	system, err := env.Database.MediaDB.FindSystemBySystemID(entry.SystemID)
+	if err != nil {
+		log.Debug().Err(err).Str("system", entry.SystemID).Msg("failed to resolve history system for launcher override")
+		return 0
+	}
+	media, err := env.Database.MediaDB.FindMediaBySystemAndPath(ctx, system.DBID, entry.MediaPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", entry.MediaPath).Msg("failed to resolve history media for launcher override")
+		return 0
+	}
+	if media == nil {
+		return 0
+	}
+	return media.DBID
 }

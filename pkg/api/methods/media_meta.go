@@ -246,12 +246,16 @@ func buildMediaMetaResponse(
 		titleTags = []database.TagInfo{}
 	}
 
+	properties := mapMediaProperties(mediaProps)
+	launcherOverride := mediaLauncherOverride(properties)
+
 	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
 		Path:                row.Path,
 		ParentDir:           row.ParentDir,
 		IsMissing:           row.IsMissing,
 		Tags:                mediaTags,
-		Properties:          mapMediaProperties(mediaProps),
+		Properties:          properties,
+		LauncherOverride:    launcherOverride,
 		AvailableImageTypes: availableImageTypes(mediaProps),
 		Title: models.MediaMetaTitleResponse{
 			Slug:                row.Title.Slug,
@@ -268,6 +272,14 @@ func buildMediaMetaResponse(
 			Properties: mapMediaProperties(titleProps),
 		},
 	}}
+}
+
+func mediaLauncherOverride(props map[string]models.MediaMetaPropertyItem) *string {
+	item, ok := props[launcherOverridePropertyTypeTag()]
+	if !ok || item.Text == "" {
+		return nil
+	}
+	return &item.Text
 }
 
 func availableImageTypes(props []database.MediaProperty) []string {

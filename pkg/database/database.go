@@ -242,6 +242,7 @@ type SearchResult struct {
 	SystemID string
 	Name     string
 	Path     string
+	MediaID  int64
 }
 
 type TagInfo struct {
@@ -393,13 +394,10 @@ type SearchResultWithCursor struct {
 	SortValue     string
 	SortMode      string
 	Tags          []TagInfo
-	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
+	ZapScriptTags []TagInfo
 	MediaID       int64
 	MediaTitleID  int64 `json:"-"`
-	// HasCover is true when the media or its title has at least one image
-	// property row in MediaProperties or MediaTitleProperties. Set by the
-	// browse files path; not populated by search/other paths.
-	HasCover bool
+	HasCover      bool
 }
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript

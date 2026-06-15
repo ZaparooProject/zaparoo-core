@@ -66,6 +66,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 	args.Launcher = applySystemDefaultLauncher(pl, &env, system.ID)
 	launch := getLaunchClosure(pl, &env)
 
@@ -112,6 +113,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	} else {
 		log.Info().Msgf("launching with confidence %.2f: %s", result.Confidence, result.Result.Name)
 	}
+
+	applyMediaLauncherOverrideWithReplace(pl, &env, result.Result.MediaID, result.Result.SystemID, !explicitLauncher)
 
 	return platforms.CmdResult{
 		MediaChanged: true,
