@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -83,6 +84,16 @@ func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
 			Category: misterLaunchableCategoryOther,
 			Launch:   p.launchOtherCore(filepath.Join("_Other", "TomyScramble")),
 			Test:     testOtherCore("TomyScramble"),
+		},
+		// 3S-ARM is a native ARM port of Street Fighter III: 3rd Strike that
+		// ships as an _Other core but is a real arcade game, so it is exposed
+		// as virtual media under the Arcade system rather than an Other entry.
+		launchables.VirtualMedia{
+			ID:       launchables.MisterArcadeThirdStrike,
+			Name:     "Street Fighter III: 3rd Strike (3S-ARM)",
+			SystemID: systemdefs.SystemArcade,
+			Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
+			Test:     testOtherCore("3S-ARM"),
 		},
 	}
 }
