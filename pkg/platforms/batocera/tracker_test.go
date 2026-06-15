@@ -122,6 +122,58 @@ func TestBackgroundTracker_StartsWhenESAPIUnavailableAtStartup(t *testing.T) {
 		"tracker should detect the externally launched game once the ES API is available")
 }
 
+// TestBackgroundTracker_StartsWhenStartupGameSystemUnknown covers the case where
+// the startup probe finds a running game but its system can't be mapped. StartPost
+// must not bail out: it should leave active media empty and still start the
+// background tracker (same #936 class of early-return bug).
+func TestBackgroundTracker_StartsWhenStartupGameSystemUnknown(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	mockESAPI.WithRunningGame(&esapi.RunningGameResponse{
+		Name:       "Mystery Game",
+		Path:       "/userdata/roms/unknownsystem/mystery.bin",
+		SystemName: "this-is-not-a-real-batocera-system",
+	})
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	fakeClock := clockwork.NewFakeClock()
+	platform := &Platform{
+		clock: fakeClock,
+	}
+
+	var mediaMu syncutil.RWMutex
+	var capturedMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		mediaMu.Lock()
+		capturedMedia = media
+		mediaMu.Unlock()
+	}
+	activeMedia := func() *models.ActiveMedia {
+		mediaMu.RLock()
+		defer mediaMu.RUnlock()
+		return capturedMedia
+	}
+
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
+	require.NoError(t, err)
+	defer func() {
+		if platform.stopTracker != nil {
+			_ = platform.stopTracker()
+		}
+	}()
+
+	// Unmappable startup game: no active media, but the tracker still starts.
+	require.NotNil(t, platform.stopTracker,
+		"tracker should start even when the startup game's system is unknown")
+	mediaMu.RLock()
+	assert.Nil(t, capturedMedia, "unmappable startup game should not be set as active media")
+	mediaMu.RUnlock()
+}
+
 // TestBackgroundTracker_DetectsExternalGameLaunch tests that the tracker detects
 // when a game is launched externally (not by Zaparoo)
 func TestBackgroundTracker_DetectsExternalGameLaunch(t *testing.T) {
