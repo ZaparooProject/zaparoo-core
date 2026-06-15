@@ -157,7 +157,7 @@ func TestVirtualStatPath_PreservesAbsoluteRoot(t *testing.T) {
 	assert.Equal(t, filepath.Join(launchTestAbsPath("games"), "neogeo", "NEOGEO.zip"), statPath)
 }
 
-// TestCmdLaunch_SystemArgAppliesDefaults verifies that system arg applies system defaults when no explicit launcher
+// TestApplyMediaLauncherOverride_SetsLauncherArg verifies that a media override sets the launcher AdvArg.
 func TestApplyMediaLauncherOverride_SetsLauncherArg(t *testing.T) {
 	t.Parallel()
 
