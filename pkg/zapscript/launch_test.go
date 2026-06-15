@@ -77,8 +77,8 @@ func TestMediaIDForHistoryEntry_ReturnsZeroWhenUnavailable(t *testing.T) {
 	dbErr := errors.New("database unavailable")
 
 	tests := []struct {
-		name string
 		env  func(t *testing.T) platforms.CmdEnv
+		name string
 	}{
 		{
 			name: "nil database",
