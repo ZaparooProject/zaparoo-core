@@ -4,6 +4,7 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -207,7 +208,13 @@ func (tr *Tracker) LoadCore() {
 
 	data, err := os.ReadFile(misterconfig.CoreNameFile)
 	if err != nil {
-		log.Error().Msgf("error reading core name: %s", err)
+		// CORENAME is absent until MiSTer launches a core (e.g. right after boot).
+		// That's expected; other read errors (permissions, I/O) stay at Error.
+		if os.IsNotExist(err) {
+			log.Debug().Msgf("core name file not present yet: %s", err)
+		} else {
+			log.Error().Msgf("error reading core name: %s", err)
+		}
 		return
 	}
 
@@ -308,7 +315,13 @@ func (tr *Tracker) loadGame() {
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, mglErr := mgls.ReadMgl(path)
 		if mglErr != nil {
-			log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
+			// A missing MGL (e.g. AmigaVision virtual paths, or a cleaned-up temp
+			// MGL) just means we can't track that game; not a fault worth Sentry.
+			if errors.Is(mglErr, os.ErrNotExist) {
+				log.Warn().Err(mglErr).Str("path", path).Msg("active game mgl file not found")
+			} else {
+				log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
+			}
 		} else {
 			path = ResolvePath(mgl.File.Path)
 			log.Info().Msgf("mgl path: %s", path)
@@ -502,7 +515,11 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
 						err = loadRecent(event.Name)
 						if err != nil {
-							log.Error().Msgf("error loading recent file: %s", err)
+							if errors.Is(err, os.ErrNotExist) {
+								log.Warn().Msgf("recent mgl file not found: %s", err)
+							} else {
+								log.Error().Msgf("error loading recent file: %s", err)
+							}
 						}
 					case event.Name == misterconfig.MainPickerSelected:
 						log.Info().Msgf("main picker selected: %s", event.Name)
