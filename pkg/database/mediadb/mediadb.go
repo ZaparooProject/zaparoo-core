@@ -2135,7 +2135,7 @@ func (db *MediaDB) randomGameWithStats(
 	// Get the first media item with DBID >= targetDBID
 	//nolint:gosec // whereClause is built from safe conditions, no user input
 	selectQuery := fmt.Sprintf(`
-		SELECT Systems.SystemID, Media.Path
+		SELECT Systems.SystemID, Media.Path, Media.DBID
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -2148,11 +2148,12 @@ func (db *MediaDB) randomGameWithStats(
 	err = db.sql.QueryRowContext(ctx, selectQuery, args...).Scan(
 		&row.SystemID,
 		&row.Path,
+		&row.MediaID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
 		selectQuery = fmt.Sprintf(`
-			SELECT Systems.SystemID, Media.Path
+			SELECT Systems.SystemID, Media.Path, Media.DBID
 			FROM Media
 			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -2164,6 +2165,7 @@ func (db *MediaDB) randomGameWithStats(
 		err = db.sql.QueryRowContext(ctx, selectQuery, args...).Scan(
 			&row.SystemID,
 			&row.Path,
+			&row.MediaID,
 		)
 	}
 	if err != nil {

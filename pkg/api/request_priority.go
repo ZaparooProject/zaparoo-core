@@ -95,5 +95,6 @@ func isImageAPIMethod(method string) bool {
 }
 
 func isMediaDBTransactionAPIMethod(method string) bool {
-	return strings.EqualFold(method, models.MethodMediaTagsUpdate)
+	return strings.EqualFold(method, models.MethodMediaTagsUpdate) ||
+		strings.EqualFold(method, models.MethodMediaMetaUpdate)
 }

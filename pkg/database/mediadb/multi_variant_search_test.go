@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -66,11 +67,12 @@ func TestSearchMediaWithFilters_MultipleSameMediaTypeSystems(t *testing.T) {
 	// - 10
 	// Total: 7 args (bloated with duplicates)
 
+	mediaPath := filepath.Join("games", "mario.nes")
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("NES", "SNES", "%mario%", "%mario%", 10). // Should be 5 args, not 7
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Super Mario Bros", "/games/mario.nes", int64(1)))
+			AddRow("NES", "Super Mario Bros", mediaPath, int64(1)))
 
 	// Mock tags query
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -171,6 +173,7 @@ func TestSearchMediaWithFilters_MultipleWordsMultipleSystems(t *testing.T) {
 	// Limit: 1
 	// Total: 16 args (bloated!)
 
+	mediaPath := filepath.Join("games", "smw.sfc")
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(
@@ -180,7 +183,7 @@ func TestSearchMediaWithFilters_MultipleWordsMultipleSystems(t *testing.T) {
 			10, // Limit
 		). // Should be 8 args, not 16
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("SNES", "Super Mario World", "/games/smw.sfc", int64(1)))
+			AddRow("SNES", "Super Mario World", mediaPath, int64(1)))
 
 	// Mock tags query
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -228,6 +231,7 @@ func TestSearchMediaPathGlob_Deduplication(t *testing.T) {
 	// Total: 6 args
 	// Note: sqlSearchMediaPathParts returns different columns than sqlSearchMediaWithFilters
 
+	mediaPath := filepath.Join("games", "mario.nes")
 	mock.ExpectPrepare("select Systems.SystemID, Media.Path, Media.DBID from Systems.*").
 		ExpectQuery().
 		WithArgs(
@@ -236,7 +240,7 @@ func TestSearchMediaPathGlob_Deduplication(t *testing.T) {
 			"%bros%", "%bros%", // Part 2: Slug LIKE, SecondarySlug LIKE
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
-			AddRow("NES", "/games/mario.nes", int64(42)))
+			AddRow("NES", mediaPath, int64(42)))
 
 	// sqlSearchMediaPathParts doesn't fetch tags, returns different struct
 	results, err := sqlSearchMediaPathParts(
@@ -245,7 +249,7 @@ func TestSearchMediaPathGlob_Deduplication(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
-	assert.Equal(t, "/games/mario.nes", results[0].Path)
+	assert.Equal(t, mediaPath, results[0].Path)
 	assert.Equal(t, int64(42), results[0].MediaID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
