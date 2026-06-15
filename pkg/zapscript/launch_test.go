@@ -66,6 +66,130 @@ func TestVirtualStatPath_PreservesAbsoluteRoot(t *testing.T) {
 }
 
 // TestCmdLaunch_SystemArgAppliesDefaults verifies that system arg applies system defaults when no explicit launcher
+func TestApplyMediaLauncherOverride_SetsLauncherArg(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg := &config.Instance{}
+	launchers := []platforms.Launcher{
+		{ID: "Default", SystemID: "NES"},
+		{ID: "RetroArch", SystemID: "NES"},
+	}
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "retroarch",
+		}}, nil).Once()
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch.title",
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	launcherID := applyMediaLauncherOverride(mockPlatform, &env, 123, "NES")
+
+	assert.Equal(t, "RetroArch", launcherID)
+	assert.Equal(t, "RetroArch", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathAppliesMediaLauncherOverride(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	root := t.TempDir()
+	absPath := filepath.Join(root, "game.nes")
+	launchers := []platforms.Launcher{
+		{ID: "Default", SystemID: "NES", Folders: []string{root}, Extensions: []string{".nes"}},
+		{ID: "Override", SystemID: "NES"},
+	}
+
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	mockPlatform.On("RootDirs", cfg).Return([]string{root}).Maybe()
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockMediaDB.On("FindSystemBySystemID", "NES").
+		Return(database.System{DBID: 10, SystemID: "NES"}, nil).Once()
+	mockMediaDB.On("FindMediaBySystemAndPath", mock.Anything, int64(10), absPath).
+		Return(&database.Media{DBID: 123, Path: absPath}, nil).Once()
+	mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+		Return([]database.MediaProperty{{
+			TypeTag: launcherOverridePropertyTypeTag(),
+			Text:    "Override",
+		}}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Override"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch",
+			Args:    []string{absPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesMediaOverride(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	db := &database.Database{MediaDB: mockMediaDB}
+	cfg := &config.Instance{}
+	root := t.TempDir()
+	absPath := filepath.Join(root, "game.nes")
+	explicit := platforms.Launcher{ID: "Explicit", SystemID: "NES", Folders: []string{root}}
+
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{explicit})
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "Explicit"
+		}),
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{absPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "Explicit",
+			}),
+		},
+		Cfg:      cfg,
+		Database: db,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	t.Parallel()
 

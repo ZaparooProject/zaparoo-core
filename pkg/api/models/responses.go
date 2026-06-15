@@ -60,17 +60,13 @@ type BrowseEntry struct {
 	ZapScript *string            `json:"zapScript,omitempty"`
 	FileCount *int               `json:"fileCount,omitempty"`
 	Group     *string            `json:"group,omitempty"`
-	Name      string             `json:"name"`
 	Path      string             `json:"path"`
 	Type      string             `json:"type"`
+	Name      string             `json:"name"`
 	SystemIDs []string           `json:"systemIds,omitempty"`
 	Tags      []database.TagInfo `json:"tags,omitempty"`
 	MediaID   int64              `json:"mediaId,omitempty"`
-	// HasCover is true when the media or its title has at least one image
-	// property row. Only set for media-type entries and singleton-aliased
-	// directory entries. Always emitted (never omitempty) so clients can
-	// skip cover requests for entries without art.
-	HasCover bool `json:"hasCover"`
+	HasCover  bool               `json:"hasCover"`
 }
 
 type BrowseResults struct {
@@ -278,6 +274,7 @@ type MediaMetaTitleResponse struct {
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
 type MediaMetaMediaResponse struct {
 	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	LauncherOverride    *string                          `json:"launcherOverride,omitempty"`
 	Path                string                           `json:"path"`
 	ParentDir           string                           `json:"parentDir"`
 	Tags                []database.TagInfo               `json:"tags"`

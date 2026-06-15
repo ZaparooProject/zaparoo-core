@@ -1517,13 +1517,14 @@ const (
 	// TagPropertyImageThumbnail maps to ES <thumbnail>, which in most ES forks
 	// (RPI, Sky, Batocera, ES-DE) stores cover art, not a screenshot.
 	// See esapi/gamelist.go for field-level fork documentation.
-	TagPropertyImageThumbnail TagValue = "image-thumbnail" // Thumbnail / cover image (filesystem path)
-	TagPropertyImageMarquee   TagValue = "image-marquee"   // Cabinet marquee / logo image (filesystem path)
-	TagPropertyImageWheel     TagValue = "image-wheel"     // Wheel / die-cut logo image (filesystem path)
-	TagPropertyImageFanart    TagValue = "image-fanart"    // Fan art / background image (filesystem path)
-	TagPropertyImageTitleshot TagValue = "image-titleshot" // Title screen image (filesystem path)
-	TagPropertyImageMap       TagValue = "image-map"       // In-game world/level map image (filesystem path)
-	TagPropertyVideo          TagValue = "video"           // Video clip (filesystem path)
-	TagPropertyManual         TagValue = "manual"          // Game manual PDF (filesystem path)
-	TagPropertyXMLGameID      TagValue = "xml-game-id"     // game node ID (ScreenScraper Game ID for instance)
+	TagPropertyImageThumbnail   TagValue = "image-thumbnail"   // Thumbnail / cover image (filesystem path)
+	TagPropertyImageMarquee     TagValue = "image-marquee"     // Cabinet marquee / logo image (filesystem path)
+	TagPropertyImageWheel       TagValue = "image-wheel"       // Wheel / die-cut logo image (filesystem path)
+	TagPropertyImageFanart      TagValue = "image-fanart"      // Fan art / background image (filesystem path)
+	TagPropertyImageTitleshot   TagValue = "image-titleshot"   // Title screen image (filesystem path)
+	TagPropertyImageMap         TagValue = "image-map"         // In-game world/level map image (filesystem path)
+	TagPropertyVideo            TagValue = "video"             // Video clip (filesystem path)
+	TagPropertyManual           TagValue = "manual"            // Game manual PDF (filesystem path)
+	TagPropertyXMLGameID        TagValue = "xml-game-id"       // game node ID (ScreenScraper Game ID for instance)
+	TagPropertyLauncherOverride TagValue = "launcher-override" // Per-media launcher override (launcher ID)
 )

@@ -228,15 +228,15 @@ func TestSearchMediaPathGlob_Deduplication(t *testing.T) {
 	// Total: 6 args
 	// Note: sqlSearchMediaPathParts returns different columns than sqlSearchMediaWithFilters
 
-	mock.ExpectPrepare("select Systems.SystemID, Media.Path from Systems.*").
+	mock.ExpectPrepare("select Systems.SystemID, Media.Path, Media.DBID from Systems.*").
 		ExpectQuery().
 		WithArgs(
 			"NES", "SNES", // System IDs
 			"%mario%", "%mario%", // Part 1: Slug LIKE, SecondarySlug LIKE
 			"%bros%", "%bros%", // Part 2: Slug LIKE, SecondarySlug LIKE
 		).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path"}).
-			AddRow("NES", "/games/mario.nes"))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("NES", "/games/mario.nes", int64(42)))
 
 	// sqlSearchMediaPathParts doesn't fetch tags, returns different struct
 	results, err := sqlSearchMediaPathParts(
@@ -246,6 +246,7 @@ func TestSearchMediaPathGlob_Deduplication(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "/games/mario.nes", results[0].Path)
+	assert.Equal(t, int64(42), results[0].MediaID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
