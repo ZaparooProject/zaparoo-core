@@ -20,8 +20,10 @@
 package methods
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -108,6 +110,18 @@ func logBrowseTiming(operation, path string, started time.Time, rows int) {
 func HandleMediaBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Debug().Msg("received media browse request")
 
+	result, err := browseMedia(env)
+	if err != nil && errors.Is(err, context.Canceled) {
+		// The client navigated away or cancelled the request mid-browse. This is
+		// expected and high-volume, so log at Debug to keep it out of Sentry.
+		// context.DeadlineExceeded is intentionally NOT downgraded here — a browse
+		// timeout may signal a real performance regression worth seeing.
+		return nil, fmt.Errorf("%w", models.QuietClientErr(err))
+	}
+	return result, err
+}
+
+func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	select {
 	case browseSem <- struct{}{}:
 		defer func() { <-browseSem }()

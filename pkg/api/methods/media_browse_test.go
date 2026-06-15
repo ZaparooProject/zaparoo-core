@@ -1844,3 +1844,28 @@ func TestSchemeDisplayName(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleMediaBrowseCancelledIsQuiet verifies that a browse request cancelled
+// by the client is returned as a QuietClientError (logged at Debug, kept out of
+// Sentry) rather than a plain error (logged at Error).
+func TestHandleMediaBrowseCancelledIsQuiet(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	env.Context = ctx
+
+	result, err := HandleMediaBrowse(env)
+	assert.Nil(t, result)
+	require.Error(t, err)
+
+	var quietErr *models.QuietClientError
+	require.ErrorAs(t, err, &quietErr)
+	assert.ErrorIs(t, err, context.Canceled)
+}

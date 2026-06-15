@@ -2904,7 +2904,11 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		if err := pauser.Wait(db.ctx); err != nil {
 			log.Info().Msg("background optimization cancelled while paused")
 			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
+				if errors.Is(setErr, context.Canceled) {
+					log.Debug().Err(setErr).Msg("set optimization status to failed skipped (cancelled)")
+				} else {
+					log.Error().Err(setErr).Msg("failed to set optimization status to failed")
+				}
 			}
 			if statusCallback != nil {
 				statusCallback(false)
@@ -2915,7 +2919,13 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		log.Info().Msgf("running optimization step: %s", step.name)
 
 		if err := db.SetOptimizationStep(step.name); err != nil {
-			log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
+			// A cancelled context here just means the service is shutting down
+			// mid-optimization; that's expected, so keep it out of Sentry.
+			if errors.Is(err, context.Canceled) {
+				log.Debug().Err(err).Msgf("set optimization step to %s skipped (cancelled)", step.name)
+			} else {
+				log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
+			}
 		}
 
 		// Execute step with retry and exponential backoff
