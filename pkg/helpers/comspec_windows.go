@@ -19,19 +19,28 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package systray
+package helpers
 
 import (
-	"context"
-	"os/exec"
-	"syscall"
-
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"os"
+	"path/filepath"
 )
 
-func openPath(path string) error {
-	//nolint:gosec // Safe: opens file/URL with system default handler
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/c", "start", "", path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Start() //nolint:wrapcheck // internal helper
+// ComSpec returns the absolute path to the Windows command interpreter
+// (cmd.exe), resolving it without relying on %PATH%. Some machines have a
+// %PATH% that does not contain C:\Windows\System32 (e.g. a truncated or
+// stripped environment), which makes exec lookups of the bare name "cmd"
+// fail. Using an absolute path also avoids Go's exec.ErrDot protection, which
+// rejects executables found only relative to the current directory.
+//
+// %ComSpec% and %SystemRoot% are set by the OS independently of %PATH%, so
+// they survive a broken PATH.
+func ComSpec() string {
+	if cs := os.Getenv("ComSpec"); cs != "" {
+		return cs
+	}
+	if sr := os.Getenv("SystemRoot"); sr != "" {
+		return filepath.Join(sr, "System32", "cmd.exe")
+	}
+	return `C:\Windows\System32\cmd.exe`
 }
