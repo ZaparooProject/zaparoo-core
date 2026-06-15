@@ -33,4 +33,5 @@ var (
 	MisterOtherGenMidi       = uuid.MustParse("91fafc5c-25d1-4356-b5b5-3628573d77b3")
 	MisterOtherSlugCross     = uuid.MustParse("e05893a4-59ee-4919-a3cd-47ff8c5e518d")
 	MisterOtherTomyScramble  = uuid.MustParse("349dfee7-bc32-4004-b377-ff8fe8083836")
+	MisterArcadeThirdStrike  = uuid.MustParse("618433aa-0e8b-4230-800e-ec33758affb7")
 )
