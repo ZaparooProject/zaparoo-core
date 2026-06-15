@@ -45,9 +45,23 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
+
+// isCorruptionError reports whether err indicates SQLite database corruption
+// (a malformed disk image or a non-database file). Mirrors the detection used by
+// the media scanner so corruption hit during background maintenance can be routed
+// to the same corrupt-database recovery path.
+func isCorruptionError(err error) bool {
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrCorrupt || sqliteErr.Code == sqlite3.ErrNotADB
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database disk image is malformed") ||
+		strings.Contains(msg, "file is not a database")
+}
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
 
@@ -2947,6 +2961,14 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		// Final check after all retries
 		if stepErr != nil {
 			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, step.maxRetries+1)
+			// Database corruption can't be repaired by optimization. Route it to the
+			// same corrupt-database state the indexer uses so the app surfaces the
+			// repair/rebuild flow instead of repeatedly failing maintenance.
+			if isCorruptionError(stepErr) {
+				if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
+					log.Error().Err(setErr).Msg("failed to mark media database as corrupt after optimization failure")
+				}
+			}
 			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
 				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
 			}
