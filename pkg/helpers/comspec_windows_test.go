@@ -19,19 +19,38 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package systray
+package helpers
 
 import (
-	"context"
-	"os/exec"
-	"syscall"
-
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"testing"
 )
 
-func openPath(path string) error {
-	//nolint:gosec // Safe: opens file/URL with system default handler
-	cmd := exec.CommandContext(context.Background(), helpers.ComSpec(), "/c", "start", "", path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Start() //nolint:wrapcheck // internal helper
+func TestComSpec_UsesComSpecEnvWhenSet(t *testing.T) {
+	want := `D:\custom\cmd.exe`
+	t.Setenv("ComSpec", want)
+	t.Setenv("SystemRoot", `C:\Windows`)
+
+	if got := ComSpec(); got != want {
+		t.Errorf("ComSpec() = %q, want %q", got, want)
+	}
+}
+
+func TestComSpec_FallsBackToSystemRoot(t *testing.T) {
+	t.Setenv("ComSpec", "")
+	t.Setenv("SystemRoot", `C:\Windows`)
+
+	want := `C:\Windows\System32\cmd.exe`
+	if got := ComSpec(); got != want {
+		t.Errorf("ComSpec() = %q, want %q", got, want)
+	}
+}
+
+func TestComSpec_FallsBackToDefault(t *testing.T) {
+	t.Setenv("ComSpec", "")
+	t.Setenv("SystemRoot", "")
+
+	want := `C:\Windows\System32\cmd.exe`
+	if got := ComSpec(); got != want {
+		t.Errorf("ComSpec() = %q, want %q", got, want)
+	}
 }
