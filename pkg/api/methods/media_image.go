@@ -228,9 +228,9 @@ func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, da
 // stale or cross-contaminated entries do not accumulate.
 func (c *mediaThumbCache) wipe() {
 	if err := c.fs.RemoveAll(c.dir); err != nil {
-		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache after reindex")
+		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache")
 	} else {
-		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped after reindex")
+		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped")
 	}
 	c.resolvedMu.Lock()
 	c.resolvedTypes = make(map[string]string)
