@@ -79,6 +79,8 @@ func firstBrowsedBucketForCursor(
 }
 
 func TestBrowseIndex_BucketsCountsAndSeek(t *testing.T) {
+	t.Parallel()
+
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -120,6 +122,8 @@ func TestBrowseIndex_BucketsCountsAndSeek(t *testing.T) {
 }
 
 func TestBrowseIndex_DescOrder(t *testing.T) {
+	t.Parallel()
+
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -148,6 +152,8 @@ func TestBrowseIndex_DescOrder(t *testing.T) {
 }
 
 func TestBrowseIndex_SystemScoping(t *testing.T) {
+	t.Parallel()
+
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -170,6 +176,8 @@ func TestBrowseIndex_SystemScoping(t *testing.T) {
 }
 
 func TestBrowseIndex_NonAlphabeticalSortReturnsNone(t *testing.T) {
+	t.Parallel()
+
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -189,6 +197,8 @@ func TestBrowseIndex_NonAlphabeticalSortReturnsNone(t *testing.T) {
 }
 
 func TestBrowseIndex_EmptyDirectory(t *testing.T) {
+	t.Parallel()
+
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 

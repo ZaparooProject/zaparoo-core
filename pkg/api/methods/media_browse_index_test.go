@@ -33,9 +33,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func browseIndexOpts(pathPrefix string) any {
+func browseIndexOpts(pathPrefix, sort string) any {
 	return mock.MatchedBy(func(opts database.BrowseIndexOptions) bool {
-		return opts.PathPrefix == pathPrefix && len(opts.Systems) == 0
+		return opts.PathPrefix == pathPrefix && opts.Sort == sort && len(opts.Systems) == 0
 	})
 }
 
@@ -60,10 +60,10 @@ func TestHandleMediaBrowseIndex_FilesystemPath(t *testing.T) {
 
 	mockPlatform := newBrowseIndexPlatform(t, []string{romsRoot})
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseIndex", mock.Anything, browseIndexOpts(prefix)).
+	mockMediaDB.On("BrowseIndex", mock.Anything, browseIndexOpts(prefix, "name-desc")).
 		Return(database.BrowseIndexResult{
 			Scheme:     "latin",
-			SortMode:   "name-asc",
+			SortMode:   "name-desc",
 			TotalFiles: 3,
 			Buckets: []database.BrowseIndexBucket{
 				{Key: "A", AtStart: true},
@@ -71,7 +71,8 @@ func TestHandleMediaBrowseIndex_FilesystemPath(t *testing.T) {
 			},
 		}, nil)
 
-	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &snesPath})
+	sortOrder := "name-desc"
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &snesPath, Sort: &sortOrder})
 	result, err := HandleMediaBrowseIndex(env)
 	require.NoError(t, err)
 
@@ -94,7 +95,7 @@ func TestHandleMediaBrowseIndex_FilesystemPath(t *testing.T) {
 	require.NotNil(t, cursor)
 	assert.Equal(t, "Apex", cursor.SortValue)
 	assert.Equal(t, int64(7), cursor.LastID)
-	assert.Equal(t, "name-asc", cursor.SortMode)
+	assert.Equal(t, "name-desc", cursor.SortMode)
 	assert.Equal(t, 3, cursor.TotalFiles)
 
 	mockMediaDB.AssertExpectations(t)
@@ -105,7 +106,7 @@ func TestHandleMediaBrowseIndex_VirtualPath(t *testing.T) {
 
 	mockPlatform := newBrowseIndexPlatform(t, []string{browseTestAbsPath("roms")})
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseIndex", mock.Anything, browseIndexOpts("steam://")).
+	mockMediaDB.On("BrowseIndex", mock.Anything, browseIndexOpts("steam://", "")).
 		Return(database.BrowseIndexResult{
 			Scheme:     "latin",
 			SortMode:   "name-asc",
