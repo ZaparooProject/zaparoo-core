@@ -333,16 +333,15 @@ func (p *Platform) StartPost(
 		}
 
 		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
-		if err != nil {
+		switch {
+		case err != nil:
 			// Non-fatal: an embedded arcade database is used as a fallback. Download
 			// failures are usually network/rate-limit issues, not code faults.
 			log.Warn().Msgf("failed to download arcade database: %s", err)
-		}
-
-		if arcadeDbUpdated {
+		case arcadeDbUpdated:
 			log.Info().Msg("arcade database updated")
 			tr.ReloadNameMap()
-		} else {
+		default:
 			log.Info().Msg("arcade database is up to date")
 		}
 
