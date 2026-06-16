@@ -543,7 +543,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	// If no args provided, use the currently active playlist
 	if len(env.Cmd.Args) == 0 {
 		if active == nil {
-			return platforms.CmdResult{}, errors.New("no active playlist to open")
+			return platforms.CmdResult{}, ErrNoPlaylistActive
 		}
 		log.Debug().Msg("opening active playlist (no args)")
 		// Use active playlist as-is (preserves current Index and state)

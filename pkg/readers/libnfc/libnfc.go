@@ -898,6 +898,7 @@ func (r *Reader) writeTag(req *WriteRequest) {
 	var count int
 	var target nfc.Target
 	var err error
+	var lastPollErr error
 	tries := defaultWriteTimeoutTries
 
 	for tries > 0 {
@@ -926,6 +927,7 @@ func (r *Reader) writeTag(req *WriteRequest) {
 
 		if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
 			log.Warn().Msgf("could not poll: %s", err)
+			lastPollErr = err
 		}
 
 		if count > 0 {
@@ -936,6 +938,16 @@ func (r *Reader) writeTag(req *WriteRequest) {
 	}
 
 	if count == 0 {
+		// A timeout (or clean poll) with no tag is the expected "nothing
+		// presented" case. A non-timeout poll error means the reader actually
+		// failed, so surface it as a genuine fault rather than masking it as
+		// ErrTagNotDetected (which downstream treats as an expected condition).
+		if lastPollErr != nil {
+			req.Result <- WriteRequestResult{
+				Err: fmt.Errorf("failed to poll for tag: %w", lastPollErr),
+			}
+			return
+		}
 		log.Warn().Msgf("could not detect a tag")
 		req.Result <- WriteRequestResult{
 			Err: readers.ErrTagNotDetected,

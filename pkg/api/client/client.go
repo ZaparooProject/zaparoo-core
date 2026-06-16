@@ -262,7 +262,7 @@ func WaitNotification(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+				if ctx.Err() != nil || isExpectedWebsocketClose(readErr) {
 					log.Debug().Err(readErr).Msg("connection closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")
