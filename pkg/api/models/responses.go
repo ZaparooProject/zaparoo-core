@@ -78,6 +78,31 @@ type BrowseResults struct {
 	TotalFiles int             `json:"totalFiles"`
 }
 
+// BrowseIndexGroup is one first-character section of a browse list. Key is the
+// stable bucket identifier and Label is what to display (equal for the Latin
+// scheme; separated so a future locale scheme can show a glyph differing from
+// the key). Cursor is an opaque media.browse cursor positioned just before the
+// bucket's first row: passing it to media.browse with the same scope returns a
+// continuous page that begins at the bucket. Clients must treat Key and Cursor
+// as opaque.
+type BrowseIndexGroup struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Cursor string `json:"cursor"`
+	Count  int    `json:"count"`
+}
+
+// BrowseIndexResults is the response for media.browse.index. Scheme reports the
+// collation used to derive buckets ("latin"), or "none" when no letter rail
+// applies to the scope (non-alphabetical sort, or a root listing); Groups is
+// then empty. Groups is authoritative and already ordered for the active sort;
+// clients render it as-is without assuming any alphabet.
+type BrowseIndexResults struct {
+	Scheme     string             `json:"scheme"`
+	Groups     []BrowseIndexGroup `json:"groups"`
+	TotalFiles int                `json:"totalFiles"`
+}
+
 type SettingsResponse struct {
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
