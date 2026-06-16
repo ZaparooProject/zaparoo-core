@@ -24,9 +24,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -326,6 +328,91 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 		media = append(media, m)
 	}
 	return media, rows.Err()
+}
+
+// sqlGetMediaWithTagsBySystemID retrieves all media for a system and, when
+// loadMediaTags is set, the scanner-managed tag DBIDs for each row in a single
+// pass. Folding tag links into the media read avoids a second per-(media,tag)-link
+// scan of Media: GROUP_CONCAT aggregates the links on the C side so only one extra
+// string per media row crosses the cgo boundary. User-owned tags are filtered in Go
+// against a pre-fetched DBID set rather than joined in SQL, matching the rationale in
+// sqlGetScannerMediaTagsBySystemID. SystemID is filled from the argument.
+func sqlGetMediaWithTagsBySystemID(
+	ctx context.Context, db *sql.DB, systemID string, loadMediaTags bool,
+) ([]database.MediaWithFullPath, error) {
+	if !loadMediaTags {
+		return sqlGetMediaBySystemID(ctx, db, systemID)
+	}
+
+	userTagIDs, err := sqlGetTagDBIDsByType(ctx, db, string(dbtags.TagTypeUser))
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName,
+			(SELECT GROUP_CONCAT(mt.TagDBID) FROM MediaTags mt WHERE mt.MediaDBID = m.DBID) AS TagIDs
+		FROM Media m INDEXED BY media_system_path_idx
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		ORDER BY m.Path
+	`
+	rows, err := db.QueryContext(ctx, query, systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media with tags for system %s: %w", systemID, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	media := make([]database.MediaWithFullPath, 0)
+	for rows.Next() {
+		var (
+			m      database.MediaWithFullPath
+			tagIDs sql.NullString
+		)
+		if scanErr := rows.Scan(
+			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &tagIDs,
+		); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan media with tags for system %s: %w", systemID, scanErr)
+		}
+		m.SystemID = systemID
+		parsed, parseErr := parseScannerTagIDs(tagIDs, userTagIDs)
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse tag IDs for media %d in system %s: %w", m.DBID, systemID, parseErr)
+		}
+		m.TagIDs = parsed
+		media = append(media, m)
+	}
+	return media, rows.Err()
+}
+
+// parseScannerTagIDs parses a GROUP_CONCAT(TagDBID) string into a slice of tag DBIDs,
+// excluding user-owned tags. Returns nil for a NULL/empty input or when every tag was
+// user-owned, so media without scanner tags carry no slice allocation.
+func parseScannerTagIDs(tagIDs sql.NullString, userTagIDs map[int64]struct{}) ([]int, error) {
+	if !tagIDs.Valid || tagIDs.String == "" {
+		return nil, nil
+	}
+	parts := strings.Split(tagIDs.String, ",")
+	result := make([]int, 0, len(parts))
+	for _, part := range parts {
+		// Atoi (not ParseInt+narrow) keeps tag DBIDs as int — the type ScanState's
+		// tag maps use — and errors rather than truncating an out-of-range value.
+		id, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid tag DBID %q: %w", part, err)
+		}
+		if _, isUserTag := userTagIDs[int64(id)]; isUserTag {
+			continue
+		}
+		result = append(result, id)
+	}
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
 }
 
 // sqlBulkSetMediaMissing marks media records as missing by DBID. Batches in chunks

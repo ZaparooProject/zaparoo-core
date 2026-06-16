@@ -1789,6 +1789,32 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 	return []database.MediaWithFullPath{}, nil
 }
 
+// GetMediaWithTagsBySystemID mock method for the combined per-system media + tags read.
+func (m *MockMediaDBI) GetMediaWithTagsBySystemID(
+	systemID string, loadMediaTags bool,
+) ([]database.MediaWithFullPath, error) {
+	// Try to get mock expectations, but don't fail if none are set
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetMediaWithTagsBySystemID" {
+				args := m.Called(systemID, loadMediaTags)
+				if media, ok := args.Get(0).([]database.MediaWithFullPath); ok {
+					if err := args.Error(1); err != nil {
+						return media, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return media, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.MediaWithFullPath{}, nil
+			}
+		}
+	}
+	// Default behavior when no expectations are set - return empty slice
+	return []database.MediaWithFullPath{}, nil
+}
+
 // GetMediaTagsBySystemID mock method for per-system lazy loading during resume.
 func (m *MockMediaDBI) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
 	args := m.Called(systemID)

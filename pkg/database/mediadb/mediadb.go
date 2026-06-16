@@ -2783,6 +2783,19 @@ func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFull
 	return sqlGetMediaBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
 }
 
+// GetMediaWithTagsBySystemID retrieves media for a system and, when loadMediaTags is
+// set, the scanner-managed tag DBIDs for each row in a single pass (see
+// sqlGetMediaWithTagsBySystemID). Non-cancellable context: see GetTitlesBySystemID.
+func (db *MediaDB) GetMediaWithTagsBySystemID(
+	systemID string, loadMediaTags bool,
+) ([]database.MediaWithFullPath, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	return sqlGetMediaWithTagsBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID, loadMediaTags)
+}
+
 // GetMediaTagsBySystemID retrieves all media-tag links for a specific system.
 func (db *MediaDB) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
 	if db.sql == nil {

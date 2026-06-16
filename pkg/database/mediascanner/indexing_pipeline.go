@@ -520,9 +520,10 @@ func insertMediaTagLink(db database.MediaDBI, mediaIndex, tagIndex int, tagStr s
 }
 
 type systemStateData struct {
-	titles    []database.TitleWithSystem
-	media     []database.MediaWithFullPath
-	mediaTags []database.MediaTagLink
+	titles []database.TitleWithSystem
+	// media carries each row's scanner-managed tag DBIDs in MediaWithFullPath.TagIDs
+	// when loaded with loadMediaTags set, so tag links ride on the media read.
+	media []database.MediaWithFullPath
 }
 
 func cloneMediaTagSet(tagIDs map[int]struct{}) map[int]struct{} {
@@ -860,16 +861,7 @@ func PopulateScanStateForSystem(
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
 		}
-	}
-
-	if ss.MediaTagIDs != nil {
-		for _, link := range stateData.mediaTags {
-			mediaDBID := int(link.MediaDBID)
-			if ss.MediaTagIDs[mediaDBID] == nil {
-				ss.MediaTagIDs[mediaDBID] = make(map[int]struct{})
-			}
-			ss.MediaTagIDs[mediaDBID][int(link.TagDBID)] = struct{}{}
-		}
+		applyMediaTagIDs(ss, int(m.DBID), m.TagIDs)
 	}
 
 	return nil
@@ -902,37 +894,43 @@ func loadSystemStateData(
 	default:
 	}
 
-	// Load media for this system
+	// Load media for this system, folding scanner-managed tag links into each row
+	// when requested so tags ride on the media read instead of a second scan.
 	mediaStart := time.Now()
-	media, err := db.GetMediaBySystemID(systemID)
+	media, err := db.GetMediaWithTagsBySystemID(systemID, loadMediaTags)
 	mediaElapsed := time.Since(mediaStart)
 	if err != nil {
 		return systemStateData{}, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
-	}
-
-	mediaTags := []database.MediaTagLink(nil)
-	mediaTagsElapsed := time.Duration(0)
-	if loadMediaTags {
-		mediaTagsStart := time.Now()
-		mediaTags, err = db.GetScannerMediaTagsBySystemID(systemID)
-		mediaTagsElapsed = time.Since(mediaTagsStart)
-		if err != nil {
-			return systemStateData{}, fmt.Errorf("failed to get scanner media tags for system %s: %w", systemID, err)
-		}
 	}
 
 	log.Debug().
 		Str("system", systemID).
 		Int("titles", len(titles)).
 		Int("media", len(media)).
-		Int("mediaTags", len(mediaTags)).
+		Bool("mediaTags", loadMediaTags).
 		Dur("titlesDuration", titlesElapsed).
 		Dur("mediaDuration", mediaElapsed).
-		Dur("mediaTagsDuration", mediaTagsElapsed).
 		Dur("elapsed", time.Since(startTime)).
 		Msg("loaded existing data for system resume")
 
-	return systemStateData{titles: titles, media: media, mediaTags: mediaTags}, nil
+	return systemStateData{titles: titles, media: media}, nil
+}
+
+// applyMediaTagIDs records the scanner-managed tag DBIDs for a media row into the
+// scan state's per-media tag set. No-op when tags are not being tracked or the row
+// has no scanner tags.
+func applyMediaTagIDs(ss *database.ScanState, mediaDBID int, tagIDs []int) {
+	if ss.MediaTagIDs == nil || len(tagIDs) == 0 {
+		return
+	}
+	tagSet := ss.MediaTagIDs[mediaDBID]
+	if tagSet == nil {
+		tagSet = make(map[int]struct{}, len(tagIDs))
+		ss.MediaTagIDs[mediaDBID] = tagSet
+	}
+	for _, tagID := range tagIDs {
+		tagSet[tagID] = struct{}{}
+	}
 }
 
 // PopulatePersistentScanStateForSystem loads existing Media DBIDs for a system into
@@ -975,17 +973,8 @@ func PopulatePersistentScanStateForSystem(
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
 		}
+		applyMediaTagIDs(ss, int(m.DBID), m.TagIDs)
 		ss.MissingMedia[int(m.DBID)] = struct{}{}
-	}
-
-	if ss.MediaTagIDs != nil {
-		for _, link := range stateData.mediaTags {
-			mediaDBID := int(link.MediaDBID)
-			if ss.MediaTagIDs[mediaDBID] == nil {
-				ss.MediaTagIDs[mediaDBID] = make(map[int]struct{})
-			}
-			ss.MediaTagIDs[mediaDBID][int(link.TagDBID)] = struct{}{}
-		}
 	}
 
 	log.Debug().

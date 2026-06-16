@@ -20,12 +20,14 @@
 package mediascanner
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/mock"
 )
@@ -418,5 +420,120 @@ func BenchmarkGetPathFragments_PeakMemory(b *testing.B) {
 
 	if after.TotalAlloc > before.TotalAlloc {
 		b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/(1024*1024), "total-MB")
+	}
+}
+
+// newPersistentScanState mirrors the scan state initialized by the real reindex path
+// (mediascanner.go) so the per-system read-back populates every map, including tags.
+func newPersistentScanState() *database.ScanState {
+	return &database.ScanState{
+		SystemIDs:          make(map[string]int),
+		TitleIDs:           make(map[string]int),
+		TitleNames:         make(map[int]string),
+		MediaIDs:           make(map[string]int),
+		MediaTitleIDs:      make(map[int]int),
+		MediaNeedsSortName: make(map[int]struct{}),
+		MediaSortNames:     make(map[int]string),
+		MediaParentDirs:    make(map[int]string),
+		MediaTagIDs:        make(map[int]map[int]struct{}),
+		TagTypeIDs:         make(map[string]int),
+		TagIDs:             make(map[string]int),
+		MissingMedia:       make(map[int]struct{}),
+	}
+}
+
+// seedPersistentState populates a real DB with n media (and tagsPerItem scanner tags
+// each) for one system, so the read-back benchmark measures realistic row counts.
+func seedPersistentState(b *testing.B, db *mediadb.MediaDB, systemID string, n, tagsPerItem int) {
+	b.Helper()
+
+	ss := newScanState()
+	if err := SeedCanonicalTags(db, ss); err != nil {
+		b.Fatal(err)
+	}
+
+	filenames := buildSyntheticFilenames(n)
+	if err := db.BeginTransaction(true); err != nil {
+		b.Fatal(err)
+	}
+	for i, fn := range filenames {
+		if _, _, err := AddMediaPath(db, ss, systemID, fn, "", false, false, nil, ""); err != nil {
+			b.Fatalf("AddMediaPath(%d): %v", i, err)
+		}
+	}
+	if err := db.CommitTransaction(); err != nil {
+		b.Fatal(err)
+	}
+	if tagsPerItem == 0 {
+		return
+	}
+
+	tagType, err := db.FindOrInsertTagType(database.TagType{Type: "benchgenre"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	tagDBIDs := make([]int64, tagsPerItem)
+	for i := range tagDBIDs {
+		tag, tagErr := db.FindOrInsertTag(database.Tag{
+			Tag:         fmt.Sprintf("benchtag%d", i),
+			DisplayName: fmt.Sprintf("Bench Tag %d", i),
+			TypeDBID:    tagType.DBID,
+		})
+		if tagErr != nil {
+			b.Fatal(tagErr)
+		}
+		tagDBIDs[i] = tag.DBID
+	}
+
+	media, err := db.GetMediaBySystemID(systemID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := db.BeginTransaction(true); err != nil {
+		b.Fatal(err)
+	}
+	for _, m := range media {
+		for _, tagDBID := range tagDBIDs {
+			if _, mtErr := db.InsertMediaTag(database.MediaTag{MediaDBID: m.DBID, TagDBID: tagDBID}); mtErr != nil {
+				b.Fatal(mtErr)
+			}
+		}
+	}
+	if err := db.CommitTransaction(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+// BenchmarkPopulatePersistentScanState_RealDB measures the per-system incremental
+// read-back (loadSystemStateData) against a real SQLite DB. The DB is seeded once
+// outside the timed loop; each iteration reads back into a fresh scan state. Varying
+// tagsPerItem exposes the tag-aggregation win (folding media-tag links into the media
+// read instead of a separate per-(media,tag)-link scan).
+func BenchmarkPopulatePersistentScanState_RealDB(b *testing.B) {
+	cases := []struct {
+		name        string
+		n           int
+		tagsPerItem int
+	}{
+		{name: "10k_0tags", n: 10_000, tagsPerItem: 0},
+		{name: "10k_4tags", n: 10_000, tagsPerItem: 4},
+		{name: "50k_4tags", n: 50_000, tagsPerItem: 4},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			db, cleanup := helpers.NewInMemoryMediaDB(b)
+			defer cleanup()
+			seedPersistentState(b, db, "nes", tc.n, tc.tagsPerItem)
+
+			b.ResetTimer()
+			for b.Loop() {
+				ss := newPersistentScanState()
+				if err := PopulatePersistentScanStateForSystem(context.Background(), db, ss, "nes"); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

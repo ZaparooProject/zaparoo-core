@@ -55,12 +55,13 @@ func TestPopulatePersistentScanStateForSystem_LoadsMediaOnce(t *testing.T) {
 		Slug:     "super-mario-bros",
 	}}, nil).Once()
 	nesPath := filepath.Join(string(filepath.Separator), "roms", "nes", "Super Mario Bros.nes")
-	mockDB.On("GetMediaBySystemID", "NES").Return([]database.MediaWithFullPath{{
-		DBID:      42,
-		SystemID:  "NES",
-		Path:      nesPath,
-		TitleSlug: "super-mario-bros",
-	}}, nil).Once()
+	mockDB.On("GetMediaWithTagsBySystemID", "NES", mock.AnythingOfType("bool")).
+		Return([]database.MediaWithFullPath{{
+			DBID:      42,
+			SystemID:  "NES",
+			Path:      nesPath,
+			TitleSlug: "super-mario-bros",
+		}}, nil).Once()
 
 	err := PopulatePersistentScanStateForSystem(context.Background(), mockDB, scanState, "NES")
 	require.NoError(t, err)
@@ -156,8 +157,8 @@ func TestNewNamesIndex_ResumeResetMissingFlagsSkipsCompletedSystems(t *testing.T
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{{DBID: 1, Type: "genre"}}, nil).Once()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
 	mockMediaDB.On("GetTitlesBySystemID", "snes").Return([]database.TitleWithSystem{}, nil).Once()
-	mockMediaDB.On("GetMediaBySystemID", "snes").Return([]database.MediaWithFullPath{}, nil).Once()
-	mockMediaDB.On("GetScannerMediaTagsBySystemID", "snes").Return([]database.MediaTagLink{}, nil).Once()
+	mockMediaDB.On("GetMediaWithTagsBySystemID", "snes", mock.AnythingOfType("bool")).
+		Return([]database.MediaWithFullPath{}, nil).Once()
 	mockMediaDB.On("ResetMissingFlags", []int{3}).Return(nil).Once()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{
@@ -283,8 +284,8 @@ func TestNewNamesIndex_ResumeKeepsRequestedSystemsWhenSomeAreNotRunnable(t *test
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{{DBID: 1, Type: "genre"}}, nil).Once()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
 	mockMediaDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{}, nil).Once()
-	mockMediaDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil).Once()
-	mockMediaDB.On("GetScannerMediaTagsBySystemID", "nes").Return([]database.MediaTagLink{}, nil).Once()
+	mockMediaDB.On("GetMediaWithTagsBySystemID", "nes", mock.AnythingOfType("bool")).
+		Return([]database.MediaWithFullPath{}, nil).Once()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{
 		{ID: "nes"},
@@ -293,7 +294,7 @@ func TestNewNamesIndex_ResumeKeepsRequestedSystemsWhenSomeAreNotRunnable(t *test
 	require.NoError(t, err)
 	mockMediaDB.AssertNotCalled(t, "SetIndexingStatus", "")
 	mockMediaDB.AssertNotCalled(t, "GetTitlesBySystemID", "ps2")
-	mockMediaDB.AssertNotCalled(t, "GetMediaBySystemID", "ps2")
+	mockMediaDB.AssertNotCalled(t, "GetMediaWithTagsBySystemID", "ps2", mock.Anything)
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -361,7 +362,6 @@ func TestNewNamesIndex_DependencyFlushUniqueErrorAbortsIndexing(t *testing.T) {
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
-	mockMediaDB.On("GetScannerMediaTagsBySystemID", "nes").Return([]database.MediaTagLink{}, nil).Once()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "nes"}},
 		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
