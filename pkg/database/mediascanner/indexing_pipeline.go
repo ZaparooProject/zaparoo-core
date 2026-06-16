@@ -919,7 +919,7 @@ func loadSystemStateData(
 // applyMediaTagIDs records the scanner-managed tag DBIDs for a media row into the
 // scan state's per-media tag set. No-op when tags are not being tracked or the row
 // has no scanner tags.
-func applyMediaTagIDs(ss *database.ScanState, mediaDBID int, tagIDs []int64) {
+func applyMediaTagIDs(ss *database.ScanState, mediaDBID int, tagIDs []int) {
 	if ss.MediaTagIDs == nil || len(tagIDs) == 0 {
 		return
 	}
@@ -929,7 +929,7 @@ func applyMediaTagIDs(ss *database.ScanState, mediaDBID int, tagIDs []int64) {
 		ss.MediaTagIDs[mediaDBID] = tagSet
 	}
 	for _, tagID := range tagIDs {
-		tagSet[int(tagID)] = struct{}{}
+		tagSet[tagID] = struct{}{}
 	}
 }
 

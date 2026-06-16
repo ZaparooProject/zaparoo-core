@@ -391,18 +391,20 @@ func sqlGetMediaWithTagsBySystemID(
 // parseScannerTagIDs parses a GROUP_CONCAT(TagDBID) string into a slice of tag DBIDs,
 // excluding user-owned tags. Returns nil for a NULL/empty input or when every tag was
 // user-owned, so media without scanner tags carry no slice allocation.
-func parseScannerTagIDs(tagIDs sql.NullString, userTagIDs map[int64]struct{}) ([]int64, error) {
+func parseScannerTagIDs(tagIDs sql.NullString, userTagIDs map[int64]struct{}) ([]int, error) {
 	if !tagIDs.Valid || tagIDs.String == "" {
 		return nil, nil
 	}
 	parts := strings.Split(tagIDs.String, ",")
-	result := make([]int64, 0, len(parts))
+	result := make([]int, 0, len(parts))
 	for _, part := range parts {
-		id, err := strconv.ParseInt(part, 10, 64)
+		// Atoi (not ParseInt+narrow) keeps tag DBIDs as int — the type ScanState's
+		// tag maps use — and errors rather than truncating an out-of-range value.
+		id, err := strconv.Atoi(part)
 		if err != nil {
 			return nil, fmt.Errorf("invalid tag DBID %q: %w", part, err)
 		}
-		if _, isUserTag := userTagIDs[id]; isUserTag {
+		if _, isUserTag := userTagIDs[int64(id)]; isUserTag {
 			continue
 		}
 		result = append(result, id)

@@ -521,7 +521,7 @@ type MediaWithFullPath struct {
 	TitleSlug      string
 	SystemID       string
 	SortName       string
-	TagIDs         []int64
+	TagIDs         []int
 	DBID           int64
 	MediaTitleDBID int64
 }

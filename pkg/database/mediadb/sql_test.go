@@ -1789,10 +1789,10 @@ func TestSqlGetMediaWithTagsBySystemID_AggregatesAndFiltersTags(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, results, 4)
-	assert.Equal(t, []int64{10}, results[0].TagIDs)     // user tag 99 filtered out
-	assert.Nil(t, results[1].TagIDs)                    // NULL aggregate -> nil
-	assert.Equal(t, []int64{11, 12}, results[2].TagIDs) // no user tags
-	assert.Nil(t, results[3].TagIDs)                    // all-user -> nil
+	assert.Equal(t, []int{10}, results[0].TagIDs)     // user tag 99 filtered out
+	assert.Nil(t, results[1].TagIDs)                  // NULL aggregate -> nil
+	assert.Equal(t, []int{11, 12}, results[2].TagIDs) // no user tags
+	assert.Nil(t, results[3].TagIDs)                  // all-user -> nil
 	assert.Equal(t, "nes", results[0].SystemID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
