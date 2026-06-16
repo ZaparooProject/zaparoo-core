@@ -1491,6 +1491,18 @@ func (db *MediaDB) BrowseFileCount(
 	return sqlBrowseFileCount(ctx, db.sql, opts)
 }
 
+// BrowseIndex returns the ordered first-character buckets for a browse scope,
+// each with a count and the keyset needed to seek a media.browse page to the
+// bucket's first item.
+func (db *MediaDB) BrowseIndex(
+	ctx context.Context, opts database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	if db.sql == nil {
+		return database.BrowseIndexResult{}, ErrNullSQL
+	}
+	return sqlBrowseIndex(ctx, db.sql, opts)
+}
+
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
 func (db *MediaDB) BrowseVirtualSchemes(
 	ctx context.Context, opts database.BrowseVirtualSchemesOptions,

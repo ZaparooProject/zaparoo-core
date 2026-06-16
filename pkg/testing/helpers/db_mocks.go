@@ -2334,6 +2334,22 @@ func (m *MockMediaDBI) BrowseFileCount(
 	return 0, nil
 }
 
+func (m *MockMediaDBI) BrowseIndex(
+	ctx context.Context, opts database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	args := m.Called(ctx, opts)
+	if result, ok := args.Get(0).(database.BrowseIndexResult); ok {
+		if err := args.Error(1); err != nil {
+			return result, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.BrowseIndexResult{}, nil
+}
+
 func (m *MockMediaDBI) BrowseVirtualSchemes(
 	ctx context.Context, opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {

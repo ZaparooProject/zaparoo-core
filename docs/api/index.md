@@ -253,6 +253,7 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.generate.resume           | Resume paused media database indexing.                                                |
 | media.index                     | **Deprecated.** Alias for `media.generate`.                                           |
 | media.browse                    | Browse indexed media in a directory-style hierarchy.                                  |
+| media.browse.index              | Return first-character jump-to-letter buckets and seek cursors for a browse scope.    |
 | media.lookup                    | Resolve a game name and system to a media database match.                             |
 | media.meta                      | Return metadata for a specific indexed media row.                                     |
 | media.image                     | Return the best matching image for a specific indexed media row.                      |

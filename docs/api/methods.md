@@ -704,6 +704,78 @@ All parameters are optional. When called with no parameters, returns root entrie
 }
 ```
 
+### media.browse.index
+
+Return the ordered first-character "jump to letter" buckets for a browse scope. Each bucket carries a count and a ready-to-use cursor that seeks `media.browse` to the start of that bucket, so a single round trip gives a client everything it needs to draw a section rail _and_ jump into the full ordered list. This avoids paging from the top to reach a distant section, which matters on constrained clients (e.g. MiSTer).
+
+The scope parameters mirror `media.browse` so the index describes the exact list `media.browse` would return for the same scope. The per-bucket `cursor` is an ordinary browse cursor: pass it to `media.browse` with the same `path`/`systems`/`sort` to get a normal page that begins at the bucket and continues into the next bucket as the user scrolls.
+
+#### Parameters
+
+All parameters are optional.
+
+| Key         | Type     | Required | Description                                                                                       |
+| :---------- | :------- | :------- | :------------------------------------------------------------------------------------------------ |
+| path        | string   | No       | Directory or virtual scheme to index, same as `media.browse`. Omit or set empty for a root listing (no rail applies). |
+| systems     | string[] | No       | Case-sensitive system IDs to scope the index to, same as `media.browse`.                          |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in `systems`.                                                |
+| sort        | string   | No       | Sort order, must match the `media.browse` sort the rail is for. One of `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. |
+
+#### Result
+
+| Key        | Type                                          | Required | Description                                                                 |
+| :--------- | :-------------------------------------------- | :------- | :-------------------------------------------------------------------------- |
+| scheme     | string                                        | Yes      | Collation used to derive the buckets. `latin` for first-character bucketing; `none` when no rail applies (a root listing, or a directory whose effective sort is not alphabetical, e.g. a ranked/date-prefixed collection folder), in which case `groups` is empty. |
+| totalFiles | number                                        | Yes      | Total media files in the scope.                                             |
+| groups     | [BrowseIndexGroup](#browse-index-group-object)[] | Yes   | Only non-empty buckets, ordered to match `sort`.                            |
+
+##### Browse index group object
+
+| Key    | Type   | Required | Description                                                                                       |
+| :----- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| key    | string | Yes      | Stable bucket identifier (`A`–`Z`, `0-9`, `#`). Treat as opaque.                                  |
+| label  | string | Yes      | Display text for the bucket. Equal to `key` for the `latin` scheme.                               |
+| count  | number | Yes      | Number of media files in the bucket.                                                              |
+| cursor | string | Yes      | Opaque `media.browse` cursor positioned just before the bucket's first row. Empty string for the bucket that begins the list (call `media.browse` with no cursor for the first page). |
+
+Clients should render `groups` exactly as received, in order, without assuming a particular alphabet: `scheme` and `key` are opaque so a future locale-aware scheme (e.g. pinyin/kana/hangul buckets) requires no client change.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.browse.index",
+  "params": {
+    "path": "/roms/SNES",
+    "sort": "name-asc"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "scheme": "latin",
+    "totalFiles": 150,
+    "groups": [
+      { "key": "#", "label": "#", "count": 3, "cursor": "" },
+      { "key": "0-9", "label": "0-9", "count": 7, "cursor": "eyJzb3J0VmFsdWUiOiIjV29sZiIsImxhc3RJZCI6MTAyfQ==" },
+      { "key": "A", "label": "A", "count": 12, "cursor": "eyJzb3J0VmFsdWUiOiI5IExpdmVzIiwibGFzdElkIjoxMTV9" }
+    ]
+  }
+}
+```
+
+To jump to "A", the client calls `media.browse` with that group's `cursor` and the same `path`/`sort`; the returned page begins at the first "A" title and continues into "B" as the user keeps scrolling.
+
 ### media.tags
 
 Query the media database and return available tags for filtering.
