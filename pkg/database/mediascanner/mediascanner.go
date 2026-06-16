@@ -1209,6 +1209,13 @@ func NewNamesIndex(
 				return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
 			}
 		}
+		// Refresh stored sibling disambiguation now the system's media, tags, and
+		// missing flags are final. Runs in the same transaction so it observes the
+		// missing flags just written. Non-fatal: stale disambiguation only affects
+		// display/ZapScript hints and is corrected on the next index.
+		if disErr := db.RecomputeSystemDisambiguation(ctx, []int64{int64(systemDBID)}); disErr != nil {
+			log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
+		}
 		if commitErr := db.CommitTransaction(); commitErr != nil {
 			return 0, fmt.Errorf("failed to commit missing-state transaction: %w", commitErr)
 		}

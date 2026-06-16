@@ -438,6 +438,7 @@ const (
 	TagUnfinishedPreview     TagValue = "preview"
 	TagUnfinishedPrerelease  TagValue = "prerelease"
 	TagUnfinishedFinal       TagValue = "final"
+	TagUnfinishedWIP         TagValue = "wip"
 )
 
 // Unlicensed tag values

@@ -2166,6 +2166,9 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
+	// Disambiguation refresh runs per system at the end of indexing.
+	mockMediaDB.On("RecomputeSystemDisambiguation", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RecomputeTitleDisambiguation", mock.Anything, mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }
 
@@ -2508,6 +2511,22 @@ func (m *MockMediaDBI) UpsertMediaTags(ctx context.Context, mediaDBID int64, tag
 
 func (m *MockMediaDBI) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []database.TagInfo) error {
 	args := m.Called(ctx, mediaTitleDBID, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error {
+	args := m.Called(ctx, titleDBIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error {
+	args := m.Called(ctx, systemDBIDs)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}

@@ -316,8 +316,9 @@ func AddMediaPathWithPrefixPolicy(
 			tagIndex = foundTagIndex
 		}
 
-		// Dynamically create open-ended string tags for rev, developer, publisher, and credit.
-		// These types allow arbitrary values (e.g. "rev:7-2502", "credit:nintendo-r-and-d1").
+		// Dynamically create open-ended string tags for rev, developer, publisher, credit,
+		// and builddate. These types allow arbitrary values (e.g. "rev:7-2502",
+		// "credit:nintendo-r-and-d1", "builddate:1993-10-05").
 		if tagIndex == 0 {
 			var dynType string
 			switch {
@@ -329,6 +330,8 @@ func AddMediaPathWithPrefixPolicy(
 				dynType = string(tags.TagTypePublisher)
 			case strings.HasPrefix(tagStr, string(tags.TagTypeCredit)+":"):
 				dynType = string(tags.TagTypeCredit)
+			case strings.HasPrefix(tagStr, string(tags.TagTypeBuildDate)+":"):
+				dynType = string(tags.TagTypeBuildDate)
 			}
 			if dynType != "" {
 				tagValue := strings.TrimPrefix(tagStr, dynType+":")

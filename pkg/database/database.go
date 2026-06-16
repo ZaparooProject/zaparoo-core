@@ -142,13 +142,16 @@ type System struct {
 }
 
 type MediaTitle struct {
-	Slug          string
-	Name          string
-	SecondarySlug sql.NullString
-	DBID          int64
-	SystemDBID    int64
-	SlugLength    int
-	SlugWordCount int
+	Slug string
+	Name string
+	// DisambiguationTypes is the title's stored comma-separated set of tag types
+	// whose values differ across its non-missing media (see RecomputeTitleDisambiguation).
+	DisambiguationTypes string
+	SecondarySlug       sql.NullString
+	DBID                int64
+	SystemDBID          int64
+	SlugLength          int
+	SlugWordCount       int
 }
 
 type Media struct {
@@ -388,47 +391,113 @@ type BrowseSystemRootCandidates struct {
 }
 
 type SearchResultWithCursor struct {
-	SystemID      string
-	Name          string
-	Path          string
-	SortValue     string
-	SortMode      string
-	Tags          []TagInfo
-	ZapScriptTags []TagInfo
-	MediaID       int64
-	MediaTitleID  int64 `json:"-"`
-	HasCover      bool
+	SystemID string
+	Name     string
+	Path     string
+	// DisambiguationTypes is the title's stored comma-separated set of tag types
+	// that distinguish its variants (see RecomputeTitleDisambiguation). Empty for
+	// titles with no variants, which lets the read path skip the tag lookup.
+	DisambiguationTypes string
+	SortValue           string
+	SortMode            string
+	Tags                []TagInfo
+	ZapScriptTags       []TagInfo
+	MediaID             int64
+	MediaTitleID        int64 `json:"-"`
+	HasCover            bool
+}
+
+// TagTypeDisplayPriority orders the eligible disambiguation tag types from most to least
+// important for display. Clients render the emitted disambiguating tags left-to-right and
+// truncate when space runs out, so the most decisive distinctions come first: variant
+// flags (beta/proto/hack) before region, then the specific-variant markers, then extra
+// context. A tag type only appears on an entry when it actually differs across the title's
+// siblings, so a sole differentiator always survives truncation regardless of its rank.
+// Rank is the slice index.
+var TagTypeDisplayPriority = []string{
+	"unfinished", "unlicensed", "region", "disc", "edition", "rev", "builddate",
+	"lang", "distribution", "media", "release", "year",
+	"players", "developer", "publisher", "credit",
 }
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
-// title commands. Only these types are considered when checking for disambiguation.
-var ZapScriptTagTypes = []string{"year", "players", "rev", "developer", "publisher", "credit", "edition", "release"}
+// title commands. Only these types are considered when checking for disambiguation. This
+// is the same set as TagTypeDisplayPriority; order is irrelevant here (used for SQL
+// membership), so it aliases the priority list to keep the two in sync.
+var ZapScriptTagTypes = TagTypeDisplayPriority
+
+// TagTypeDisplayRank returns the display-importance rank of a tag type (lower is more
+// important). Unknown types sort last. Used to order emitted disambiguating tags.
+func TagTypeDisplayRank(tagType string) int {
+	for i, t := range TagTypeDisplayPriority {
+		if t == tagType {
+			return i
+		}
+	}
+	return len(TagTypeDisplayPriority)
+}
+
+// isFourDigitYear reports whether s is exactly four ASCII digits, the only form
+// accepted for a year value in a ZapScript title command.
+func isFourDigitYear(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 // BuildTitleZapScript builds a ZapScript title command string from a system ID,
 // media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (type:value)
-// Only includes tags that are present in the provided slice.
+// Multiple values of the same type are grouped into one parens as a comma-separated
+// shorthand: (region:eu, region:us). Types are emitted in the order they first appear in
+// the input (callers pass tags pre-sorted by display priority). Only non-empty tags are
+// included; year values must be exactly 4 digits.
 func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 	var sb strings.Builder
 	_, _ = sb.WriteString("@" + systemID + "/" + name)
+
+	typeOrder := make([]string, 0, len(tags))
+	valuesByType := make(map[string][]string, len(tags))
 	for _, tag := range tags {
 		if tag.Tag == "" {
 			continue
 		}
-		if tag.Type == "year" {
-			if len(tag.Tag) == 4 {
-				_, _ = sb.WriteString(" (year:" + tag.Tag + ")")
-			}
+		if tag.Type == "year" && !isFourDigitYear(tag.Tag) {
 			continue
 		}
-		_, _ = sb.WriteString(" (" + tag.Type + ":" + tag.Tag + ")")
+		if _, seen := valuesByType[tag.Type]; !seen {
+			typeOrder = append(typeOrder, tag.Type)
+		}
+		valuesByType[tag.Type] = append(valuesByType[tag.Type], tag.Tag)
+	}
+
+	for _, tagType := range typeOrder {
+		values := valuesByType[tagType]
+		if len(values) == 0 {
+			continue
+		}
+		_, _ = sb.WriteString(" (")
+		for k, v := range values {
+			if k > 0 {
+				_, _ = sb.WriteString(", ")
+			}
+			_, _ = sb.WriteString(tagType + ":" + v)
+		}
+		_, _ = sb.WriteString(")")
 	}
 	return sb.String()
 }
 
 // ZapScript returns the ZapScript title command string for this search result.
 // Uses ZapScriptTags (disambiguating tags only). If ZapScriptTags has not been
-// computed (nil), no tags are emitted — callers that need disambiguation must
-// ensure ZapScriptTags is populated via computeZapScriptTags or equivalent.
+// populated (nil), no tags are emitted — callers that need disambiguation must
+// run the result through attachZapScriptTags, which reads the title's stored
+// DisambiguationTypes (see RecomputeTitleDisambiguation).
 func (r *SearchResultWithCursor) ZapScript() string {
 	return BuildTitleZapScript(r.SystemID, r.Name, r.ZapScriptTags)
 }
@@ -836,6 +905,15 @@ type MediaDBI interface {
 	// UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
 	// Exclusive/additive behaviour is identical to UpsertMediaTags.
 	UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []TagInfo) error
+
+	// RecomputeTitleDisambiguation recomputes the stored disambiguating tag types
+	// for the given MediaTitle DBIDs. Called after writes that change a title's
+	// media or tags so reads can rely on the stored, title-global value.
+	RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error
+
+	// RecomputeSystemDisambiguation recomputes the stored disambiguating tag types
+	// for every MediaTitle belonging to the given system DBIDs. Used at index time.
+	RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error
 
 	// UpsertMediaTitleProperties upserts properties into MediaTitleProperties.
 	// Conflicts on (MediaTitleDBID, TypeTagDBID) update data columns; DBID is preserved.

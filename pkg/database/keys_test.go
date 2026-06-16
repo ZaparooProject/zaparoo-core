@@ -226,6 +226,13 @@ func TestBuildTitleZapScript(t *testing.T) {
 			want:     "@SNES/Game",
 		},
 		{
+			name:     "year tag with non-digit chars skipped",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "abcd", Type: "year"}},
+			want:     "@SNES/Game",
+		},
+		{
 			name:     "players tag",
 			systemID: "SNES",
 			gameName: "Game",
@@ -287,6 +294,34 @@ func TestBuildTitleZapScript(t *testing.T) {
 			gameName: "Game",
 			tags:     []TagInfo{{Tag: "", Type: "publisher"}, {Tag: "nintendo", Type: "publisher"}},
 			want:     "@SNES/Game (publisher:nintendo)",
+		},
+		{
+			name:     "multiple values of same type grouped into shorthand",
+			systemID: "Genesis",
+			gameName: "Sonic The Hedgehog",
+			tags:     []TagInfo{{Tag: "eu", Type: "region"}, {Tag: "us", Type: "region"}},
+			want:     "@Genesis/Sonic The Hedgehog (region:eu, region:us)",
+		},
+		{
+			name:     "different types each get their own parens in first-seen order",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "us", Type: "region"}, {Tag: "a", Type: "rev"}},
+			want:     "@SNES/Game (region:us) (rev:a)",
+		},
+		{
+			name:     "non-consecutive same type grouped, value order preserved",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "us", Type: "region"}, {Tag: "1", Type: "rev"}, {Tag: "eu", Type: "region"}},
+			want:     "@SNES/Game (region:us, region:eu) (rev:1)",
+		},
+		{
+			name:     "multi-value lang grouped",
+			systemID: "GBA",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "en", Type: "lang"}, {Tag: "fr", Type: "lang"}, {Tag: "de", Type: "lang"}},
+			want:     "@GBA/Game (lang:en, lang:fr, lang:de)",
 		},
 	}
 
