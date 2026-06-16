@@ -749,13 +749,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 
 		results = append(results, models.SearchResultMedia{
-			MediaID:   result.MediaID,
-			RelPath:   relPath,
-			System:    resultSystem,
-			Name:      result.Name,
-			Path:      result.Path,
-			ZapScript: zapScript,
-			Tags:      result.Tags,
+			MediaID:            result.MediaID,
+			RelPath:            relPath,
+			System:             resultSystem,
+			Name:               result.Name,
+			Path:               result.Path,
+			ZapScript:          zapScript,
+			Tags:               result.Tags,
+			DisambiguatingTags: result.ZapScriptTags,
 		})
 	}
 

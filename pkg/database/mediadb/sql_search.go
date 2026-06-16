@@ -417,94 +417,127 @@ func logFetchAndAttachTagsTiming(
 	tagPairs int,
 	unionStarted time.Time,
 ) {
-	unionElapsed := time.Since(unionStarted)
-	zsStarted := time.Now()
-	computeZapScriptTags(results)
-	zsElapsed := time.Since(zsStarted)
-
 	log.Debug().
 		Int("rows", len(results)).
 		Int("tagPairs", tagPairs).
-		Dur("unionDuration", unionElapsed).
-		Dur("zapscriptDuration", zsElapsed).
+		Dur("unionDuration", time.Since(unionStarted)).
 		Msg("fetch and attach tags timing")
 }
 
-// computeZapScriptTags determines which tags are disambiguating across sibling
-// variants (results with the same Name) and populates ZapScriptTags on each result.
-// A tag type is disambiguating when multiple results sharing the same Name have
-// different values for that tag type.
+// attachTagsAndDisambiguation attaches all tags to the results and then populates
+// ZapScriptTags from each title's precomputed disambiguating types. Search entry
+// points use this; fetchAndAttachTags itself stays a pure tag-attach step.
+func attachTagsAndDisambiguation(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+		return err
+	}
+	return attachZapScriptTags(ctx, db, results)
+}
+
+// attachZapScriptTags populates ZapScriptTags on each result with the tags that
+// disambiguate it from its same-title siblings. Disambiguation is precomputed and
+// stored per title in MediaTitles.DisambiguationTypes (see RecomputeTitleDisambiguation),
+// so this is a single indexed lookup keyed by media ID — it is title-global and
+// independent of pagination, sort order, or page-level grouping. A media's
+// ZapScriptTags are exactly its MediaTags whose type is listed for its title.
 //
-// KNOWN LIMITATION: This operates on a single page of results, so siblings split
-// across pages won't trigger disambiguation here. The app writes the ZapScript
-// string from search results directly to tags, so a bare @system/name could be
-// written when siblings exist on other pages. In practice this is rare — siblings
-// are adjacent in sort order — and the resolver handles bare commands via its
-// multi-strategy search. A proper fix would require a DB query per title group.
-func computeZapScriptTags(results []database.SearchResultWithCursor) {
-	if len(results) == 0 {
-		return
-	}
-
-	// Group results by SystemID+Name to find siblings (same title within a system)
-	nameGroups := make(map[string][]int) // "SystemID/Name" → indices into results
-	hasSiblings := false
+// Callers MUST populate each result's DisambiguationTypes from the title's stored
+// value (the main search/browse queries select it). An empty DisambiguationTypes is
+// treated as "title has no variants" and skips the lookup, so a result left empty by
+// mistake silently yields no ZapScriptTags.
+func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []database.SearchResultWithCursor) error {
 	for i := range results {
-		key := results[i].SystemID + "/" + results[i].Name
-		nameGroups[key] = append(nameGroups[key], i)
-		if len(nameGroups[key]) > 1 {
-			hasSiblings = true
+		if results[i].ZapScriptTags == nil {
+			results[i].ZapScriptTags = []database.TagInfo{}
 		}
 	}
-	if !hasSiblings {
-		for i := range results {
-			if results[i].ZapScriptTags == nil {
-				results[i].ZapScriptTags = []database.TagInfo{}
-			}
-		}
-		return
+	if len(results) == 0 {
+		return nil
 	}
 
-	for _, indices := range nameGroups {
-		if len(indices) < 2 {
-			for _, idx := range indices {
-				if results[idx].ZapScriptTags == nil {
-					results[idx].ZapScriptTags = []database.TagInfo{}
-				}
-			}
+	// Only media whose title actually has variants need a lookup. Titles with no
+	// variants have an empty DisambiguationTypes, so the common page (no variants)
+	// issues zero queries.
+	mediaIDs := make([]int64, 0, len(results))
+	seen := make(map[int64]struct{}, len(results))
+	for i := range results {
+		id := results[i].MediaID
+		if id == 0 || results[i].DisambiguationTypes == "" {
 			continue
 		}
-		// For each eligible tag type, collect distinct values across siblings
-		disambiguating := make(map[string]bool) // tag types that need disambiguation
-
-		for _, tagType := range database.ZapScriptTagTypes {
-			values := make(map[string]bool)
-			for _, idx := range indices {
-				for _, tag := range results[idx].Tags {
-					if tag.Type == tagType {
-						values[tag.Tag] = true
-					}
-				}
-			}
-			if len(values) > 1 {
-				disambiguating[tagType] = true
-			}
+		if _, ok := seen[id]; ok {
+			continue
 		}
+		seen[id] = struct{}{}
+		mediaIDs = append(mediaIDs, id)
+	}
+	if len(mediaIDs) == 0 {
+		return nil
+	}
 
-		// Populate ZapScriptTags with only disambiguating tags for each result
-		for _, idx := range indices {
-			var zapTags []database.TagInfo
-			for _, tag := range results[idx].Tags {
-				if disambiguating[tag.Type] {
-					zapTags = append(zapTags, tag)
+	placeholders := prepareVariadic("?", ",", len(mediaIDs))
+	args := make([]any, len(mediaIDs))
+	for i, id := range mediaIDs {
+		args[i] = id
+	}
+
+	// Comma-boundary membership test against the stored type list: a Type matches
+	// only when delimited by commas on both sides, so "rev" never matches "revision".
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	query := `
+		SELECT Media.DBID, TagTypes.Type, Tags.Tag, Tags.DisplayName
+		FROM Media
+		JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
+		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+		JOIN TagTypes ON TagTypes.DBID = Tags.TypeDBID
+		WHERE Media.DBID IN (` + placeholders + `)
+		  AND instr(',' || MediaTitles.DisambiguationTypes || ',', ',' || TagTypes.Type || ',') > 0
+		ORDER BY Media.DBID, TagTypes.Type, Tags.Tag`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query disambiguating tags: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close disambiguating tags rows")
+		}
+	}()
+
+	byMedia := make(map[int64][]database.TagInfo)
+	for rows.Next() {
+		var mediaID int64
+		var tag database.TagInfo
+		if scanErr := rows.Scan(&mediaID, &tag.Type, &tag.Tag, &tag.Label); scanErr != nil {
+			return fmt.Errorf("failed to scan disambiguating tag: %w", scanErr)
+		}
+		tag.Tag = dbtags.UnpadTagValue(tag.Tag)
+		byMedia[mediaID] = append(byMedia[mediaID], tag)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("disambiguating tags rows iteration error: %w", err)
+	}
+
+	for i := range results {
+		if zapTags, ok := byMedia[results[i].MediaID]; ok {
+			// Order by display importance (variant flags, region, ... credit last) so
+			// clients can render left-to-right and truncate. Within a type, sort by value.
+			sort.SliceStable(zapTags, func(a, b int) bool {
+				ra, rb := database.TagTypeDisplayRank(zapTags[a].Type), database.TagTypeDisplayRank(zapTags[b].Type)
+				if ra != rb {
+					return ra < rb
 				}
-			}
-			results[idx].ZapScriptTags = zapTags
-			if results[idx].ZapScriptTags == nil {
-				results[idx].ZapScriptTags = []database.TagInfo{}
-			}
+				return zapTags[a].Tag < zapTags[b].Tag
+			})
+			results[i].ZapScriptTags = zapTags
 		}
 	}
+	return nil
 }
 
 func sqlSearchMediaPathExact(
@@ -816,7 +849,8 @@ func sqlSearchMediaWithFilters(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
-			Media.DBID
+			Media.DBID,
+			MediaTitles.DisambiguationTypes
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
@@ -859,7 +893,9 @@ func sqlSearchMediaWithFilters(
 	// Collect media items
 	for mediaRows.Next() {
 		result := database.SearchResultWithCursor{}
-		if scanErr := mediaRows.Scan(&result.SystemID, &result.Name, &result.Path, &result.MediaID); scanErr != nil {
+		if scanErr := mediaRows.Scan(
+			&result.SystemID, &result.Name, &result.Path, &result.MediaID, &result.DisambiguationTypes,
+		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan media result: %w", scanErr)
 		}
 		results = append(results, result)
@@ -871,7 +907,7 @@ func sqlSearchMediaWithFilters(
 
 	// Fetch and attach tags for all results
 	tagsStarted := time.Now()
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -936,7 +972,8 @@ func sqlSearchMediaByTitleDBIDs(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
-			Media.DBID
+			Media.DBID,
+			MediaTitles.DisambiguationTypes
 		FROM MediaTitles
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
@@ -959,7 +996,9 @@ func sqlSearchMediaByTitleDBIDs(
 	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
 	for rows.Next() {
 		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID); scanErr != nil {
+		if scanErr := rows.Scan(
+			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.DisambiguationTypes,
+		); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan result: %w", scanErr)
 		}
 		results = append(results, r)
@@ -970,7 +1009,7 @@ func sqlSearchMediaByTitleDBIDs(
 	queryElapsed := time.Since(queryStarted)
 
 	tagsStarted := time.Now()
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return nil, err
 	}
 
@@ -1018,7 +1057,8 @@ func sqlSearchMediaBySlug(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
-			Media.DBID as MediaID
+			Media.DBID as MediaID,
+			MediaTitles.DisambiguationTypes
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
@@ -1052,6 +1092,7 @@ func sqlSearchMediaBySlug(
 			&result.Name,
 			&result.Path,
 			&result.MediaID,
+			&result.DisambiguationTypes,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
@@ -1063,7 +1104,7 @@ func sqlSearchMediaBySlug(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -1108,7 +1149,8 @@ func sqlSearchMediaBySecondarySlug(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
-			Media.DBID as MediaID
+			Media.DBID as MediaID,
+			MediaTitles.DisambiguationTypes
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
@@ -1142,6 +1184,7 @@ func sqlSearchMediaBySecondarySlug(
 			&result.Name,
 			&result.Path,
 			&result.MediaID,
+			&result.DisambiguationTypes,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
@@ -1153,7 +1196,7 @@ func sqlSearchMediaBySecondarySlug(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -1193,7 +1236,8 @@ func sqlSearchMediaBySlugPrefix(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
-			Media.DBID as MediaID
+			Media.DBID as MediaID,
+			MediaTitles.DisambiguationTypes
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
@@ -1227,6 +1271,7 @@ func sqlSearchMediaBySlugPrefix(
 			&result.Name,
 			&result.Path,
 			&result.MediaID,
+			&result.DisambiguationTypes,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
@@ -1238,7 +1283,7 @@ func sqlSearchMediaBySlugPrefix(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -1301,7 +1346,8 @@ func sqlSearchMediaBySlugIn(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
-			Media.DBID as MediaID
+			Media.DBID as MediaID,
+			MediaTitles.DisambiguationTypes
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
@@ -1335,6 +1381,7 @@ func sqlSearchMediaBySlugIn(
 			&result.Name,
 			&result.Path,
 			&result.MediaID,
+			&result.DisambiguationTypes,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
@@ -1346,7 +1393,7 @@ func sqlSearchMediaBySlugIn(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
 		return results, err
 	}
 

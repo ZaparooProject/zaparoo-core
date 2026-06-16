@@ -71,8 +71,8 @@ func TestSearchMediaWithFilters_MultipleSameMediaTypeSystems(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("NES", "SNES", "%mario%", "%mario%", 10). // Should be 5 args, not 7
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Super Mario Bros", mediaPath, int64(1)))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow("NES", "Super Mario Bros", mediaPath, int64(1), ""))
 
 	// Mock tags query
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -121,7 +121,7 @@ func TestSearchMediaWithFilters_DifferentMediaTypes(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("PS2", "TVEpisode", "%losts01e05%", "%losts01e05%", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}))
 
 	// No tags query mock needed - no results means fetchAndAttachTags returns early
 
@@ -182,8 +182,8 @@ func TestSearchMediaWithFilters_MultipleWordsMultipleSystems(t *testing.T) {
 			"%mario%", "%mario%", // Word 2: Slug LIKE, SecondarySlug LIKE
 			10, // Limit
 		). // Should be 8 args, not 16
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("SNES", "Super Mario World", mediaPath, int64(1)))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow("SNES", "Super Mario World", mediaPath, int64(1), ""))
 
 	// Mock tags query
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").

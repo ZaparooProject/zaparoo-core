@@ -53,6 +53,9 @@ var CanonicalIsExclusive = map[TagType]bool{
 	TagTypeUnfinished: true,
 	TagTypeCopyright:  true,
 
+	// One build/romset date per file
+	TagTypeBuildDate: true,
+
 	// Game family/series — one authoritative value per title
 	TagTypeGameFamily: true,
 

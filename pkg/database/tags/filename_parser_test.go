@@ -770,6 +770,155 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 	}
 }
 
+func TestParseFilenameToCanonicalTags_ArcadeRegionBuildDate(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []string
+	}{
+		{
+			name:     "World region with build date",
+			filename: "Super Street Fighter II The New Challengers (World 931005).mra",
+			wantTags: []string{"region:world", "builddate:1993-10-05"},
+		},
+		{
+			name:     "USA region with build date adds lang",
+			filename: "Some Arcade Game (USA 040202).mra",
+			wantTags: []string{"region:us", "lang:en", "builddate:2004-02-02"},
+		},
+		{
+			name:     "Europe region with build date no longer credit",
+			filename: "X-Men Vs. Street Fighter (Europe 961004).mra",
+			wantTags: []string{"region:eu", "builddate:1996-10-04"},
+		},
+		{
+			name:     "qualifier comma region with build date",
+			filename: "Street Fighter Zero (CPS Changer, Japan 951020).mra",
+			wantTags: []string{"region:jp", "lang:ja", "builddate:1995-10-20"},
+		},
+		{
+			name:     "standalone No-Intro build date",
+			filename: "Sonic The Hedgehog 2 (1992-09-21).bin",
+			wantTags: []string{"builddate:1992-09-21"},
+		},
+		{
+			name:     "comma-separated region and bare date",
+			filename: "X-Men Vs. Street Fighter (EU, 961004).mra",
+			wantTags: []string{"region:eu", "builddate:1996-10-04"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+			for _, want := range tt.wantTags {
+				assert.Contains(t, gotStrings, want, "expected %s in %v", want, gotStrings)
+			}
+			// No credit: fallback should survive for these region+date names.
+			for _, tagStr := range gotStrings {
+				assert.False(t, strings.HasPrefix(tagStr, "credit:"),
+					"region+date name should not produce credit: tag, got %q", tagStr)
+			}
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_CreditRemappings(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []string
+		wantNot  []string // tag prefixes that must NOT appear
+	}{
+		{
+			name:     "title-prefixed hack is unlicensed not credit",
+			filename: "Super Mario World (SMW Hack).sfc",
+			wantTags: []string{"unlicensed:hack"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "multi-token hack",
+			filename: "Super Mario World (SA-1 SMW Hack).sfc",
+			wantTags: []string{"unlicensed:hack"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "cracker credit becomes dump cracked",
+			filename: "Pitfall (4am Crack).a26",
+			wantTags: []string{"dump:cracked"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "multi-token cracker",
+			filename: "Game (4am and SAN Inc Crack).dsk",
+			wantTags: []string{"dump:cracked"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "english translation maps to unlicensed plus lang",
+			filename: "Final Fantasy (English Translation).sfc",
+			wantTags: []string{"unlicensed:translation", "lang:en"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "set number maps to set tag",
+			filename: "Galaga (Set 1).mra",
+			wantTags: []string{"set:1"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "wip maps to unfinished",
+			filename: "Some Homebrew (WIP).bin",
+			wantTags: []string{"unfinished:wip"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "genuine company name stays credit",
+			filename: "Cracktro (Fairlight).d64",
+			wantTags: []string{"credit:fairlight"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+			for _, want := range tt.wantTags {
+				assert.Contains(t, gotStrings, want, "expected %s in %v", want, gotStrings)
+			}
+			for _, prefix := range tt.wantNot {
+				for _, tagStr := range gotStrings {
+					assert.False(t, strings.HasPrefix(tagStr, prefix),
+						"%q should not produce %s tag, got %q", tt.filename, prefix, tagStr)
+				}
+			}
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_BareNumberNotBuildDate(t *testing.T) {
+	// A bare 6-digit number with no region word must not be read as a build date,
+	// including as a comma-part with no region sibling.
+	for _, filename := range []string{
+		"Mystery Game (123456).rom",
+		"Mystery Game (931005).rom",
+		"Mystery Game (Foo, 961004).rom",
+	} {
+		got := ParseFilenameToCanonicalTags(filename)
+		for _, tag := range got {
+			assert.NotEqual(t, TagTypeBuildDate, tag.Type,
+				"bare number in %q should not produce a build date, got %s", filename, tag.String())
+		}
+	}
+}
+
 func TestParseFilenameToCanonicalTags_NoDuplicates(t *testing.T) {
 	tests := []struct {
 		name     string

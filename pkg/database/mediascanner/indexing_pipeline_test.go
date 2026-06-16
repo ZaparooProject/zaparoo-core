@@ -494,6 +494,57 @@ func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.
 	assert.Equal(t, 1, extensionTagCount)
 }
 
+// TestAddMediaPath_ArcadeBuildDateTagPersisted verifies the freeform builddate tag
+// produced from a MiSTer Arcade "(Region YYMMDD)" name survives indexing. builddate
+// is an open-ended value type, so the pipeline must create it dynamically (like rev/
+// credit) — otherwise it is dropped as "unknown".
+func TestAddMediaPath_ArcadeBuildDateTagPersisted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	state := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, state))
+
+	path := filepath.Join("_Arcade", "Super Street Fighter II The New Challengers (World 931005).mra")
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, mediaID, err := AddMediaPath(mediaDB, state, "Arcade", path, "", false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	rows, err := sqlDB.QueryContext(ctx, `
+		SELECT TagTypes.Type, Tags.Tag
+		FROM MediaTags
+		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+		JOIN TagTypes ON TagTypes.DBID = Tags.TypeDBID
+		WHERE MediaTags.MediaDBID = ?`, mediaID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var got []string
+	for rows.Next() {
+		var typ, val string
+		require.NoError(t, rows.Scan(&typ, &val))
+		got = append(got, typ+":"+tags.UnpadTagValue(val))
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Contains(t, got, "builddate:1993-10-05", "build date tag should persist through indexing")
+	assert.Contains(t, got, "region:world")
+}
+
 func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testing.T) {
 	t.Parallel()
 

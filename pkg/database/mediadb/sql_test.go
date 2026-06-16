@@ -593,8 +593,8 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 		ExpectQuery().
 		// Slug LIKE, SecondarySlug LIKE, tag args doubled for both tag sources
 		WithArgs("NES", "%mario%", "%mario%", "genre", "Action", "genre", "Action", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Mario", "/games/mario.nes", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow("NES", "Mario", "/games/mario.nes", 1, ""))
 
 	// Mock second query: get tags for the media items
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -633,6 +633,8 @@ func expectSearchTagsQuery(mock sqlmock.Sqlmock, mediaID int64) {
 		ExpectQuery().
 		WithArgs(mediaID, mediaID).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "DisplayName", "Type"}))
+	// No disambiguation lookup is expected: these fixtures return an empty
+	// DisambiguationTypes, so attachZapScriptTags skips the query entirely.
 }
 
 func TestSqlSearchMediaWithFilters_AllSystemsTagOnlySkipsSystemFilter(t *testing.T) {
@@ -648,8 +650,8 @@ func TestSqlSearchMediaWithFilters_AllSystemsTagOnlySkipsSystemFilter(t *testing
 	mock.ExpectPrepare("(?s)WHERE\\s+Media\\.IsMissing = 0.*ORDER BY Media\\.DBID ASC.*LIMIT \\?").
 		ExpectQuery().
 		WithArgs("user", "favorite", "user", "favorite", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 7))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 7, ""))
 	expectSearchTagsQuery(mock, 7)
 
 	results, err := sqlSearchMediaWithFilters(
@@ -682,8 +684,8 @@ func TestSqlSearchMediaWithFilters_DuplicateSystemsMissingOneKeepsSystemFilter(t
 	mock.ExpectPrepare(searchSystemFilterPattern).
 		ExpectQuery().
 		WithArgs(args...).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow(allSystems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 8))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow(allSystems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 8, ""))
 	expectSearchTagsQuery(mock, 8)
 
 	results, err := sqlSearchMediaWithFilters(
@@ -714,8 +716,8 @@ func TestSqlSearchMediaWithFilters_NonTagDrivenKeepsSystemFilter(t *testing.T) {
 		mock.ExpectPrepare(searchSystemFilterPattern).
 			ExpectQuery().
 			WithArgs(args...).
-			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-				AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 9))
+			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+				AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 9, ""))
 		expectSearchTagsQuery(mock, 9)
 
 		results, err := sqlSearchMediaWithFilters(
@@ -743,8 +745,8 @@ func TestSqlSearchMediaWithFilters_NonTagDrivenKeepsSystemFilter(t *testing.T) {
 		mock.ExpectPrepare(searchVariantSystemFilterPattern).
 			ExpectQuery().
 			WithArgs(args...).
-			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-				AddRow(systems[0].ID, "Mario", filepath.ToSlash(filepath.Join("roms", "mario.rom")), 10))
+			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+				AddRow(systems[0].ID, "Mario", filepath.ToSlash(filepath.Join("roms", "mario.rom")), 10, ""))
 		expectSearchTagsQuery(mock, 10)
 
 		results, err := sqlSearchMediaWithFilters(
@@ -1278,8 +1280,8 @@ func TestSqlSearchMediaBySlug_Success(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1, ""))
 
 	// Mock tags query (now always called even when no tag filters)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1312,8 +1314,8 @@ func TestSqlSearchMediaBySlug_WithTags(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "usa", "region", "usa", "genre", "platform", "genre", "platform").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world-usa.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world-usa.smc", 1, ""))
 
 	// Mock tags query
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1354,9 +1356,9 @@ func TestSqlSearchMediaBySlug_MultipleResults(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("genesis", "Sonic the Hedgehog", "/games/sonic.bin", 1).
-			AddRow("genesis", "Sonic the Hedgehog 2", "/games/sonic2.bin", 2))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("genesis", "Sonic the Hedgehog", "/games/sonic.bin", 1, "").
+			AddRow("genesis", "Sonic the Hedgehog 2", "/games/sonic2.bin", 2, ""))
 
 	// Mock tags query (now always called even when no tag filters)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1398,9 +1400,9 @@ func TestSqlSearchMediaBySlug_LoadsTagsWithoutFilters(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World (USA)", "/games/smw-usa.smc", 1).
-			AddRow("snes", "Super Mario World (Europe)", "/games/smw-eu.smc", 2))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World (USA)", "/games/smw-usa.smc", 1, "").
+			AddRow("snes", "Super Mario World (Europe)", "/games/smw-eu.smc", 2, ""))
 
 	// Mock tags query - returns tags for both ROMs
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1444,7 +1446,7 @@ func TestSqlSearchMediaBySlug_NoResults(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}))
 
 	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
 
@@ -1467,7 +1469,7 @@ func TestSqlSearchMediaBySlug_WithTagsNoResults(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "japan", "region", "japan").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}))
 
 	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
 
@@ -1514,8 +1516,8 @@ func TestSqlSearchMediaBySlug_TagsQueryError(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "usa", "region", "usa").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1, ""))
 
 	// Mock tags query error
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1577,8 +1579,8 @@ func TestSqlSearchMediaBySlug_TagsScanError(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(systemID, slug, "region", "usa", "region", "usa").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1, ""))
 
 	// Mock tags query with wrong column count (scan error)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1953,9 +1955,9 @@ func TestSqlSearchMediaByTitleDBIDs_BasicLookup(t *testing.T) {
 
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), int64(20), 100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100).
-			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100, "").
+			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200, ""))
 
 	// Tag query (fetchAndAttachTags uses PrepareContext)
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
@@ -1988,8 +1990,8 @@ func TestSqlSearchMediaByTitleDBIDs_WithCursor(t *testing.T) {
 	cursor := int64(150)
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), cursor, 100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200, ""))
 
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
@@ -2012,8 +2014,8 @@ func TestSqlSearchMediaByTitleDBIDs_WithLetter(t *testing.T) {
 	letter := "S"
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), letter, 100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100, ""))
 
 	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().

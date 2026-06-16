@@ -706,6 +706,31 @@ func (db *MediaDB) GetLastIndexedSystem() (string, error) {
 	return sqlGetLastIndexedSystem(db.ctx, db.sql)
 }
 
+// RecomputeTitleDisambiguation recomputes the stored disambiguating tag types
+// for the given MediaTitle DBIDs. Callers invoke this after any write that can
+// change a title's set of media or their tags (indexing, scraping, manual tag
+// edits) so reads can rely on the stored, title-global value.
+func (db *MediaDB) RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlRecomputeTitleDisambiguation(ctx, db.conn(), titleDBIDs)
+}
+
+// RecomputeSystemDisambiguation recomputes the stored disambiguating tag types
+// for every MediaTitle belonging to the given system DBIDs. Called at index time
+// once a system is fully written so all of its titles are refreshed together.
+func (db *MediaDB) RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlRecomputeDisambiguationForSystems(ctx, db.conn(), systemDBIDs)
+}
+
 // IndexGeneration returns the monotonic counter that's bumped on every
 // successful indexing run. Returns 0 if no indexing has completed yet.
 func (db *MediaDB) IndexGeneration() (int64, error) {

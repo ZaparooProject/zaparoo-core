@@ -216,6 +216,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	"beta-5":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta5}},
 	"preview":              {{Type: TagTypeUnfinished, Value: TagUnfinishedPreview}},
 	"pre-release":          {{Type: TagTypeUnfinished, Value: TagUnfinishedPrerelease}},
+	"wip":                  {{Type: TagTypeUnfinished, Value: TagUnfinishedWIP}},
 	"proto":                {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
 	"prototype":            {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
 	"engineering-sample":   {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
