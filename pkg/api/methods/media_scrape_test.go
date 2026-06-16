@@ -23,6 +23,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -287,6 +289,106 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	assert.True(t, status.Done)
 
 	mockDB.AssertExpectations(t)
+}
+
+// doneUpdatePlatformScraper returns a scraper that emits a single Done=true
+// update then closes the channel.
+func doneUpdatePlatformScraper(id, name string) platforms.Scraper {
+	return platforms.Scraper{
+		ID:   id,
+		Name: name,
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			go func() {
+				ch <- scraper.ScrapeUpdate{Done: true}
+				close(ch)
+			}()
+			return nil
+		},
+	}
+}
+
+// TestHandleMediaScrape_WipesThumbCacheOnCompletion verifies that finishing a
+// scrape invalidates the resized-thumbnail disk cache (issue #967): a re-scrape
+// can change image sources under a stable cache key, so the cache must be
+// wiped or it keeps serving stale art.
+func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance and the
+	// process-wide thumb cache pointer.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	fs := afero.NewMemMapFs()
+	oldCache := &mediaThumbCache{
+		fs:            fs,
+		dir:           filepath.Join("cache", "thumbs", "current"),
+		resolvedTypes: make(map[string]string),
+	}
+	mediaID := int64(1)
+	oldCache.set(mediaRefParam{MediaID: &mediaID}, "property:image-boxart", 100, []byte("png-data"), "image/png")
+	mediaThumbCachePointer.Store(oldCache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "test-scraper"}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": doneUpdatePlatformScraper("test-scraper", "Test Scraper"),
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+	}
+
+	result, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+
+	var gotDone bool
+	timeout := time.After(2 * time.Second)
+	for !gotDone {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var payload models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &payload))
+			if payload.Done {
+				gotDone = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for done=true notification")
+		}
+	}
+
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning()
+	}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
+
+	newCache := mediaThumbCachePointer.Load()
+	require.NotNil(t, newCache)
+	assert.NotEqual(t, oldCache.dir, newCache.dir, "thumb cache generation should swap on scrape completion")
+	_, statErr := fs.Stat(oldCache.dir)
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "old thumb cache dir should be removed")
 }
 
 func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
