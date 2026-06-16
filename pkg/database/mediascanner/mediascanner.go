@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -78,6 +79,18 @@ func isSQLiteDatabaseCorrupt(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "database disk image is malformed") ||
 		strings.Contains(msg, "file is not a database")
+}
+
+// logMaintenanceError logs an indexing maintenance failure (status writes, cache
+// population). When the failure is just the service context being cancelled
+// mid-index — an expected shutdown condition — it logs at Debug; any other
+// failure logs at Error so genuine problems stay visible in Sentry.
+func logMaintenanceError(err error, msg string) {
+	if errors.Is(err, context.Canceled) {
+		log.Debug().Err(err).Msg(msg)
+		return
+	}
+	log.Error().Err(err).Msg(msg)
 }
 
 type PathResult struct {
@@ -534,7 +547,7 @@ func GetFiles(
 func handleCancellation(ctx context.Context, db database.MediaDBI, message string) (int, error) {
 	log.Info().Msg(message)
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to cancelled")
+		logMaintenanceError(setErr, "failed to set indexing status to cancelled")
 	}
 	return 0, ctx.Err()
 }
@@ -546,7 +559,7 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 		log.Error().Err(rbErr).Msg("failed to rollback transaction after cancellation")
 	}
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to cancelled")
+		logMaintenanceError(setErr, "failed to set indexing status to cancelled")
 	}
 	return 0, ctx.Err()
 }
@@ -826,7 +839,7 @@ func NewNamesIndex(
 	logPhaseMetrics("initial_state_population")
 
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to running")
+		logMaintenanceError(setErr, "failed to set indexing status to running")
 	}
 	if !shouldResume {
 		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
@@ -850,7 +863,7 @@ func NewNamesIndex(
 		if err != nil {
 			// Mark indexing as failed on error
 			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to set indexing status to failed after error")
+				logMaintenanceError(setErr, "failed to set indexing status to failed after error")
 			}
 		}
 	}()
@@ -1008,6 +1021,12 @@ func NewNamesIndex(
 			if scanErr != nil {
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
+				}
+				if errors.Is(scanErr, syscall.ECONNREFUSED) {
+					// The scanner's backing service (e.g. Kodi) isn't running.
+					// Expected on devices without it; keep out of Sentry.
+					log.Warn().Err(scanErr).Msgf("skipping %s scanner: service unavailable", l.ID)
+					continue
 				}
 				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
@@ -1338,7 +1357,7 @@ func NewNamesIndex(
 	t0 = time.Now()
 	if selectiveRun {
 		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to populate system tags cache for indexed systems")
+			logMaintenanceError(cacheErr, "failed to populate system tags cache for indexed systems")
 		}
 		log.Info().
 			Dur("elapsed", time.Since(t0)).
@@ -1355,7 +1374,7 @@ func NewNamesIndex(
 
 		t0 = time.Now()
 		if cacheErr := db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to refresh slug search cache for indexed systems")
+			logMaintenanceError(cacheErr, "failed to refresh slug search cache for indexed systems")
 		}
 		log.Info().
 			Dur("elapsed", time.Since(t0)).
@@ -1364,7 +1383,7 @@ func NewNamesIndex(
 		logPhaseMetrics("refresh_slug_search_cache")
 	} else {
 		if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-			log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+			logMaintenanceError(cacheErr, "failed to populate system tags cache")
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
 		logPhaseMetrics("populate_system_tags_cache")
@@ -1411,7 +1430,7 @@ func NewNamesIndex(
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
-		log.Error().Err(setErr).Msg("failed to set indexing status to completed")
+		logMaintenanceError(setErr, "failed to set indexing status to completed")
 	}
 	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to clear last indexed system on completion")

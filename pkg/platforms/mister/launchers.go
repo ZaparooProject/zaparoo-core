@@ -53,8 +53,18 @@ func checkInZip(path string) string {
 	}
 
 	fileInfo, err := os.Stat(path)
-	if err != nil || fileInfo.IsDir() {
-		log.Error().Err(err).Msgf("failed to access the zip file at path: %s", path)
+	if err != nil {
+		// A token pointing to a zip that isn't present is a user/data condition,
+		// not a code fault; keep it out of Sentry. Other stat errors stay visible.
+		if os.IsNotExist(err) {
+			log.Warn().Err(err).Msgf("zip file not found at path: %s", path)
+		} else {
+			log.Error().Err(err).Msgf("failed to access the zip file at path: %s", path)
+		}
+		return path
+	}
+	if fileInfo.IsDir() {
+		log.Error().Msgf("expected a zip file but found a directory: %s", path)
 		return path
 	}
 

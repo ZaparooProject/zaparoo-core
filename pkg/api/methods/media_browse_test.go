@@ -1844,3 +1844,36 @@ func TestSchemeDisplayName(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleMediaBrowseCancelledIsQuiet verifies that a browse request cancelled
+// by the client is returned as a QuietClientError (logged at Debug, kept out of
+// Sentry) rather than a plain error (logged at Error).
+func TestHandleMediaBrowseCancelledIsQuiet(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	// A DB query that fails because the request context was cancelled mid-browse
+	// (client navigated away) is the real-world source of these events.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseRootCounts", mock.Anything, mock.Anything).
+		Return(map[string]*int(nil), context.Canceled)
+
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, nil)
+
+	result, err := HandleMediaBrowse(env)
+	assert.Nil(t, result)
+	require.Error(t, err)
+
+	// Cancellation is returned as a QuietClientError (logged at Debug, out of
+	// Sentry) and still unwraps to context.Canceled for the JSON-RPC response.
+	var quietErr *models.QuietClientError
+	require.ErrorAs(t, err, &quietErr)
+	assert.ErrorIs(t, err, context.Canceled)
+}

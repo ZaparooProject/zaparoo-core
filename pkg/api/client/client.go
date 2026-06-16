@@ -44,6 +44,20 @@ var (
 
 const APIPath = "/api/v0.1"
 
+// isExpectedWebsocketClose reports whether a websocket read error is an expected
+// disconnect (the connection closed, the peer went away, or an abnormal closure
+// such as the service restarting) rather than a genuine protocol/read fault.
+// Expected disconnects are logged below Error level to keep them out of Sentry.
+func isExpectedWebsocketClose(err error) bool {
+	return errors.Is(err, net.ErrClosed) ||
+		websocket.IsCloseError(err,
+			websocket.CloseNormalClosure,
+			websocket.CloseGoingAway,
+			websocket.CloseNoStatusReceived,
+			websocket.CloseAbnormalClosure,
+		)
+}
+
 // DisableZapScript disables the service running any processed ZapScript from
 // tokens, and returns a function to re-enable it.
 // The returned function must be run even if there is an error so the service
@@ -134,7 +148,7 @@ func LocalClient(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+				if ctx.Err() != nil || isExpectedWebsocketClose(readErr) {
 					log.Debug().Err(readErr).Msg("connection closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")
@@ -248,7 +262,7 @@ func WaitNotification(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+				if ctx.Err() != nil || isExpectedWebsocketClose(readErr) {
 					log.Debug().Err(readErr).Msg("connection closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")
@@ -405,12 +419,7 @@ func WaitNotifications(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if errors.Is(readErr, net.ErrClosed) ||
-					websocket.IsCloseError(readErr,
-						websocket.CloseNormalClosure,
-						websocket.CloseGoingAway,
-						websocket.CloseNoStatusReceived,
-					) {
+				if isExpectedWebsocketClose(readErr) {
 					log.Warn().Err(readErr).Msg("websocket closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")

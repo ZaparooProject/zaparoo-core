@@ -31,12 +31,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
@@ -82,6 +84,18 @@ func playlistForLog(pls *playlists.Playlist) any {
 		Truncated:     len(pls.Items) - showing,
 		Items:         pls.Items[:showing],
 	}
+}
+
+// isExpectedLaunchError reports whether a token-launch error is an expected
+// user/operational condition that should be logged at Warn rather than Error
+// (keeping it out of Sentry). These are not bugs: a missing file, a playlist
+// control command with nothing playing, a double-tap during an active launch,
+// or a user-supplied system that doesn't exist.
+func isExpectedLaunchError(err error) bool {
+	return errors.Is(err, zapscript.ErrFileNotFound) ||
+		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
+		errors.Is(err, state.ErrLaunchInProgress) ||
+		errors.Is(err, systemdefs.ErrUnknownSystem)
 }
 
 func runTokenZapScript(
@@ -349,7 +363,11 @@ func launchPlaylistMedia(
 
 	err := runTokenZapScript(svc, t, plsc, nil, false)
 	if err != nil {
-		log.Error().Err(err).Msgf("error launching token")
+		if isExpectedLaunchError(err) {
+			log.Warn().Err(err).Msgf("error launching token")
+		} else {
+			log.Error().Err(err).Msgf("error launching token")
+		}
 		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 	}
@@ -635,7 +653,7 @@ func processTokenQueue(
 
 				err = runTokenZapScript(svc, t, plsc, nil, false)
 				if err != nil {
-					if errors.Is(err, zapscript.ErrFileNotFound) {
+					if isExpectedLaunchError(err) {
 						log.Warn().Err(err).Msgf("error launching token")
 					} else {
 						log.Error().Err(err).Msgf("error launching token")

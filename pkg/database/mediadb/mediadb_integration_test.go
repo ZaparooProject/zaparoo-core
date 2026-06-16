@@ -3985,3 +3985,46 @@ func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing
 	require.Len(t, nextPage, 1)
 	assert.Equal(t, "Contra", nextPage[0].Name)
 }
+
+// TestMediaDB_UpdateMediaTitle_FlushesBufferedTitle_Integration is a regression
+// test for the FOREIGN KEY constraint failure seen when re-pointing an existing
+// media row to a MediaTitle that is still buffered in the batch inserter (e.g. an
+// arcade .mra scanned once by filename and again by its arcade-database name).
+// UpdateMediaTitle must flush the pending MediaTitle batch before the UPDATE so
+// the referenced title exists.
+func TestMediaDB_UpdateMediaTitle_FlushesBufferedTitle_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Tx 1: persist a system, a title, and a media row referencing that title.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	_, err := mediaDB.InsertSystem(database.System{DBID: 1, SystemID: "Arcade", Name: "Arcade"})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{DBID: 1, SystemDBID: 1, Slug: "imsorry", Name: "I'm Sorry"})
+	require.NoError(t, err)
+	mediaPath := filepath.Join("media", "fat", "_Arcade", "I'm Sorry (US, 315-5110).mra")
+	_, err = mediaDB.InsertMedia(database.Media{DBID: 1, SystemDBID: 1, MediaTitleDBID: 1, Path: mediaPath})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Tx 2: buffer a second title, then immediately re-point the existing media at
+	// it. Before the flush fix this failed with "FOREIGN KEY constraint failed".
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		DBID: 2, SystemDBID: 1, Slug: "imsorryus3155110", Name: "I'm Sorry (US, 315-5110)",
+	})
+	require.NoError(t, err)
+	err = mediaDB.UpdateMediaTitle(1, 2, "I'm Sorry (US, 315-5110)")
+	require.NoError(t, err, "update must flush the buffered title to satisfy the foreign key")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// The media row now references the second title.
+	found, err := mediaDB.FindMedia(database.Media{DBID: 1})
+	require.NoError(t, err)
+	assert.Equal(t, mediaPath, found.Path)
+	assert.Equal(t, int64(2), found.MediaTitleDBID)
+}

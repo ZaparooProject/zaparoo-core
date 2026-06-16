@@ -216,7 +216,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	// path when nfc.csv is absent; <10ms parse otherwise).
 	uids, texts, err := LoadCsvMappings()
 	if err != nil {
-		log.Error().Msgf("error loading mappings: %s", err)
+		// A malformed nfc.csv is user-supplied data, not a code fault; log at
+		// Warn so it stays out of Sentry while remaining visible locally.
+		log.Warn().Msgf("error loading mappings: %s", err)
 	} else {
 		p.SetDB(uids, texts)
 		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
@@ -331,14 +333,15 @@ func (p *Platform) StartPost(
 		}
 
 		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
-		if err != nil {
-			log.Error().Msgf("failed to download arcade database: %s", err)
-		}
-
-		if arcadeDbUpdated {
+		switch {
+		case err != nil:
+			// Non-fatal: an embedded arcade database is used as a fallback. Download
+			// failures are usually network/rate-limit issues, not code faults.
+			log.Warn().Msgf("failed to download arcade database: %s", err)
+		case arcadeDbUpdated:
 			log.Info().Msg("arcade database updated")
 			tr.ReloadNameMap()
-		} else {
+		default:
 			log.Info().Msg("arcade database is up to date")
 		}
 

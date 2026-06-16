@@ -21,11 +21,21 @@ package readers
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+)
+
+// ErrTagNotDetected and ErrUnsupportedTagType are expected user conditions
+// during a tag write (no tag was presented, or an unsupported tag was). Reader
+// drivers return these so the write path can log them at Warn rather than Error,
+// keeping them out of Sentry while genuine hardware failures remain at Error.
+var (
+	ErrTagNotDetected     = errors.New("could not detect a tag")
+	ErrUnsupportedTagType = errors.New("unsupported tag type")
 )
 
 type Capability string

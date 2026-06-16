@@ -22,6 +22,8 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package service
 
 import (
+	"errors"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -88,7 +90,14 @@ func checkAndResumeIndexing(
 	// GenerateMediaDB spawns its own goroutine and returns immediately
 	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db, pauser)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
+		// An expected operational state (e.g. indexing/scraping already running)
+		// means auto-resume isn't needed — not a failure worth reporting.
+		var clientErr *models.ClientError
+		if errors.As(err, &clientErr) {
+			log.Warn().Err(err).Msg("skipping auto-resume of media indexing")
+		} else {
+			log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
+		}
 	}
 }
 
