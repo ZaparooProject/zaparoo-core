@@ -78,8 +78,9 @@ var (
 // mediaThumbCache persists resized cover images to disk so that the expensive
 // decode+bilinear-resize+transparency-scan is only performed once per unique
 // (identity, imageType, maxSize) triple. The cache survives core restarts and
-// reboots; it is wiped entirely when a full media reindex completes (because
-// MediaDB row IDs change and file-backed image paths may have moved).
+// reboots; it is wiped entirely when a scrape completes (scraping replaces
+// image sources under a stable cache key) and when a media reindex completes
+// (insurance against id:DBID-keyed entries colliding if the MediaDB is reset).
 //
 // Keys are SHA-256 hashes of the logical identity string; values are stored as
 // <hash>.jpg or <hash>.png to encode the content-type implicitly.
@@ -142,8 +143,9 @@ func (c *mediaThumbCache) setResolvedTypeTag(ref mediaRefParam, prefs []string, 
 
 // thumbKey returns the cache key string for a resize request. The key encodes
 // the stable identity (media-ID or system+path) plus the resolved image-type tag
-// and target size. Media IDs change on reindex, but the whole cache is wiped
-// then, so they are safe to use here.
+// and target size. Media IDs are reused across an in-place reindex, but could be
+// reassigned if the MediaDB is reset; the reindex wipe covers that case, so they
+// are safe to use here.
 func thumbKey(ref mediaRefParam, typeTag string, maxSize int) string {
 	var identity string
 	if ref.MediaID != nil {
@@ -222,13 +224,13 @@ func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, da
 }
 
 // wipe removes the entire thumbnail cache directory and clears the in-memory
-// resolved-type memo. Called after a successful full media reindex so stale
-// entries do not accumulate.
+// resolved-type memo. Called after a successful scrape or media reindex so
+// stale or cross-contaminated entries do not accumulate.
 func (c *mediaThumbCache) wipe() {
 	if err := c.fs.RemoveAll(c.dir); err != nil {
-		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache after reindex")
+		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache")
 	} else {
-		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped after reindex")
+		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped")
 	}
 	c.resolvedMu.Lock()
 	c.resolvedTypes = make(map[string]string)
@@ -244,7 +246,8 @@ func InitMediaThumbCache(pl platforms.Platform) {
 }
 
 // WipeMediaThumbCache removes all cached thumbnails. Called after a successful
-// full reindex so the cache does not serve stale art.
+// scrape (image sources may have changed) or media reindex so the cache does
+// not serve stale art.
 func WipeMediaThumbCache() {
 	if old := mediaThumbCachePointer.Load(); old != nil {
 		mediaThumbCachePointer.Store(old.nextGeneration())

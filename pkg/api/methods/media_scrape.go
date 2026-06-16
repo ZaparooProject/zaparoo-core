@@ -542,6 +542,7 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 			if update.Done {
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
 				mediaImageNoImages.clear()
+				WipeMediaThumbCache()
 			} else {
 				populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
 			}
@@ -566,6 +567,7 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 			terminalStatus.State = scrapeStateCompleted
 			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
 			mediaImageNoImages.clear()
+			WipeMediaThumbCache()
 			publishScrapingStatus(ns, &terminalStatus)
 		}
 		if err := db.MediaDB.SetScrapingStatus(finalStatus); err != nil {
