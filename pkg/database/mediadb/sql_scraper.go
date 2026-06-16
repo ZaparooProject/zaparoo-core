@@ -1583,6 +1583,12 @@ func (db *MediaDB) ApplyScrapeResult(
 		return fmt.Errorf("ApplyScrapeResult: commit: %w", err)
 	}
 	committed = true
+	// Scraped tags can change which tags distinguish a title's variants. Refresh
+	// after commit (the scrape ran on its own tx, not db.tx). Non-fatal.
+	if disErr := db.RecomputeTitleDisambiguation(ctx, []int64{mediaTitleDBID}); disErr != nil {
+		log.Warn().Err(disErr).Int64("titleID", mediaTitleDBID).
+			Msg("failed to recompute title disambiguation after scrape")
+	}
 	return nil
 }
 
@@ -1623,6 +1629,21 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		return fmt.Errorf("ApplyScrapeResults: commit: %w", err)
 	}
 	committed = true
+	// Scraped tags can change which tags distinguish a title's variants. Refresh
+	// the affected titles after commit (the batch ran on its own tx). Non-fatal.
+	titleIDs := make([]int64, 0, len(targets))
+	seenTitles := make(map[int64]struct{}, len(targets))
+	for i := range targets {
+		id := targets[i].MediaTitleDBID
+		if _, ok := seenTitles[id]; ok {
+			continue
+		}
+		seenTitles[id] = struct{}{}
+		titleIDs = append(titleIDs, id)
+	}
+	if disErr := db.RecomputeTitleDisambiguation(ctx, titleIDs); disErr != nil {
+		log.Warn().Err(disErr).Msg("failed to recompute title disambiguation after scrape batch")
+	}
 	stats.Duration = stats.Duration.Round(time.Microsecond)
 	log.Debug().
 		Int("targets", stats.Targets).
@@ -2587,6 +2608,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
+			mt.DisambiguationTypes,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
@@ -2609,6 +2631,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 		&row.MediaTitleDBID, &row.SystemDBID,
 		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
+		&row.Title.DisambiguationTypes,
 		&row.System.DBID, &row.System.SystemID, &row.System.Name,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2637,6 +2660,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
+			mt.DisambiguationTypes,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
@@ -2659,6 +2683,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 			&row.MediaTitleDBID, &row.SystemDBID,
 			&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
+			&row.Title.DisambiguationTypes,
 			&row.System.DBID, &row.System.SystemID, &row.System.Name,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystemByIDs: %w", err)
@@ -3156,9 +3181,9 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		return nil, fmt.Errorf("resolve singleton aliases tags: %w", err)
 	}
 
-	// Build the alias list and a parallel synthetic results slice for in-memory
-	// ZapScript disambiguation (same approach as computeZapScriptTags in the
-	// search path — no extra DB queries).
+	// Build the alias list and a parallel synthetic results slice carrying each
+	// title's stored DisambiguationTypes, which attachZapScriptTags reads to
+	// populate ZapScriptTags (same path as the search/browse queries).
 	aliases := make([]database.SingletonContainerAlias, 0, len(candidates))
 	synthetic := make([]database.SearchResultWithCursor, 0, len(candidates))
 	for _, c := range candidates {
@@ -3176,15 +3201,18 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 			Tags:     mediaTags,
 		})
 		synthetic = append(synthetic, database.SearchResultWithCursor{
-			SystemID: row.System.SystemID,
-			Name:     row.Title.Name,
-			MediaID:  row.DBID,
-			Tags:     mediaTags,
+			SystemID:            row.System.SystemID,
+			Name:                row.Title.Name,
+			MediaID:             row.DBID,
+			Tags:                mediaTags,
+			DisambiguationTypes: row.Title.DisambiguationTypes,
 		})
 	}
 
-	// In-memory ZapScript disambiguation across the resolved set.
-	computeZapScriptTags(synthetic)
+	// Populate ZapScriptTags from each title's precomputed disambiguating types.
+	if err := attachZapScriptTags(ctx, db.sql, synthetic); err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases disambiguation: %w", err)
+	}
 	for i := range aliases {
 		aliases[i].ZapScriptTags = synthetic[i].ZapScriptTags
 	}

@@ -29,13 +29,14 @@ import (
 )
 
 type SearchResultMedia struct {
-	RelPath   *string            `json:"relativePath,omitempty"`
-	System    System             `json:"system"`
-	Name      string             `json:"name"`
-	Path      string             `json:"path"`
-	ZapScript string             `json:"zapScript"`
-	Tags      []database.TagInfo `json:"tags"`
-	MediaID   int64              `json:"mediaId,omitempty"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	System             System             `json:"system"`
+	Name               string             `json:"name"`
+	Path               string             `json:"path"`
+	ZapScript          string             `json:"zapScript"`
+	Tags               []database.TagInfo `json:"tags"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
 }
 
 type PaginationInfo struct {
@@ -55,18 +56,19 @@ type TagsResponse struct {
 }
 
 type BrowseEntry struct {
-	SystemID  *string            `json:"systemId,omitempty"`
-	RelPath   *string            `json:"relativePath,omitempty"`
-	ZapScript *string            `json:"zapScript,omitempty"`
-	FileCount *int               `json:"fileCount,omitempty"`
-	Group     *string            `json:"group,omitempty"`
-	Path      string             `json:"path"`
-	Type      string             `json:"type"`
-	Name      string             `json:"name"`
-	SystemIDs []string           `json:"systemIds,omitempty"`
-	Tags      []database.TagInfo `json:"tags,omitempty"`
-	MediaID   int64              `json:"mediaId,omitempty"`
-	HasCover  bool               `json:"hasCover"`
+	SystemID           *string            `json:"systemId,omitempty"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	ZapScript          *string            `json:"zapScript,omitempty"`
+	FileCount          *int               `json:"fileCount,omitempty"`
+	Group              *string            `json:"group,omitempty"`
+	Path               string             `json:"path"`
+	Type               string             `json:"type"`
+	Name               string             `json:"name"`
+	SystemIDs          []string           `json:"systemIds,omitempty"`
+	Tags               []database.TagInfo `json:"tags,omitempty"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	HasCover           bool               `json:"hasCover"`
 }
 
 type BrowseResults struct {
@@ -338,14 +340,15 @@ type ScrapingStatusResponse struct {
 }
 
 type MediaLookupMatch struct {
-	RelPath    *string            `json:"relativePath,omitempty"`
-	System     System             `json:"system"`
-	Name       string             `json:"name"`
-	Path       string             `json:"path"`
-	ZapScript  string             `json:"zapScript"`
-	Tags       []database.TagInfo `json:"tags"`
-	MediaID    int64              `json:"mediaId,omitempty"`
-	Confidence float64            `json:"confidence"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	System             System             `json:"system"`
+	Name               string             `json:"name"`
+	Path               string             `json:"path"`
+	ZapScript          string             `json:"zapScript"`
+	Tags               []database.TagInfo `json:"tags"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	Confidence         float64            `json:"confidence"`
 }
 
 type MediaLookupResponse struct {

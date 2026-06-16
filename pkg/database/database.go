@@ -142,13 +142,16 @@ type System struct {
 }
 
 type MediaTitle struct {
-	Slug          string
-	Name          string
-	SecondarySlug sql.NullString
-	DBID          int64
-	SystemDBID    int64
-	SlugLength    int
-	SlugWordCount int
+	Slug string
+	Name string
+	// DisambiguationTypes is the title's stored comma-separated set of tag types
+	// whose values differ across its non-missing media (see RecomputeTitleDisambiguation).
+	DisambiguationTypes string
+	SecondarySlug       sql.NullString
+	DBID                int64
+	SystemDBID          int64
+	SlugLength          int
+	SlugWordCount       int
 }
 
 type Media struct {
@@ -388,16 +391,20 @@ type BrowseSystemRootCandidates struct {
 }
 
 type SearchResultWithCursor struct {
-	SystemID      string
-	Name          string
-	Path          string
-	SortValue     string
-	SortMode      string
-	Tags          []TagInfo
-	ZapScriptTags []TagInfo
-	MediaID       int64
-	MediaTitleID  int64 `json:"-"`
-	HasCover      bool
+	SystemID string
+	Name     string
+	Path     string
+	// DisambiguationTypes is the title's stored comma-separated set of tag types
+	// that distinguish its variants (see RecomputeTitleDisambiguation). Empty for
+	// titles with no variants, which lets the read path skip the tag lookup.
+	DisambiguationTypes string
+	SortValue           string
+	SortMode            string
+	Tags                []TagInfo
+	ZapScriptTags       []TagInfo
+	MediaID             int64
+	MediaTitleID        int64 `json:"-"`
+	HasCover            bool
 }
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
@@ -427,8 +434,9 @@ func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 
 // ZapScript returns the ZapScript title command string for this search result.
 // Uses ZapScriptTags (disambiguating tags only). If ZapScriptTags has not been
-// computed (nil), no tags are emitted — callers that need disambiguation must
-// ensure ZapScriptTags is populated via computeZapScriptTags or equivalent.
+// populated (nil), no tags are emitted — callers that need disambiguation must
+// run the result through attachZapScriptTags, which reads the title's stored
+// DisambiguationTypes (see RecomputeTitleDisambiguation).
 func (r *SearchResultWithCursor) ZapScript() string {
 	return BuildTitleZapScript(r.SystemID, r.Name, r.ZapScriptTags)
 }
@@ -836,6 +844,15 @@ type MediaDBI interface {
 	// UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
 	// Exclusive/additive behaviour is identical to UpsertMediaTags.
 	UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []TagInfo) error
+
+	// RecomputeTitleDisambiguation recomputes the stored disambiguating tag types
+	// for the given MediaTitle DBIDs. Called after writes that change a title's
+	// media or tags so reads can rely on the stored, title-global value.
+	RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error
+
+	// RecomputeSystemDisambiguation recomputes the stored disambiguating tag types
+	// for every MediaTitle belonging to the given system DBIDs. Used at index time.
+	RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error
 
 	// UpsertMediaTitleProperties upserts properties into MediaTitleProperties.
 	// Conflicts on (MediaTitleDBID, TypeTagDBID) update data columns; DBID is preserved.

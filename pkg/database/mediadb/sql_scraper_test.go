@@ -2351,6 +2351,35 @@ func TestResolveSingletonContainerAliases_TagsAttachedOnAlias(t *testing.T) {
 	assert.Equal(t, "favorite", aliases[0].Tags[0].Type)
 }
 
+// TestResolveSingletonContainerAliases_DisambiguatingTagsAttached verifies that a
+// singleton container alias whose title has sibling variants gets its disambiguating
+// ZapScriptTags populated. The aliased USA disc lives in its own directory while the
+// Japan variant of the same title lives elsewhere; the title therefore disambiguates
+// on "release" and the alias must surface release=USA.
+func TestResolveSingletonContainerAliases_DisambiguatingTagsAttached(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	usaPath := "roms/PSX/USA Disc/game.chd"
+	systemDBID, _, mediaIDs := setupDisambTitle(t, mediaDB, "PSX", "Game", []disambTitleMedia{
+		{path: usaPath, tags: map[string]string{"release": "USA"}},
+		{path: "roms/PSX/Game (Japan).chd", tags: map[string]string{"release": "Japan"}},
+	})
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+
+	aliasDir := ParentDirForMediaPath(usaPath)
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, systemDBID, []database.SingletonAliasCandidate{
+		{ChildDir: aliasDir, FileCount: 1},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, mediaIDs[0], aliases[0].Row.DBID)
+	require.Len(t, aliases[0].ZapScriptTags, 1)
+	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, aliases[0].ZapScriptTags[0])
+}
+
 func TestResolveSingletonContainerAliases_MultipleDirsInOneScan(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupAliasTestDB(t)

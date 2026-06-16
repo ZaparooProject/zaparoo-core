@@ -650,9 +650,11 @@ func sqlBrowseFilesFromMedia(
 	sortMode := resolveBrowseSortMode(ctx, db, opts)
 	sortModeElapsed := time.Since(sortModeStarted)
 	sortExpr := browseSortExpr(sortMode)
-	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, ` + sortExpr + ` AS SortValue
+	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, ` +
+		`mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
 		WHERE ` + where
 	if opts.Cursor != nil {
 		query += browseCursorCondition(sortMode)
@@ -672,7 +674,7 @@ func sqlBrowseFilesFromMedia(
 	for rows.Next() {
 		var r database.SearchResultWithCursor
 		if scanErr := rows.Scan(
-			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID, &r.SortValue,
+			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID, &r.DisambiguationTypes, &r.SortValue,
 		); scanErr != nil {
 			return nil, fmt.Errorf("browse files scan: %w", scanErr)
 		}
@@ -705,12 +707,12 @@ func sqlBrowseFilesFromMedia(
 	}
 	coverFlagsElapsed := time.Since(coverFlagsStarted)
 
-	// Disambiguate sibling variants: same SystemID+Name within the page get
-	// ZapScriptTags populated so the tag-write path can produce unambiguous
-	// ZapScript strings. Zero extra queries when there are no siblings (typical).
+	// Populate ZapScriptTags from the title's precomputed disambiguating types
+	// (single indexed lookup). Title-global, so it is correct regardless of how
+	// siblings fall across pages or sort order.
 	siblingsStarted := time.Now()
-	if err := fetchAndDisambiguateSiblings(ctx, db, results); err != nil {
-		return nil, fmt.Errorf("browse files sibling disambiguation: %w", err)
+	if err := attachZapScriptTags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse files disambiguation: %w", err)
 	}
 
 	log.Debug().
@@ -724,66 +726,6 @@ func sqlBrowseFilesFromMedia(
 		Dur("siblingsDuration", time.Since(siblingsStarted)).
 		Msg("browse files step timing")
 	return results, nil
-}
-
-// fetchAndDisambiguateSiblings populates ZapScriptTags on results that share
-// the same SystemID+Name (disc variants, regional editions, etc.) so the
-// tag-write path can build an unambiguous ZapScript string. For pages with no
-// sibling groups — the common case — the function returns immediately after the
-// grouping check with no DB queries. When siblings are present, a single batch
-// tag fetch is issued only for the affected media IDs.
-func fetchAndDisambiguateSiblings(
-	ctx context.Context,
-	db sqlQueryable,
-	results []database.SearchResultWithCursor,
-) error {
-	if len(results) == 0 {
-		return nil
-	}
-
-	nameGroups := make(map[string][]int, len(results))
-	for i := range results {
-		key := results[i].SystemID + "\x00" + results[i].Name
-		nameGroups[key] = append(nameGroups[key], i)
-	}
-
-	var siblingIndices []int
-	for _, indices := range nameGroups {
-		if len(indices) >= 2 {
-			siblingIndices = append(siblingIndices, indices...)
-		}
-	}
-
-	if len(siblingIndices) == 0 {
-		for i := range results {
-			results[i].ZapScriptTags = []database.TagInfo{}
-		}
-		return nil
-	}
-
-	// Fetch full tags only for the sibling results (single batch query).
-	siblingResults := make([]database.SearchResultWithCursor, len(siblingIndices))
-	for i, idx := range siblingIndices {
-		siblingResults[i] = results[idx]
-	}
-	if err := fetchAndAttachTagsByResultIDs(ctx, db, siblingResults); err != nil {
-		return fmt.Errorf("sibling tag fetch: %w", err)
-	}
-	computeZapScriptTags(siblingResults)
-
-	// Write ZapScriptTags back; non-sibling entries get an empty slice.
-	siblingTagMap := make(map[int64][]database.TagInfo, len(siblingIndices))
-	for i, idx := range siblingIndices {
-		siblingTagMap[results[idx].MediaID] = siblingResults[i].ZapScriptTags
-	}
-	for i := range results {
-		if zapTags, ok := siblingTagMap[results[i].MediaID]; ok {
-			results[i].ZapScriptTags = zapTags
-		} else {
-			results[i].ZapScriptTags = []database.TagInfo{}
-		}
-	}
-	return nil
 }
 
 // fetchAndAttachCoverFlags sets HasCover on each result based on whether the

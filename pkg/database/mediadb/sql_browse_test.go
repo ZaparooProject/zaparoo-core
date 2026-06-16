@@ -765,71 +765,9 @@ func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
 	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
 }
 
-// TestFetchAndDisambiguateSiblings_NoSiblings verifies that when all entries on
-// the page have unique names, ZapScriptTags is set to an empty slice with no
-// DB queries.
-func TestFetchAndDisambiguateSiblings_NoSiblings(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	results := []database.SearchResultWithCursor{
-		{MediaID: 1, MediaTitleID: 10, SystemID: "NES", Name: "Game A"},
-		{MediaID: 2, MediaTitleID: 11, SystemID: "NES", Name: "Game B"},
-		{MediaID: 3, MediaTitleID: 12, SystemID: "NES", Name: "Game C"},
-	}
-
-	// No DB queries should be issued — grouping is pure in-memory.
-	err = fetchAndDisambiguateSiblings(context.Background(), db, results)
-	require.NoError(t, err)
-	for i, r := range results {
-		assert.Equal(t, []database.TagInfo{}, r.ZapScriptTags, "entry %d should have empty ZapScriptTags", i)
-	}
-	assert.NoError(t, mock.ExpectationsWereMet(), "no DB queries expected")
-}
-
-// TestFetchAndDisambiguateSiblings_EmptyResults verifies the empty-input guard.
-func TestFetchAndDisambiguateSiblings_EmptyResults(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	err = fetchAndDisambiguateSiblings(context.Background(), db, nil)
-	require.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestFetchAndDisambiguateSiblings_DuplicateNamesFetchTags(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	results := []database.SearchResultWithCursor{
-		{MediaID: 1, MediaTitleID: 10, SystemID: "NES", Name: "Same Game"},
-		{MediaID: 2, MediaTitleID: 11, SystemID: "NES", Name: "Same Game"},
-	}
-
-	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM MediaTags`).
-		WithArgs(int64(1), int64(2), int64(10), int64(11)).
-		WillReturnRows(sqlmock.NewRows([]string{"HasTags"}).AddRow(true))
-	mock.ExpectPrepare(`SELECT\s+0 as SourceKind`).
-		ExpectQuery().
-		WithArgs(int64(1), int64(2), int64(10), int64(11)).
-		WillReturnRows(sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "DisplayName", "Type"}).
-			AddRow(0, int64(1), "USA", "United States", "release").
-			AddRow(0, int64(2), "Japan", "Japan", "release"))
-
-	err = fetchAndDisambiguateSiblings(context.Background(), db, results)
-	require.NoError(t, err)
-	require.Len(t, results[0].ZapScriptTags, 1)
-	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, database.TagInfo{Tag: "USA", Type: "release", Label: "United States"}, results[0].ZapScriptTags[0])
-	assert.Equal(t, database.TagInfo{Tag: "Japan", Type: "release", Label: "Japan"}, results[1].ZapScriptTags[0])
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
+// Sibling disambiguation is exercised end-to-end in disambiguation_test.go: it
+// now reads stored per-title types (RecomputeSystemDisambiguation) instead of
+// grouping a page in memory, so it is correct across page boundaries.
 
 // TestBrowseFiles_SortNameFallback_Integration verifies that a media row with
 // SortName=” (pre-migration) gets its display name derived from the file path

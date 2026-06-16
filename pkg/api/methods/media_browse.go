@@ -771,6 +771,7 @@ func buildBrowseResponse(
 			entry.RelPath = mediaEntry.RelPath
 			entry.ZapScript = mediaEntry.ZapScript
 			entry.Tags = mediaEntry.Tags
+			entry.DisambiguatingTags = mediaEntry.DisambiguatingTags
 			entry.HasCover = mediaEntry.HasCover
 		}
 		entries = append(entries, entry)
@@ -845,13 +846,14 @@ func buildMediaEntry(
 	rootDirs []string,
 ) models.BrowseEntry {
 	entry := models.BrowseEntry{
-		MediaID:  result.MediaID,
-		Name:     result.Name,
-		Path:     result.Path,
-		Type:     "media",
-		SystemID: &result.SystemID,
-		Tags:     result.Tags,
-		HasCover: result.HasCover,
+		MediaID:            result.MediaID,
+		Name:               result.Name,
+		Path:               result.Path,
+		Type:               "media",
+		SystemID:           &result.SystemID,
+		Tags:               result.Tags,
+		DisambiguatingTags: result.ZapScriptTags,
+		HasCover:           result.HasCover,
 	}
 	zapScript := result.ZapScript()
 	entry.ZapScript = &zapScript

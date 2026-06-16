@@ -331,6 +331,84 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 	return titles, rows.Err()
 }
 
+// sqlRecomputeTitleDisambiguation recomputes MediaTitles.DisambiguationTypes for
+// the given titles. A tag type is disambiguating for a title when the title's
+// present (non-missing) media hold more than one distinct value for that type,
+// restricted to database.ZapScriptTagTypes. The result is stored as a sorted,
+// comma-separated list of type names (empty when nothing disambiguates).
+//
+// This is the single source of truth for sibling disambiguation: read paths
+// filter each result's tags by the stored types instead of re-deriving across a
+// page of results, which made disambiguation depend on pagination and sort order.
+func sqlRecomputeTitleDisambiguation(ctx context.Context, db sqlQueryable, titleDBIDs []int64) error {
+	return sqlRecomputeDisambiguation(ctx, db, "DBID", titleDBIDs)
+}
+
+// sqlRecomputeDisambiguationForSystems recomputes DisambiguationTypes for every
+// MediaTitle belonging to the given systems. Used at index time so titles whose
+// media set changed (including titles that lost variants) are all refreshed.
+func sqlRecomputeDisambiguationForSystems(ctx context.Context, db sqlQueryable, systemDBIDs []int64) error {
+	return sqlRecomputeDisambiguation(ctx, db, "SystemDBID", systemDBIDs)
+}
+
+// sqlRecomputeDisambiguation runs the disambiguation UPDATE filtered by either
+// MediaTitles.DBID (title-scoped) or MediaTitles.SystemDBID (system-scoped).
+// filterCol is a trusted constant, never user input.
+func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol string, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	typeHolders := prepareVariadic("?", ",", len(database.ZapScriptTagTypes))
+	typeArgs := make([]any, len(database.ZapScriptTagTypes))
+	for i, t := range database.ZapScriptTagTypes {
+		typeArgs[i] = t
+	}
+
+	// Chunk IDs so total bound parameters stay under SQLite's limit.
+	chunkSize := sqliteMaxParams - len(database.ZapScriptTagTypes)
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+
+		args := make([]any, 0, len(typeArgs)+len(chunk))
+		args = append(args, typeArgs...)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+
+		//nolint:gosec // filterCol is a trusted constant; placeholders are parameterized
+		query := fmt.Sprintf(`
+			UPDATE MediaTitles
+			SET DisambiguationTypes = COALESCE((
+				SELECT group_concat(Type, ',')
+				FROM (
+					SELECT tt.Type AS Type
+					FROM Media m
+					JOIN MediaTags mt ON mt.MediaDBID = m.DBID
+					JOIN Tags t ON t.DBID = mt.TagDBID
+					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+					WHERE m.MediaTitleDBID = MediaTitles.DBID
+					  AND m.IsMissing = 0
+					  AND tt.Type IN (%s)
+					GROUP BY tt.Type
+					HAVING COUNT(DISTINCT t.Tag) > 1
+					ORDER BY tt.Type
+				)
+			), '')
+			WHERE MediaTitles.%s IN (%s)
+		`, typeHolders, filterCol, prepareVariadic("?", ",", len(chunk)))
+
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("failed to recompute disambiguation: %w", err)
+		}
+	}
+	return nil
+}
+
 // PreFilterQuery represents pre-filter parameters for efficient fuzzy matching candidate reduction.
 type PreFilterQuery struct {
 	MinLength    int
