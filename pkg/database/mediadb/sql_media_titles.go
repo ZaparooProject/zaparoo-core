@@ -301,14 +301,17 @@ func sqlGetTitlesWithSystemsExcluding(
 	return titles, rows.Err()
 }
 
-// sqlGetTitlesBySystemID retrieves all media titles for a specific system with their associated system information.
+// sqlGetTitlesBySystemID retrieves all media titles for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL titles upfront.
+// SystemID is filled from the argument rather than joined from Systems: every row's
+// SystemID equals the filter argument, so the join only added a per-row probe and a
+// redundant string crossing (the top reindex allocator). SystemDBID is still selected
+// because other callers read it.
 func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.TitleWithSystem, error) {
 	query := `
-		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
+		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID
 		FROM MediaTitles t
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
+		WHERE t.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 	`
 	rows, err := db.QueryContext(ctx, query, systemID)
 	if err != nil {
@@ -323,9 +326,10 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 	titles := make([]database.TitleWithSystem, 0)
 	for rows.Next() {
 		var title database.TitleWithSystem
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
+		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID); err != nil {
 			return nil, fmt.Errorf("failed to scan title for system %s: %w", systemID, err)
 		}
+		title.SystemID = systemID
 		titles = append(titles, title)
 	}
 	return titles, rows.Err()

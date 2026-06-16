@@ -511,13 +511,17 @@ type TitleWithSystem struct {
 	SystemDBID int64
 }
 
-// MediaWithFullPath represents a Media item with its associated title and system information
+// MediaWithFullPath represents a Media item with its associated title and system information.
+// TagIDs is transient and not a stored column: it is populated only by
+// GetMediaWithTagsBySystemID (when loadMediaTags is set) with the scanner-managed tag
+// DBIDs for the row, carrying tag links on the media row to avoid a second read.
 type MediaWithFullPath struct {
 	Path           string
 	ParentDir      string
 	TitleSlug      string
 	SystemID       string
 	SortName       string
+	TagIDs         []int64
 	DBID           int64
 	MediaTitleDBID int64
 }
@@ -842,6 +846,7 @@ type MediaDBI interface {
 	// Per-system query methods for lazy loading during resume
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	GetMediaWithTagsBySystemID(systemID string, loadMediaTags bool) ([]MediaWithFullPath, error)
 	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
 	GetScannerMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
 

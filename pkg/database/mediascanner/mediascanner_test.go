@@ -459,13 +459,11 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
-	// Mock per-system loading (PopulatePersistentScanStateForSystem calls both)
+	// Mock per-system loading (PopulatePersistentScanStateForSystem reads titles + media/tags)
 	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
 		Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
+	mockMediaDB.On("GetMediaWithTagsBySystemID", mock.AnythingOfType("string"), mock.AnythingOfType("bool")).
 		Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetScannerMediaTagsBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaTagLink{}, nil).Maybe()
 	// Subsequent calls: normal operation (no truncate because resuming successfully)
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing
@@ -578,10 +576,8 @@ func TestNewNamesIndex_ReportsSystemBeforeLoadingExistingData(t *testing.T) {
 	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
 		Run(func(args mock.Arguments) { recordLoad(args.String(0)) }).
 		Return([]database.TitleWithSystem{}, nil).Twice()
-	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
+	mockMediaDB.On("GetMediaWithTagsBySystemID", mock.AnythingOfType("string"), mock.AnythingOfType("bool")).
 		Return([]database.MediaWithFullPath{}, nil).Twice()
-	mockMediaDB.On("GetScannerMediaTagsBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaTagLink{}, nil).Twice()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
 	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()
@@ -758,10 +754,8 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
 	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
 		Return([]database.TitleWithSystem{}, nil).Maybe()
-	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
+	mockMediaDB.On("GetMediaWithTagsBySystemID", mock.AnythingOfType("string"), mock.AnythingOfType("bool")).
 		Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetScannerMediaTagsBySystemID", mock.AnythingOfType("string")).
-		Return([]database.MediaTagLink{}, nil).Maybe()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
 	// Mock GetMax*ID methods for PopulateScanStateFromDB
