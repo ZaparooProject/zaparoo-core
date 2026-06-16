@@ -2362,10 +2362,11 @@ func TestResolveSingletonContainerAliases_DisambiguatingTagsAttached(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 
-	usaPath := "roms/PSX/USA Disc/game.chd"
+	usaPath := filepath.ToSlash(filepath.Join("roms", "PSX", "USA Disc", "game.chd"))
+	jpnPath := filepath.ToSlash(filepath.Join("roms", "PSX", "Game (Japan).chd"))
 	systemDBID, _, mediaIDs := setupDisambTitle(t, mediaDB, "PSX", "Game", []disambTitleMedia{
 		{path: usaPath, tags: map[string]string{"release": "USA"}},
-		{path: "roms/PSX/Game (Japan).chd", tags: map[string]string{"release": "Japan"}},
+		{path: jpnPath, tags: map[string]string{"release": "Japan"}},
 	})
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
 

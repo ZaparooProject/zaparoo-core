@@ -333,9 +333,12 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 
 // sqlRecomputeTitleDisambiguation recomputes MediaTitles.DisambiguationTypes for
 // the given titles. A tag type is disambiguating for a title when the title's
-// present (non-missing) media hold more than one distinct value for that type,
-// restricted to database.ZapScriptTagTypes. The result is stored as a sorted,
-// comma-separated list of type names (empty when nothing disambiguates).
+// present (non-missing) media hold more than one distinct per-media value-set for
+// that type, restricted to database.ZapScriptTagTypes. Comparing per-media sets
+// (not values pooled across media) means a multi-valued type that is identical on
+// every sibling — e.g. every disc tagged (USA, Europe) — does not falsely
+// disambiguate. The result is stored as a sorted, comma-separated list of type
+// names (empty when nothing disambiguates).
 //
 // This is the single source of truth for sibling disambiguation: read paths
 // filter each result's tags by the stored types instead of re-deriving across a
@@ -386,17 +389,25 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			SET DisambiguationTypes = COALESCE((
 				SELECT group_concat(Type, ',')
 				FROM (
-					SELECT tt.Type AS Type
-					FROM Media m
-					JOIN MediaTags mt ON mt.MediaDBID = m.DBID
-					JOIN Tags t ON t.DBID = mt.TagDBID
-					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-					WHERE m.MediaTitleDBID = MediaTitles.DBID
-					  AND m.IsMissing = 0
-					  AND tt.Type IN (%s)
-					GROUP BY tt.Type
-					HAVING COUNT(DISTINCT t.Tag) > 1
-					ORDER BY tt.Type
+					SELECT Type
+					FROM (
+						SELECT Type, MediaDBID, group_concat(Tag) AS ValueSet
+						FROM (
+							SELECT DISTINCT tt.Type AS Type, m.DBID AS MediaDBID, t.Tag AS Tag
+							FROM Media m
+							JOIN MediaTags mt ON mt.MediaDBID = m.DBID
+							JOIN Tags t ON t.DBID = mt.TagDBID
+							JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+							WHERE m.MediaTitleDBID = MediaTitles.DBID
+							  AND m.IsMissing = 0
+							  AND tt.Type IN (%s)
+							ORDER BY tt.Type, m.DBID, t.Tag
+						)
+						GROUP BY Type, MediaDBID
+					)
+					GROUP BY Type
+					HAVING COUNT(DISTINCT ValueSet) > 1
+					ORDER BY Type
 				)
 			), '')
 			WHERE MediaTitles.%s IN (%s)

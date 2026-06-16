@@ -108,8 +108,8 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 	ctx := context.Background()
 
 	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
-		{path: "/roms/nes/sonic-usa.nes", tags: map[string]string{"release": "USA"}},
-		{path: "/roms/nes/sonic-eur.nes", tags: map[string]string{"release": "Europe"}},
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
 	})
 
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
@@ -206,6 +206,91 @@ func TestRecomputeSystemDisambiguation_MissingMediaExcluded(t *testing.T) {
 
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
 	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, titleDBID))
+}
+
+// addExtraTag attaches one more (type, value) tag to each of the given media,
+// used to build multi-valued tag sets the map-based setupDisambTitle helper can't
+// express (one value per type).
+func addExtraTag(t *testing.T, mediaDB *MediaDB, mediaIDs []int64, tagType, value string) {
+	t.Helper()
+	tt, err := mediaDB.FindOrInsertTagType(database.TagType{Type: tagType})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	tag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tt.DBID, Tag: value})
+	require.NoError(t, err)
+	for _, mid := range mediaIDs {
+		_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: mid, TagDBID: tag.DBID})
+		require.NoError(t, err)
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+}
+
+// TestRecomputeSystemDisambiguation_IdenticalMultiValueSetsDoNotDisambiguate proves
+// that a multi-valued type identical on every sibling is not flagged: both discs
+// carry the same region set {us, eu}, so only the differing disc number
+// disambiguates. (Pooling distinct values across media would wrongly flag region.)
+func TestRecomputeSystemDisambiguation_IdenticalMultiValueSetsDoNotDisambiguate(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "PSX", "Final Fantasy VII", []disambTitleMedia{
+		{path: browseTestPath("roms", "psx", "ff7-disc1.chd"), tags: map[string]string{"region": "us", "disc": "1"}},
+		{path: browseTestPath("roms", "psx", "ff7-disc2.chd"), tags: map[string]string{"region": "us", "disc": "2"}},
+	})
+
+	// Give both discs the identical second region value so each holds the set {us, eu}.
+	addExtraTag(t, mediaDB, mediaIDs, "region", "eu")
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Equal(t, "disc", titleDisambiguationTypes(t, mediaDB, titleDBID))
+}
+
+// TestRecomputeSystemDisambiguation_DifferingMultiValueSetsDisambiguate is the
+// counterpart: when the per-media region sets differ ({us, eu} vs {us}), region
+// disambiguates.
+func TestRecomputeSystemDisambiguation_DifferingMultiValueSetsDisambiguate(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "SNES", "Secret of Mana", []disambTitleMedia{
+		{path: browseTestPath("roms", "snes", "som-multi.sfc"), tags: map[string]string{"region": "us"}},
+		{path: browseTestPath("roms", "snes", "som-us.sfc"), tags: map[string]string{"region": "us"}},
+	})
+
+	// Only the first media also carries region:eu → its set {us, eu} differs from {us}.
+	addExtraTag(t, mediaDB, mediaIDs[:1], "region", "eu")
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Equal(t, "region", titleDisambiguationTypes(t, mediaDB, titleDBID))
+}
+
+// TestRecomputeTitleDisambiguation_Success exercises the title-scoped entry point
+// (RecomputeTitleDisambiguation) directly, complementing the system-scoped tests.
+func TestRecomputeTitleDisambiguation_Success(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, titleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Contra", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "contra-usa.nes"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "nes", "contra-jpn.nes"), tags: map[string]string{"release": "Japan"}},
+	})
+
+	require.NoError(t, mediaDB.RecomputeTitleDisambiguation(ctx, []int64{titleDBID}))
+	assert.Equal(t, "release", titleDisambiguationTypes(t, mediaDB, titleDBID))
+}
+
+// TestRecomputeTitleDisambiguation_NullSQL verifies the nil-DB guard.
+func TestRecomputeTitleDisambiguation_NullSQL(t *testing.T) {
+	t.Parallel()
+	db := &MediaDB{}
+	err := db.RecomputeTitleDisambiguation(context.Background(), []int64{1})
+	require.ErrorIs(t, err, ErrNullSQL)
 }
 
 // TestAttachZapScriptTags_TitleGlobalAcrossPages proves the page-independence fix:
