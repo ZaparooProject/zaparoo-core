@@ -117,6 +117,7 @@ const (
 	TagTypeMameParent    TagType = "mameparent"    // MAME parent ROM relationship
 	TagTypeRegion        TagType = "region"        // Release region
 	TagTypeYear          TagType = "year"          // Release year
+	TagTypeBuildDate     TagType = "builddate"     // Romset/build date (YYYY-MM-DD); MiSTer arcade YYMMDD
 	TagTypeSeason        TagType = "season"        // TV show season number
 	TagTypeEpisode       TagType = "episode"       // TV show episode number
 	TagTypeTrack         TagType = "track"         // Music track number
@@ -684,6 +685,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagUnfinishedPreview,     // Preview version (our addition)
 		TagUnfinishedPrerelease,  // Pre-release version (our addition)
 		TagUnfinishedFinal,       // Final release (TOSEC/demo-scene: completed version)
+		TagUnfinishedWIP,         // Work-in-progress build
 		// Demo variants
 		TagUnfinishedDemoPlayable, TagUnfinishedDemoRolling, TagUnfinishedDemoSlideshow,
 	},
@@ -759,6 +761,10 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 	TagTypeCredit: {
 		// Dynamic values - company credits where developer/publisher role is unspecified
+	},
+
+	TagTypeBuildDate: {
+		// Dynamic values - romset/build dates normalized to YYYY-MM-DD by the parser.
 	},
 
 	TagTypeRelease: {

@@ -415,7 +415,7 @@ type SearchResultWithCursor struct {
 // siblings, so a sole differentiator always survives truncation regardless of its rank.
 // Rank is the slice index.
 var TagTypeDisplayPriority = []string{
-	"unfinished", "unlicensed", "region", "disc", "edition", "rev",
+	"unfinished", "unlicensed", "region", "disc", "edition", "rev", "builddate",
 	"lang", "distribution", "media", "release", "year",
 	"players", "developer", "publisher", "credit",
 }
@@ -437,12 +437,26 @@ func TagTypeDisplayRank(tagType string) int {
 	return len(TagTypeDisplayPriority)
 }
 
+// isFourDigitYear reports whether s is exactly four ASCII digits, the only form
+// accepted for a year value in a ZapScript title command.
+func isFourDigitYear(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // BuildTitleZapScript builds a ZapScript title command string from a system ID,
 // media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (type:value)
 // Multiple values of the same type are grouped into one parens as a comma-separated
 // shorthand: (region:eu, region:us). Types are emitted in the order they first appear in
 // the input (callers pass tags pre-sorted by display priority). Only non-empty tags are
-// included; year values must be 4 digits.
+// included; year values must be exactly 4 digits.
 func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 	var sb strings.Builder
 	_, _ = sb.WriteString("@" + systemID + "/" + name)
@@ -453,7 +467,7 @@ func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 		if tag.Tag == "" {
 			continue
 		}
-		if tag.Type == "year" && len(tag.Tag) != 4 {
+		if tag.Type == "year" && !isFourDigitYear(tag.Tag) {
 			continue
 		}
 		if _, seen := valuesByType[tag.Type]; !seen {

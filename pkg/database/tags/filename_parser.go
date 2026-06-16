@@ -236,6 +236,40 @@ func classifyUnmappedParen(normalized, _ string) ([]CanonicalTag, bool) {
 		return []CanonicalTag{{Type: TagTypeRelease, Value: TagReleaseClassics, Source: TagSourceBracketed}}, true
 	}
 
+	// ROM hack with a title prefix: "smw-hack", "sa-1-smw-hack" → unlicensed:hack.
+	// (Bare "hack" already maps; the title prefix is what breaks the dash-split.)
+	if last == "hack" && len(tokens) >= 2 {
+		return []CanonicalTag{{Type: TagTypeUnlicensed, Value: TagUnlicensedHack, Source: TagSourceBracketed}}, true
+	}
+
+	// Cracked dump with a cracker credit: "4am-crack", "...-crack" → dump:cracked.
+	if last == "crack" && len(tokens) >= 2 {
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpCracked, Source: TagSourceBracketed}}, true
+	}
+
+	// Literal translation marker: "english-translation" → unlicensed:translation, plus the
+	// language tag when the prefix names a language.
+	if last == "translation" {
+		result := []CanonicalTag{{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceBracketed}}
+		if len(tokens) >= 2 {
+			prefix := strings.Join(tokens[:len(tokens)-1], "-")
+			for _, lt := range mapFilenameTagToCanonical(prefix) {
+				if lt.Type == TagTypeLang {
+					lt.Source = TagSourceBracketed
+					result = append(result, lt)
+				}
+			}
+		}
+		return result, true
+	}
+
+	// Set number: "set-1", "set-2" → set:N (distinct from media-structure "disc-N").
+	if first == "set" && len(tokens) >= 2 {
+		if number, ok := normalizeStructuralNumber(tokens[1]); ok {
+			return []CanonicalTag{{Type: TagTypeSet, Value: TagValue(number), Source: TagSourceBracketed}}, true
+		}
+	}
+
 	// Version phrases — drop, no tag ("version" or its Romance-language equivalents)
 	for _, t := range tokens {
 		if t == "version" || t == "versione" || t == "versao" {
@@ -1036,6 +1070,7 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 	}
 
 	var results []CanonicalTag
+	var unmatched []string
 
 	for _, part := range parts {
 		// Clean up the part (remove leading/trailing whitespace and dashes)
@@ -1048,10 +1083,37 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 		normalized := cachedNormalizeTag(part)
 		mapped := mapFilenameTagToCanonical(normalized)
 
+		matched := false
 		for _, ct := range mapped {
 			if ct.Type != TagTypeUnknown {
 				ct.Source = TagSourceBracketed
 				results = append(results, ct)
+				matched = true
+			}
+		}
+		// A comma-part may itself be a "Region YYMMDD" pack, e.g. the "Japan 951020"
+		// half of "(CPS Changer, Japan 951020)".
+		if !matched {
+			if rdTags, ok := parseRegionDateToken(normalized); ok {
+				results = append(results, rdTags...)
+				matched = true
+			}
+		}
+		if !matched {
+			unmatched = append(unmatched, normalized)
+		}
+	}
+
+	// MiSTer Arcade also writes the region and date as separate comma-parts, e.g.
+	// "(EU, 961004)". A standalone 6-digit number is normally rejected as a date, but
+	// the presence of a region sibling makes it unambiguous, so accept it here.
+	if hasTagType(results, TagTypeRegion) {
+		for _, u := range unmatched {
+			if v, ok := parseBuildDate(u); ok {
+				results = append(results, CanonicalTag{
+					Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed,
+				})
+				break
 			}
 		}
 	}
@@ -1060,6 +1122,42 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 		return results
 	}
 	return nil
+}
+
+// parseRegionDateToken handles the MiSTer Arcade naming convention where a single
+// parenthetical packs a region word and a build date, space-separated (normalization
+// turns the space into a dash): "World 931005" → "world-931005" →
+// region:world + builddate:1993-10-05. It also accepts a standalone build date
+// (YYYY-MM-DD or YYYYMMDD). A bare 6-digit number is deliberately NOT treated as a
+// date unless preceded by a region word, to avoid false positives on plain numbers.
+// Returns the canonical tags and true on a match.
+func parseRegionDateToken(normalized string) ([]CanonicalTag, bool) {
+	// Standalone date: YYYY-MM-DD (dashed) or YYYYMMDD (8 digits). Bare 6-digit is
+	// excluded here — it only counts as a date with a region prefix (below).
+	if strings.Contains(normalized, "-") || len(normalized) == 8 {
+		if v, ok := parseBuildDate(normalized); ok {
+			return []CanonicalTag{{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed}}, true
+		}
+	}
+
+	// Region word + trailing date. Split on the last dash so multi-word regions
+	// ("hong-kong", "united-kingdom") stay intact.
+	i := strings.LastIndex(normalized, "-")
+	if i <= 0 || i >= len(normalized)-1 {
+		return nil, false
+	}
+	prefix, last := normalized[:i], normalized[i+1:]
+	v, ok := parseBuildDate(last)
+	if !ok {
+		return nil, false
+	}
+	regionTags := mapFilenameTagToCanonical(prefix)
+	if !hasTagType(regionTags, TagTypeRegion) {
+		return nil, false
+	}
+	result := withSource(regionTags, TagSourceBracketed)
+	result = append(result, CanonicalTag{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed})
+	return result, true
 }
 
 // disambiguateTag uses context to determine the correct canonical tag(s) for an ambiguous raw tag.
@@ -1121,6 +1219,12 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 	// Check if it's comma-separated mixed tags (JP, Rev B) or (USA, Europe)
 	if mixedTags := parseCommaSeparatedTags(normalized); mixedTags != nil {
 		return mixedTags
+	}
+
+	// MiSTer Arcade "Region YYMMDD" packs a region word and a build date in one
+	// parens (no comma): "World 931005" → region:world + builddate:1993-10-05.
+	if rdTags, ok := parseRegionDateToken(normalized); ok {
+		return rdTags
 	}
 
 	// For parentheses tags, use position and context

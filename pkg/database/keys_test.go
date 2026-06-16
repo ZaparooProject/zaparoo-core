@@ -226,6 +226,13 @@ func TestBuildTitleZapScript(t *testing.T) {
 			want:     "@SNES/Game",
 		},
 		{
+			name:     "year tag with non-digit chars skipped",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "abcd", Type: "year"}},
+			want:     "@SNES/Game",
+		},
+		{
 			name:     "players tag",
 			systemID: "SNES",
 			gameName: "Game",
