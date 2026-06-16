@@ -525,6 +525,15 @@ func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []databas
 
 	for i := range results {
 		if zapTags, ok := byMedia[results[i].MediaID]; ok {
+			// Order by display importance (variant flags, region, ... credit last) so
+			// clients can render left-to-right and truncate. Within a type, sort by value.
+			sort.SliceStable(zapTags, func(a, b int) bool {
+				ra, rb := database.TagTypeDisplayRank(zapTags[a].Type), database.TagTypeDisplayRank(zapTags[b].Type)
+				if ra != rb {
+					return ra < rb
+				}
+				return zapTags[a].Tag < zapTags[b].Tag
+			})
 			results[i].ZapScriptTags = zapTags
 		}
 	}

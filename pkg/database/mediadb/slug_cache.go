@@ -320,5 +320,15 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
+	// Order by display importance so the written ZapScript matches the order shown to
+	// users (variant flags, region, ... credit last); sort by value within a type.
+	sort.SliceStable(resultTags, func(a, b int) bool {
+		ra, rb := database.TagTypeDisplayRank(resultTags[a].Type), database.TagTypeDisplayRank(resultTags[b].Type)
+		if ra != rb {
+			return ra < rb
+		}
+		return resultTags[a].Tag < resultTags[b].Tag
+	})
+
 	return resultTags, nil
 }

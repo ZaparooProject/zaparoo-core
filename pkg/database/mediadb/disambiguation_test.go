@@ -251,3 +251,56 @@ func TestGetZapScriptTagsBySystemAndPath_Integration(t *testing.T) {
 	require.Len(t, got, 1, "only release differs across the two variants")
 	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, got[0])
 }
+
+// TestRecomputeSystemDisambiguation_RegionDisambiguates exercises a newly eligible tag
+// type: region (us vs jp) now disambiguates same-named regional variants.
+func TestRecomputeSystemDisambiguation_RegionDisambiguates(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "Genesis", "Sonic The Hedgehog", []disambTitleMedia{
+		{path: "/roms/genesis/sonic-usa.md", tags: map[string]string{"region": "us"}},
+		{path: "/roms/genesis/sonic-jpn.md", tags: map[string]string{"region": "jp"}},
+	})
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Equal(t, "region", titleDisambiguationTypes(t, mediaDB, titleDBID))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaIDs[0], Name: "Sonic The Hedgehog", SystemID: "Genesis", DisambiguationTypes: "region"},
+	}
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.Len(t, results[0].ZapScriptTags, 1)
+	assert.Equal(t, database.TagInfo{Type: "region", Tag: "us"}, results[0].ZapScriptTags[0])
+}
+
+// TestAttachZapScriptTags_OrdersByDisplayPriority verifies emitted tags come back in
+// display-importance order (unfinished › region › rev), not alphabetical, so clients can
+// render-and-truncate left to right.
+func TestAttachZapScriptTags_OrdersByDisplayPriority(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "Genesis", "Streets of Rage", []disambTitleMedia{
+		{path: "/roms/genesis/sor-a.md", tags: map[string]string{"region": "us", "unfinished": "beta", "rev": "a"}},
+		{path: "/roms/genesis/sor-b.md", tags: map[string]string{"region": "jp", "unfinished": "proto", "rev": "b"}},
+	})
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	stored := titleDisambiguationTypes(t, mediaDB, titleDBID)
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaIDs[0], Name: "Streets of Rage", SystemID: "Genesis", DisambiguationTypes: stored},
+	}
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.Len(t, results[0].ZapScriptTags, 3)
+	gotOrder := []string{
+		results[0].ZapScriptTags[0].Type,
+		results[0].ZapScriptTags[1].Type,
+		results[0].ZapScriptTags[2].Type,
+	}
+	assert.Equal(t, []string{"unfinished", "region", "rev"}, gotOrder)
+}

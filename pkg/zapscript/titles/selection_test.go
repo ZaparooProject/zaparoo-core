@@ -300,6 +300,59 @@ func TestHasAllTagsOperators(t *testing.T) {
 			tagFilters: []zapscript.TagFilter{},
 			expected:   true,
 		},
+		{
+			name: "multi-value type - AND matches one value in the set",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "region", Tag: "us"},
+					{Type: "region", Tag: "eu"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+			},
+			expected: true,
+		},
+		{
+			name: "multi-value type - AND of two values both in the set",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "region", Tag: "us"},
+					{Type: "region", Tag: "eu"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorAND},
+			},
+			expected: true, // set-aware: collapsing to one value would fail this
+		},
+		{
+			name: "multi-value type - AND value not in the set",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "region", Tag: "us"},
+					{Type: "region", Tag: "eu"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "jp", Operator: zapscript.TagOperatorAND},
+			},
+			expected: false,
+		},
+		{
+			name: "multi-value lang - NOT matches a value in the set",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "lang", Tag: "en"},
+					{Type: "lang", Tag: "fr"},
+				},
+			},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "lang", Value: "fr", Operator: zapscript.TagOperatorNOT},
+			},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

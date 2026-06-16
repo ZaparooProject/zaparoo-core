@@ -407,27 +407,74 @@ type SearchResultWithCursor struct {
 	HasCover            bool
 }
 
+// TagTypeDisplayPriority orders the eligible disambiguation tag types from most to least
+// important for display. Clients render the emitted disambiguating tags left-to-right and
+// truncate when space runs out, so the most decisive distinctions come first: variant
+// flags (beta/proto/hack) before region, then the specific-variant markers, then extra
+// context. A tag type only appears on an entry when it actually differs across the title's
+// siblings, so a sole differentiator always survives truncation regardless of its rank.
+// Rank is the slice index.
+var TagTypeDisplayPriority = []string{
+	"unfinished", "unlicensed", "region", "disc", "edition", "rev",
+	"lang", "distribution", "media", "release", "year",
+	"players", "developer", "publisher", "credit",
+}
+
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
-// title commands. Only these types are considered when checking for disambiguation.
-var ZapScriptTagTypes = []string{"year", "players", "rev", "developer", "publisher", "credit", "edition", "release"}
+// title commands. Only these types are considered when checking for disambiguation. This
+// is the same set as TagTypeDisplayPriority; order is irrelevant here (used for SQL
+// membership), so it aliases the priority list to keep the two in sync.
+var ZapScriptTagTypes = TagTypeDisplayPriority
+
+// TagTypeDisplayRank returns the display-importance rank of a tag type (lower is more
+// important). Unknown types sort last. Used to order emitted disambiguating tags.
+func TagTypeDisplayRank(tagType string) int {
+	for i, t := range TagTypeDisplayPriority {
+		if t == tagType {
+			return i
+		}
+	}
+	return len(TagTypeDisplayPriority)
+}
 
 // BuildTitleZapScript builds a ZapScript title command string from a system ID,
 // media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (type:value)
-// Only includes tags that are present in the provided slice.
+// Multiple values of the same type are grouped into one parens as a comma-separated
+// shorthand: (region:eu, region:us). Types are emitted in the order they first appear in
+// the input (callers pass tags pre-sorted by display priority). Only non-empty tags are
+// included; year values must be 4 digits.
 func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 	var sb strings.Builder
 	_, _ = sb.WriteString("@" + systemID + "/" + name)
+
+	typeOrder := make([]string, 0, len(tags))
+	valuesByType := make(map[string][]string, len(tags))
 	for _, tag := range tags {
 		if tag.Tag == "" {
 			continue
 		}
-		if tag.Type == "year" {
-			if len(tag.Tag) == 4 {
-				_, _ = sb.WriteString(" (year:" + tag.Tag + ")")
-			}
+		if tag.Type == "year" && len(tag.Tag) != 4 {
 			continue
 		}
-		_, _ = sb.WriteString(" (" + tag.Type + ":" + tag.Tag + ")")
+		if _, seen := valuesByType[tag.Type]; !seen {
+			typeOrder = append(typeOrder, tag.Type)
+		}
+		valuesByType[tag.Type] = append(valuesByType[tag.Type], tag.Tag)
+	}
+
+	for _, tagType := range typeOrder {
+		values := valuesByType[tagType]
+		if len(values) == 0 {
+			continue
+		}
+		_, _ = sb.WriteString(" (")
+		for k, v := range values {
+			if k > 0 {
+				_, _ = sb.WriteString(", ")
+			}
+			_, _ = sb.WriteString(tagType + ":" + v)
+		}
+		_, _ = sb.WriteString(")")
 	}
 	return sb.String()
 }
