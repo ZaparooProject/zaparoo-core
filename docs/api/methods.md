@@ -1616,7 +1616,7 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 | Key              | Type        | Required | Description |
 | :--------------- | :---------- | :------- | :---------- |
-| launcherOverride | string|null | Yes      | Launcher ID to use for this media row, matched case-insensitively and stored with canonical casing. Use `null` to clear it. Empty strings are rejected. |
+| launcherOverride | string\|null | Yes      | Launcher ID to use for this media row, matched case-insensitively and stored with canonical casing. Use `null` to clear it. Empty strings are rejected. |
 
 #### Result
 
