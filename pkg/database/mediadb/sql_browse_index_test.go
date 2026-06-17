@@ -101,12 +101,17 @@ func TestBrowseIndex_BucketsCountsAndSeek(t *testing.T) {
 
 	keys := make([]string, len(result.Buckets))
 	counts := make(map[string]int, len(result.Buckets))
+	offsets := make(map[string]int, len(result.Buckets))
 	for i, b := range result.Buckets {
 		keys[i] = b.Key
 		counts[b.Key] = b.Count
+		offsets[b.Key] = b.Offset
 	}
 	assert.Equal(t, []string{"#", "0-9", "A", "B", "Z"}, keys, "buckets in scroll order")
 	assert.Equal(t, map[string]int{"#": 1, "0-9": 1, "A": 2, "B": 1, "Z": 1}, counts)
+	// Offset is the bucket's 0-based file position = cumulative count of earlier
+	// buckets (#:0, 0-9:1, A:2, B:4, Z:5).
+	assert.Equal(t, map[string]int{"#": 0, "0-9": 1, "A": 2, "B": 4, "Z": 5}, offsets)
 
 	// The first bucket in the list begins the list (no preceding row).
 	require.True(t, result.Buckets[0].AtStart)
@@ -139,10 +144,15 @@ func TestBrowseIndex_DescOrder(t *testing.T) {
 
 	assert.Equal(t, "latin", result.Scheme)
 	keys := make([]string, len(result.Buckets))
+	offsets := make(map[string]int, len(result.Buckets))
 	for i, b := range result.Buckets {
 		keys[i] = b.Key
+		offsets[b.Key] = b.Offset
 	}
 	assert.Equal(t, []string{"Z", "B", "A", "0-9", "#"}, keys, "reversed for name-desc")
+	// Offset is the bucket's 0-based position in the descending listing =
+	// cumulative count of earlier buckets (Z:0, B:1, A:2, 0-9:4, #:5).
+	assert.Equal(t, map[string]int{"Z": 0, "B": 1, "A": 2, "0-9": 4, "#": 5}, offsets)
 	require.True(t, result.Buckets[0].AtStart, "Z begins a descending list")
 
 	for _, b := range result.Buckets {

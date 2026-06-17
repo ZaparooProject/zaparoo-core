@@ -66,8 +66,8 @@ func TestHandleMediaBrowseIndex_FilesystemPath(t *testing.T) {
 			SortMode:   "name-desc",
 			TotalFiles: 3,
 			Buckets: []database.BrowseIndexBucket{
-				{Key: "A", AtStart: true},
-				{Key: "B", SortValue: "Apex", LastID: 7, Count: 2},
+				{Key: "A", AtStart: true, Count: 5, Offset: 0},
+				{Key: "B", SortValue: "Apex", LastID: 7, Count: 2, Offset: 5},
 			},
 		}, nil)
 
@@ -86,6 +86,8 @@ func TestHandleMediaBrowseIndex_FilesystemPath(t *testing.T) {
 	assert.Equal(t, "A", res.Groups[0].Key)
 	assert.Equal(t, "A", res.Groups[0].Label)
 	assert.Empty(t, res.Groups[0].Cursor)
+	assert.Equal(t, 0, res.Groups[0].Offset)
+	assert.Equal(t, 5, res.Groups[1].Offset)
 
 	// The second bucket carries a real seek cursor that decodes to its keyset.
 	assert.Equal(t, "B", res.Groups[1].Key)

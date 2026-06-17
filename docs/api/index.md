@@ -232,7 +232,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **61 registered methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. These API docs cover **62 methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
@@ -256,6 +256,7 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.browse.index              | Return first-character jump-to-letter buckets and seek cursors for a browse scope.    |
 | media.lookup                    | Resolve a game name and system to a media database match.                             |
 | media.meta                      | Return metadata for a specific indexed media row.                                     |
+| media.meta.update               | Update writable metadata fields for a specific indexed media row.                     |
 | media.image                     | Return the best matching image for a specific indexed media row.                      |
 | media.clean.orphans             | Remove orphaned media database rows.                                                  |
 | scrapers                        | List available metadata scrapers.                                                     |
