@@ -983,7 +983,7 @@ func sqlBrowseIndex(
 	), counts AS (
 		SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
 	)
-	SELECT o.bucket, o.sortValue, o.dbid, c.n
+	SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
 	FROM ordered o
 	INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
 	ORDER BY o.rn`
@@ -1001,8 +1001,9 @@ func sqlBrowseIndex(
 			sortValue string
 			dbid      int64
 			count     int
+			firstRN   int64
 		)
-		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count); scanErr != nil {
+		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
 			return database.BrowseIndexResult{}, fmt.Errorf("browse index scan: %w", scanErr)
 		}
 		// Nudge the tiebreaker so the strict keyset comparison includes this row:
@@ -1016,7 +1017,9 @@ func sqlBrowseIndex(
 			SortValue: sortValue,
 			LastID:    cursorID,
 			Count:     count,
-			AtStart:   len(result.Buckets) == 0,
+			// rn is 1-based; the bucket's first item is its 0-based file offset.
+			Offset:  int(firstRN - 1),
+			AtStart: len(result.Buckets) == 0,
 		})
 		result.TotalFiles += count
 	}

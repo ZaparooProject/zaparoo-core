@@ -203,6 +203,7 @@ func buildBrowseIndexResponse(result database.BrowseIndexResult) (any, error) {
 			Label:  bucket.Key,
 			Cursor: cursor,
 			Count:  bucket.Count,
+			Offset: bucket.Offset,
 		})
 	}
 

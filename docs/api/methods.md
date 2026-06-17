@@ -737,6 +737,7 @@ All parameters are optional.
 | label  | string | Yes      | Display text for the bucket. Equal to `key` for the `latin` scheme.                               |
 | count  | number | Yes      | Number of media files in the bucket.                                                              |
 | cursor | string | Yes      | Opaque `media.browse` cursor positioned just before the bucket's first row. Empty string for the bucket that begins the list (call `media.browse` with no cursor for the first page). |
+| offset | number | Yes      | 0-based position of the bucket's first item among the scope's media files, taken from its row number in the same ordered listing `media.browse` pages through (so it cannot drift from the browse order). Excludes any directory entries the listing shows before files; a client that jumps to a position in the full list adds its own leading-directory count. Use this to jump to the bucket's position rather than reloading from `cursor`. |
 
 Clients should render `groups` exactly as received, in order, without assuming a particular alphabet: `scheme` and `key` are opaque so a future locale-aware scheme (e.g. pinyin/kana/hangul buckets) requires no client change.
 
@@ -766,9 +767,9 @@ Clients should render `groups` exactly as received, in order, without assuming a
     "scheme": "latin",
     "totalFiles": 150,
     "groups": [
-      { "key": "#", "label": "#", "count": 3, "cursor": "" },
-      { "key": "0-9", "label": "0-9", "count": 7, "cursor": "eyJzb3J0VmFsdWUiOiIjV29sZiIsImxhc3RJZCI6MTAyfQ==" },
-      { "key": "A", "label": "A", "count": 12, "cursor": "eyJzb3J0VmFsdWUiOiI5IExpdmVzIiwibGFzdElkIjoxMTV9" }
+      { "key": "#", "label": "#", "count": 3, "cursor": "", "offset": 0 },
+      { "key": "0-9", "label": "0-9", "count": 7, "cursor": "eyJzb3J0VmFsdWUiOiIjV29sZiIsImxhc3RJZCI6MTAyfQ==", "offset": 3 },
+      { "key": "A", "label": "A", "count": 12, "cursor": "eyJzb3J0VmFsdWUiOiI5IExpdmVzIiwibGFzdElkIjoxMTV9", "offset": 10 }
     ]
   }
 }
@@ -1481,6 +1482,7 @@ Single requests return the existing single `media` response shape. Batch request
 | isMissing  | boolean                                 | Yes      | Whether the indexed file is currently missing.        |
 | tags       | [TagInfo](#taginfo-object)[]            | Yes      | ROM-level tags for this media row.                    |
 | properties | object                                  | Yes      | ROM-level properties keyed by canonical type tag.     |
+| launcherOverride | string                            | No       | Launcher ID stored for this media row, mirrored from `property:launcher-override` in `properties`. When present, Core uses it for title, search, path, random, and history launches unless ZapScript includes an explicit `launcher` argument. |
 | title      | [MediaMetaTitle](#media-meta-title-object) | Yes   | Shared title metadata for this media row.             |
 
 ##### Media meta title object
@@ -1538,7 +1540,13 @@ Property keys are canonical type tags such as `property:description`, `property:
       "tags": [
         {"type": "region", "tag": "usa"}
       ],
-      "properties": {},
+      "properties": {
+        "property:launcher-override": {
+          "text": "RetroArch",
+          "contentType": ""
+        }
+      },
+      "launcherOverride": "RetroArch",
       "title": {
         "slug": "super mario world",
         "name": "Super Mario World",
@@ -1576,6 +1584,77 @@ Property keys are canonical type tags such as `property:description`, `property:
       {"mediaId": 42},
       {"system": "SNES", "path": "/roms/snes/Super Metroid.sfc"}
     ]
+  }
+}
+```
+
+### media.meta.update
+
+Update writable metadata fields for one indexed media row, then return the same response shape as [`media.meta`](#mediameta).
+
+Use this to store a per-media launcher override. Core validates the launcher exists and supports the media row's system before saving it. Set `launcherOverride` to `null` to clear the override.
+
+Launcher selection order is:
+
+1. Explicit `launcher` advanced argument in ZapScript.
+2. Per-media `launcherOverride` stored with `media.meta.update`.
+3. System default launcher from configuration.
+4. Normal launcher matching.
+
+#### Parameters
+
+An object identifying the media row by `mediaId` or by `system` and canonical `path`.
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| mediaId | number | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system  | string | No       | System ID for the media row. Required when `mediaId` is omitted. |
+| path    | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
+| media   | object | Yes      | Patch object. Currently supports only `launcherOverride`. |
+
+##### Media patch object
+
+| Key              | Type        | Required | Description |
+| :--------------- | :---------- | :------- | :---------- |
+| launcherOverride | string|null | Yes      | Launcher ID to use for this media row, matched case-insensitively and stored with canonical casing. Use `null` to clear it. Empty strings are rejected. |
+
+#### Result
+
+| Key   | Type                            | Required | Description                 |
+| :---- | :------------------------------ | :------- | :-------------------------- |
+| media | [MediaMeta](#media-meta-object) | Yes      | Updated metadata for row.   |
+
+#### Example
+
+##### Set override
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.meta.update",
+  "params": {
+    "mediaId": 42,
+    "media": {
+      "launcherOverride": "RetroArch"
+    }
+  }
+}
+```
+
+##### Clear override
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "media.meta.update",
+  "params": {
+    "system": "SNES",
+    "path": "/roms/snes/Super Mario World.sfc",
+    "media": {
+      "launcherOverride": null
+    }
   }
 }
 ```

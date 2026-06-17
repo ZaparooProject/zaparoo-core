@@ -84,12 +84,15 @@ type BrowseResults struct {
 // the key). Cursor is an opaque media.browse cursor positioned just before the
 // bucket's first row: passing it to media.browse with the same scope returns a
 // continuous page that begins at the bucket. Clients must treat Key and Cursor
-// as opaque.
+// as opaque. Offset is the 0-based position of the bucket's first item among
+// the scope's media files (excluding any leading directories), for clients that
+// jump to a position in the full list rather than reload from the cursor.
 type BrowseIndexGroup struct {
 	Key    string `json:"key"`
 	Label  string `json:"label"`
 	Cursor string `json:"cursor"`
 	Count  int    `json:"count"`
+	Offset int    `json:"offset"`
 }
 
 // BrowseIndexResults is the response for media.browse.index. Scheme reports the

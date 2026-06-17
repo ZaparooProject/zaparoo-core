@@ -358,13 +358,17 @@ type BrowseIndexOptions struct {
 // BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
 // and LastID are the keyset of the row immediately before the bucket's first
 // row, so a media.browse cursor built from them lands a page on the bucket's
-// first item. AtStart is true for the bucket that begins the list (no preceding
-// row), in which case the caller should produce an empty cursor.
+// first item. Offset is the bucket's 0-based position among the scope's files
+// (its row number in the ordered query, so it can't drift from the browse
+// order); it excludes leading directories, which the caller adds. AtStart is
+// true for the bucket that begins the list (no preceding row), in which case
+// the caller should produce an empty cursor.
 type BrowseIndexBucket struct {
 	Key       string
 	SortValue string
 	LastID    int64
 	Count     int
+	Offset    int
 	AtStart   bool
 }
 
