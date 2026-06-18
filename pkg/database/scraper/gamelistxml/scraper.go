@@ -56,6 +56,7 @@ import (
 type GamelistRecord struct {
 	AvailableMediaDirs  map[string]string
 	SystemRootPath      string
+	AssetRootPath       string
 	MatchKind           gamelistMatchKind
 	Game                esapi.Game
 	MatchedMediaDBID    int64
@@ -304,6 +305,7 @@ func resolveSystemsFromPlatform(
 
 type parsedGamelistFile struct {
 	RootPath           string
+	AssetRootPath      string
 	GamelistPath       string
 	AvailableMediaDirs map[string]string
 	Games              []esapi.Game
@@ -343,12 +345,65 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 			Msg("gamelistxml: loaded gamelist.xml")
 		parsed.Files = append(parsed.Files, parsedGamelistFile{
 			RootPath:           rootPath,
+			AssetRootPath:      rootPath,
 			GamelistPath:       gamelistPath,
 			AvailableMediaDirs: statMediaDirsFS(g.filesystem(), rootPath),
 			Games:              gl.Games,
 		})
 	}
+
+	if file, ok := g.loadCustomGamelistFile(system); ok {
+		parsed.Files = append(parsed.Files, file)
+	}
+
 	return parsed, nil
+}
+
+// loadCustomGamelistFile checks the configured custom gamelists path for
+// {custom_gamelists_path}/{system.ID}/gamelist.xml and loads it if present.
+// Asset paths (image, video, manual, etc.) are resolved relative to the
+// custom system directory, while game.Path is resolved relative to the
+// system's first ROM path (falling back to the custom directory if the
+// system has none), matching how a regular ES gamelist.xml co-located with
+// ROMs would resolve paths.
+func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem) (parsedGamelistFile, bool) {
+	if g.cfg == nil {
+		return parsedGamelistFile{}, false
+	}
+	customBase := g.cfg.ScraperCustomGamelistsPath()
+	if customBase == "" {
+		return parsedGamelistFile{}, false
+	}
+
+	customSystemDir := filepath.Join(customBase, system.ID)
+	gamelistPath := filepath.Join(customSystemDir, "gamelist.xml")
+	exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
+	if statErr != nil || !exists {
+		return parsedGamelistFile{}, false
+	}
+
+	gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
+	if err != nil {
+		log.Warn().Err(err).Str("path", gamelistPath).
+			Msg("gamelistxml: failed to read custom gamelist.xml, skipping")
+		return parsedGamelistFile{}, false
+	}
+
+	rootPath := customSystemDir
+	if len(system.ROMPaths) > 0 {
+		rootPath = system.ROMPaths[0]
+	}
+	log.Info().
+		Str("path", gamelistPath).
+		Int("entries", len(gl.Games)).
+		Msg("gamelistxml: loaded custom gamelist.xml")
+	return parsedGamelistFile{
+		RootPath:           rootPath,
+		AssetRootPath:      customSystemDir,
+		GamelistPath:       gamelistPath,
+		AvailableMediaDirs: statMediaDirsFS(g.filesystem(), customSystemDir),
+		Games:              gl.Games,
+	}, true
 }
 
 // LoadRecords iterates gamelist.xml files found under each ROM root path for
@@ -421,6 +476,7 @@ outer:
 					slugPathSelections++
 					records = append(records, &GamelistRecord{
 						SystemRootPath:      file.RootPath,
+						AssetRootPath:       file.AssetRootPath,
 						AvailableMediaDirs:  file.AvailableMediaDirs,
 						Game:                *game,
 						MatchKind:           gamelistMatchSlugPath,
@@ -455,6 +511,7 @@ outer:
 				}
 				records = append(records, &GamelistRecord{
 					SystemRootPath:      file.RootPath,
+					AssetRootPath:       file.AssetRootPath,
 					AvailableMediaDirs:  file.AvailableMediaDirs,
 					Game:                *game,
 					MatchKind:           selection.matchKind,
@@ -476,6 +533,7 @@ outer:
 					Msg("gamelistxml: path-only fallback matched record")
 				records = append(records, &GamelistRecord{
 					SystemRootPath:      file.RootPath,
+					AssetRootPath:       file.AssetRootPath,
 					AvailableMediaDirs:  file.AvailableMediaDirs,
 					Game:                *game,
 					MatchKind:           gamelistMatchPathOnly,
@@ -1062,6 +1120,16 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	propType := string(tags.TagTypeProperty)
 	root := record.SystemRootPath
 
+	// assetRoot is the directory asset paths in the gamelist (image, video,
+	// manual, etc.) are resolved relative to. This is normally the same as
+	// root, but differs when the gamelist comes from a custom gamelists path
+	// (the asset paths stay relative to the gamelist's own directory while
+	// game.Path stays relative to the ROM root).
+	assetRoot := record.AssetRootPath
+	if assetRoot == "" {
+		assetRoot = root
+	}
+
 	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
 	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
@@ -1081,9 +1149,10 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 
 	// For each image property: use the XML path when present, otherwise scan
 	// the pre-stated media sub-directories for a matching <stem>.png file.
+	statGamelistImages := g.cfg.ScraperStatGamelistImages()
 	appendImageProp := func(propValue tags.TagValue, xmlPath string) {
 		key := propType + ":" + string(propValue)
-		p := pathProp(key, xmlPath, root, g.externalAssetRoots)
+		p := pathProp(key, xmlPath, assetRoot, g.externalAssetRoots, g.filesystem(), statGamelistImages)
 		if p == nil {
 			p = findMediaFilePropFS(
 				g.filesystem(), key, fallbackNames,
@@ -1118,10 +1187,16 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	appendImageProp(tags.TagPropertyImageTitleshot, titleshotXML)
 	appendImageProp(tags.TagPropertyImageMap, game.Map)
 
-	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root, g.externalAssetRoots); p != nil {
+	if p := pathProp(
+		propType+":"+string(tags.TagPropertyVideo), game.Video, assetRoot, g.externalAssetRoots,
+		g.filesystem(), false,
+	); p != nil {
 		mediaProps = append(mediaProps, *p)
 	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root, g.externalAssetRoots); p != nil {
+	if p := pathProp(
+		propType+":"+string(tags.TagPropertyManual), game.Manual, assetRoot, g.externalAssetRoots,
+		g.filesystem(), false,
+	); p != nil {
 		mediaProps = append(mediaProps, *p)
 	}
 
@@ -1240,14 +1315,23 @@ func appendNormalizedTag(tagInfos []database.TagInfo, tagType, raw, label string
 
 // pathProp resolves esPath to an absolute path and returns a MediaProperty for
 // the given typeTag. Returns nil if the path cannot be resolved (skipped cleanly).
-func pathProp(typeTag, esPath, systemRootPath string, externalAssetRoots []string) *database.MediaProperty {
+// If checkExists is true, the resolved file must exist on fs or nil is returned.
+func pathProp(
+	typeTag, esPath, systemRootPath string, externalAssetRoots []string, fs afero.Fs, checkExists bool,
+) *database.MediaProperty {
 	if esPath == "" {
 		return nil
 	}
-	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath, externalAssetRoots))
-	if abs == "" {
+	resolved := resolveESAssetPath(esPath, systemRootPath, externalAssetRoots)
+	if resolved == "" {
 		return nil
 	}
+	if checkExists {
+		if exists, err := afero.Exists(fs, resolved); err != nil || !exists {
+			return nil
+		}
+	}
+	abs := filepath.ToSlash(resolved)
 	return &database.MediaProperty{
 		TypeTag:     typeTag,
 		Text:        abs,
@@ -1620,6 +1704,7 @@ func isCompanionGame(game *esapi.Game) bool {
 type companionParent struct {
 	AvailableMediaDirs map[string]string
 	SystemRootPath     string
+	AssetRootPath      string
 	GameID             string
 	Game               esapi.Game
 }
@@ -1678,6 +1763,7 @@ func companionEntriesFromParsed(
 				parents = append(parents, companionParent{
 					Game:               game,
 					SystemRootPath:     file.RootPath,
+					AssetRootPath:      file.AssetRootPath,
 					AvailableMediaDirs: file.AvailableMediaDirs,
 					GameID:             game.ScreenScraperIDAttr,
 				})
@@ -1715,6 +1801,7 @@ func companionEntriesFromParsed(
 func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scraper.MapResult {
 	result := g.MapToDB(&GamelistRecord{
 		SystemRootPath:     p.SystemRootPath,
+		AssetRootPath:      p.AssetRootPath,
 		AvailableMediaDirs: p.AvailableMediaDirs,
 		Game:               p.Game,
 	})

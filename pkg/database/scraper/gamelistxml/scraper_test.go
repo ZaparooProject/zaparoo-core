@@ -1226,7 +1226,7 @@ func TestMapToDB_ScreenScraperID_NeitherSet(t *testing.T) {
 func TestPathProp_NormalizesSlashes(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	p := pathProp("prop:image", "./images/mario.png", root, nil)
+	p := pathProp("prop:image", "./images/mario.png", root, nil, afero.NewOsFs(), false)
 	require.NotNil(t, p, "expected non-nil property")
 	if strings.Contains(p.Text, "\\") {
 		t.Errorf("pathProp returned backslashes in path: %q", p.Text)
