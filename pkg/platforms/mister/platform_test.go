@@ -111,6 +111,18 @@ func TestIsWidgetScript(t *testing.T) {
 	assert.True(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "'-show-text'"))
 }
 
+func TestScriptRunMode(t *testing.T) {
+	t.Parallel()
+
+	runScript, widget := scriptRunMode("/media/fat/Scripts/test.sh", "")
+	assert.Equal(t, misterScriptRunFlag, runScript)
+	assert.False(t, widget)
+
+	runScript, widget = scriptRunMode("/media/fat/Scripts/zaparoo.sh", "'-show-text'")
+	assert.Equal(t, misterWidgetRunFlag, runScript)
+	assert.True(t, widget)
+}
+
 func TestLaunchSystem_MenuUsesReturnToMenu(t *testing.T) {
 	t.Parallel()
 

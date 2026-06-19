@@ -41,6 +41,13 @@ func isWidgetScript(bin, args string) bool {
 	return strings.HasSuffix(bin, "/zaparoo.sh") && strings.HasPrefix(args, "'-show-")
 }
 
+func scriptRunMode(bin, args string) (runScript string, widget bool) {
+	if isWidgetScript(bin, args) {
+		return misterWidgetRunFlag, true
+	}
+	return misterScriptRunFlag, false
+}
+
 func runScript(pl *Platform, bin, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("failed to stat script file: %w", err)
@@ -103,17 +110,16 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 	}
 
 	scriptPath := misterScriptPath
+	runScript, widgetScript := scriptRunMode(bin, args)
 	vt := "2"
-	runScript := misterScriptRunFlag
 	log.Debug().Msgf("bin: %s", bin)
 	log.Debug().Msgf("args: %s", args)
-	if isWidgetScript(bin, args) {
+	if widgetScript {
 		// launching widgets, so we'll use a different tty and script name
 		// to avoid the active script check (widgets handle this)
 		log.Debug().Msg("widget launched, changing params")
 		scriptPath = misterWidgetScriptPath
 		vt = launcherConsoleVT
-		runScript = misterWidgetRunFlag
 	}
 
 	// this is just to follow mister's convention, which reserves
