@@ -37,6 +37,10 @@ func scriptIsActive() bool {
 	return strings.TrimSpace(string(output)) != ""
 }
 
+func isWidgetScript(bin, args string) bool {
+	return strings.HasSuffix(bin, "/zaparoo.sh") && strings.HasPrefix(args, "'-show-")
+}
+
 func runScript(pl *Platform, bin, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("failed to stat script file: %w", err)
@@ -103,7 +107,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 	runScript := misterScriptRunFlag
 	log.Debug().Msgf("bin: %s", bin)
 	log.Debug().Msgf("args: %s", args)
-	if strings.HasSuffix(bin, "/zaparoo.sh") && strings.HasPrefix(args, "'-show-") {
+	if isWidgetScript(bin, args) {
 		// launching widgets, so we'll use a different tty and script name
 		// to avoid the active script check (widgets handle this)
 		log.Debug().Msg("widget launched, changing params")

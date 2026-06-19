@@ -103,6 +103,23 @@ func restoreTLSRootFallbackHooks(t *testing.T) {
 	})
 }
 
+func TestIsWidgetScript(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, isWidgetScript("/media/fat/Scripts/test.sh", ""))
+	assert.False(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "-show-text"))
+	assert.True(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "'-show-text'"))
+}
+
+func TestLaunchSystem_MenuUsesReturnToMenu(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+	err := p.LaunchSystem(&config.Instance{}, "Menu")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch menu")
+}
+
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
 	t.Parallel()
 
