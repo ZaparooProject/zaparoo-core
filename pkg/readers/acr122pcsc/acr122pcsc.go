@@ -359,8 +359,8 @@ func (r *ACR122PCSC) Close() error {
 	return nil
 }
 
-// TODO: this is a hack workaround to stop some log spam, probably the Detect
-// functions on readers should actually return an error instead of ""
+// PCSC reader listing can fail repeatedly when the service or hardware is absent.
+// Detect returns an empty string for "no reader", so log the first failure only.
 var detectErrorOnce sync.Once
 
 func (r *ACR122PCSC) Detect(connected []string) string {

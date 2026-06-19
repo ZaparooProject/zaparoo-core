@@ -54,13 +54,12 @@ type TapToConfig struct {
 }
 
 type SystemsConfig struct {
-	GamesFolder []string `ini:"games_folder,omitempty,allowshadow"` // TODO: rename root_folder?
-	SetCore     []string `ini:"set_core,omitempty,allowshadow"`     // TODO: deprecated? change to set_launcher
+	GamesFolder []string `ini:"games_folder,omitempty,allowshadow"`
+	SetCore     []string `ini:"set_core,omitempty,allowshadow"`
 }
 
 type LaunchersConfig struct {
 	AllowFile []string `ini:"allow_file,omitempty,allowshadow"`
-	// TODO: allow_shell - contents of shell command
 }
 
 type APIConfig struct {
@@ -195,7 +194,6 @@ func (c *UserConfig) IsFileAllowed(path string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, allowed := range c.Launchers.AllowFile {
-		// TODO: case insensitive on mister? platform option?
 		if runtime.GOOS == "windows" {
 			// do a case-insensitive comparison on windows
 			allowed = strings.ToLower(allowed)

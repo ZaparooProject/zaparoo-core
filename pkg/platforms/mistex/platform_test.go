@@ -24,9 +24,19 @@ package mistex
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLaunchSystem_MenuUsesLaunchMenu(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+	err := platform.LaunchSystem(&config.Instance{}, "Menu")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch menu")
+}
 
 // TestGamepadPress_DisabledReturnsError tests that GamepadPress returns an error
 // when the virtual gamepad is disabled (gpd.Device is nil).

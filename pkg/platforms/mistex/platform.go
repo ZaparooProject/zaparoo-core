@@ -293,7 +293,7 @@ func (p *Platform) ActiveGamePath() string {
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	// Handle menu specially - launch menu core directly
-	if strings.EqualFold(id, "menu") {
+	if strings.EqualFold(id, platforms.SystemMenu) {
 		if err := LaunchMenu(); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
