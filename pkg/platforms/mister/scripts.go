@@ -20,19 +20,15 @@ import (
 )
 
 const (
-	misterScriptPath       = "/tmp/script"
-	misterWidgetScriptPath = "/tmp/widget_script"
-	misterScriptRunFlag    = "1"
-	misterWidgetRunFlag    = "2"
+	misterScriptPath        = "/tmp/script"
+	misterScriptGrepCommand = "ps ax | grep [/]tmp/script"
+	misterWidgetScriptPath  = "/tmp/widget_script"
+	misterScriptRunFlag     = "1"
+	misterWidgetRunFlag     = "2"
 )
 
 func scriptIsActive() bool {
-	cmd := exec.CommandContext(
-		context.Background(),
-		"bash",
-		"-c",
-		"ps ax | grep [/]"+strings.TrimPrefix(misterScriptPath, "/"),
-	)
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", misterScriptGrepCommand)
 	output, err := cmd.Output()
 	if err != nil {
 		// grep returns an error code if there was no result
