@@ -152,7 +152,6 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 }
 
 func SystemsWithRBF() map[string]RBFInfo {
-	// TODO: include alt rbfs somehow?
 	results := make(map[string]RBFInfo)
 
 	rbfFiles, err := shallowScanRBF()

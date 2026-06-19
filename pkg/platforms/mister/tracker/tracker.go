@@ -45,7 +45,7 @@ type platformWithArcadeCache interface {
 type NameMapping struct {
 	CoreName   string
 	System     string
-	Name       string // TODO: use names.txt
+	Name       string
 	ArcadeName string
 }
 

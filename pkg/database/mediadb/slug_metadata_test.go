@@ -294,15 +294,14 @@ func TestGenerateSlugWithMetadata_DifferentMediaTypes(t *testing.T) {
 			expectedSecondary: "firstbattles01e05", // Secondary is reordered: "First Battle s01e05"
 			description:       "TV episode with S01E05 format and subtitle",
 		},
-		// TODO: Re-enable when ParseMovie is implemented
-		// {
-		// 	name:              "movie_with_year_no_secondary",
-		// 	mediaType:         slugs.MediaTypeMovie,
-		// 	input:             "The Matrix (1999)",
-		// 	expectedSlug:      "matrix",
-		// 	expectedSecondary: "",
-		// 	description:       "Movie with year in parentheses (stripped), no secondary title",
-		// },
+		{
+			name:              "movie_with_year_no_secondary",
+			mediaType:         slugs.MediaTypeMovie,
+			input:             "The Matrix (1999)",
+			expectedSlug:      "matrix",
+			expectedSecondary: "",
+			description:       "Movie with year in parentheses (stripped), no secondary title",
+		},
 		{
 			name:              "game_episode_like_with_dash",
 			mediaType:         slugs.MediaTypeGame,
@@ -311,15 +310,14 @@ func TestGenerateSlugWithMetadata_DifferentMediaTypes(t *testing.T) {
 			expectedSecondary: "s01e01", // After dash
 			description:       "Game with dash separator, episode-like title not normalized for Game type",
 		},
-		// TODO: Re-enable when ParseMusic is implemented
-		// {
-		// 	name:              "music_with_dash_separator",
-		// 	mediaType:         slugs.MediaTypeMusic,
-		// 	input:             "The Beatles - Hey Jude",
-		// 	expectedSlug:      "beatlesheyjude",
-		// 	expectedSecondary: "heyjude", // After dash
-		// 	description:       "Music title with dash separator between artist and song",
-		// },
+		{
+			name:              "music_with_dash_separator",
+			mediaType:         slugs.MediaTypeMusic,
+			input:             "The Beatles - Hey Jude",
+			expectedSlug:      "beatlesheyjude",
+			expectedSecondary: "heyjude", // After dash
+			description:       "Music title with dash separator between artist and song",
+		},
 		{
 			name:              "tvshow_vs_game_same_episode_title",
 			mediaType:         slugs.MediaTypeGame,

@@ -19,8 +19,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	misterScriptPath       = "/tmp/script"
+	misterWidgetScriptPath = "/tmp/widget_script"
+	misterScriptRunFlag    = "1"
+	misterWidgetRunFlag    = "2"
+)
+
 func scriptIsActive() bool {
-	cmd := exec.CommandContext(context.Background(), "bash", "-c", "ps ax | grep [/]tmp/script")
+	cmd := exec.CommandContext(
+		context.Background(),
+		"bash",
+		"-c",
+		"ps ax | grep [/]"+strings.TrimPrefix(misterScriptPath, "/"),
+	)
 	output, err := cmd.Output()
 	if err != nil {
 		// grep returns an error code if there was no result
@@ -44,7 +56,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		cmd := exec.CommandContext(context.Background(), bin, args) //nolint:gosec // G204: script runner's purpose
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
-			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT=1")
+			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT="+misterScriptRunFlag)
 		cmd.Dir = filepath.Dir(bin)
 		err := cmd.Run()
 		if err != nil {
@@ -90,19 +102,18 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		return fmt.Errorf("failed to open console for script: %w", err)
 	}
 
-	scriptPath := "/tmp/script"
+	scriptPath := misterScriptPath
 	vt := "2"
-	runScript := "1"
-	// TODO: these shouldn't be hardcoded
+	runScript := misterScriptRunFlag
 	log.Debug().Msgf("bin: %s", bin)
 	log.Debug().Msgf("args: %s", args)
 	if strings.HasSuffix(bin, "/zaparoo.sh") && strings.HasPrefix(args, "'-show-") {
 		// launching widgets, so we'll use a different tty and script name
 		// to avoid the active script check (widgets handle this)
 		log.Debug().Msg("widget launched, changing params")
-		scriptPath = "/tmp/widget_script"
+		scriptPath = misterWidgetScriptPath
 		vt = launcherConsoleVT
-		runScript = "2"
+		runScript = misterWidgetRunFlag
 	}
 
 	// this is just to follow mister's convention, which reserves

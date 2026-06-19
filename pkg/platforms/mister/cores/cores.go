@@ -89,11 +89,7 @@ func PathToMGLDef(system *Core, path string) (*MGLParams, error) {
 	return mglDef, fmt.Errorf("system has no matching mgl args: %s, %s", system.ID, path)
 }
 
-// FIXME: launch game > launch new game same system > not working? should it?
-// TODO: alternate cores (user core override)
 // TODO: alternate arcade folders
-// TODO: custom scan function
-// TODO: custom launch function
 // TODO: support globbing on extensions
 
 var Systems = map[string]Core{
@@ -583,8 +579,6 @@ var Systems = map[string]Core{
 		RBF: "_Console/NeoGeo",
 		Slots: []Slot{
 			{
-				// TODO: This also has some special handling re: zip files (darksoft pack).
-				// Exts: []strings{".*"}
 				Label: "ROM set",
 				Exts:  []string{".neo"},
 				Mgl: &MGLParams{

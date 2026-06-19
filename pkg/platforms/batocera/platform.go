@@ -393,7 +393,7 @@ func (p *Platform) ReturnToMenu() error {
 }
 
 func (p *Platform) LaunchSystem(_ *config.Instance, systemID string) error {
-	if strings.EqualFold(systemID, "menu") {
+	if strings.EqualFold(systemID, platforms.SystemMenu) {
 		return p.ReturnToMenu()
 	}
 
