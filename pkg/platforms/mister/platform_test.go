@@ -123,7 +123,7 @@ func TestScriptRunMode(t *testing.T) {
 	assert.True(t, widget)
 }
 
-func TestLaunchSystem_MenuUsesReturnToMenu(t *testing.T) {
+func TestLaunchSystem_MenuUsesLaunchMenu(t *testing.T) {
 	t.Parallel()
 
 	p := &Platform{}
