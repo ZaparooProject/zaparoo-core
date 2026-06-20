@@ -13,15 +13,52 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
-const misterLaunchableCategoryOther = "Other"
+const (
+	misterLaunchableCategoryComputer = "Computer"
+	misterLaunchableCategoryConsole  = "Console"
+	misterLaunchableCategoryOther    = "Other"
+)
 
-// Launchables exposes launch-only MiSTer _Other entries that do not already
-// have media or alternate-core launchers.
+type misterCoreLaunchableDefinition struct {
+	ID       uuid.UUID
+	Name     string
+	Category string
+	CorePath string
+}
+
+var misterCoreLaunchableDefinitions = []misterCoreLaunchableDefinition{
+	{ID: launchables.MisterConsoleAY38500, Name: "AY-3-8500", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "AY-3-8500")},
+	{ID: launchables.MisterConsoleBBCBridgeCompanion, Name: "BBC Bridge Companion", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "BBCBridgeCompanion")},
+	{ID: launchables.MisterConsoleMyVision, Name: "My Vision", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "MyVision")},
+	{ID: launchables.MisterConsoleSuperVision8000, Name: "Super Vision 8000", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "Super_Vision_8000")},
+	{ID: launchables.MisterComputerAltair8800, Name: "Altair 8800", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Altair8800")},
+	{ID: launchables.MisterComputerArchie, Name: "Archie", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Archie")},
+	{ID: launchables.MisterComputerAtariST, Name: "Atari ST", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "AtariST")},
+	{ID: launchables.MisterComputerC128, Name: "Commodore 128", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "C128")},
+	{ID: launchables.MisterComputerCoCo3, Name: "CoCo 3", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "CoCo3")},
+	{ID: launchables.MisterComputerColecoAdam, Name: "Coleco Adam", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "ColecoAdam")},
+	{ID: launchables.MisterComputerEG2000, Name: "EG2000 Colour Genie", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "eg2000")},
+	{ID: launchables.MisterComputerEnterprise, Name: "Enterprise", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Enterprise")},
+	{ID: launchables.MisterComputerHomelab, Name: "Homelab", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Homelab")},
+	{ID: launchables.MisterComputerIQ151, Name: "IQ-151", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "IQ151")},
+	{ID: launchables.MisterComputerMacLC, Name: "Mac LC", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "MacLC")},
+	{ID: launchables.MisterComputerOndraSPO186, Name: "Ondra SPO186", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Ondra_SPO186")},
+	{ID: launchables.MisterComputerPC88, Name: "PC-88", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "PC88")},
+	{ID: launchables.MisterComputerPCjr, Name: "PCjr", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "PCjr")},
+	{ID: launchables.MisterComputerSharpMZ, Name: "Sharp MZ", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "SharpMZ")},
+	{ID: launchables.MisterComputerTK2000, Name: "TK2000", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "TK2000")},
+	{ID: launchables.MisterComputerTandy1000, Name: "Tandy 1000", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Tandy1000")},
+	{ID: launchables.MisterComputerVT52, Name: "VT52", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "VT52")},
+}
+
+// Launchables exposes launch-only MiSTer core entries that do not already have
+// media launchers.
 func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
-	return []launchables.Launchable{
+	items := []launchables.Launchable{
 		launchables.VirtualSystem{
 			ID:       launchables.MisterOtherChess,
 			Name:     "Chess",
@@ -96,16 +133,36 @@ func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
 			Test:     testOtherCore("3S-ARM"),
 		},
 	}
+
+	for _, def := range misterCoreLaunchableDefinitions {
+		items = append(items, launchables.VirtualSystem{
+			ID:       def.ID,
+			Name:     def.Name,
+			Category: def.Category,
+			Launch:   p.launchCore(def.CorePath),
+			Test:     testCore(def.CorePath),
+		})
+	}
+
+	return items
 }
 
 func testOtherCore(shortName string) func(*config.Instance) bool {
+	return testCore(filepath.Join("_Other", shortName))
+}
+
+func testCore(corePath string) func(*config.Instance) bool {
 	return func(*config.Instance) bool {
-		return otherCoreExists(misterconfig.SDRootDir, shortName)
+		return coreExists(misterconfig.SDRootDir, corePath)
 	}
 }
 
 func otherCoreExists(rootDir, shortName string) bool {
-	matches, err := filepath.Glob(filepath.Join(rootDir, "_Other", shortName+"*.rbf"))
+	return coreExists(rootDir, filepath.Join("_Other", shortName))
+}
+
+func coreExists(rootDir, corePath string) bool {
+	matches, err := filepath.Glob(filepath.Join(rootDir, corePath+"*.rbf"))
 	return err == nil && len(matches) > 0
 }
 
@@ -136,6 +193,12 @@ func (p *Platform) launchShortCoreFile(corePath string) error {
 }
 
 func (p *Platform) launchOtherCore(
+	corePath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return p.launchCore(corePath)
+}
+
+func (p *Platform) launchCore(
 	corePath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
