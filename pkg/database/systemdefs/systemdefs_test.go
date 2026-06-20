@@ -291,6 +291,14 @@ func TestLookupSystemAliases(t *testing.T) {
 		{"GB alias", "GB", "Gameboy"},
 		{"GBA alias", "GameboyAdvance", "GBA"},
 		{"MAME alias", "MAME", "Arcade"},
+		// MSU/enhanced Genesis aliases
+		{"GenesisPlus by ID", "GenesisPlus", "GenesisPlus"},
+		{"GenesisPlus MDPlus alias", "MDPlus", "GenesisPlus"},
+		{"GenesisPlus MegaDrivePlus alias", "MegaDrivePlus", "GenesisPlus"},
+		// MSU-1 / SGB-MSU1 aliases
+		{"SNESMSU1 SNES-MSU1 alias", "SNES-MSU1", "SNESMSU1"},
+		{"SGBMSU1 SGB-MSU1 alias", "SGB-MSU1", "SGBMSU1"},
+		{"SGBMSU1 SuperGameboyMSU1 alias", "SuperGameboyMSU1", "SGBMSU1"},
 	}
 
 	for _, tt := range tests {
