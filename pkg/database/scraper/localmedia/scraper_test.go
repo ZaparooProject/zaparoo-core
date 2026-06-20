@@ -351,8 +351,9 @@ func TestMediaPropsForPath_MirroredSubfolderCrossRoot(t *testing.T) {
 func TestDeleteStaleLocalMediaProps_DeletesStaleCrossRootProp(t *testing.T) {
 	t.Parallel()
 
-	romRoot := filepath.Join(t.TempDir(), "cifs", "nes")
-	artRoot := filepath.Join(t.TempDir(), "fat", "nes")
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	artRoot := filepath.Join(base, "fat", "nes")
 	mediaPath := filepath.Join(romRoot, "Game.nes")
 	staleCrossRootPath := filepath.Join(artRoot, "media", "boxart", "Game.png")
 
