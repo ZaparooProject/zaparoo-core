@@ -94,48 +94,6 @@ func checkMappingData(m *database.Mapping, t *tokens.Token) bool {
 	return false
 }
 
-func isCfgRegex(s string) bool {
-	return len(s) > 2 && s[0] == '/' && s[len(s)-1] == '/'
-}
-
-func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
-	cfgMappings := cfg.Mappings()
-	mappings := make([]database.Mapping, 0, len(cfgMappings))
-
-	for _, m := range cfgMappings {
-		var dbm database.Mapping
-		dbm.Enabled = true
-		dbm.Override = m.ZapScript
-
-		switch m.TokenKey {
-		case "data":
-			dbm.Type = userdb.MappingTypeData
-		case "value":
-			dbm.Type = userdb.MappingTypeValue
-		default:
-			dbm.Type = userdb.MappingTypeID
-		}
-
-		switch {
-		case isCfgRegex(m.MatchPattern):
-			dbm.Match = userdb.MatchTypeRegex
-			dbm.Pattern = m.MatchPattern[1 : len(m.MatchPattern)-1]
-		case strings.Contains(m.MatchPattern, "*"):
-			// TODO: this behaviour doesn't actually match "partial"
-			// the old behaviour will need to be migrated to this one
-			dbm.Match = userdb.MatchTypePartial
-			dbm.Pattern = strings.ReplaceAll(m.MatchPattern, "*", "")
-		default:
-			dbm.Match = userdb.MatchTypeExact
-			dbm.Pattern = m.MatchPattern
-		}
-
-		mappings = append(mappings, dbm)
-	}
-
-	return mappings
-}
-
 //nolint:gocritic // single-use parameter in service function
 func getMapping(
 	cfg *config.Instance,
@@ -153,7 +111,7 @@ func getMapping(
 	}
 
 	// load config mappings after
-	ms = append(ms, mappingsFromConfig(cfg)...)
+	ms = append(ms, userdb.MappingsFromConfig(cfg)...)
 
 	for _, m := range ms {
 		switch m.Type {

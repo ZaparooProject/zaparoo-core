@@ -185,7 +185,11 @@ type MappingResponse struct {
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
-	Enabled  bool   `json:"enabled"`
+	// Source identifies where the mapping came from: "database" or "file".
+	Source string `json:"source"`
+	// ReadOnly is true for mappings that can't be edited via the API (file mappings).
+	ReadOnly bool `json:"readOnly"`
+	Enabled  bool `json:"enabled"`
 }
 
 type TokenResponse struct {

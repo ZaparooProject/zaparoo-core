@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -36,11 +37,53 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	mappingSourceDatabase = "database"
+	mappingSourceFile     = "file"
+)
+
+// toMappingResponse converts a mapping into its API response form, tagged with
+// its source. Only database mappings carry an ID and timestamp; file mappings
+// are read-only and have neither. The v0.1 legacy type names are applied here so
+// both sources are reported consistently.
+func toMappingResponse(m *database.Mapping, source string) models.MappingResponse {
+	// keep compatibility for v0.1 api type names without mutating the source
+	mappingType := m.Type
+	switch mappingType {
+	case userdb.MappingTypeID:
+		mappingType = userdb.LegacyMappingTypeUID
+	case userdb.MappingTypeValue:
+		mappingType = userdb.LegacyMappingTypeText
+	}
+
+	mr := models.MappingResponse{
+		Label:    m.Label,
+		Enabled:  m.Enabled,
+		Type:     mappingType,
+		Match:    m.Match,
+		Pattern:  m.Pattern,
+		Override: m.Override,
+		Source:   source,
+		ReadOnly: source != mappingSourceDatabase,
+	}
+
+	if source == mappingSourceDatabase {
+		mr.ID = strconv.FormatInt(m.DBID, 10)
+		mr.Added = time.Unix(m.Added, 0).Format(time.RFC3339)
+	}
+
+	return mr
+}
+
 func HandleMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received mappings request")
 
-	resp := models.AllMappingsResponse{
-		Mappings: make([]models.MappingResponse, 0),
+	var params models.AllMappingsParams
+	if len(env.Params) > 0 {
+		if err := json.Unmarshal(env.Params, &params); err != nil {
+			log.Warn().Err(err).Msg("invalid params")
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
 	}
 
 	mappings, err := env.Database.UserDB.GetAllMappings()
@@ -49,36 +92,21 @@ func HandleMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		return nil, errors.New("error getting mappings")
 	}
 
-	mrs := make([]models.MappingResponse, 0)
-
-	for _, m := range mappings {
-		t := time.Unix(m.Added, 0)
-
-		// keep compatibility for v0.1 api
-		switch m.Type {
-		case userdb.MappingTypeID:
-			m.Type = userdb.LegacyMappingTypeUID
-		case userdb.MappingTypeValue:
-			m.Type = userdb.LegacyMappingTypeText
-		}
-
-		mr := models.MappingResponse{
-			ID:       strconv.FormatInt(m.DBID, 10),
-			Added:    t.Format(time.RFC3339),
-			Label:    m.Label,
-			Enabled:  m.Enabled,
-			Type:     m.Type,
-			Match:    m.Match,
-			Pattern:  m.Pattern,
-			Override: m.Override,
-		}
-
-		mrs = append(mrs, mr)
+	mrs := make([]models.MappingResponse, 0, len(mappings))
+	for i := range mappings {
+		mrs = append(mrs, toMappingResponse(&mappings[i], mappingSourceDatabase))
 	}
 
-	resp.Mappings = mrs
+	// File mappings (mappings folder) are read-only and only included when the
+	// client opts in, so older clients keep receiving DB mappings only.
+	if params.IncludeReadOnly {
+		fileMappings := userdb.MappingsFromConfig(env.Config)
+		for i := range fileMappings {
+			mrs = append(mrs, toMappingResponse(&fileMappings[i], mappingSourceFile))
+		}
+	}
 
-	return resp, nil
+	return models.AllMappingsResponse{Mappings: mrs}, nil
 }
 
 func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
