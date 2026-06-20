@@ -276,6 +276,7 @@ const (
 	SystemGBA2P             = "GBA2P"
 	SystemGenesis           = "Genesis"
 	SystemGenesisMSU        = "GenesisMSU"
+	SystemGenesisPlus       = "GenesisPlus"
 	SystemIntellivision     = "Intellivision"
 	SystemJaguar            = "Jaguar"
 	SystemJaguarCD          = "JaguarCD"
@@ -596,6 +597,11 @@ var Systems = map[string]System{
 		Aliases:   []string{"MegaDriveMSU", "MSU-MD"},
 		Fallbacks: []string{SystemGenesis},
 	},
+	SystemGenesisPlus: {
+		ID:        SystemGenesisPlus,
+		Aliases:   []string{"MDPlus", "MegaDrivePlus"},
+		Fallbacks: []string{SystemGenesis},
+	},
 	SystemIntellivision: {
 		ID:    SystemIntellivision,
 		Slugs: []string{"mattelintellivision", "intv"},
@@ -759,11 +765,12 @@ var Systems = map[string]System{
 	},
 	SystemSNESMSU1: {
 		ID:        SystemSNESMSU1,
-		Aliases:   []string{"MSU1", "MSU-1"},
+		Aliases:   []string{"MSU1", "MSU-1", "SNES-MSU1"},
 		Fallbacks: []string{SystemSNES},
 	},
 	SystemSGBMSU1: {
 		ID:        SystemSGBMSU1,
+		Aliases:   []string{"SGB-MSU1", "SuperGameboyMSU1"},
 		Fallbacks: []string{SystemSuperGameboy},
 	},
 	SystemSNESMusic: {
