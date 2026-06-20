@@ -24,10 +24,63 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFormatDisambiguatingTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected string
+		input    []database.TagInfo
+	}{
+		{
+			name:     "empty slice",
+			input:    []database.TagInfo{},
+			expected: "",
+		},
+		{
+			name:     "nil slice",
+			input:    nil,
+			expected: "",
+		},
+		{
+			name: "single tag",
+			input: []database.TagInfo{
+				{Type: "region", Tag: "eu"},
+			},
+			expected: "region:eu",
+		},
+		{
+			name: "multiple same-type tags",
+			input: []database.TagInfo{
+				{Type: "region", Tag: "eu"},
+				{Type: "region", Tag: "us"},
+			},
+			expected: "region:eu, region:us",
+		},
+		{
+			name: "mixed types preserve given order",
+			input: []database.TagInfo{
+				{Type: "region", Tag: "eu"},
+				{Type: "builddate", Tag: "1996-10-04"},
+			},
+			expected: "region:eu, builddate:1996-10-04",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := formatDisambiguatingTags(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
 
 func TestTruncateSystemName(t *testing.T) {
 	t.Parallel()
@@ -177,6 +230,78 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 	// Wait for SearchMedia to be called using the mock's signal channel
 	called := mockSvc.SearchMediaCalled()
 	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+}
+
+func TestBuildSearchMedia_DisambiguatingTags_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{
+		{ID: "genesis", Name: "Genesis"},
+	})
+
+	searchResults := &models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Sonic The Hedgehog",
+				Path:      "/roms/genesis/sonic_eu.md",
+				ZapScript: "**launch.genesis:/roms/genesis/sonic_eu.md",
+				System:    models.System{ID: "genesis", Name: "Genesis"},
+				DisambiguatingTags: []database.TagInfo{
+					{Type: "region", Tag: "eu"},
+					{Type: "region", Tag: "us"},
+				},
+			},
+			{
+				Name:      "Sonic The Hedgehog",
+				Path:      "/roms/genesis/sonic_jp.md",
+				ZapScript: "**launch.genesis:/roms/genesis/sonic_jp.md",
+				System:    models.System{ID: "genesis", Name: "Genesis"},
+				DisambiguatingTags: []database.TagInfo{
+					{Type: "region", Tag: "jp"},
+				},
+			},
+			{
+				Name:      "Streets of Rage",
+				Path:      "/roms/genesis/streets.md",
+				ZapScript: "**launch.genesis:/roms/genesis/streets.md",
+				System:    models.System{ID: "genesis", Name: "Genesis"},
+			},
+		},
+		Total: 3,
+	}
+	mockSvc.SetupSearchMedia(searchResults)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	session := NewSession()
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+
+	// Trigger search
+	runner.SimulateTab()
+	runner.SimulateEnter()
+
+	called := mockSvc.SearchMediaCalled()
+	require.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+
+	// Results with disambiguating tags should show them in the row
+	assert.True(t, runner.WaitForText("region:eu", 100*time.Millisecond), "region:eu tag should appear in results")
+	assert.True(t, runner.ContainsText("region:jp"), "region:jp tag should appear in results")
+
+	// Result without tags should still render cleanly (no spurious parens)
+	assert.True(t, runner.ContainsText("Streets of Rage"), "unduplicated title should appear")
 }
 
 func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
