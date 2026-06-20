@@ -293,31 +293,42 @@ func (s *scraperImpl) mediaPropsForPath(
 	roots []string,
 	availableDirs map[string]map[string]string,
 ) []database.MediaProperty {
-	props := make([]database.MediaProperty, 0)
+	// Artwork filenames are derived from the root that actually contains the
+	// game (its home root); the same relative names are then searched under
+	// every root's media/ dir so art can live on a different drive than the rom.
+	var fallbackNames []string
 	for _, root := range roots {
-		fallbackNames := esmedia.ArtworkFallbackNames(path, root)
-		if len(fallbackNames) == 0 {
+		if names := esmedia.ArtworkFallbackNames(path, root); len(names) > 0 {
+			fallbackNames = names
+			break
+		}
+	}
+	if len(fallbackNames) == 0 {
+		return nil
+	}
+
+	// roots is in RootDirs order, so the first root with a match wins.
+	orderedDirs := make([]map[string]string, 0, len(roots))
+	for _, root := range roots {
+		orderedDirs = append(orderedDirs, availableDirs[root])
+	}
+
+	props := make([]database.MediaProperty, 0)
+	for _, propValue := range artworkPropertyOrder {
+		file := esmedia.FindFileAcrossRootsFS(
+			s.fs,
+			fallbackNames,
+			esmedia.ArtworkDirCandidates[string(propValue)],
+			orderedDirs,
+		)
+		if file == nil {
 			continue
 		}
-		for _, propValue := range artworkPropertyOrder {
-			file := esmedia.FindFileFS(
-				s.fs,
-				fallbackNames,
-				esmedia.ArtworkDirCandidates[string(propValue)],
-				availableDirs[root],
-			)
-			if file == nil {
-				continue
-			}
-			props = append(props, database.MediaProperty{
-				TypeTag:     tags.PropertyTypeTag(propValue),
-				Text:        filepath.ToSlash(file.Path),
-				ContentType: file.ContentType,
-			})
-		}
-		if len(props) > 0 {
-			return props
-		}
+		props = append(props, database.MediaProperty{
+			TypeTag:     tags.PropertyTypeTag(propValue),
+			Text:        filepath.ToSlash(file.Path),
+			ContentType: file.ContentType,
+		})
 	}
 	return props
 }
@@ -365,12 +376,21 @@ func isLocalMediaPropForPath(prop *database.MediaProperty, mediaPath string, roo
 		return false
 	}
 
+	// Derive artwork names from the game's home root, then match the prop path
+	// against the media/ convention under any root (art may live cross-drive).
+	var fallbackNames []string
+	for _, root := range roots {
+		if names := esmedia.ArtworkFallbackNames(mediaPath, root); len(names) > 0 {
+			fallbackNames = names
+			break
+		}
+	}
+	if len(fallbackNames) == 0 {
+		return false
+	}
+
 	propPath := filepath.Clean(filepath.FromSlash(prop.Text))
 	for _, root := range roots {
-		fallbackNames := esmedia.ArtworkFallbackNames(mediaPath, root)
-		if len(fallbackNames) == 0 {
-			continue
-		}
 		for _, dir := range candidates {
 			for _, name := range fallbackNames {
 				candidate := filepath.Clean(filepath.Join(root, "media", dir, name))

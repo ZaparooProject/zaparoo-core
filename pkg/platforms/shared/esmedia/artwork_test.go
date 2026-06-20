@@ -146,6 +146,75 @@ func TestFindFileFS_RejectsTraversalNames(t *testing.T) {
 	assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "Game.png")), file.Path)
 }
 
+func TestFindFileAcrossRootsFS_FirstRootInOrderWins(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	rootA := filepath.Join("media", "usb0", "nes")
+	rootB := filepath.Join("media", "fat", "nes")
+	boxartA := filepath.Join(rootA, "media", "boxart")
+	boxartB := filepath.Join(rootB, "media", "boxart")
+	require.NoError(t, fs.MkdirAll(boxartA, 0o750))
+	require.NoError(t, fs.MkdirAll(boxartB, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(boxartA, "Game.png"), []byte("a"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(boxartB, "Game.png"), []byte("b"), 0o600))
+
+	file := FindFileAcrossRootsFS(
+		fs,
+		[]string{"Game.png"},
+		[]string{"boxart"},
+		[]map[string]string{
+			{"boxart": boxartA},
+			{"boxart": boxartB},
+		},
+	)
+
+	require.NotNil(t, file)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(boxartA, "Game.png")), file.Path)
+}
+
+func TestFindFileAcrossRootsFS_FallsThroughToLaterRoot(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	romRoot := filepath.Join("media", "fat", "cifs", "nes")
+	artRoot := filepath.Join("media", "fat", "nes")
+	boxartArt := filepath.Join(artRoot, "media", "boxart")
+	require.NoError(t, fs.MkdirAll(filepath.Join(romRoot, "media"), 0o750))
+	require.NoError(t, fs.MkdirAll(boxartArt, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(boxartArt, "Game.png"), []byte("art"), 0o600))
+
+	file := FindFileAcrossRootsFS(
+		fs,
+		[]string{"Game.png"},
+		[]string{"boxart"},
+		[]map[string]string{
+			StatMediaDirsFS(fs, romRoot),
+			StatMediaDirsFS(fs, artRoot),
+		},
+	)
+
+	require.NotNil(t, file)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(boxartArt, "Game.png")), file.Path)
+}
+
+func TestFindFileAcrossRootsFS_NotFound(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	boxart := filepath.Join("media", "fat", "nes", "media", "boxart")
+	require.NoError(t, fs.MkdirAll(boxart, 0o750))
+
+	file := FindFileAcrossRootsFS(
+		fs,
+		[]string{"Missing.png"},
+		[]string{"boxart"},
+		[]map[string]string{{"boxart": boxart}},
+	)
+
+	assert.Nil(t, file)
+}
+
 func TestResolvePath(t *testing.T) {
 	t.Parallel()
 

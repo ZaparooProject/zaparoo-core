@@ -168,6 +168,24 @@ func FindFileFS(
 	return nil
 }
 
+// FindFileAcrossRootsFS searches each root's media directories in order and
+// returns the first matching file. orderedAvailableDirs must be in priority
+// order (RootDirs order); the first root with a hit wins. Within a root the
+// existing candidate-directory order applies.
+func FindFileAcrossRootsFS(
+	fs afero.Fs,
+	fallbackNames []string,
+	candidates []string,
+	orderedAvailableDirs []map[string]string,
+) *File {
+	for _, availableDirs := range orderedAvailableDirs {
+		if file := FindFileFS(fs, fallbackNames, candidates, availableDirs); file != nil {
+			return file
+		}
+	}
+	return nil
+}
+
 // MimeFromExt returns a MIME type based on file extension.
 func MimeFromExt(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
