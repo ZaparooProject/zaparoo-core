@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -13,15 +14,71 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
-const misterLaunchableCategoryOther = "Other"
+const (
+	misterLaunchableCategoryComputer = "Computer"
+	misterLaunchableCategoryConsole  = "Console"
+	misterLaunchableCategoryOther    = "Other"
+)
 
-// Launchables exposes launch-only MiSTer _Other entries that do not already
-// have media or alternate-core launchers.
+type misterCoreLaunchableDefinition struct {
+	Name     string
+	Category string
+	CorePath string
+	ID       uuid.UUID
+}
+
+var misterCoreLaunchableDefinitions = []misterCoreLaunchableDefinition{
+	misterConsoleCore(launchables.MisterConsoleAY38500, "AY-3-8500", "AY-3-8500"),
+	misterConsoleCore(launchables.MisterConsoleBBCBridgeCompanion, "BBC Bridge Companion", "BBCBridgeCompanion"),
+	misterConsoleCore(launchables.MisterConsoleMyVision, "My Vision", "MyVision"),
+	misterConsoleCore(launchables.MisterConsoleSuperVision8000, "Super Vision 8000", "Super_Vision_8000"),
+	misterComputerCore(launchables.MisterComputerAltair8800, "Altair 8800", "Altair8800"),
+	misterComputerCore(launchables.MisterComputerArchie, "Archie", "Archie"),
+	misterComputerCore(launchables.MisterComputerAtariST, "Atari ST", "AtariST"),
+	misterComputerCore(launchables.MisterComputerC128, "Commodore 128", "C128"),
+	misterComputerCore(launchables.MisterComputerCoCo3, "CoCo 3", "CoCo3"),
+	misterComputerCore(launchables.MisterComputerColecoAdam, "Coleco Adam", "ColecoAdam"),
+	misterComputerCore(launchables.MisterComputerEG2000, "EG2000 Colour Genie", "eg2000"),
+	misterComputerCore(launchables.MisterComputerEnterprise, "Enterprise", "Enterprise"),
+	misterComputerCore(launchables.MisterComputerHomelab, "Homelab", "Homelab"),
+	misterComputerCore(launchables.MisterComputerIQ151, "IQ-151", "IQ151"),
+	misterComputerCore(launchables.MisterComputerMacLC, "Mac LC", "MacLC"),
+	misterComputerCore(launchables.MisterComputerOndraSPO186, "Ondra SPO186", "Ondra_SPO186"),
+	misterComputerCore(launchables.MisterComputerPC88, "PC-88", "PC88"),
+	misterComputerCore(launchables.MisterComputerPCjr, "PCjr", "PCjr"),
+	misterComputerCore(launchables.MisterComputerSharpMZ, "Sharp MZ", "SharpMZ"),
+	misterComputerCore(launchables.MisterComputerTK2000, "TK2000", "TK2000"),
+	misterComputerCore(launchables.MisterComputerTandy1000, "Tandy 1000", "Tandy1000"),
+	misterComputerCore(launchables.MisterComputerVT52, "VT52", "VT52"),
+}
+
+func misterConsoleCore(id uuid.UUID, name, coreName string) misterCoreLaunchableDefinition {
+	return misterCoreLaunchableDefinition{
+		ID:       id,
+		Name:     name,
+		Category: misterLaunchableCategoryConsole,
+		CorePath: filepath.Join("_Console", coreName),
+	}
+}
+
+func misterComputerCore(id uuid.UUID, name, coreName string) misterCoreLaunchableDefinition {
+	return misterCoreLaunchableDefinition{
+		ID:       id,
+		Name:     name,
+		Category: misterLaunchableCategoryComputer,
+		CorePath: filepath.Join("_Computer", coreName),
+	}
+}
+
+// Launchables exposes launch-only MiSTer core entries that do not already have
+// media launchers.
 func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
-	return []launchables.Launchable{
+	items := make([]launchables.Launchable, 0, 10+len(misterCoreLaunchableDefinitions))
+	items = append(items,
 		launchables.VirtualSystem{
 			ID:       launchables.MisterOtherChess,
 			Name:     "Chess",
@@ -95,18 +152,46 @@ func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
 			Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
 			Test:     testOtherCore("3S-ARM"),
 		},
+	)
+
+	for _, def := range misterCoreLaunchableDefinitions {
+		items = append(items, launchables.VirtualSystem{
+			ID:       def.ID,
+			Name:     def.Name,
+			Category: def.Category,
+			Launch:   p.launchCore(def.CorePath),
+			Test:     testCore(def.CorePath),
+		})
 	}
+
+	return items
 }
 
 func testOtherCore(shortName string) func(*config.Instance) bool {
+	return testCore(filepath.Join("_Other", shortName))
+}
+
+func testCore(corePath string) func(*config.Instance) bool {
 	return func(*config.Instance) bool {
-		return otherCoreExists(misterconfig.SDRootDir, shortName)
+		return coreExists(misterconfig.SDRootDir, corePath)
 	}
 }
 
 func otherCoreExists(rootDir, shortName string) bool {
-	matches, err := filepath.Glob(filepath.Join(rootDir, "_Other", shortName+"*.rbf"))
-	return err == nil && len(matches) > 0
+	return coreExists(rootDir, filepath.Join("_Other", shortName))
+}
+
+func coreExists(rootDir, corePath string) bool {
+	matches, err := filepath.Glob(filepath.Join(rootDir, corePath+"*"))
+	if err != nil {
+		return false
+	}
+	for _, match := range matches {
+		if filepath.Ext(strings.ToLower(match)) == ".rbf" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Platform) closeLaunchConsole() error {
@@ -136,6 +221,12 @@ func (p *Platform) launchShortCoreFile(corePath string) error {
 }
 
 func (p *Platform) launchOtherCore(
+	corePath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return p.launchCore(corePath)
+}
+
+func (p *Platform) launchCore(
 	corePath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {

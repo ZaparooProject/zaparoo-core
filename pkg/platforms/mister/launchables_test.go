@@ -18,17 +18,17 @@ import (
 func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 	items := (&Platform{}).Launchables(&config.Instance{})
 
-	require.Len(t, items, 10)
-	seenSystems := make(map[string]bool, len(items))
+	require.Len(t, items, 32)
+	seenSystems := make(map[string]string, len(items))
 	seenMedia := make(map[string]launchables.VirtualMedia, len(items))
 	for _, item := range items {
 		switch entry := item.(type) {
 		case launchables.VirtualSystem:
-			assert.Equal(t, "Other", entry.Category)
+			assert.NotEmpty(t, entry.Category)
 			assert.NotNil(t, entry.Launch)
 			assert.NotNil(t, entry.Test)
 			assert.NotEmpty(t, entry.ZapScript())
-			seenSystems[entry.Name] = true
+			seenSystems[entry.Name] = entry.Category
 		case launchables.VirtualMedia:
 			assert.NotNil(t, entry.Launch)
 			assert.NotNil(t, entry.Test)
@@ -50,7 +50,39 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 		"Slug Cross",
 		"Tomy Scramble",
 	} {
-		assert.True(t, seenSystems[name], name)
+		assert.Equal(t, "Other", seenSystems[name], name)
+	}
+
+	for _, name := range []string{
+		"AY-3-8500",
+		"BBC Bridge Companion",
+		"My Vision",
+		"Super Vision 8000",
+	} {
+		assert.Equal(t, "Console", seenSystems[name], name)
+	}
+
+	for _, name := range []string{
+		"Altair 8800",
+		"Archie",
+		"Atari ST",
+		"Commodore 128",
+		"CoCo 3",
+		"Coleco Adam",
+		"EG2000 Colour Genie",
+		"Enterprise",
+		"Homelab",
+		"IQ-151",
+		"Mac LC",
+		"Ondra SPO186",
+		"PC-88",
+		"PCjr",
+		"Sharp MZ",
+		"TK2000",
+		"Tandy 1000",
+		"VT52",
+	} {
+		assert.Equal(t, "Computer", seenSystems[name], name)
 	}
 
 	thirdStrike, ok := seenMedia["Street Fighter III: 3rd Strike (3S-ARM)"]
@@ -102,14 +134,23 @@ func TestLaunchOtherCoreReturnsInjectedLaunchError(t *testing.T) {
 	assert.True(t, closed)
 }
 
-func TestOtherCoreExists(t *testing.T) {
+func TestCoreExists(t *testing.T) {
 	rootDir := t.TempDir()
 	otherDir := filepath.Join(rootDir, "_Other")
+	consoleDir := filepath.Join(rootDir, "_Console")
+	computerDir := filepath.Join(rootDir, "_Computer")
 	require.NoError(t, os.MkdirAll(otherDir, 0o750))
+	require.NoError(t, os.MkdirAll(consoleDir, 0o750))
+	require.NoError(t, os.MkdirAll(computerDir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "Chess_20240410.rbf"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "3S-ARM.rbf"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(consoleDir, "AY-3-8500_20250903.rbf"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(computerDir, "VT52_20241120.RBF"), nil, 0o600))
 
 	assert.True(t, otherCoreExists(rootDir, "Chess"))
 	assert.True(t, otherCoreExists(rootDir, "3S-ARM"))
 	assert.False(t, otherCoreExists(rootDir, "Donut"))
+	assert.True(t, coreExists(rootDir, filepath.Join("_Console", "AY-3-8500")))
+	assert.True(t, coreExists(rootDir, filepath.Join("_Computer", "VT52")))
+	assert.False(t, coreExists(rootDir, filepath.Join("_Computer", "Altair8800")))
 }
