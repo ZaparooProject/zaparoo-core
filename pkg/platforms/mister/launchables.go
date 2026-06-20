@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -181,8 +182,16 @@ func otherCoreExists(rootDir, shortName string) bool {
 }
 
 func coreExists(rootDir, corePath string) bool {
-	matches, err := filepath.Glob(filepath.Join(rootDir, corePath+"*.rbf"))
-	return err == nil && len(matches) > 0
+	matches, err := filepath.Glob(filepath.Join(rootDir, corePath+"*"))
+	if err != nil {
+		return false
+	}
+	for _, match := range matches {
+		if filepath.Ext(strings.ToLower(match)) == ".rbf" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Platform) closeLaunchConsole() error {

@@ -145,7 +145,7 @@ func TestCoreExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "Chess_20240410.rbf"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "3S-ARM.rbf"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(consoleDir, "AY-3-8500_20250903.rbf"), nil, 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(computerDir, "VT52_20241120.rbf"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(computerDir, "VT52_20241120.RBF"), nil, 0o600))
 
 	assert.True(t, otherCoreExists(rootDir, "Chess"))
 	assert.True(t, otherCoreExists(rootDir, "3S-ARM"))
