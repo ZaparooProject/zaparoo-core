@@ -73,9 +73,10 @@ const (
 )
 
 type slugMediaSelection struct {
-	matchKind gamelistMatchKind
-	key       string
-	media     database.Media
+	matchKind      gamelistMatchKind
+	key            string
+	media          database.Media
+	mediaLevelSafe bool
 }
 
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
@@ -452,6 +453,7 @@ outer:
 					delete(indexes.MediaByPathFold, selection.key)
 				} else {
 					slugFirstMediaFallbacks++
+					mediaLevelWriteSafe = selection.mediaLevelSafe
 				}
 				records = append(records, &GamelistRecord{
 					SystemRootPath:      file.RootPath,
@@ -1370,7 +1372,12 @@ func selectMediaForSlugMatch(
 	if len(mediaRows) == 0 {
 		return slugMediaSelection{matchKind: matchKind}
 	}
-	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind}
+	// A pure slug-only match with exactly one media row is unambiguous: there is
+	// only one place the artwork can go, so media-level writes are safe.
+	// slug_conflict (path points at a different title) and multi-row titles stay
+	// unsafe to avoid attaching art to the wrong regional variant.
+	mediaLevelSafe := matchKind == gamelistMatchSlugOnly && len(mediaRows) == 1
+	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind, mediaLevelSafe: mediaLevelSafe}
 }
 
 func (g *GamelistXMLScraper) canonicalMediaForResolvedPath(
