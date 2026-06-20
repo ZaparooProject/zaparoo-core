@@ -195,6 +195,17 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row *database.MediaTit
 	return *row, nil
 }
 
+func sqlUpdateMediaTitleName(ctx context.Context, db sqlQueryable, titleDBID int64, name string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE MediaTitles SET Name = ? WHERE DBID = ?`,
+		name, titleDBID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update media title name: %w", err)
+	}
+	return nil
+}
+
 func sqlGetAllMediaTitles(ctx context.Context, db *sql.DB) ([]database.MediaTitle, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT DBID, Slug, Name, SystemDBID, SlugLength, SlugWordCount, SecondarySlug

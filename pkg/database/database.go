@@ -827,6 +827,7 @@ type MediaDBI interface {
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
 	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error
+	UpdateMediaTitleName(titleDBID int64, name string) error
 	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error

@@ -490,6 +490,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Nintendo
 		TagArcadeBoardNintendoVS, TagArcadeBoardNintendoNSS,
 	},
+
 	TagTypeCompatibility: {
 		// SEGA systems
 		TagCompatibilitySG1000, TagCompatibilitySG1000SC3000, TagCompatibilitySG1000Othello,

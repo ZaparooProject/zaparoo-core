@@ -4028,3 +4028,80 @@ func TestMediaDB_UpdateMediaTitle_FlushesBufferedTitle_Integration(t *testing.T)
 	assert.Equal(t, mediaPath, found.Path)
 	assert.Equal(t, int64(2), found.MediaTitleDBID)
 }
+
+func TestMediaDB_UpdateMediaTitleName_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Insert a system and a title with the raw AmigaVision listing line as Name.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
+	require.NoError(t, err)
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "1001stolenideas",
+		Name:       "1001 Stolen Ideas (Airwalk)(AGA)",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// UpdateMediaTitleName must update MediaTitles.Name in place.
+	err = mediaDB.UpdateMediaTitleName(title.DBID, "1001 Stolen Ideas")
+	require.NoError(t, err)
+
+	titles, err := mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1001 Stolen Ideas", titles[0].Name)
+	assert.Equal(t, "1001stolenideas", titles[0].Slug, "slug must not change when name is updated")
+}
+
+func TestMediaDB_UpdateMediaTitleName_FlushesPendingTitleBatch_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Insert the initial title outside a batch transaction.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
+	require.NoError(t, err)
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "1869",
+		Name:       "1869 (AGA)[en]",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Buffer a second title inside an open batch transaction, then call
+	// UpdateMediaTitleName. The method must flush the batch before executing
+	// the UPDATE so the second title is persisted correctly.
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "3dpool",
+		Name:       "3D Pool (OCS)[en]",
+	})
+	require.NoError(t, err)
+	err = mediaDB.UpdateMediaTitleName(title.DBID, "1869")
+	require.NoError(t, err, "update must flush the buffered title before executing")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err := mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 2, "buffered title must have been flushed and persisted")
+
+	bySlug := make(map[string]string, len(titles))
+	for _, tt := range titles {
+		bySlug[tt.Slug] = tt.Name
+	}
+	assert.Equal(t, "1869", bySlug["1869"], "name must be updated to the cleaned title")
+	assert.Equal(t, "3D Pool (OCS)[en]", bySlug["3dpool"], "buffered title must be present")
+}

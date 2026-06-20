@@ -1749,3 +1749,143 @@ func TestPopulateScanStateForSystem_TracksEmptySortNameInNeedsSortNameMap(t *tes
 	assert.Contains(t, ss.MediaNeedsSortName, populatedID,
 		"media with empty SortName must appear in MediaNeedsSortName")
 }
+
+// TestAddMediaPath_ExistingTitleNameUpdatesOnReindex verifies that when the
+// derived title name changes between index runs (e.g. after scanner starts
+// emitting empty ProvidedName so filename parsing cleans the title),
+// MediaTitles.Name is updated to the new cleaned name on the next reindex.
+// This covers the AmigaVision case: "1001 Stolen Ideas (Airwalk)(AGA)" →
+// "1001 Stolen Ideas" after ProvidedName is cleared in scanAmigaVisionListingFile.
+func TestAddMediaPath_ExistingTitleNameUpdatesOnReindex(t *testing.T) {
+	t.Parallel()
+
+	const systemID = "Amiga"
+	gamePath := filepath.Join(
+		string(filepath.Separator), "media", "fat", "games", "Amiga", "Demos", "1001 Stolen Ideas (Airwalk)(AGA)",
+	)
+
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	// First index: scanner provided the raw listing line as the name.
+	initialState := newIndexingPipelineScanState()
+	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err := AddMediaPath(
+		mediaDB, initialState, systemID, gamePath,
+		"1001 Stolen Ideas (Airwalk)(AGA)", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err := mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1001 Stolen Ideas (Airwalk)(AGA)", titles[0].Name)
+
+	// Second index: scanner now emits empty ProvidedName so the filename
+	// parser derives the cleaned title "1001 Stolen Ideas".
+	reindexState := newIndexingPipelineScanState()
+	require.NoError(t, PopulateScanStateFromDB(context.Background(), mediaDB, reindexState))
+	require.NoError(t, PopulatePersistentScanStateForSystem(context.Background(), mediaDB, reindexState, systemID))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err = AddMediaPath(
+		mediaDB, reindexState, systemID, gamePath,
+		"", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err = mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1001 Stolen Ideas", titles[0].Name)
+}
+
+// TestAddMediaPath_ExistingTitleNameUnchangedSkipsUpdate verifies that
+// reindexing a path whose derived title name is identical to the stored name
+// does not issue a redundant UPDATE. This exercises the equal-name branch in
+// AddMediaPathWithPrefixPolicy and documents that reindexing is idempotent.
+func TestAddMediaPath_ExistingTitleNameUnchangedSkipsUpdate(t *testing.T) {
+	t.Parallel()
+
+	const systemID = "Amiga"
+	gamePath := filepath.Join(
+		string(filepath.Separator), "media", "fat", "games", "Amiga", "Games", "1869 (AGA)[en]",
+	)
+
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	// First index: empty ProvidedName so the parser derives "1869".
+	initialState := newIndexingPipelineScanState()
+	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err := AddMediaPath(
+		mediaDB, initialState, systemID, gamePath,
+		"", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err := mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1869", titles[0].Name)
+
+	// Second index: same path, same empty ProvidedName — derived name is still "1869".
+	// The equal-name check must skip UpdateMediaTitleName; the name must be unchanged.
+	reindexState := newIndexingPipelineScanState()
+	require.NoError(t, PopulateScanStateFromDB(context.Background(), mediaDB, reindexState))
+	require.NoError(t, PopulatePersistentScanStateForSystem(context.Background(), mediaDB, reindexState, systemID))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err = AddMediaPath(
+		mediaDB, reindexState, systemID, gamePath,
+		"", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err = mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1869", titles[0].Name)
+}
+
+// TestAddMediaPath_TitleNameUpdateErrorPropagates verifies that a DB error
+// from UpdateMediaTitleName is propagated as a wrapped error. The scan state
+// is pre-seeded with an existing title whose stored name differs from the
+// newly derived name, so the update path is taken immediately.
+func TestAddMediaPath_TitleNameUpdateErrorPropagates(t *testing.T) {
+	t.Parallel()
+
+	const systemID = "Amiga"
+	gamePath := filepath.Join(
+		string(filepath.Separator), "media", "fat", "games", "Amiga", "Games", "1869 (AGA)[en]",
+	)
+
+	mockDB := &helpers.MockMediaDBI{}
+
+	// Pre-seed: system and title already exist in scan state.
+	// The stored name "1869 (AGA)[en]" differs from the derived "1869",
+	// so UpdateMediaTitleName will be called.
+	scanState := &database.ScanState{
+		SystemIDs:  map[string]int{systemID: 1},
+		TitleIDs:   map[string]int{database.TitleKey(systemID, "1869"): 5},
+		TitleNames: map[int]string{5: "1869 (AGA)[en]"},
+		MediaIDs:   make(map[string]int),
+		TagIDs:     make(map[string]int),
+		TagTypeIDs: make(map[string]int),
+	}
+
+	mockDB.On("UpdateMediaTitleName", int64(5), "1869").Return(assert.AnError).Once()
+
+	_, _, err := AddMediaPath(
+		mockDB, scanState, systemID, gamePath,
+		"", true, false, nil, slugs.MediaTypeGame,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error updating media title name")
+	mockDB.AssertExpectations(t)
+}

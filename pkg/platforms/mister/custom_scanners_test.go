@@ -222,7 +222,7 @@ func TestAmigaScanner_IgnoresStaleListingRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, filepath.Join(validPath, "Games", "Valid Game"), results[0].Path)
-	assert.Equal(t, "Valid Game", results[0].Name)
+	assert.Empty(t, results[0].Name)
 }
 
 func TestAmigaScanner_AddsGamesAndDemosSubfolders(t *testing.T) {
@@ -247,12 +247,10 @@ func TestAmigaScanner_AddsGamesAndDemosSubfolders(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, results, platforms.ScanResult{
 		Path:  filepath.Join(validPath, "Games", "Valid Game"),
-		Name:  "Valid Game",
 		NoExt: true,
 	})
 	assert.Contains(t, results, platforms.ScanResult{
 		Path:  filepath.Join(validPath, "Demos", "Valid Demo"),
-		Name:  "Valid Demo",
 		NoExt: true,
 	})
 }
@@ -280,7 +278,49 @@ func TestAmigaScanner_FiltersListingFiles(t *testing.T) {
 	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(validPath, "listings", "games.txt")})
 	assert.Contains(t, results, platforms.ScanResult{
 		Path:  filepath.Join(validPath, "Games", "Valid Game"),
-		Name:  "Valid Game",
+		NoExt: true,
+	})
+}
+
+func TestAmigaScanner_LeavesNameEmptyForIndexerTitleCleaning(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+
+	listingPath := filepath.Join(validPath, "listings")
+	require.NoError(t, os.MkdirAll(listingPath, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(validPath, "shared"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(validPath, "AmigaVision.hdf"), []byte("test"), 0o600))
+	gamesContent := "1869 (AGA)[en]\n3D Pool (OCS)[en]\n7 Colors (OCS)[en-de-fr-it-es]\n"
+	demosContent := "1001 Stolen Ideas (Airwalk)(AGA)\n9 Fingers (Spaceballs)(OCS)\n"
+	require.NoError(t, os.WriteFile(filepath.Join(listingPath, "games.txt"), []byte(gamesContent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(listingPath, "demos.txt"), []byte(demosContent), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+
+	for _, r := range results {
+		assert.Empty(t, r.Name, "ScanResult.Name must be empty so the indexer derives a cleaned title from the path")
+	}
+
+	// Paths still carry the raw listing line so launch validation can match exactly.
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Games", "1869 (AGA)[en]"),
+		NoExt: true,
+	})
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Demos", "1001 Stolen Ideas (Airwalk)(AGA)"),
 		NoExt: true,
 	})
 }

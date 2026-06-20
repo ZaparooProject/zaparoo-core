@@ -138,6 +138,8 @@ Filesystem fallback searches known subdirectories under `<systemRootPath>/media/
 
 Only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read by the current scraper.
 
+For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
+
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
 
 ## ZaparooCompanion Entries
