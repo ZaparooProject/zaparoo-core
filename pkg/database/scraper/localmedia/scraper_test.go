@@ -279,3 +279,100 @@ func TestMediaPropsForPath_UsesFlatFallbackAfterMirroredPath(t *testing.T) {
 	assert.Equal(t, filepath.ToSlash(flatCoverPath), props[0].Text)
 	assert.Equal(t, "image/webp", props[0].ContentType)
 }
+
+func TestMediaPropsForPath_FindsArtworkOnDifferentRoot(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	artRoot := filepath.Join(base, "fat", "nes")
+	romPath := filepath.Join(romRoot, "Game.nes")
+	boxartPath := filepath.Join(artRoot, "media", "boxart", "Game.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Join(romRoot, "media"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(boxartPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, boxartPath, []byte("boxart"), 0o600))
+
+	roots := []string{romRoot, artRoot}
+	s := &scraperImpl{fs: fs}
+	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots))
+
+	require.Len(t, props, 1)
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
+	assert.Equal(t, filepath.ToSlash(boxartPath), props[0].Text)
+}
+
+func TestMediaPropsForPath_PrefersEarlierRootInOrder(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	firstRoot := filepath.Join(base, "usb0", "nes")
+	secondRoot := filepath.Join(base, "cifs", "nes")
+	romPath := filepath.Join(secondRoot, "Game.nes")
+	firstBoxart := filepath.Join(firstRoot, "media", "boxart", "Game.png")
+	secondBoxart := filepath.Join(secondRoot, "media", "boxart", "Game.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(firstBoxart), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(secondBoxart), 0o750))
+	require.NoError(t, afero.WriteFile(fs, firstBoxart, []byte("first"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, secondBoxart, []byte("second"), 0o600))
+
+	roots := []string{firstRoot, secondRoot}
+	s := &scraperImpl{fs: fs}
+	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots))
+
+	require.Len(t, props, 1)
+	assert.Equal(t, filepath.ToSlash(firstBoxart), props[0].Text)
+}
+
+func TestMediaPropsForPath_MirroredSubfolderCrossRoot(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	artRoot := filepath.Join(base, "fat", "nes")
+	romPath := filepath.Join(romRoot, "Japan", "Game.nes")
+	mirroredPath := filepath.Join(artRoot, "media", "images", "Japan", "Game.png")
+	flatPath := filepath.Join(artRoot, "media", "images", "Game.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(mirroredPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, mirroredPath, []byte("mirror"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, flatPath, []byte("flat"), 0o600))
+
+	roots := []string{romRoot, artRoot}
+	s := &scraperImpl{fs: fs}
+	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots))
+
+	require.Len(t, props, 1)
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageImage), props[0].TypeTag)
+	assert.Equal(t, filepath.ToSlash(mirroredPath), props[0].Text)
+}
+
+func TestDeleteStaleLocalMediaProps_DeletesStaleCrossRootProp(t *testing.T) {
+	t.Parallel()
+
+	romRoot := filepath.Join(t.TempDir(), "cifs", "nes")
+	artRoot := filepath.Join(t.TempDir(), "fat", "nes")
+	mediaPath := filepath.Join(romRoot, "Game.nes")
+	staleCrossRootPath := filepath.Join(artRoot, "media", "boxart", "Game.png")
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(11)).Return([]database.MediaProperty{
+		{
+			TypeTag:     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+			TypeTagDBID: 101,
+			Text:        filepath.ToSlash(staleCrossRootPath),
+		},
+	}, nil)
+	mockDB.On("DeleteMediaProperty", mock.Anything, int64(11), int64(101)).Return(nil).Once()
+
+	s := &scraperImpl{db: mockDB, fs: afero.NewMemMapFs()}
+	media := &database.MediaWithFullPath{DBID: 11, MediaTitleDBID: 101, Path: mediaPath, SystemID: "NES"}
+	deleted, err := s.deleteStaleLocalMediaProps(
+		context.Background(), media, []string{romRoot, artRoot}, nil,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+	mockDB.AssertExpectations(t)
+}

@@ -54,7 +54,7 @@ import (
 // root path and the DB identifiers of the matched MediaTitle and one of its
 // Media rows (used as the sentinel write target).
 type GamelistRecord struct {
-	AvailableMediaDirs  map[string]string
+	MediaDirsByRoot     []map[string]string
 	SystemRootPath      string
 	MatchKind           gamelistMatchKind
 	Game                esapi.Game
@@ -304,10 +304,9 @@ func resolveSystemsFromPlatform(
 }
 
 type parsedGamelistFile struct {
-	RootPath           string
-	GamelistPath       string
-	AvailableMediaDirs map[string]string
-	Games              []esapi.Game
+	RootPath     string
+	GamelistPath string
+	Games        []esapi.Game
 }
 
 type parsedGamelistSystem struct {
@@ -343,10 +342,9 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 			Int("entries", len(gl.Games)).
 			Msg("gamelistxml: loaded gamelist.xml")
 		parsed.Files = append(parsed.Files, parsedGamelistFile{
-			RootPath:           rootPath,
-			GamelistPath:       gamelistPath,
-			AvailableMediaDirs: statMediaDirsFS(g.filesystem(), rootPath),
-			Games:              gl.Games,
+			RootPath:     rootPath,
+			GamelistPath: gamelistPath,
+			Games:        gl.Games,
 		})
 	}
 	return parsed, nil
@@ -375,6 +373,7 @@ func (g *GamelistXMLScraper) loadRecordsFromParsed(
 	parsed parsedGamelistSystem,
 ) ([]*GamelistRecord, error) {
 	var records []*GamelistRecord
+	mediaDirsByRoot := g.orderedMediaDirsForSystem(system)
 	candidateMedia := len(indexes.MediaByPathFold)
 	candidateTitles := len(indexes.TitlesBySlug)
 	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
@@ -422,7 +421,7 @@ outer:
 					slugPathSelections++
 					records = append(records, &GamelistRecord{
 						SystemRootPath:      file.RootPath,
-						AvailableMediaDirs:  file.AvailableMediaDirs,
+						MediaDirsByRoot:     mediaDirsByRoot,
 						Game:                *game,
 						MatchKind:           gamelistMatchSlugPath,
 						MatchedTitleDBID:    title.DBID,
@@ -457,7 +456,7 @@ outer:
 				}
 				records = append(records, &GamelistRecord{
 					SystemRootPath:      file.RootPath,
-					AvailableMediaDirs:  file.AvailableMediaDirs,
+					MediaDirsByRoot:     mediaDirsByRoot,
 					Game:                *game,
 					MatchKind:           selection.matchKind,
 					MatchedTitleDBID:    title.DBID,
@@ -478,7 +477,7 @@ outer:
 					Msg("gamelistxml: path-only fallback matched record")
 				records = append(records, &GamelistRecord{
 					SystemRootPath:      file.RootPath,
-					AvailableMediaDirs:  file.AvailableMediaDirs,
+					MediaDirsByRoot:     mediaDirsByRoot,
 					Game:                *game,
 					MatchKind:           gamelistMatchPathOnly,
 					MatchedTitleDBID:    pathMedia.MediaTitleDBID,
@@ -1087,9 +1086,9 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		key := propType + ":" + string(propValue)
 		p := pathProp(key, xmlPath, root, g.externalAssetRoots)
 		if p == nil {
-			p = findMediaFilePropFS(
+			p = findMediaFilePropAcrossRootsFS(
 				g.filesystem(), key, fallbackNames,
-				esmedia.ArtworkDirCandidates[string(propValue)], record.AvailableMediaDirs,
+				esmedia.ArtworkDirCandidates[string(propValue)], record.MediaDirsByRoot,
 			)
 		}
 		if p != nil {
@@ -1298,6 +1297,18 @@ func statMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
 	return esmedia.StatMediaDirsFS(fs, rootPath)
 }
 
+// orderedMediaDirsForSystem returns the media/ subdirectories of every ROM root
+// for the system, in RootDirs order (system.ROMPaths order). The filesystem
+// fallback searches these in order so artwork can live on a different root than
+// the rom; the first root with a match wins.
+func (g *GamelistXMLScraper) orderedMediaDirsForSystem(system scraper.ScrapeSystem) []map[string]string {
+	dirs := make([]map[string]string, 0, len(system.ROMPaths))
+	for _, root := range system.ROMPaths {
+		dirs = append(dirs, statMediaDirsFS(g.filesystem(), root))
+	}
+	return dirs
+}
+
 // findMediaFileProp searches for <stem>.png inside the first candidate
 // directory (from candidates) that appears in availableDirs. Returns a
 // MediaProperty for the file when found, nil otherwise.
@@ -1328,6 +1339,27 @@ func findMediaFilePropFS(
 	availableDirs map[string]string,
 ) *database.MediaProperty {
 	file := esmedia.FindFileFS(fs, fallbackNames, candidates, availableDirs)
+	if file == nil {
+		return nil
+	}
+	return &database.MediaProperty{
+		TypeTag:     typeTag,
+		Text:        file.Path,
+		ContentType: file.ContentType,
+	}
+}
+
+// findMediaFilePropAcrossRootsFS searches each root's media directories in
+// RootDirs order and returns a property for the first match. This lets artwork
+// live on a different root than the rom.
+func findMediaFilePropAcrossRootsFS(
+	fs afero.Fs,
+	typeTag string,
+	fallbackNames []string,
+	candidates []string,
+	mediaDirsByRoot []map[string]string,
+) *database.MediaProperty {
+	file := esmedia.FindFileAcrossRootsFS(fs, fallbackNames, candidates, mediaDirsByRoot)
 	if file == nil {
 		return nil
 	}
@@ -1625,10 +1657,9 @@ func isCompanionGame(game *esapi.Game) bool {
 // Parent records carry full metadata but no ROM path; they represent the canonical game
 // title shared by multiple regional ROM releases.
 type companionParent struct {
-	AvailableMediaDirs map[string]string
-	SystemRootPath     string
-	GameID             string
-	Game               esapi.Game
+	SystemRootPath string
+	GameID         string
+	Game           esapi.Game
 }
 
 // companionChild holds a ZaparooCompanion ROM child record parsed from a gamelist.xml.
@@ -1683,10 +1714,9 @@ func companionEntriesFromParsed(
 			switch {
 			case game.ScreenScraperIDAttr != "" && game.Path == "":
 				parents = append(parents, companionParent{
-					Game:               game,
-					SystemRootPath:     file.RootPath,
-					AvailableMediaDirs: file.AvailableMediaDirs,
-					GameID:             game.ScreenScraperIDAttr,
+					Game:           game,
+					SystemRootPath: file.RootPath,
+					GameID:         game.ScreenScraperIDAttr,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
 				resolved := esmedia.ResolvePath(game.Path, file.RootPath)
@@ -1717,13 +1747,13 @@ func companionEntriesFromParsed(
 }
 
 // mapCompanionParentToResult builds the tag and property writes for a companion parent
-// record. MapToDB is safe with an empty Game.Path; the stem becomes "." which is
-// rejected by findMediaFilePropFS, so filesystem fallbacks are skipped cleanly.
+// record. Parent records carry no ROM path, so the filesystem artwork fallback is
+// skipped cleanly (the stem becomes "." and no fallback names are produced); media
+// dirs are therefore not needed here.
 func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scraper.MapResult {
 	result := g.MapToDB(&GamelistRecord{
-		SystemRootPath:     p.SystemRootPath,
-		AvailableMediaDirs: p.AvailableMediaDirs,
-		Game:               p.Game,
+		SystemRootPath: p.SystemRootPath,
+		Game:           p.Game,
 	})
 	result.TitleProps = append(result.TitleProps, result.MediaProps...)
 	result.MediaProps = nil

@@ -337,7 +337,7 @@ func TestLoadRecords_PathMatch(t *testing.T) {
 	assert.Equal(t, "Mario", records[0].Game.Name)
 	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
 	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
-	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].AvailableMediaDirs["image"])
+	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].MediaDirsByRoot[0]["image"])
 }
 
 func TestLoadRecords_SubfolderPathMatch(t *testing.T) {
@@ -1472,8 +1472,8 @@ func TestMapToDB_FilesystemFallback_Image(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(imgDir, "mario.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"image": imgDir},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"image": imgDir}},
 		Game: esapi.Game{
 			Path:  "./roms/mario.nes",
 			Image: "", // no XML path → filesystem fallback
@@ -1504,8 +1504,8 @@ func TestMapToDB_FilesystemFallback_NestedGamePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(imgPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"images": imgDir},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"images": imgDir}},
 		Game: esapi.Game{
 			Path: "./Japan/Game.nes",
 		},
@@ -1524,6 +1524,65 @@ func TestMapToDB_FilesystemFallback_NestedGamePath(t *testing.T) {
 	assert.True(t, found, "nested filesystem fallback image property missing")
 }
 
+func TestMapToDB_FilesystemFallback_CrossRoot(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	artRoot := filepath.Join(base, "fat", "nes")
+	imgDir := filepath.Join(artRoot, "media", "images")
+	require.NoError(t, os.MkdirAll(imgDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(imgDir, "Game.png"), []byte{}, 0o600))
+
+	// The gamelist.xml lives on romRoot; artwork lives on a different root.
+	rec := GamelistRecord{
+		SystemRootPath:  romRoot,
+		MediaDirsByRoot: []map[string]string{{}, {"images": imgDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range result.MediaProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(imgDir, "Game.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "cross-root filesystem fallback image property missing")
+}
+
+func TestMapToDB_FilesystemFallback_PrefersEarlierRootInOrder(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	firstArtDir := filepath.Join(base, "usb0", "nes", "media", "images")
+	secondArtDir := filepath.Join(base, "fat", "nes", "media", "images")
+	require.NoError(t, os.MkdirAll(firstArtDir, 0o750))
+	require.NoError(t, os.MkdirAll(secondArtDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(firstArtDir, "Game.png"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(secondArtDir, "Game.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:  romRoot,
+		MediaDirsByRoot: []map[string]string{{"images": firstArtDir}, {"images": secondArtDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range result.MediaProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(firstArtDir, "Game.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "cross-root filesystem fallback image property missing")
+}
+
 func TestMapToDB_FilesystemFallback_NestedWinsBeforeFlat(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -1536,9 +1595,9 @@ func TestMapToDB_FilesystemFallback_NestedWinsBeforeFlat(t *testing.T) {
 	require.NoError(t, os.WriteFile(flatPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"images": imgDir},
-		Game:               esapi.Game{Path: "./Japan/Game.nes"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"images": imgDir}},
+		Game:            esapi.Game{Path: "./Japan/Game.nes"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1564,9 +1623,9 @@ func TestMapToDB_FilesystemFallback_ThumbnailBox2DFrontAlias(t *testing.T) {
 	require.NoError(t, os.WriteFile(thumbPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"box2dfront": thumbDir},
-		Game:               esapi.Game{Path: "./Game.nes"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"box2dfront": thumbDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1591,9 +1650,9 @@ func TestMapToDB_FilesystemFallback_Boxart(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(boxartDir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart": boxartDir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart": boxartDir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1623,11 +1682,11 @@ func TestMapToDB_FallbackFindsBox2DLogoTitleScreenDirs(t *testing.T) {
 
 	rec := GamelistRecord{
 		SystemRootPath: root,
-		AvailableMediaDirs: map[string]string{
+		MediaDirsByRoot: []map[string]string{{
 			"box2d":       box2DDir,
 			"logo":        logoDir,
 			"titlescreen": titleScreenDir,
-		},
+		}},
 		Game: esapi.Game{Path: "./Game.nes"},
 	}
 
@@ -1662,9 +1721,9 @@ func TestMapToDB_FallbackFindsJPGMediaFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(imgPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"images": imgDir},
-		Game:               esapi.Game{Path: "./Game.nes"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"images": imgDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1696,8 +1755,8 @@ func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
 	require.NoError(t, os.WriteFile(fsImg, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"image": filepath.Join(root, "media", "image")},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"image": filepath.Join(root, "media", "image")}},
 		Game: esapi.Game{
 			Path:  "./roms/mario.nes",
 			Image: "./media/images/mario.png", // XML path present → must win
@@ -1720,7 +1779,7 @@ func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
 func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// No media/ directory, no AvailableMediaDirs — should produce no image props.
+	// No media/ directory, no MediaDirsByRoot — should produce no image props.
 	rec := GamelistRecord{
 		SystemRootPath: root,
 		Game:           esapi.Game{Path: "./roms/mario.nes"},
@@ -1808,9 +1867,9 @@ func TestMapToDB_FilesystemFallback_Boxart3D(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart3d": dir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart3d": dir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1835,9 +1894,9 @@ func TestMapToDB_FilesystemFallback_BoxartSide(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart2dside": dir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart2dside": dir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1862,9 +1921,9 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart2dback": dir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart2dback": dir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
