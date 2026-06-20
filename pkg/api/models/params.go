@@ -66,6 +66,12 @@ type RunScriptParams struct {
 	Unsafe    bool                     `json:"unsafe"`
 }
 
+type AllMappingsParams struct {
+	// IncludeReadOnly also returns read-only mappings loaded from the mappings
+	// folder. Defaults to false so older clients keep receiving DB mappings only.
+	IncludeReadOnly bool `json:"includeReadOnly,omitempty"`
+}
+
 type AddMappingParams struct {
 	Label    string `json:"label" validate:"max=255"`
 	Type     string `json:"type" validate:"required,oneof=id value data uid text"`
