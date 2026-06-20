@@ -46,7 +46,7 @@ import (
 type RBFCache struct {
 	bySystemID    map[string]RBFInfo
 	byShortName   map[string][]RBFInfo
-	byLauncherID  map[string]string
+	byLauncherID  map[string][]string
 	lastDirMtimes map[string]int64
 	persistPath   string
 	lastRootRBFs  []string
@@ -386,31 +386,40 @@ func isHexish(s string) bool {
 	return true
 }
 
-// RegisterAltCore registers an alt core's expected RBF path.
-// Called during launcher creation.
-func (c *RBFCache) RegisterAltCore(launcherID, rbfPath string) {
+// RegisterAltCore registers an alt core's expected RBF path(s).
+// Called during launcher creation. When multiple paths are given, they are
+// tried in order at resolution time and the first that matches a scanned RBF
+// wins, allowing a launcher to support more than one core location/naming
+// convention (e.g. Sinden cores in "Light Gun/" or legacy "_Sinden/").
+func (c *RBFCache) RegisterAltCore(launcherID string, rbfPaths ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byLauncherID == nil {
-		c.byLauncherID = make(map[string]string)
+		c.byLauncherID = make(map[string][]string)
 	}
-	c.byLauncherID[launcherID] = rbfPath
+	c.byLauncherID[launcherID] = rbfPaths
 }
 
 // GetByLauncherID returns the resolved RBF path for an alt core launcher.
-// When the registered path includes a directory, the match is strict: a
-// directory mismatch returns (RBFInfo{}, false) rather than silently falling
-// back to a different directory's core.
+// Registered paths are tried in order; the first that resolves wins. When a
+// registered path includes a directory, the match is strict: a directory
+// mismatch is skipped rather than silently falling back to a different
+// directory's core.
 func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	rbfPath, ok := c.byLauncherID[launcherID]
+	rbfPaths, ok := c.byLauncherID[launcherID]
 	if !ok {
 		return RBFInfo{}, false
 	}
 
-	return c.getByMglPathLocked(rbfPath)
+	for _, rbfPath := range rbfPaths {
+		if rbfInfo, found := c.getByMglPathLocked(rbfPath); found {
+			return rbfInfo, true
+		}
+	}
+	return RBFInfo{}, false
 }
 
 func (c *RBFCache) relatedCandidates(rbfPath string) []string {

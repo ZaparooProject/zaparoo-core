@@ -173,11 +173,11 @@ func TestRegisterAltCore(t *testing.T) {
 
 	// Verify it was stored
 	cache.mu.RLock()
-	rbfPath, ok := cache.byLauncherID["2XPSX"]
+	rbfPaths, ok := cache.byLauncherID["2XPSX"]
 	cache.mu.RUnlock()
 
 	assert.True(t, ok, "launcher ID should be found")
-	assert.Equal(t, "_Other/PSX2XCPU", rbfPath)
+	assert.Equal(t, []string{"_Other/PSX2XCPU"}, rbfPaths)
 }
 
 func TestRegisterAltCore_MultipleRegistrations(t *testing.T) {
@@ -192,9 +192,9 @@ func TestRegisterAltCore_MultipleRegistrations(t *testing.T) {
 
 	cache.mu.RLock()
 	assert.Len(t, cache.byLauncherID, 3, "should have 3 registered launchers")
-	assert.Equal(t, "_Other/PSX2XCPU", cache.byLauncherID["2XPSX"])
-	assert.Equal(t, "_ConsolePWM/PSX_PWM", cache.byLauncherID["PWMPSX"])
-	assert.Equal(t, "_LLAPI/PSX_LLAPI", cache.byLauncherID["LLAPIPSX"])
+	assert.Equal(t, []string{"_Other/PSX2XCPU"}, cache.byLauncherID["2XPSX"])
+	assert.Equal(t, []string{"_ConsolePWM/PSX_PWM"}, cache.byLauncherID["PWMPSX"])
+	assert.Equal(t, []string{"_LLAPI/PSX_LLAPI"}, cache.byLauncherID["LLAPIPSX"])
 	cache.mu.RUnlock()
 }
 
@@ -268,6 +268,56 @@ func TestGetByLauncherID_ExtractsShortNameFromPath(t *testing.T) {
 	rbf, found := cache.GetByLauncherID("80MHzNintendo64")
 	assert.True(t, found, "should find RBF by extracted short name")
 	assert.Equal(t, "_Other/N64_80MHz", rbf.MglName)
+}
+
+// TestGetByLauncherID_MultipleCandidatesPrefersFirst verifies that when an alt
+// core registers more than one candidate path (e.g. Sinden cores in the modern
+// "Light Gun/" folder or the legacy "_Sinden/" folder), the first candidate
+// that resolves wins when both are installed.
+func TestGetByLauncherID_MultipleCandidatesPrefersFirst(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/Light Gun/NES-Sinden.rbf", ShortName: "NES-Sinden", MglName: "Light Gun/NES-Sinden"},
+		{Path: "/media/fat/_Sinden/NES_Sinden.rbf", ShortName: "NES_Sinden", MglName: "_Sinden/NES_Sinden"},
+	})
+	cache.RegisterAltCore("SindenNES", "Light Gun/NES-Sinden", "_Sinden/NES_Sinden")
+
+	rbf, found := cache.GetByLauncherID("SindenNES")
+	assert.True(t, found, "registered launcher should be found")
+	assert.Equal(t, "Light Gun/NES-Sinden", rbf.MglName, "should prefer the modern Light Gun path")
+}
+
+// TestGetByLauncherID_MultipleCandidatesFallsBack verifies that resolution falls
+// through to a later candidate when the preferred one is not installed.
+func TestGetByLauncherID_MultipleCandidatesFallsBack(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Sinden/NES_Sinden.rbf", ShortName: "NES_Sinden", MglName: "_Sinden/NES_Sinden"},
+	})
+	cache.RegisterAltCore("SindenNES", "Light Gun/NES-Sinden", "_Sinden/NES_Sinden")
+
+	rbf, found := cache.GetByLauncherID("SindenNES")
+	assert.True(t, found, "should fall back to the legacy candidate")
+	assert.Equal(t, "_Sinden/NES_Sinden", rbf.MglName)
+}
+
+// TestGetByLauncherID_MultipleCandidatesNoneInstalled verifies that no candidate
+// resolving returns not-found (Resolve then falls back to the base system core).
+func TestGetByLauncherID_MultipleCandidatesNoneInstalled(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/NES_20240101.rbf", ShortName: "NES", MglName: "_Console/NES"},
+	})
+	cache.RegisterAltCore("SindenNES", "Light Gun/NES-Sinden", "_Sinden/NES_Sinden")
+
+	_, found := cache.GetByLauncherID("SindenNES")
+	assert.False(t, found, "no Sinden candidate installed should not resolve")
 }
 
 // TestRegression_Issue477_AltCoreUsesWrongRBFPath is a regression test for GitHub issue #477.

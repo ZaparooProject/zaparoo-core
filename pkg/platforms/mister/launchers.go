@@ -226,9 +226,18 @@ func launchArcade(
 }
 
 func launchSinden(
+	launcherID string,
 	systemID string,
 	rbfName string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	// Modern setups (update_all / MrLightgun) deploy Sinden cores to
+	// "Light Gun/<Core>-Sinden", older ones to "_Sinden/<Core>_Sinden".
+	// Register both; the modern path is preferred when present.
+	newRBF := "Light Gun/" + rbfName + "-Sinden"
+	oldRBF := "_Sinden/" + rbfName + "_Sinden"
+	setName := rbfName + "_Sinden"
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, newRBF, oldRBF)
+
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
@@ -237,28 +246,13 @@ func launchSinden(
 		path = checkInZip(path)
 
 		sn := *s
-
-		newRBF := "Light Gun/" + rbfName + "-Sinden"
-		oldRBF := "_Sinden/" + rbfName + "_Sinden"
-
-		newMatches, err := filepath.Glob(filepath.Join(misterconfig.SDRootDir, newRBF) + "*")
-		if err != nil {
-			log.Debug().Err(err).Msg("error checking for new Sinden RBF")
-		}
-		if len(newMatches) > 0 {
-			sn.RBF = newRBF
-		} else {
-			// just fallback on trying the old path
-			sn.RBF = oldRBF
-		}
-
-		sn.SetName = rbfName + "_Sinden"
-		sn.SetNameSameDir = true
-		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+		if setNameErr := configureAltCoreWithDefaultSetName(
+			&sn, launcherID, newRBF, setName, true, opts,
+		); setNameErr != nil {
 			return nil, setNameErr
 		}
 
-		log.Debug().Str("rbf", sn.RBF).Msgf("launching Sinden: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Str("launcher", launcherID).Msgf("launching Sinden: %v", sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
@@ -1261,12 +1255,12 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenGenesis",
 			SystemID: systemdefs.SystemGenesis,
-			Launch:   launchSinden(systemdefs.SystemGenesis, "Genesis"),
+			Launch:   launchSinden("SindenGenesis", systemdefs.SystemGenesis, "Genesis"),
 		},
 		{
 			ID:       "SindenMegaDrive",
 			SystemID: systemdefs.SystemGenesis,
-			Launch:   launchSinden(systemdefs.SystemGenesis, "MegaDrive"),
+			Launch:   launchSinden("SindenMegaDrive", systemdefs.SystemGenesis, "MegaDrive"),
 		},
 		{
 			ID:       "LLAPIMegaDrive",
@@ -1326,7 +1320,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenSMS",
 			SystemID: systemdefs.SystemMasterSystem,
-			Launch:   launchSinden(systemdefs.SystemMasterSystem, "SMS"),
+			Launch:   launchSinden("SindenSMS", systemdefs.SystemMasterSystem, "SMS"),
 		},
 		{
 			ID:       "LLAPISMS",
@@ -1355,7 +1349,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenMegaCD",
 			SystemID: systemdefs.SystemMegaCD,
-			Launch:   launchSinden(systemdefs.SystemMegaCD, "MegaCD"),
+			Launch:   launchSinden("SindenMegaCD", systemdefs.SystemMegaCD, "MegaCD"),
 		},
 		{
 			ID:       "LLAPIMegaCD",
@@ -1434,7 +1428,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenNES",
 			SystemID: systemdefs.SystemNES,
-			Launch:   launchSinden(systemdefs.SystemNES, "NES"),
+			Launch:   launchSinden("SindenNES", systemdefs.SystemNES, "NES"),
 		},
 		{
 			ID:         systemdefs.SystemNESMusic,
@@ -1540,7 +1534,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchSinden(systemdefs.SystemPSX, "PSX"),
+			Launch:   launchSinden("SindenPSX", systemdefs.SystemPSX, "PSX"),
 		},
 		{
 			ID:       "2XPSX",
@@ -1696,7 +1690,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "SindenSNES",
 			SystemID: systemdefs.SystemSNES,
-			Launch:   launchSinden(systemdefs.SystemSNES, "SNES"),
+			Launch:   launchSinden("SindenSNES", systemdefs.SystemSNES, "SNES"),
 		},
 		{
 			ID:         systemdefs.SystemSNESMusic,

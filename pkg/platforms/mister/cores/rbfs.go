@@ -122,7 +122,9 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 	}
 
 	for _, file := range files {
-		if file.IsDir() && strings.HasPrefix(file.Name(), "_") {
+		// Scan "_"-prefixed core menu folders plus the "Light Gun" folder
+		// used by modern MiSTer Sinden cores (which has no "_" prefix).
+		if file.IsDir() && (strings.HasPrefix(file.Name(), "_") || strings.EqualFold(file.Name(), "Light Gun")) {
 			subFiles, subErr := os.ReadDir(filepath.Join(root, file.Name()))
 			if subErr != nil {
 				continue
