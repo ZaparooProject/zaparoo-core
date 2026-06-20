@@ -2143,6 +2143,37 @@ func TestSqlUpdateMediaTitle_ExecError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlUpdateMediaTitleName_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`UPDATE MediaTitles SET Name = \? WHERE DBID = \?`).
+		WithArgs("1001 Stolen Ideas", int64(42)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = sqlUpdateMediaTitleName(context.Background(), db, 42, "1001 Stolen Ideas")
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlUpdateMediaTitleName_ExecError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`UPDATE MediaTitles SET Name = \? WHERE DBID = \?`).
+		WithArgs("1001 Stolen Ideas", int64(42)).
+		WillReturnError(sql.ErrConnDone)
+
+	err = sqlUpdateMediaTitleName(context.Background(), db, 42, "1001 Stolen Ideas")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update media title name")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlGetMediaWithFullPath_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
