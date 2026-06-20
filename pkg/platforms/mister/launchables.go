@@ -24,41 +24,60 @@ const (
 )
 
 type misterCoreLaunchableDefinition struct {
-	ID       uuid.UUID
 	Name     string
 	Category string
 	CorePath string
+	ID       uuid.UUID
 }
 
 var misterCoreLaunchableDefinitions = []misterCoreLaunchableDefinition{
-	{ID: launchables.MisterConsoleAY38500, Name: "AY-3-8500", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "AY-3-8500")},
-	{ID: launchables.MisterConsoleBBCBridgeCompanion, Name: "BBC Bridge Companion", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "BBCBridgeCompanion")},
-	{ID: launchables.MisterConsoleMyVision, Name: "My Vision", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "MyVision")},
-	{ID: launchables.MisterConsoleSuperVision8000, Name: "Super Vision 8000", Category: misterLaunchableCategoryConsole, CorePath: filepath.Join("_Console", "Super_Vision_8000")},
-	{ID: launchables.MisterComputerAltair8800, Name: "Altair 8800", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Altair8800")},
-	{ID: launchables.MisterComputerArchie, Name: "Archie", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Archie")},
-	{ID: launchables.MisterComputerAtariST, Name: "Atari ST", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "AtariST")},
-	{ID: launchables.MisterComputerC128, Name: "Commodore 128", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "C128")},
-	{ID: launchables.MisterComputerCoCo3, Name: "CoCo 3", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "CoCo3")},
-	{ID: launchables.MisterComputerColecoAdam, Name: "Coleco Adam", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "ColecoAdam")},
-	{ID: launchables.MisterComputerEG2000, Name: "EG2000 Colour Genie", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "eg2000")},
-	{ID: launchables.MisterComputerEnterprise, Name: "Enterprise", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Enterprise")},
-	{ID: launchables.MisterComputerHomelab, Name: "Homelab", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Homelab")},
-	{ID: launchables.MisterComputerIQ151, Name: "IQ-151", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "IQ151")},
-	{ID: launchables.MisterComputerMacLC, Name: "Mac LC", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "MacLC")},
-	{ID: launchables.MisterComputerOndraSPO186, Name: "Ondra SPO186", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Ondra_SPO186")},
-	{ID: launchables.MisterComputerPC88, Name: "PC-88", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "PC88")},
-	{ID: launchables.MisterComputerPCjr, Name: "PCjr", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "PCjr")},
-	{ID: launchables.MisterComputerSharpMZ, Name: "Sharp MZ", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "SharpMZ")},
-	{ID: launchables.MisterComputerTK2000, Name: "TK2000", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "TK2000")},
-	{ID: launchables.MisterComputerTandy1000, Name: "Tandy 1000", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "Tandy1000")},
-	{ID: launchables.MisterComputerVT52, Name: "VT52", Category: misterLaunchableCategoryComputer, CorePath: filepath.Join("_Computer", "VT52")},
+	misterConsoleCore(launchables.MisterConsoleAY38500, "AY-3-8500", "AY-3-8500"),
+	misterConsoleCore(launchables.MisterConsoleBBCBridgeCompanion, "BBC Bridge Companion", "BBCBridgeCompanion"),
+	misterConsoleCore(launchables.MisterConsoleMyVision, "My Vision", "MyVision"),
+	misterConsoleCore(launchables.MisterConsoleSuperVision8000, "Super Vision 8000", "Super_Vision_8000"),
+	misterComputerCore(launchables.MisterComputerAltair8800, "Altair 8800", "Altair8800"),
+	misterComputerCore(launchables.MisterComputerArchie, "Archie", "Archie"),
+	misterComputerCore(launchables.MisterComputerAtariST, "Atari ST", "AtariST"),
+	misterComputerCore(launchables.MisterComputerC128, "Commodore 128", "C128"),
+	misterComputerCore(launchables.MisterComputerCoCo3, "CoCo 3", "CoCo3"),
+	misterComputerCore(launchables.MisterComputerColecoAdam, "Coleco Adam", "ColecoAdam"),
+	misterComputerCore(launchables.MisterComputerEG2000, "EG2000 Colour Genie", "eg2000"),
+	misterComputerCore(launchables.MisterComputerEnterprise, "Enterprise", "Enterprise"),
+	misterComputerCore(launchables.MisterComputerHomelab, "Homelab", "Homelab"),
+	misterComputerCore(launchables.MisterComputerIQ151, "IQ-151", "IQ151"),
+	misterComputerCore(launchables.MisterComputerMacLC, "Mac LC", "MacLC"),
+	misterComputerCore(launchables.MisterComputerOndraSPO186, "Ondra SPO186", "Ondra_SPO186"),
+	misterComputerCore(launchables.MisterComputerPC88, "PC-88", "PC88"),
+	misterComputerCore(launchables.MisterComputerPCjr, "PCjr", "PCjr"),
+	misterComputerCore(launchables.MisterComputerSharpMZ, "Sharp MZ", "SharpMZ"),
+	misterComputerCore(launchables.MisterComputerTK2000, "TK2000", "TK2000"),
+	misterComputerCore(launchables.MisterComputerTandy1000, "Tandy 1000", "Tandy1000"),
+	misterComputerCore(launchables.MisterComputerVT52, "VT52", "VT52"),
+}
+
+func misterConsoleCore(id uuid.UUID, name, coreName string) misterCoreLaunchableDefinition {
+	return misterCoreLaunchableDefinition{
+		ID:       id,
+		Name:     name,
+		Category: misterLaunchableCategoryConsole,
+		CorePath: filepath.Join("_Console", coreName),
+	}
+}
+
+func misterComputerCore(id uuid.UUID, name, coreName string) misterCoreLaunchableDefinition {
+	return misterCoreLaunchableDefinition{
+		ID:       id,
+		Name:     name,
+		Category: misterLaunchableCategoryComputer,
+		CorePath: filepath.Join("_Computer", coreName),
+	}
 }
 
 // Launchables exposes launch-only MiSTer core entries that do not already have
 // media launchers.
 func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
-	items := []launchables.Launchable{
+	items := make([]launchables.Launchable, 0, 10+len(misterCoreLaunchableDefinitions))
+	items = append(items,
 		launchables.VirtualSystem{
 			ID:       launchables.MisterOtherChess,
 			Name:     "Chess",
@@ -132,7 +151,7 @@ func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
 			Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
 			Test:     testOtherCore("3S-ARM"),
 		},
-	}
+	)
 
 	for _, def := range misterCoreLaunchableDefinitions {
 		items = append(items, launchables.VirtualSystem{
