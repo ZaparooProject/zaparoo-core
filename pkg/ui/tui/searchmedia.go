@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -44,6 +45,20 @@ func writeTagForMedia(
 	WriteTagWithModal(pages, app, svc, writeValue, func(_ bool) {
 		app.SetFocus(mediaList)
 	})
+}
+
+// formatDisambiguatingTags renders pre-sorted disambiguating tags as a
+// comma-separated "type:value" list, e.g. "region:eu, region:us". Returns ""
+// when there are no tags.
+func formatDisambiguatingTags(tags []database.TagInfo) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	parts := make([]string, len(tags))
+	for i := range tags {
+		parts[i] = tags[i].Type + ":" + tags[i].Tag
+	}
+	return strings.Join(parts, ", ")
 }
 
 // truncateSystemName truncates a system name to fit in the left column.
@@ -213,7 +228,13 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 				displayName = result.Name
 				writeValue = result.ZapScript
 			}
-			displayText := fmt.Sprintf("%s [%s](%s)[-]", displayName, CurrentTheme().SecondaryColor, result.System.Name)
+			displayText := displayName
+			if tuiCfg.WriteFormat != "path" {
+				if tagStr := formatDisambiguatingTags(result.DisambiguatingTags); tagStr != "" {
+					displayText += " (" + tagStr + ")"
+				}
+			}
+			displayText += fmt.Sprintf(" [%s](%s)[-]", CurrentTheme().SecondaryColor, result.System.Name)
 			value := writeValue // capture for closure
 			mediaList.AddItem(displayText, "", 0, func() {
 				writeTagForMedia(pages, app, svc, value, mediaList)
