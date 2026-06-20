@@ -1749,3 +1749,55 @@ func TestPopulateScanStateForSystem_TracksEmptySortNameInNeedsSortNameMap(t *tes
 	assert.Contains(t, ss.MediaNeedsSortName, populatedID,
 		"media with empty SortName must appear in MediaNeedsSortName")
 }
+
+// TestAddMediaPath_ExistingTitleNameUpdatesOnReindex verifies that when the
+// derived title name changes between index runs (e.g. after scanner starts
+// emitting empty ProvidedName so filename parsing cleans the title),
+// MediaTitles.Name is updated to the new cleaned name on the next reindex.
+// This covers the AmigaVision case: "1001 Stolen Ideas (Airwalk)(AGA)" →
+// "1001 Stolen Ideas" after ProvidedName is cleared in scanAmigaVisionListingFile.
+func TestAddMediaPath_ExistingTitleNameUpdatesOnReindex(t *testing.T) {
+	t.Parallel()
+
+	const systemID = "Amiga"
+	gamePath := filepath.Join(
+		string(filepath.Separator), "media", "fat", "games", "Amiga", "Demos", "1001 Stolen Ideas (Airwalk)(AGA)",
+	)
+
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	// First index: scanner provided the raw listing line as the name.
+	initialState := newIndexingPipelineScanState()
+	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err := AddMediaPath(
+		mediaDB, initialState, systemID, gamePath,
+		"1001 Stolen Ideas (Airwalk)(AGA)", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err := mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1001 Stolen Ideas (Airwalk)(AGA)", titles[0].Name)
+
+	// Second index: scanner now emits empty ProvidedName so the filename
+	// parser derives the cleaned title "1001 Stolen Ideas".
+	reindexState := newIndexingPipelineScanState()
+	require.NoError(t, PopulateScanStateFromDB(context.Background(), mediaDB, reindexState))
+	require.NoError(t, PopulatePersistentScanStateForSystem(context.Background(), mediaDB, reindexState, systemID))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err = AddMediaPath(
+		mediaDB, reindexState, systemID, gamePath,
+		"", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	titles, err = mediaDB.GetAllMediaTitles()
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "1001 Stolen Ideas", titles[0].Name)
+}

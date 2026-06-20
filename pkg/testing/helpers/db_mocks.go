@@ -1089,6 +1089,15 @@ func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortNam
 	return nil
 }
 
+func (m *MockMediaDBI) UpdateMediaTitleName(titleDBID int64, name string) error {
+	m.trackDatabaseOperation()
+	args := m.Called(titleDBID, name)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID, parentDir)
@@ -2191,6 +2200,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("UpdateMediaTitleName", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
 	// Disambiguation refresh runs per system at the end of indexing.
 	mockMediaDB.On("RecomputeSystemDisambiguation", mock.Anything, mock.Anything).Return(nil).Maybe()

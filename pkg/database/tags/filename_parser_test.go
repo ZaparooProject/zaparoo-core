@@ -2624,6 +2624,59 @@ func BenchmarkDetectNumberingPattern(b *testing.B) {
 	}
 }
 
+// TestParseTitleFromFilename_AmigaVision verifies that titles derived from
+// AmigaVision listing lines (the path basename) are cleaned correctly. The scanner
+// leaves ScanResult.Name empty so the indexer derives the title from the path,
+// which means the raw listing line — e.g. "1869 (AGA)[en]" — arrives as the
+// filename argument here.
+func TestParseTitleFromFilename_AmigaVision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		filename  string
+		wantTitle string
+	}{
+		{
+			name:      "game with AGA chipset and single language",
+			filename:  "1869 (AGA)[en]",
+			wantTitle: "1869",
+		},
+		{
+			name:      "game with OCS chipset and single language",
+			filename:  "3D Pool (OCS)[en]",
+			wantTitle: "3D Pool",
+		},
+		{
+			name:      "game with OCS chipset and multi-language bracket",
+			filename:  "7 Colors (OCS)[en-de-fr-it-es]",
+			wantTitle: "7 Colors",
+		},
+		{
+			name:      "demo with group paren and AGA chipset",
+			filename:  "1001 Stolen Ideas (Airwalk)(AGA)",
+			wantTitle: "1001 Stolen Ideas",
+		},
+		{
+			name:      "demo with group paren and OCS chipset",
+			filename:  "9 Fingers (Spaceballs)(OCS)",
+			wantTitle: "9 Fingers",
+		},
+		{
+			name:      "game title with leading number preserved",
+			filename:  "1869 (OCS)[en]",
+			wantTitle: "1869",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.wantTitle, ParseTitleFromFilename(tt.filename, false))
+		})
+	}
+}
+
 func BenchmarkFilenameParser_ExtractSpecialPatterns(b *testing.B) {
 	filename := "Game Title (Disc 1 of 3) (Rev A) (v1.2) (1998) S02E05.zip"
 	b.ReportAllocs()

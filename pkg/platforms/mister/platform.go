@@ -1143,7 +1143,6 @@ func scanAmigaVisionListingFile(path, installPath string, listing amigaVisionLis
 		}
 		results = append(results, platforms.ScanResult{
 			Path:  filepath.Join(installPath, listing.BrowseDir, name),
-			Name:  name,
 			NoExt: true,
 		})
 	}

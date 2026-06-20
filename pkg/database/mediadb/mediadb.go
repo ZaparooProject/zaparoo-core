@@ -2464,6 +2464,29 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName st
 	return err
 }
 
+func (db *MediaDB) UpdateMediaTitleName(titleDBID int64, name string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	if db.batchInsertMediaTitle != nil {
+		if err := db.batchInsertMediaTitle.Flush(); err != nil {
+			return fmt.Errorf("failed to flush media title batch before update: %w", err)
+		}
+	}
+
+	err := sqlUpdateMediaTitleName(db.ctx, db.conn(), titleDBID, name)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
+			return invalidateErr
+		}
+	} else if err == nil {
+		db.markBrowseCacheDirty()
+	}
+
+	return err
+}
+
 func (db *MediaDB) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
 	if db.sql == nil {
 		return ErrNullSQL
