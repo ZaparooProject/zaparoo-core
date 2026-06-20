@@ -486,6 +486,107 @@ func TestLoadRecords_PokemonAccentMatchesNonAccentedSlug(t *testing.T) {
 	assert.Equal(t, int64(856), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(857), records[0].MatchedMediaDBID)
 	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_SlugOnlySingleMediaRowIsWriteSafe(t *testing.T) {
+	t.Parallel()
+
+	// Models issue #977: gamelist <path> differs from the indexed file path
+	// (here by subfolder), so the path-fold match fails, but both fold to
+	// the same title slug. With exactly one media row the match is
+	// unambiguous and media-level art should be written.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./Bomber Man.mra</path>
+    <name>Bomber Man</name>
+    <image>./media/images/bomberman.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "arcade", ROMPaths: []string{root}},
+		mediaBySlugAndPath("bomberman", &database.MediaTitle{DBID: 10, Slug: "bomberman"},
+			database.Media{
+				DBID: 11, MediaTitleDBID: 10,
+				Path: filepath.Join(root, "subdir", "Bomber Man.mra"),
+			}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.Equal(t, int64(10), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+	// Confirm MapToDB produces an image prop that will not be dropped.
+	mapped := (&GamelistXMLScraper{}).MapToDB(records[0])
+	assert.NotEmpty(t, mapped.MediaProps, "image prop must survive to the write when write-safe")
+}
+
+func TestLoadRecords_SlugOnlyMultipleMediaRowsStaysUnsafe(t *testing.T) {
+	t.Parallel()
+
+	// Two regional variants under one title; the gamelist path matches neither
+	// by fold → gamelistMatchSlugOnly but MediaLevelWriteSafe must stay false
+	// to avoid attaching art to the wrong variant.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./Game.nes</path>
+    <name>Game</name>
+    <image>./media/images/game.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		mediaBySlugAndPath("game", &database.MediaTitle{DBID: 20, Slug: "game"},
+			database.Media{DBID: 21, MediaTitleDBID: 20, Path: filepath.Join(root, "USA", "Game.nes")},
+			database.Media{DBID: 22, MediaTitleDBID: 20, Path: filepath.Join(root, "Japan", "Game.nes")}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.False(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_SlugConflictStaysUnsafe(t *testing.T) {
+	t.Parallel()
+
+	// The gamelist <path> folds to a media row belonging to a DIFFERENT title
+	// than the slug match. Even though only one media row exists for the slug-
+	// matched title, the conflict disqualifies media-level writes.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./game.nes</path>
+    <name>Game</name>
+    <image>./media/images/game.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	// Build indexes manually: title 30 is slug-matched, but game.nes is
+	// indexed under title 40 (a different title).
+	indexes := mediaByPath(
+		database.Media{DBID: 50, MediaTitleDBID: 40, Path: filepath.Join(root, "game.nes")},
+		database.Media{DBID: 51, MediaTitleDBID: 30, Path: filepath.Join(root, "other", "game.nes")},
+	)
+	indexes.TitlesBySlug["game"] = database.MediaTitle{DBID: 30, Slug: "game"}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		indexes,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, gamelistMatchSlugConflict, records[0].MatchKind)
 	assert.False(t, records[0].MediaLevelWriteSafe)
 }
 
@@ -3349,8 +3450,10 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
+func TestScrapeLoop_SlugOnlySingleMediaMatchWritesImageAndTitle(t *testing.T) {
 	t.Parallel()
+	// Single-media-row slug-only match: both title-level metadata (description)
+	// and media-level art (image) must be written.
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
 <gameList>
@@ -3383,6 +3486,75 @@ func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
 			return false
 		}
 		descTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
+		imageTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+		return assert.Contains(t, w.MediaProps, database.MediaProperty{
+			TypeTag:     imageTypeTag,
+			Text:        filepath.ToSlash(filepath.Join(root, "media", "images", "mario.png")),
+			ContentType: "image/png",
+		}) &&
+			assert.Contains(t, w.TitleProps, database.MediaProperty{
+				TypeTag:     descTypeTag,
+				Text:        "Title metadata",
+				ContentType: "text/plain",
+			})
+	})
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, writeMatcher).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 1, done.Matched)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_SlugOnlyMultipleMediaMatchDropsImage(t *testing.T) {
+	t.Parallel()
+	// Multi-media-row slug-only match: image must be dropped (media-level
+	// writes unsafe) while title-level metadata still writes.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./xml-path.nes</path>
+    <name>Mario</name>
+    <desc>Title metadata</desc>
+    <image>./media/images/mario.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	const (
+		titleDBID  = int64(2)
+		mediaDBID1 = int64(20)
+		mediaDBID2 = int64(21)
+		systemDBID = int64(200)
+	)
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{
+			{DBID: mediaDBID1, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "USA", "Mario.nes")},
+			{DBID: mediaDBID2, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "Japan", "Mario.nes")},
+		}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
+	writeMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		if w == nil {
+			return false
+		}
+		descTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
 		return assert.Empty(t, w.MediaTags) &&
 			assert.Empty(t, w.MediaProps) &&
 			assert.Contains(t, w.TitleProps, database.MediaProperty{
@@ -3391,7 +3563,7 @@ func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
 				ContentType: "text/plain",
 			})
 	})
-	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, writeMatcher).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID1, titleDBID, writeMatcher).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	ch := make(chan scraper.ScrapeUpdate, 128)

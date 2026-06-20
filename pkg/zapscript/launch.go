@@ -263,10 +263,9 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	systemID := env.Cmd.Args[0]
 
-	// For menu, use ReturnToMenu() instead of LaunchSystem
-	// This ensures proper handling across all platforms (stops active launcher and returns to main menu)
-	// TODO: move "menu" to a const somewhere else
-	if strings.EqualFold(systemID, "menu") {
+	// For menu, use ReturnToMenu() instead of LaunchSystem.
+	// This ensures proper handling across all platforms (stops active launcher and returns to main menu).
+	if strings.EqualFold(systemID, platforms.SystemMenu) {
 		if err := pl.ReturnToMenu(); err != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,

@@ -613,9 +613,9 @@ func (*Reader) Detect(connected []string) string {
 	// Track which enumerated ports were NOT detected as PN532 devices.
 	// Store the device file's ModTime so we can detect device swaps at
 	// the same path (the file is recreated with a new ModTime on replug).
-	// TODO: this re-enumerates serial ports redundantly since DetectAll
-	// already does so internally. Could be eliminated if DetectAll
-	// returned the full list of candidate paths it tried.
+	// DetectAll currently does not expose candidate paths it tried; see
+	// https://github.com/ZaparooProject/go-pn532/issues/94. Until then,
+	// enumerate serial ports here to infer failed probe paths.
 	currentPorts, enumErr := helpers.GetSerialDeviceList()
 	if enumErr == nil {
 		detectedPaths := make(map[string]bool, len(devices))

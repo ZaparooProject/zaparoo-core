@@ -95,6 +95,12 @@ const (
 	StopForConsoleReset
 )
 
+// System identifiers for platform-level targets.
+const (
+	// SystemMenu identifies the platform's main menu/frontend target.
+	SystemMenu = "menu"
+)
+
 // Running instance identifiers for launchers that communicate with persistent applications.
 // Used in Launcher.UsesRunningInstance to indicate which app instance the launcher targets.
 const (

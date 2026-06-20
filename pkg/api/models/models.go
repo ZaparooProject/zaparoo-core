@@ -75,6 +75,7 @@ const (
 	MethodMediaScrapeCancel    = "media.scrape.cancel"
 	MethodMediaScrapeResume    = "media.scrape.resume"
 	MethodMediaBrowse          = "media.browse"
+	MethodMediaBrowseIndex     = "media.browse.index"
 	MethodMediaControl         = "media.control"
 	MethodMediaActiveUpdate    = "media.active.update"
 	MethodMediaCleanOrphans    = "media.clean.orphans"

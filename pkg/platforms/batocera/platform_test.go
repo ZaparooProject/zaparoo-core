@@ -815,6 +815,23 @@ func TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu(t *testing.T) {
 	assert.NoError(t, err, "ReturnToMenu should handle no active media gracefully")
 }
 
+func TestLaunchSystem_MenuUsesReturnToMenu(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	mockESAPI.WithNoRunningGame()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{cfg: cfg}
+	platform.activeMedia = func() *models.ActiveMedia { return nil }
+	platform.setActiveMedia = func(_ *models.ActiveMedia) {}
+
+	err = platform.LaunchSystem(cfg, "Menu")
+	assert.NoError(t, err)
+}
+
 // TestStartPost_ESAPIUnavailable tests that StartPost handles ES API unavailability gracefully
 func TestStartPost_ESAPIUnavailable(t *testing.T) {
 	// Note: Not using t.Parallel() because we need to ensure no MockESAPIServer is running

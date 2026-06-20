@@ -916,6 +916,119 @@ func sqlBrowseFileCountFromMedia(
 	return count, nil
 }
 
+const (
+	browseIndexSchemeLatin = "latin"
+	browseIndexSchemeNone  = "none"
+)
+
+// sqlBrowseIndex computes the first-character bucket facet for a browse scope:
+// per-bucket counts plus each bucket's first-row keyset, from which a seek
+// cursor is derived so a media.browse page lands on the bucket's first item.
+// Buckets are returned in the active sort order (matching scroll order), not a
+// hard-coded alphabet.
+//
+// The rail is only meaningful when rows are ordered alphabetically by SortName.
+// When resolveBrowseSortMode picks a filename / rank-prefix / date-prefix
+// ordering, the first-character mapping would not match the displayed order, so
+// the result reports scheme "none" with no buckets.
+func sqlBrowseIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	filesOpts := &database.BrowseFilesOptions{
+		PathPrefix: opts.PathPrefix,
+		Sort:       opts.Sort,
+		Systems:    opts.Systems,
+	}
+	sortMode := resolveBrowseSortMode(ctx, db, filesOpts)
+	if browseSortExpr(sortMode) != "m.SortName" {
+		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
+			PathPrefix: opts.PathPrefix,
+			Systems:    opts.Systems,
+		})
+		if err != nil {
+			return database.BrowseIndexResult{}, err
+		}
+		return database.BrowseIndexResult{
+			Scheme:     browseIndexSchemeNone,
+			SortMode:   sortMode,
+			TotalFiles: total,
+		}, nil
+	}
+
+	where, args := browseFilesBaseCondition(filesOpts)
+	// Only join Systems when a system filter is active; browseFilesBaseCondition
+	// references s.SystemID solely for that filter, so an unfiltered facet would
+	// otherwise pay one PK lookup per row for nothing.
+	join := ""
+	if len(opts.Systems) > 0 {
+		join = " INNER JOIN Systems s ON m.SystemDBID = s.DBID"
+	}
+	bucketExpr := browseBucketKeyExpr("m.SortName")
+	// The window orders by the browse sort expression, which idx_media_browse_sort
+	// already provides (ParentDir, IsMissing equality then SortName, DBID), so the
+	// window needs no sort; only the GROUP BY (folded bucket, not index order) uses
+	// a transient btree. rn gives each row's position so MIN(rn) per bucket finds
+	// the bucket's first row, joined back for its keyset.
+	desc := sortMode == "name-desc"
+
+	query := `WITH ordered AS (
+		SELECT ` + bucketExpr + ` AS bucket,
+			m.SortName AS sortValue,
+			m.DBID AS dbid,
+			ROW_NUMBER() OVER (ORDER BY ` + browseSortClause(sortMode) + `) AS rn
+		FROM Media m` + join + `
+		WHERE ` + where + `
+	), counts AS (
+		SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
+	)
+	SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
+	FROM ordered o
+	INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
+	ORDER BY o.rn`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse index query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := database.BrowseIndexResult{Scheme: browseIndexSchemeLatin, SortMode: sortMode}
+	for rows.Next() {
+		var (
+			bucket    string
+			sortValue string
+			dbid      int64
+			count     int
+			firstRN   int64
+		)
+		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
+			return database.BrowseIndexResult{}, fmt.Errorf("browse index scan: %w", scanErr)
+		}
+		// Nudge the tiebreaker so the strict keyset comparison includes this row:
+		// ascending uses (>) so subtract one; descending uses (<) so add one.
+		cursorID := dbid - 1
+		if desc {
+			cursorID = dbid + 1
+		}
+		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
+			Key:       bucket,
+			SortValue: sortValue,
+			LastID:    cursorID,
+			Count:     count,
+			// rn is 1-based; the bucket's first item is its 0-based file offset.
+			Offset:  int(firstRN - 1),
+			AtStart: len(result.Buckets) == 0,
+		})
+		result.TotalFiles += count
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse index rows: %w", rowsErr)
+	}
+	return result, nil
+}
+
 func sqlBrowseVirtualSchemes(
 	ctx context.Context,
 	db sqlQueryable,

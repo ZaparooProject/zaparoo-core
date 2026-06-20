@@ -346,6 +346,46 @@ type BrowseFileCountOptions struct {
 	Systems    []systemdefs.System
 }
 
+// BrowseIndexOptions contains parameters for the BrowseIndex facet query. It
+// mirrors the scoping fields of BrowseFilesOptions so the index describes the
+// exact list a media.browse call would return.
+type BrowseIndexOptions struct {
+	PathPrefix string
+	Sort       string
+	Systems    []systemdefs.System
+}
+
+// BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
+// and LastID are the keyset of the row immediately before the bucket's first
+// row, so a media.browse cursor built from them lands a page on the bucket's
+// first item. Offset is the bucket's 0-based position among the scope's files
+// (its row number in the ordered query, so it can't drift from the browse
+// order); it excludes leading directories, which the caller adds. AtStart is
+// true for the bucket that begins the list (no preceding row), in which case
+// the caller should produce an empty cursor.
+type BrowseIndexBucket struct {
+	Key       string
+	SortValue string
+	LastID    int64
+	Count     int
+	Offset    int
+	AtStart   bool
+}
+
+// BrowseIndexResult is the ordered set of first-character buckets for a browse
+// scope. Buckets are ordered to match the active sort. Scheme reports the
+// collation used to derive the buckets ("latin"); it is "none" when the
+// directory's effective sort is not alphabetical, in which case Buckets is
+// empty and no rail applies. SortMode is the resolved browse sort mode the
+// buckets were computed under and must be embedded into the seek cursors so the
+// subsequent media.browse page continues in the same order.
+type BrowseIndexResult struct {
+	Scheme     string
+	SortMode   string
+	Buckets    []BrowseIndexBucket
+	TotalFiles int
+}
+
 // BrowseVirtualScheme represents a virtual URI scheme with indexed content.
 type BrowseVirtualScheme struct {
 	Scheme    string
@@ -757,6 +797,7 @@ type MediaDBI interface {
 	BrowseDirectories(ctx context.Context, opts BrowseDirectoriesOptions) ([]BrowseDirectoryResult, error)
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
+	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)

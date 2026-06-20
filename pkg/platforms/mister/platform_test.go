@@ -26,6 +26,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -101,6 +102,63 @@ func restoreTLSRootFallbackHooks(t *testing.T) {
 		configureZapLinkHTTPTransport = oldConfigureZapLinkHTTPTransport
 		configureInstallerHTTPTransport = oldConfigureInstallerHTTPTransport
 	})
+}
+
+func TestIsWidgetScript(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, isWidgetScript("/media/fat/Scripts/test.sh", ""))
+	assert.False(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "-show-text"))
+	assert.True(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "'-show-text'"))
+}
+
+func TestScriptRunMode(t *testing.T) {
+	t.Parallel()
+
+	runScript, widget := scriptRunMode("/media/fat/Scripts/test.sh", "")
+	assert.Equal(t, misterScriptRunFlag, runScript)
+	assert.False(t, widget)
+
+	runScript, widget = scriptRunMode("/media/fat/Scripts/zaparoo.sh", "'-show-text'")
+	assert.Equal(t, misterWidgetRunFlag, runScript)
+	assert.True(t, widget)
+}
+
+func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
+	t.Parallel()
+
+	if scriptIsActive() {
+		t.Skip("MiSTer script already active")
+	}
+
+	tmpDir := t.TempDir()
+	flagPath := filepath.Join(tmpDir, "run_flag")
+	argPath := filepath.Join(tmpDir, "arg")
+	scriptPath := filepath.Join(tmpDir, "script.sh")
+	script := "#!/bin/sh\n" +
+		"printf '%s' \"$ZAPAROO_RUN_SCRIPT\" > run_flag\n" +
+		"printf '%s' \"$1\" > arg\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
+
+	err := runScript(nil, scriptPath, "hello", true)
+	require.NoError(t, err)
+
+	flag, err := os.ReadFile(flagPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, misterScriptRunFlag, string(flag))
+
+	arg, err := os.ReadFile(argPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(arg))
+}
+
+func TestLaunchSystem_MenuUsesLaunchMenu(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+	err := p.LaunchSystem(&config.Instance{}, "Menu")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch menu")
 }
 
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
