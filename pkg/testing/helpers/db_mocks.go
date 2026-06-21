@@ -640,6 +640,19 @@ func (m *MockMediaDBI) CommitTransactionWithOptions(options database.Transaction
 	return nil
 }
 
+func (m *MockMediaDBI) FlushBatchInserters() error {
+	// Infrastructure call during indexing; treat as a no-op unless a test sets
+	// an explicit expectation, so callers don't have to wire it up everywhere.
+	if !m.hasExpectedCall("FlushBatchInserters") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) RollbackTransaction() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {

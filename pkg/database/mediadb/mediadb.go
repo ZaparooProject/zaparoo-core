@@ -1078,6 +1078,40 @@ func (db *MediaDB) closeAllBatchInserters() error {
 	return errors.Join(closeErrs...)
 }
 
+// FlushBatchInserters flushes all pending batch-insert buffers into the open
+// transaction without committing, so freshly inserted rows become visible to
+// reads on the same transaction (e.g. RecomputeSystemDisambiguation). Unlike
+// closeAllBatchInserters it leaves the inserters open for continued use, which
+// lets one transaction span multiple systems. No-op when no transaction or no
+// batch inserters are active. Each inserter's Flush already flushes its FK
+// dependencies first, so the iteration order only needs to be deterministic.
+func (db *MediaDB) FlushBatchInserters() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	if db.tx == nil {
+		return nil
+	}
+
+	var flushErrs []error
+	for _, bi := range []*BatchInserter{
+		db.batchInsertSystem,
+		db.batchInsertMediaTitle,
+		db.batchInsertMedia,
+		db.batchInsertTag,
+		db.batchInsertTagType,
+		db.batchInsertMediaTag,
+	} {
+		if bi == nil {
+			continue
+		}
+		if flushErr := bi.Flush(); flushErr != nil {
+			flushErrs = append(flushErrs, flushErr)
+		}
+	}
+	return errors.Join(flushErrs...)
+}
+
 // RollbackTransaction rolls back the current transaction and cleans up resources
 func (db *MediaDB) RollbackTransaction() error {
 	db.sqlMu.Lock()
