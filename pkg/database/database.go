@@ -703,6 +703,7 @@ type MediaDBI interface {
 	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
 	CommitTransactionWithOptions(options TransactionOptions) error
+	FlushBatchInserters() error
 	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error

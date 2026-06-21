@@ -903,9 +903,15 @@ func NewNamesIndex(
 		}
 	}
 
-	// Batch tracking variables for adaptive transaction management
+	// Batch tracking variables for adaptive transaction management. One
+	// transaction can span multiple systems to amortise the fixed per-commit
+	// fsync + WAL-checkpoint cost on slow storage (each commit costs ~0.2-2.5s
+	// regardless of row count). pendingSystems holds systems whose inserts and
+	// missing-state are buffered in the open transaction but not yet committed,
+	// and therefore not yet durable for crash-resume.
 	filesInBatch := 0
 	batchStarted := false
+	pendingSystems := make([]string, 0)
 
 	// TODO: skip unchanged systems via a per-system fingerprint — store
 	// hash(sorted walked paths) + parser version + media row count after each
@@ -918,7 +924,7 @@ func NewNamesIndex(
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
 	// are called for every system, fixing the stale-state gaps that existed in
 	// the previous loop 2 and loop 3.
-	for _, sys := range sortedSystems {
+	for sysIdx, sys := range sortedSystems {
 		// Check for cancellation or pause
 		select {
 		case <-ctx.Done():
@@ -1149,12 +1155,17 @@ func NewNamesIndex(
 					Msg("processed media paths")
 			}
 
-			// Commit if we hit file limit (memory safety - even mid-system)
+			// Commit if we hit file limit (memory safety - even mid-system). The
+			// current system is only partially processed here, so it is NOT marked
+			// complete; on resume the cursor points at it and it is re-indexed from
+			// scratch (idempotent). Systems fully processed earlier in this batch are
+			// now durable and marked complete.
 			if filesInBatch >= maxFilesPerTransaction {
 				log.Debug().
 					Str("system", systemID).
 					Int("files", filesInBatch).
-					Msg("committing media indexing batch")
+					Int("batchedSystems", len(pendingSystems)).
+					Msg("committing media indexing batch (file limit)")
 				commitStart := time.Now()
 				if commitErr := db.CommitTransaction(); commitErr != nil {
 					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
@@ -1171,11 +1182,17 @@ func NewNamesIndex(
 						Dur("commitTime", commitElapsed).
 						Msg("database commit took longer than expected")
 				}
-				// Update progress after successful commit
+				// Resume cursor points at the in-progress system so it is redone;
+				// systems sorted before it (including the batched, fully-processed
+				// ones) are treated as complete on resume.
 				if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
 					log.Error().Err(setErr).Msgf(
 						"failed to set last indexed system to %s after file limit commit", systemID)
 				}
+				for _, s := range pendingSystems {
+					completedSystems[s] = true
+				}
+				pendingSystems = pendingSystems[:0]
 				// NOTE: Do not flush TitleIDs/MediaIDs here — we are still
 				// mid-system. Clearing them would break dedup for remaining
 				// files in this system (multi-disc titles, persistent-mode
@@ -1185,66 +1202,92 @@ func NewNamesIndex(
 			}
 		}
 
-		if batchStarted {
+		// Finalize this system's missing-state and disambiguation inside the
+		// currently open transaction, which is shared across batched systems. The
+		// rows just inserted for this system are flushed (not committed) so the
+		// disambiguation query observes them; the commit itself is deferred to a
+		// batch boundary below so the fsync + checkpoint cost is amortised.
+		systemDBID, found := scanState.SystemIDs[systemID]
+		if found {
+			// A mid-system file-limit commit may have closed the transaction on the
+			// final file; reopen one so the missing-state writes have a home.
+			if !batchStarted {
+				if beginErr := db.BeginTransaction(true); beginErr != nil {
+					return 0, fmt.Errorf("failed to begin transaction to finalize system %s: %w", systemID, beginErr)
+				}
+				batchStarted = true
+			}
+			if flushErr := db.FlushBatchInserters(); flushErr != nil {
+				return 0, fmt.Errorf("failed to flush batch inserts for system %s: %w", systemID, flushErr)
+			}
+			if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
+				return 0, fmt.Errorf("failed to reset missing flags for system %s: %w", systemID, resetErr)
+			}
+			if len(scanState.MissingMedia) > 0 {
+				if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
+					return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
+				}
+			}
+			// Refresh stored sibling disambiguation now the system's media, tags, and
+			// missing flags are final and flushed into the transaction. Non-fatal:
+			// stale disambiguation only affects display/ZapScript hints and is
+			// corrected on the next index.
+			if disErr := db.RecomputeSystemDisambiguation(ctx, []int64{int64(systemDBID)}); disErr != nil {
+				log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
+			}
+			pendingSystems = append(pendingSystems, systemID)
+		} else {
+			// System produced no rows — nothing to commit for it.
+			completedSystems[systemID] = true
+		}
+
+		// Always flush between systems — TitleIDs/MediaIDs are system-scoped and
+		// Populate* re-loads them for the next system. In-memory only; safe to do
+		// with the transaction still open.
+		FlushScanStateMaps(&scanState)
+
+		// Commit at a batch boundary: when accumulated files reach the limit or
+		// this is the last system. This is the only place the fsync + checkpoint is
+		// paid, so a run of small systems shares a single commit.
+		isLastSystem := sysIdx == len(sortedSystems)-1
+		if batchStarted && (filesInBatch >= maxFilesPerTransaction || isLastSystem) {
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
-				Msg("committing media indexing system transaction")
+				Int("batchedSystems", len(pendingSystems)).
+				Msg("committing media indexing batch")
 			commitStart := time.Now()
 			if commitErr := db.CommitTransaction(); commitErr != nil {
-				return 0, fmt.Errorf("failed to commit system transaction: %w", commitErr)
+				return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 			}
 			commitElapsed := time.Since(commitStart)
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
+				Int("batchedSystems", len(pendingSystems)).
 				Dur("commitTime", commitElapsed).
-				Msg("committed system transaction")
+				Msg("committed batch")
 			if commitElapsed > 5*time.Second {
 				log.Warn().
 					Int("files", filesInBatch).
 					Dur("commitTime", commitElapsed).
 					Msg("database commit took longer than expected")
 			}
+			// The cursor points at the last fully-finalized system; systems before
+			// it are complete and it is redone on resume (idempotent).
+			if len(pendingSystems) > 0 {
+				lastDone := pendingSystems[len(pendingSystems)-1]
+				if setErr := db.SetLastIndexedSystem(lastDone); setErr != nil {
+					log.Error().Err(setErr).Msgf("failed to set last indexed system to %s after batch commit", lastDone)
+				}
+				for _, s := range pendingSystems {
+					completedSystems[s] = true
+				}
+				pendingSystems = pendingSystems[:0]
+			}
 			filesInBatch = 0
 			batchStarted = false
 		}
-
-		systemDBID, found := scanState.SystemIDs[systemID]
-		if !found {
-			completedSystems[systemID] = true
-			FlushScanStateMaps(&scanState)
-			continue
-		}
-
-		if beginErr := db.BeginTransaction(false); beginErr != nil {
-			return 0, fmt.Errorf("failed to begin missing-state transaction: %w", beginErr)
-		}
-		if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
-			return 0, fmt.Errorf("failed to reset missing flags for system %s: %w", systemID, resetErr)
-		}
-		if len(scanState.MissingMedia) > 0 {
-			if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
-				return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
-			}
-		}
-		// Refresh stored sibling disambiguation now the system's media, tags, and
-		// missing flags are final. Runs in the same transaction so it observes the
-		// missing flags just written. Non-fatal: stale disambiguation only affects
-		// display/ZapScript hints and is corrected on the next index.
-		if disErr := db.RecomputeSystemDisambiguation(ctx, []int64{int64(systemDBID)}); disErr != nil {
-			log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
-		}
-		if commitErr := db.CommitTransaction(); commitErr != nil {
-			return 0, fmt.Errorf("failed to commit missing-state transaction: %w", commitErr)
-		}
-
-		if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
-			log.Error().Err(setErr).Msgf("failed to set last indexed system to %s after system completion", systemID)
-		}
-
-		// Mark system as processed only after its missing-state finalization commits.
-		completedSystems[systemID] = true
 
 		systemElapsed := time.Since(systemStartTime)
 		systemMetricsEnd := metrics.Capture(ctx, false)
@@ -1264,10 +1307,6 @@ func NewNamesIndex(
 				Dur("elapsed", systemElapsed).
 				Msg("system indexing took longer than expected - check for slow storage or large directories")
 		}
-
-		// Always flush between systems — TitleIDs/MediaIDs are system-scoped and
-		// Populate* re-loads them for the next system.
-		FlushScanStateMaps(&scanState)
 	}
 
 	logPhaseMetrics("systems")
