@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -204,9 +205,89 @@ func TestNewNamesIndex_BatchedReindexIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestNewNamesIndex_BatchedMissingMediaMarkedOnReindex verifies that media which
+// disappears between indexes is still flagged missing now that the missing-state
+// reconciliation runs inside the shared batch transaction rather than its own.
+func TestNewNamesIndex_BatchedMissingMediaMarkedOnReindex(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache.
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	keep := filepath.Join(dir, "keep.bin")
+	gone := filepath.Join(dir, "gone.bin")
+	require.NoError(t, os.WriteFile(keep, []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(gone, []byte("x"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:         "custom-nes",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{dir},
+		Extensions: []string{".bin"},
+	}
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	systems := []systemdefs.System{{ID: systemdefs.SystemNES}}
+
+	first, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first)
+
+	// The file vanishes before the second index, so its row must be flagged missing.
+	require.NoError(t, os.Remove(gone))
+
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	// GetAllMedia does not select IsMissing, so read the flag directly.
+	missingByBase := readMissingFlags(t, db)
+	assert.True(t, missingByBase["gone.bin"], "the removed file's media row should be flagged missing")
+	assert.False(t, missingByBase["keep.bin"], "the surviving file's media row should not be missing")
+}
+
+// readMissingFlags returns IsMissing for every Media row keyed by path basename.
+func readMissingFlags(t *testing.T, db *database.Database) map[string]bool {
+	t.Helper()
+	sqlDB := db.MediaDB.UnsafeGetSQLDb()
+	require.NotNil(t, sqlDB)
+	rows, err := sqlDB.QueryContext(context.Background(), "SELECT Path, IsMissing FROM Media")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	flags := make(map[string]bool)
+	for rows.Next() {
+		var path string
+		var missing bool
+		require.NoError(t, rows.Scan(&path, &missing))
+		flags[filepath.Base(path)] = missing
+	}
+	require.NoError(t, rows.Err())
+	return flags
+}
+
 // TestNewNamesIndex_LargeSystemCommitsMidBatch verifies that a single system
 // exceeding maxFilesPerTransaction still triggers an intermediate (memory-safety)
-// commit and indexes every file correctly.
+// commit and indexes every file correctly. A small system is batched ahead of the
+// large one (it sorts first: "Gameboy" < "NES"), so the mid-system commit fires
+// while the small system is already finalized — exercising the path that marks
+// previously-batched systems complete at a mid-system commit boundary.
 func TestNewNamesIndex_LargeSystemCommitsMidBatch(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and log.Logger.
 	db, cleanup := testhelpers.NewTestDatabase(t)
@@ -214,7 +295,8 @@ func TestNewNamesIndex_LargeSystemCommitsMidBatch(t *testing.T) {
 
 	fileCount := maxFilesPerTransaction + 5
 	systemFiles := map[string][]string{
-		systemdefs.SystemNES: genFileNames("game", fileCount),
+		systemdefs.SystemGameboy: {"small1.bin", "small2.bin"},
+		systemdefs.SystemNES:     genFileNames("game", fileCount),
 	}
 	platform, cfg, systems := setupCustomLauncherSystems(t, systemFiles)
 
@@ -232,11 +314,17 @@ func TestNewNamesIndex_LargeSystemCommitsMidBatch(t *testing.T) {
 	zerolog.SetGlobalLevel(prevGlobal)
 	output := buf.String()
 
-	assert.Equal(t, fileCount, filesIndexed, "every file in the oversized system should be indexed")
+	assert.Equal(t, fileCount+2, filesIndexed, "every file in both systems should be indexed")
 
 	media, mErr := db.MediaDB.GetMediaBySystemID(systemdefs.SystemNES)
 	require.NoError(t, mErr)
-	assert.Len(t, media, fileCount, "all media rows should be present")
+	assert.Len(t, media, fileCount, "all media rows for the oversized system should be present")
+
+	// The small system was batched ahead of the large one; it must be committed
+	// (and queryable) even though the large system forced a mid-system commit.
+	smallMedia, sErr := db.MediaDB.GetMediaBySystemID(systemdefs.SystemGameboy)
+	require.NoError(t, sErr)
+	assert.Len(t, smallMedia, 2, "the small system batched ahead should be fully indexed")
 
 	fileLimitCommits := strings.Count(output, "committed batch (file limit)")
 	assert.GreaterOrEqual(t, fileLimitCommits, 1,
