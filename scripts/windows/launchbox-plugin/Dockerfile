@@ -17,4 +17,4 @@ RUN dotnet restore
 COPY . .
 
 # Publish the plugin (creates complete artifact)
-RUN dotnet publish -c Release -o /build --no-restore
+RUN dotnet publish -c Release -o /build
