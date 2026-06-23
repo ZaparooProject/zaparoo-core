@@ -547,6 +547,16 @@ func TestFetchAndAttachCoverFlags_EmptyResults(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func expectImagePropertyTagLookup(mock sqlmock.Sqlmock, ids ...int64) {
+	rows := sqlmock.NewRows([]string{"DBID"})
+	for _, id := range ids {
+		rows.AddRow(id)
+	}
+	mock.ExpectQuery(`SELECT t\.DBID\s+FROM Tags t\s+JOIN TagTypes tt ON tt\.DBID = t\.TypeDBID\s+WHERE tt\.Type = \? AND t\.Tag LIKE \?\s+ORDER BY t\.DBID`).
+		WithArgs(string(tags.TagTypeProperty), imagePropertyValuePrefix+"%").
+		WillReturnRows(rows)
+}
+
 func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -559,9 +569,10 @@ func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
 	}
 
 	// Query returns no rows — neither media ID has any image property.
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(1), int64(2), int64(1), int64(2)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}))
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(1), int64(2), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -582,9 +593,10 @@ func TestFetchAndAttachCoverFlags_MediaLevelCover(t *testing.T) {
 	}
 
 	// Query returns mediaID 10 as having a cover (media-level property).
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(10), int64(20), int64(10), int64(20)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(10)))
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(10), int64(20), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("media", int64(10)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -606,10 +618,11 @@ func TestFetchAndAttachCoverFlags_TitleLevelCover(t *testing.T) {
 		{MediaID: 31, MediaTitleID: 100, Name: "GameA (Rev B)"},
 	}
 
-	// Query returns both media IDs (via the title-level UNION ALL leg).
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(30), int64(31), int64(30), int64(31)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(30)).AddRow(int64(31)))
+	// Query returns the shared title ID from the title-level UNION ALL leg.
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(30), int64(31), int64(901), int64(100), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("title", int64(100)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -628,8 +641,9 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 		{MediaID: 5, Name: "SomeGame"},
 	}
 
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(5), int64(5)).
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(5), int64(901)).
 		WillReturnError(errors.New("db unavailable"))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)

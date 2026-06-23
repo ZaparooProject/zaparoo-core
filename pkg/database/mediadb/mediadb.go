@@ -180,6 +180,7 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	clearPrefixPolicyCache()
 	if scope.UtilityTagDBIDsChanged {
 		clearUtilityTagCache()
+		clearImagePropertyTagCache()
 		db.utilityTagCacheDirty = false
 	}
 	switch {
@@ -331,6 +332,7 @@ func (db *MediaDB) Open() error {
 	sqlInstance.SetMaxOpenConns(2)
 	db.sql = sqlInstance
 	clearUtilityTagCache()
+	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
 
 	if !exists {
@@ -1089,6 +1091,7 @@ func (db *MediaDB) Close() error {
 
 	logSQLTraceSummary()
 	clearUtilityTagCacheFor(db.sql)
+	clearImagePropertyTagCacheFor(db.sql)
 	clearPrefixPolicyCacheFor(db.sql)
 
 	err := db.sql.Close()
@@ -1133,6 +1136,7 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
 	db.sql = sqlDB
 	clearUtilityTagCache()
+	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
 	db.ctx = ctx
 	db.pl = platform
