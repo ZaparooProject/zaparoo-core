@@ -825,6 +825,9 @@ func NewNamesIndex(
 			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
 		}
 		if isSQLiteDatabaseCorrupt(err) {
+			log.Error().Strs("integrity", db.IntegrityReport()).
+				Msg("media database integrity check after corruption detected during indexing")
+			db.MarkCorrupt(fmt.Sprintf("scan state population: %v", err))
 			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
 				log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
 			}
@@ -913,6 +916,19 @@ func NewNamesIndex(
 	batchStarted := false
 	pendingSystems := make([]string, 0)
 
+	// Sub-phase wall-time accumulators across the systems loop, logged once after
+	// it so the monolithic "systems" phase can be attributed to its parts:
+	// per-system state load, file collection (filesystem scan + scanners), media
+	// row inserts, per-system finalize (flush + missing flags + disambiguation),
+	// and transaction commits (the fsync + checkpoint cost).
+	var (
+		stateLoadDur time.Duration
+		collectDur   time.Duration
+		insertDur    time.Duration
+		finalizeDur  time.Duration
+		commitDur    time.Duration
+	)
+
 	// TODO: skip unchanged systems via a per-system fingerprint — store
 	// hash(sorted walked paths) + parser version + media row count after each
 	// system completes; on match at the next run, skip the state load, parse,
@@ -959,15 +975,18 @@ func NewNamesIndex(
 		scanState.MissingMedia = make(map[int]struct{})
 
 		// Load existing data for this system — always persistent.
+		stateLoadStart := time.Now()
 		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) {
 				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
 			}
 			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
 		}
+		stateLoadDur += time.Since(stateLoadStart)
 
 		files := make([]platforms.ScanResult, 0)
 		systemStartTime := time.Now()
+		collectStart := time.Now()
 
 		log.Info().
 			Str("system", systemID).
@@ -1102,6 +1121,8 @@ func NewNamesIndex(
 				Msg("calculated directory prefix policies")
 		}
 
+		collectDur += time.Since(collectStart)
+
 		for fileIdx, file := range files {
 			// Check for cancellation or pause between file processing
 			select {
@@ -1133,9 +1154,11 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			prefixPolicy := prefixPolicyByDir[dir]
 
+			insertStart := time.Now()
 			_, _, addErr := AddMediaPathWithPrefixPolicy(
 				db, &scanState, systemID, file.Path, file.Name, file.NoExt, prefixPolicy, cfg, mediaType,
 			)
+			insertDur += time.Since(insertStart)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
 				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
@@ -1171,6 +1194,7 @@ func NewNamesIndex(
 					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
 				}
 				commitElapsed := time.Since(commitStart)
+				commitDur += commitElapsed
 				log.Debug().
 					Str("system", systemID).
 					Int("files", filesInBatch).
@@ -1207,6 +1231,7 @@ func NewNamesIndex(
 		// rows just inserted for this system are flushed (not committed) so the
 		// disambiguation query observes them; the commit itself is deferred to a
 		// batch boundary below so the fsync + checkpoint cost is amortised.
+		finalizeStart := time.Now()
 		systemDBID, found := scanState.SystemIDs[systemID]
 		if found {
 			// A mid-system file-limit commit may have closed the transaction on the
@@ -1245,6 +1270,7 @@ func NewNamesIndex(
 		// Populate* re-loads them for the next system. In-memory only; safe to do
 		// with the transaction still open.
 		FlushScanStateMaps(&scanState)
+		finalizeDur += time.Since(finalizeStart)
 
 		// Commit at a batch boundary: when accumulated files reach the limit or
 		// this is the last system. This is the only place the fsync + checkpoint is
@@ -1261,6 +1287,7 @@ func NewNamesIndex(
 				return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 			}
 			commitElapsed := time.Since(commitStart)
+			commitDur += commitElapsed
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
@@ -1309,6 +1336,13 @@ func NewNamesIndex(
 		}
 	}
 
+	log.Info().
+		Dur("stateLoad", stateLoadDur).
+		Dur("collect", collectDur).
+		Dur("insert", insertDur).
+		Dur("finalize", finalizeDur).
+		Dur("commit", commitDur).
+		Msg("media indexing systems sub-phase breakdown")
 	logPhaseMetrics("systems")
 
 	status.Step++

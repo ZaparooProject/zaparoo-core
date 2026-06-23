@@ -596,6 +596,9 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 func checkpointScrapingWAL(mediaDB database.MediaDBI, scraperID string) {
 	started := time.Now()
 	if err := mediaDB.WALCheckpoint(); err != nil {
+		// A malformed-page failure during the post-scrape checkpoint flags the database
+		// corrupt so the recovery flow rebuilds it rather than serving a broken cache.
+		mediaDB.NoteCorruption(err)
 		log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to checkpoint WAL after scraper run")
 		return
 	}
