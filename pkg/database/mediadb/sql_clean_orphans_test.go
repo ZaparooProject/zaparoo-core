@@ -53,7 +53,7 @@ func setupCleanOrphansDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	db, cleanup = setupTempMediaDB(t)
 
 	ctx := context.Background()
-	conn := db.sql
+	conn := db.sql.Load()
 
 	_, err := conn.ExecContext(ctx, `
 		INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES
@@ -119,7 +119,7 @@ func countRows(t *testing.T, db *MediaDB, table string) int {
 	t.Helper()
 	var n int
 	//nolint:gosec // table name is test-internal, never from user input
-	err := db.sql.QueryRowContext(context.Background(),
+	err := db.sql.Load().QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM "+table).Scan(&n)
 	require.NoError(t, err)
 	return n
@@ -135,7 +135,7 @@ func TestSqlCleanMediaOrphans_NoMissing(t *testing.T) {
 	db, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
-	deleted, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	deleted, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), deleted)
 }
@@ -151,24 +151,24 @@ func TestSqlCleanMediaOrphans_DeletesMissingMediaAndChildren(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	deleted, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	deleted, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 	// Media DBID 1 (NES mario) and DBID 2 (SNES zelda) are missing.
 	assert.Equal(t, int64(2), deleted)
 
 	// Media DBID 3 (SNES zelda alt) must survive.
 	var mediaCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(), "SELECT COUNT(*) FROM Media").Scan(&mediaCount))
 	assert.Equal(t, 1, mediaCount, "only the non-missing SNES media row should remain")
 
 	var mediaTagCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(), "SELECT COUNT(*) FROM MediaTags WHERE MediaDBID IN (1,2)").Scan(&mediaTagCount))
 	assert.Equal(t, 0, mediaTagCount, "MediaTags for deleted media must be gone")
 
 	var mediaPropCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(), "SELECT COUNT(*) FROM MediaProperties WHERE MediaDBID = 1").Scan(&mediaPropCount))
 	assert.Equal(t, 0, mediaPropCount, "MediaProperties for deleted media must be gone")
 }
@@ -183,17 +183,17 @@ func TestSqlCleanMediaOrphans_KeepsNonMissingMedia(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	_, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	_, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 
 	var count int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM Media WHERE IsMissing = 0").Scan(&count))
 	assert.Equal(t, 1, count, "the surviving SNES zelda_alt row must remain")
 
 	// Its MediaTag should also survive.
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 3").Scan(&count))
 	assert.Equal(t, 1, count, "the surviving media's tag must remain")
@@ -209,25 +209,25 @@ func TestSqlCleanMediaOrphans_RemovesFullyOrphanedTitle(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	_, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	_, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 
 	// NES "mario" title had only one Media row (IsMissing=1) → must be gone.
 	var titleCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM MediaTitles WHERE DBID = 1").Scan(&titleCount))
 	assert.Equal(t, 0, titleCount, "fully-orphaned NES title must be deleted")
 
 	// Its MediaTitleTags and MediaTitleProperties must also be gone.
 	var titleTagCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM MediaTitleTags WHERE MediaTitleDBID = 1").Scan(&titleTagCount))
 	assert.Equal(t, 0, titleTagCount, "MediaTitleTags for deleted title must be gone")
 
 	var titlePropCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&titlePropCount))
 	assert.Equal(t, 0, titlePropCount, "MediaTitleProperties for deleted title must be gone")
@@ -243,19 +243,19 @@ func TestSqlCleanMediaOrphans_KeepsPartiallyMissingTitle(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	_, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	_, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 
 	// SNES "zelda" title had two rows: one missing, one present → must survive.
 	var titleCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM MediaTitles WHERE DBID = 2").Scan(&titleCount))
 	assert.Equal(t, 1, titleCount, "partially-missing SNES title must survive")
 
 	// Its MediaTitleTag must also survive.
 	var titleTagCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM MediaTitleTags WHERE MediaTitleDBID = 2").Scan(&titleTagCount))
 	assert.Equal(t, 1, titleTagCount, "MediaTitleTag for surviving title must remain")
@@ -271,14 +271,14 @@ func TestSqlCleanMediaOrphans_RemovesOrphanedTags(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	_, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	_, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 
 	// Tag "Action" (DBID=1) was referenced by MediaTags for all three media
 	// rows.  After cleanup, it is still referenced by the surviving SNES row
 	// (Media DBID=3) → must survive.
 	var actionCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM Tags WHERE DBID = 1").Scan(&actionCount))
 	assert.Equal(t, 1, actionCount, "Action tag still referenced by surviving media must survive")
@@ -287,7 +287,7 @@ func TestSqlCleanMediaOrphans_RemovesOrphanedTags(t *testing.T) {
 	// (now gone) and the SNES "zelda" title (still present) and the orphan
 	// title (also gone).  It remains through the surviving SNES title.
 	var rpgCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM Tags WHERE DBID = 2").Scan(&rpgCount))
 	assert.Equal(t, 1, rpgCount, "RPG tag still referenced by surviving title must survive")
@@ -296,7 +296,7 @@ func TestSqlCleanMediaOrphans_RemovesOrphanedTags(t *testing.T) {
 	// title (now gone) and MediaProperties for the NES media (now gone).
 	// It has no surviving references → must be deleted.
 	var coverCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM Tags WHERE DBID = 3").Scan(&coverCount))
 	assert.Equal(t, 0, coverCount, "Cover tag with no surviving references must be deleted")
@@ -304,7 +304,7 @@ func TestSqlCleanMediaOrphans_RemovesOrphanedTags(t *testing.T) {
 	// Tag "Soundtrack" (DBID=4) was never referenced by any join table and is
 	// NOT in our candidate set — the function must not touch it.
 	var soundtrackCount int
-	require.NoError(t, db.sql.QueryRowContext(
+	require.NoError(t, db.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT COUNT(*) FROM Tags WHERE DBID = 4").Scan(&soundtrackCount))
 	assert.Equal(t, 1, soundtrackCount, "unreferenced-but-not-candidate tag must not be touched")
@@ -320,7 +320,7 @@ func TestSqlCleanMediaOrphans_ReturnCount(t *testing.T) {
 	db, cleanup := setupCleanOrphansDB(t)
 	defer cleanup()
 
-	deleted, err := sqlCleanMediaOrphans(context.Background(), db.sql)
+	deleted, err := sqlCleanMediaOrphans(context.Background(), db.sql.Load())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), deleted, "expected 2 missing media rows to be deleted")
 }

@@ -42,12 +42,12 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	ctx := context.Background()
 	fakeClock := clockwork.NewFakeClock()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             fakeClock,
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock successful optimization for the first call only
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -99,12 +99,12 @@ func TestOptimizationAndIndexingStatusConflict(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	tests := []struct {
 		optimizationStatusErr error
@@ -182,12 +182,12 @@ func TestConcurrentStatusUpdates(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	const numGoroutines = 10
 
@@ -230,12 +230,12 @@ func TestConcurrentOptimizationStepUpdates(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Test sequential step updates to avoid mock order issues
 	steps := []string{"indexes", "analyze", "vacuum"}
@@ -259,12 +259,12 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Test that the atomic flag properly prevents concurrent optimization
 	const numGoroutines = 100
@@ -321,12 +321,12 @@ func TestOptimizationInterruption(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -364,12 +364,12 @@ func TestConcurrentIndexingAndOptimizationStatusChecks(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	const numReaders = 50
 	var wg sync.WaitGroup
@@ -414,12 +414,12 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock optimization workflow
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

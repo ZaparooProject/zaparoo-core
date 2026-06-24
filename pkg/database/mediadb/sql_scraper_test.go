@@ -41,7 +41,7 @@ func setupScraperTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 	t.Helper()
 	mediaDB, cleanup = setupTempMediaDB(t)
 	ctx := context.Background()
-	db := mediaDB.sql
+	db := mediaDB.sql.Load()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
 	_, err := db.ExecContext(ctx, `
@@ -105,7 +105,7 @@ func TestFindMediaBySystemAndPaths_ReturnsMatchesByPath(t *testing.T) {
 	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
 	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
 	missingPath := filepath.ToSlash(filepath.Join("roms", "missing.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, zeldaPath)
@@ -146,7 +146,7 @@ func TestFindMediaIDsByPaths_ReturnsSamePathAcrossSystems(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 2, 'mario', 'Mario');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 2, ?);
@@ -169,7 +169,7 @@ func TestFindMediaIDsByPaths_ChunksLargeInput(t *testing.T) {
 
 	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
 	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, zeldaPath)
@@ -198,7 +198,7 @@ func TestFindSingleContainerLaunchMedia_ReturnsOnlyDirectChild(t *testing.T) {
 
 	container := filepath.ToSlash(filepath.Join("roms", "Zelda"))
 	childPath := filepath.ToSlash(filepath.Join(container, "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (2, 2, 1, ?, ?);
 	`, childPath, container+"/")
@@ -221,7 +221,7 @@ func TestFindSingleContainerLaunchMedia_ReturnsCueForCueBinFolder(t *testing.T) 
 	parentDir := container + "/"
 	cuePath := filepath.ToSlash(filepath.Join(container, "Game.cue"))
 	binPath := filepath.ToSlash(filepath.Join(container, "Game.bin"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'game-cue', 'Game Cue'),
 			(3, 1, 'game-bin', 'Game Bin');
@@ -249,7 +249,7 @@ func TestFindSingleContainerLaunchMedia_ReturnsM3UForDiscFolder(t *testing.T) {
 	m3uPath := filepath.ToSlash(filepath.Join(container, "Game.m3u"))
 	cuePath := filepath.ToSlash(filepath.Join(container, "Disc 1.cue"))
 	binPath := filepath.ToSlash(filepath.Join(container, "Disc 1.bin"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'game-m3u', 'Game M3U'),
 			(3, 1, 'disc-cue', 'Disc Cue'),
@@ -278,7 +278,7 @@ func TestFindSingleContainerLaunchMedia_RejectsAmbiguousDirectChildren(t *testin
 	parentDir := container + "/"
 	onePath := filepath.ToSlash(filepath.Join(container, "one.cue"))
 	twoPath := filepath.ToSlash(filepath.Join(container, "two.cue"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'one', 'One'),
 			(3, 1, 'two', 'Two');
@@ -303,7 +303,7 @@ func TestFindSingleContainerLaunchMedia_RejectsNestedOnlyOrMixedNestedMedia(t *t
 	childDir := filepath.ToSlash(filepath.Join(parent, "Child"))
 	directPath := filepath.ToSlash(filepath.Join(parent, "direct.nes"))
 	nestedPath := filepath.ToSlash(filepath.Join(childDir, "nested.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'direct', 'Direct'),
 			(3, 1, 'nested', 'Nested');
@@ -334,7 +334,7 @@ func TestFindSingleContainerLaunchMedia_IgnoresMissingAndOtherSystems(t *testing
 	nesPath := filepath.ToSlash(filepath.Join(container, "nes.nes"))
 	snesPath := filepath.ToSlash(filepath.Join(container, "snes.sfc"))
 	missingPath := filepath.ToSlash(filepath.Join(container, "missing.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'nes-game', 'NES Game'),
@@ -365,7 +365,7 @@ func TestFindSingleContainerLaunchMedia_UsesByteExactPrefix(t *testing.T) {
 	gameXYZ := filepath.ToSlash(filepath.Join("roms", "GameXYZ1"))
 	caseUpper := filepath.ToSlash(filepath.Join("roms", "CaseGame"))
 	caseLower := filepath.ToSlash(filepath.Join("roms", "casegame"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'underscore', 'Underscore'),
 			(3, 1, 'wildcard', 'Wildcard'),
@@ -520,7 +520,7 @@ func TestFindMediaBySystemAndPathSuffix_MultipleMatches(t *testing.T) {
 	ctx := context.Background()
 
 	deepPath := filepath.ToSlash(filepath.Join("roms", "sub", "mario.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'mario2', 'Mario 2');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, deepPath)
@@ -550,7 +550,7 @@ func TestFindMediaBySystemAndPathSuffix_PercentEscaped(t *testing.T) {
 	ctx := context.Background()
 
 	specialPath := filepath.ToSlash(filepath.Join("roms", "100% game.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, '100pct', '100% Game');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, specialPath)
@@ -575,7 +575,7 @@ func TestFindMediaBySystemAndPathSuffix_UnderscoreEscaped(t *testing.T) {
 	ctx := context.Background()
 
 	specialPath := filepath.ToSlash(filepath.Join("roms", "game_one.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'game-one', 'Game One');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, specialPath)
@@ -602,7 +602,7 @@ func TestMediaHasTag_True(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert tag DBID=1 (property:description) on media DBID=1.
-	_, err := mediaDB.sql.ExecContext(ctx,
+	_, err := mediaDB.sql.Load().ExecContext(ctx,
 		"INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 1)")
 	require.NoError(t, err)
 
@@ -646,7 +646,7 @@ func TestGetScrapedMediaCount(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, mediaPath2)
@@ -682,7 +682,7 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, mediaPath2)
@@ -705,7 +705,7 @@ func TestGetTotalScrapedMediaCount_TitlePropertyOnlyDoesNotCount(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda-rev-a.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
 	`, mediaPath2)
 	require.NoError(t, err)
@@ -725,7 +725,7 @@ func TestGetTotalScrapedMediaCount_MediaPropertyOnlyDoesNotCount(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "mario-rev-a.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
 	`, mediaPath2)
 	require.NoError(t, err)
@@ -756,7 +756,7 @@ func TestGetScrapedMediaIDs(t *testing.T) {
 
 	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
 	mediaPathOtherSystem := filepath.ToSlash(filepath.Join("roms", "sonic.md"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'Genesis', 'Genesis');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 		    (2, 1, 'zelda', 'Zelda'),
@@ -794,7 +794,7 @@ func TestGetScrapeRunMediaIDs(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, mediaPath2)
@@ -819,7 +819,7 @@ func TestGetScrapeRunMediaIDs(t *testing.T) {
 	assert.Empty(t, ids)
 
 	var remainingRunTags int
-	err = mediaDB.sql.QueryRowContext(ctx, `
+	err = mediaDB.sql.Load().QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM Tags t
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
@@ -936,7 +936,7 @@ func TestApplyScrapeResults_WritesMultipleTargets(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, mediaPath)
@@ -1018,7 +1018,7 @@ func TestApplyScrapeResults_SkipsUnchangedTitleMetadataAndStillWritesSentinel(t 
 	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
 
 	var titleTagLinks int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM MediaTitleTags mtt
 		JOIN Tags t ON mtt.TagDBID = t.DBID
@@ -1028,7 +1028,7 @@ func TestApplyScrapeResults_SkipsUnchangedTitleMetadataAndStillWritesSentinel(t 
 	assert.Equal(t, 1, titleTagLinks)
 
 	var titlePropRows int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM MediaTitleProperties mtp
 		JOIN Tags t ON mtp.TypeTagDBID = t.DBID
@@ -1069,7 +1069,7 @@ func TestApplyScrapeResults_ReplacesChangedExclusiveTitleTags(t *testing.T) {
 	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{second}))
 
 	var developerTags []string
-	rows, err := mediaDB.sql.QueryContext(ctx, `
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, `
 		SELECT t.Tag
 		FROM MediaTitleTags mtt
 		JOIN Tags t ON mtt.TagDBID = t.DBID
@@ -1124,7 +1124,7 @@ func TestApplyScrapeResults_ExclusiveTitleTagReplaceKeepsOtherTypes(t *testing.T
 
 func getTitleTagValuesForType(ctx context.Context, t *testing.T, mediaDB *MediaDB, typeName string) []string {
 	t.Helper()
-	rows, err := mediaDB.sql.QueryContext(ctx, `
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, `
 		SELECT t.Tag
 		FROM MediaTitleTags mtt
 		JOIN Tags t ON mtt.TagDBID = t.DBID
@@ -1156,7 +1156,7 @@ func TestApplyScrapeResults_RollsBackWholeBatchBeforeSentinel(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, mediaPath)
@@ -1200,7 +1200,7 @@ func TestApplyScrapeResults_DoesNotDuplicateSharedTags(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, mediaPath)
@@ -1218,7 +1218,7 @@ func TestApplyScrapeResults_DoesNotDuplicateSharedTags(t *testing.T) {
 	}))
 
 	var tagCount int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM Tags t JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		WHERE tt.Type = 'developer' AND t.Tag = 'nintendo'
@@ -1233,7 +1233,7 @@ func TestApplyScrapeResults_BulkExclusiveTitleTagLaterTargetWins(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario-alt.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
 	`, mediaPath)
 	require.NoError(t, err)
@@ -1256,7 +1256,7 @@ func TestApplyScrapeResults_BulkExclusiveTitleTagLaterTargetWins(t *testing.T) {
 	}))
 
 	var developerTags []string
-	rows, err := mediaDB.sql.QueryContext(ctx, `
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, `
 		SELECT t.Tag
 		FROM MediaTitleTags mtt
 		JOIN Tags t ON mtt.TagDBID = t.DBID
@@ -1303,7 +1303,7 @@ func TestApplyScrapeResults_BulkAdditiveTitleTagsAccumulate(t *testing.T) {
 	}))
 
 	var genreTags []string
-	rows, err := mediaDB.sql.QueryContext(ctx, `
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, `
 		SELECT t.Tag
 		FROM MediaTitleTags mtt
 		JOIN Tags t ON mtt.TagDBID = t.DBID
@@ -1333,7 +1333,7 @@ func TestApplyScrapeResults_BulkTitlePropertyLaterTargetWins(t *testing.T) {
 	ctx := context.Background()
 
 	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario-alt.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
 	`, mediaPath)
 	require.NoError(t, err)
@@ -1362,7 +1362,7 @@ func TestApplyScrapeResults_BulkTitlePropertyLaterTargetWins(t *testing.T) {
 	}))
 
 	var text string
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx, `
 		SELECT mtp.Text
 		FROM MediaTitleProperties mtp
 		JOIN Tags t ON mtp.TypeTagDBID = t.DBID
@@ -1403,7 +1403,7 @@ func TestUpsertMediaTags_AdditiveType_AccumulatesTags(t *testing.T) {
 	require.NoError(t, err)
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1").Scan(&count))
 	assert.Equal(t, 2, count, "additive type should keep both tags")
 }
@@ -1423,7 +1423,7 @@ func TestUpsertMediaTags_ExclusiveType_ReplacesExisting(t *testing.T) {
 
 	// Only "konami" should remain.
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM MediaTags mt
 		 JOIN Tags t ON mt.TagDBID = t.DBID
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
@@ -1431,7 +1431,7 @@ func TestUpsertMediaTags_ExclusiveType_ReplacesExisting(t *testing.T) {
 	assert.Equal(t, 1, count, "exclusive type should have exactly one tag")
 
 	var tagVal string
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT t.Tag FROM MediaTags mt
 		 JOIN Tags t ON mt.TagDBID = t.DBID
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
@@ -1450,7 +1450,7 @@ func TestUpsertMediaTags_Idempotent(t *testing.T) {
 	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, ti)) // insert same tag again
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1").Scan(&count))
 	assert.Equal(t, 1, count, "duplicate additive insert should be idempotent")
 }
@@ -1467,7 +1467,7 @@ func TestUpsertMediaTitleTags_ExclusiveType_Replaces(t *testing.T) {
 	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "sega"}}))
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM MediaTitleTags mtt
 		 JOIN Tags t ON mtt.TagDBID = t.DBID
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
@@ -1490,7 +1490,7 @@ func TestUpsertMediaTitleProperties_Insert(t *testing.T) {
 
 	var text string
 	var blobDBID *int64
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT Text, BlobDBID FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&text, &blobDBID))
 	assert.Equal(t, "A plumber's adventure.", text)
 	assert.Nil(t, blobDBID, "text-only property should have nil BlobDBID")
@@ -1513,12 +1513,12 @@ func TestUpsertMediaTitleProperties_Update(t *testing.T) {
 	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, props2))
 
 	var text string
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT Text FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&text))
 	assert.Equal(t, "Updated version.", text, "second upsert should update existing row")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&count))
 	assert.Equal(t, 1, count, "upsert must not create duplicate rows")
 }
@@ -1548,7 +1548,7 @@ func TestUpsertMediaTitleProperties_RollsBackOnError(t *testing.T) {
 	require.Error(t, err)
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&count))
 	assert.Equal(t, 0, count)
 }
@@ -1569,7 +1569,7 @@ func TestUpsertMediaProperties_Insert(t *testing.T) {
 
 	var text string
 	var blobDBID *int64
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT Text, BlobDBID FROM MediaProperties WHERE MediaDBID = 1").Scan(&text, &blobDBID))
 	assert.Equal(t, boxartPath, text)
 	assert.Nil(t, blobDBID, "path-only property should have nil BlobDBID")
@@ -1588,7 +1588,7 @@ func TestUpsertMediaProperties_RollsBackOnError(t *testing.T) {
 	require.Error(t, err)
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaProperties WHERE MediaDBID = 1").Scan(&count))
 	assert.Equal(t, 0, count)
 }
@@ -1655,7 +1655,7 @@ func TestGetMediaBatchMetadata_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
 	`, zeldaPath)
@@ -1899,7 +1899,7 @@ func TestUpsertMediaTags_ExclusiveType_MultipleDistinctInOneCall(t *testing.T) {
 
 	// No MediaTags rows should have been written (transaction must be rolled back).
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1`).Scan(&count))
 	assert.Equal(t, 0, count, "no tags should be persisted when the call is rejected")
 }
@@ -1919,7 +1919,7 @@ func TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall(t *testing.T) {
 	require.NoError(t, err)
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1`).Scan(&count))
 	assert.Equal(t, 1, count, "duplicate identical tags should persist once")
 }
@@ -1940,7 +1940,7 @@ func TestUpsertMediaTags_AutoCreatesTagType(t *testing.T) {
 
 	// The TagTypes row must now exist.
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM TagTypes WHERE Type = 'scraper.gamelist.xml'`).Scan(&count))
 	assert.Equal(t, 1, count, "auto-created TagTypes row must exist")
 
@@ -1973,14 +1973,14 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 
 	// Exactly one Tags row and one MediaTags link should exist.
 	var tagCount int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM Tags t
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		 WHERE tt.Type = 'scraper.test' AND t.Tag LIKE '%concurrent%'`).Scan(&tagCount))
 	assert.Equal(t, 1, tagCount, "concurrent writes must produce exactly one Tags row")
 
 	var mediaTagCount int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM MediaTags mt
 		 JOIN Tags t ON mt.TagDBID = t.DBID
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
@@ -2142,7 +2142,7 @@ func TestGetMediaProperties_OversizedBlobOmitsBinary(t *testing.T) {
 	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", []byte("small"))
 	require.NoError(t, err)
 	var largeSize int64 = database.MaxMediaPropertyBinaryBytes + 1
-	res, err := mediaDB.sql.ExecContext(ctx,
+	res, err := mediaDB.sql.Load().ExecContext(ctx,
 		`UPDATE MediaBlobs SET Data = zeroblob(?) WHERE DBID = ?`, largeSize, blobDBID)
 	require.NoError(t, err)
 	rowsAffected, err := res.RowsAffected()
@@ -2192,7 +2192,7 @@ func setupAliasTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 	t.Helper()
 	mediaDB, cleanup = setupTempMediaDB(t)
 	ctx := context.Background()
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES
 			(1, 'NES', 'Nintendo'),
 			(2, 'PSX', 'PlayStation');
@@ -2218,7 +2218,7 @@ func TestResolveSingletonContainerAliases_SingleFileIsAliased(t *testing.T) {
 	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
 	gameDir := aliasTestDir(parent, "Game")
 	gamePath := filepath.ToSlash(filepath.Join(parent, "Game", "Game.chd"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'game', 'Game');
 		INSERT INTO Media (
 			DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName
@@ -2249,7 +2249,7 @@ func TestResolveSingletonContainerAliases_CueBinIsAliasedToCue(t *testing.T) {
 	gameDir := aliasTestDir(parent, "Disc")
 	cuePath := filepath.ToSlash(filepath.Join(parent, "Disc", "Game.cue"))
 	binPath := filepath.ToSlash(filepath.Join(parent, "Disc", "Game.bin"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(1, 2, 'game-cue', 'Game'),
 			(2, 2, 'game-bin', 'Game Bin');
@@ -2277,7 +2277,7 @@ func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T)
 	parent := filepath.ToSlash(filepath.Join("roms", "NES"))
 	collDir := aliasTestDir(parent, "Collection")
 	subDir := aliasTestDir(parent, "Collection", "Sub")
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'game', 'Game');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
 			(1, 1, 1, ?, ?);
@@ -2305,7 +2305,7 @@ func TestResolveSingletonContainerAliases_M3UAliasedForMultiDisc(t *testing.T) {
 	m3uPath := filepath.ToSlash(filepath.Join(parent, "MultiDisc", "Game.m3u"))
 	cuePath := filepath.ToSlash(filepath.Join(parent, "MultiDisc", "Disc1.cue"))
 	binPath := filepath.ToSlash(filepath.Join(parent, "MultiDisc", "Disc1.bin"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(1, 2, 'game-m3u', 'Game'),
 			(2, 2, 'disc1-cue', 'Disc1 Cue'),
@@ -2334,7 +2334,7 @@ func TestResolveSingletonContainerAliases_TagsAttachedOnAlias(t *testing.T) {
 	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
 	gameDir := aliasTestDir(parent, "Tagged")
 	gamePath := filepath.ToSlash(filepath.Join(parent, "Tagged", "game.chd"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'tagged-game', 'Tagged Game');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
 		INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 10);
@@ -2392,7 +2392,7 @@ func TestResolveSingletonContainerAliases_MultipleDirsInOneScan(t *testing.T) {
 	gameBDir := aliasTestDir(parent, "GameB")
 	gameAPath := filepath.ToSlash(filepath.Join(parent, "GameA", "GameA.chd"))
 	gameBPath := filepath.ToSlash(filepath.Join(parent, "GameB", "GameB.chd"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(1, 2, 'game-a', 'Game A'),
 			(2, 2, 'game-b', 'Game B');
@@ -2441,7 +2441,7 @@ func TestResolveSingletonContainerAliases_CountMismatchSkipsDir(t *testing.T) {
 	subDir := aliasTestDir(parent, "Game", "Extras")
 	gamePath := filepath.ToSlash(filepath.Join(parent, "Game", "Game.chd"))
 	extraPath := filepath.ToSlash(filepath.Join(parent, "Game", "Extras", "bonus.chd"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(1, 2, 'game', 'Game'),
 			(2, 2, 'bonus', 'Bonus');
@@ -2468,7 +2468,7 @@ func TestResolveSingletonContainerAliases_RootPrefixIsHandled(t *testing.T) {
 
 	gameDir := aliasTestDir("", "Game")
 	gamePath := filepath.ToSlash(filepath.Join("Game", "Game.chd"))
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'game', 'Game');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
 	`, gamePath, gameDir)
@@ -2504,7 +2504,7 @@ func TestResolveSingletonContainerAliases_HasCoverSet(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed the minimal tag rows needed by fetchAndAttachCoverFlags.
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
 		INSERT OR IGNORE INTO Tags    (DBID, TypeDBID, Tag)      VALUES (901, 900, 'image-boxart');
 	`)
@@ -2519,7 +2519,7 @@ func TestResolveSingletonContainerAliases_HasCoverSet(t *testing.T) {
 	noCoverDir := aliasTestDir(parent, "NoCover")
 	noCoverPath := filepath.ToSlash(filepath.Join(parent, "NoCover", "nocov.chd"))
 
-	_, err = mediaDB.sql.ExecContext(ctx, `
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(1, 2, 'with-cover', 'With Cover'),
 			(2, 2, 'no-cover',   'No Cover');
@@ -2530,7 +2530,7 @@ func TestResolveSingletonContainerAliases_HasCoverSet(t *testing.T) {
 	require.NoError(t, err)
 
 	// MediaProperties row for media DBID=1.
-	_, err = mediaDB.sql.ExecContext(ctx,
+	_, err = mediaDB.sql.Load().ExecContext(ctx,
 		`INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text) VALUES (1, 901, 'cover.jpg')`)
 	require.NoError(t, err)
 

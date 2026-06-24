@@ -271,13 +271,16 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
 		// settings
-		models.MethodSettings:             methods.HandleSettings,
-		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
-		models.MethodSettingsReload:       methods.HandleSettingsReload,
-		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
-		models.MethodPlaytimeLimits:       methods.HandlePlaytimeLimits,
-		models.MethodPlaytimeLimitsUpdate: methods.HandlePlaytimeLimitsUpdate,
-		models.MethodPlaytime:             methods.HandlePlaytime,
+		models.MethodSettings:              methods.HandleSettings,
+		models.MethodSettingsUpdate:        methods.HandleSettingsUpdate,
+		models.MethodSettingsReload:        methods.HandleSettingsReload,
+		models.MethodSettingsLogsDownload:  methods.HandleLogsDownload,
+		models.MethodSettingsBackup:        methods.HandleBackup,
+		models.MethodSettingsBackupList:    methods.HandleBackupList,
+		models.MethodSettingsBackupRestore: methods.HandleBackupRestore,
+		models.MethodPlaytimeLimits:        methods.HandlePlaytimeLimits,
+		models.MethodPlaytimeLimitsUpdate:  methods.HandlePlaytimeLimitsUpdate,
+		models.MethodPlaytime:              methods.HandlePlaytime,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers

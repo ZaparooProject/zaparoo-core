@@ -517,10 +517,10 @@ func NewInMemoryUserDB(t *testing.T) *UserDB {
 	// Create UserDB wrapper
 	ctx := context.Background()
 	db := &UserDB{
-		sql: sqlDB,
 		ctx: ctx,
 		pl:  nil, // Not needed for tests
 	}
+	db.sql.Store(sqlDB)
 
 	// Run migrations to create schema
 	err = db.Allocate()

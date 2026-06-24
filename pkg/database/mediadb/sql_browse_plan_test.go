@@ -50,7 +50,7 @@ func TestBrowseFilesQueryPlan_NameSortHasNoFilesort(t *testing.T) {
 	defer cleanup()
 
 	parentDir := seedBrowsePlanTestDB(t, mediaDB, arcadeScaleRows)
-	require.NoError(t, sqlAnalyze(ctx, mediaDB.sql))
+	require.NoError(t, sqlAnalyze(ctx, mediaDB.sql.Load()))
 
 	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, m.SortName AS SortValue
 		FROM Media m
@@ -58,7 +58,7 @@ func TestBrowseFilesQueryPlan_NameSortHasNoFilesort(t *testing.T) {
 		WHERE m.ParentDir = ? AND m.IsMissing = 0
 		ORDER BY m.SortName ASC, m.DBID ASC LIMIT ?`
 
-	rows, err := mediaDB.sql.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, parentDir, 301)
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, parentDir, 301)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rows.Close()) }()
 
@@ -94,10 +94,10 @@ func TestExplainBrowseFilesQuery(t *testing.T) {
 
 	// Run ANALYZE to populate sqlite_stat1 so the planner has index cardinality
 	// stats matching a production database.
-	require.NoError(t, sqlAnalyze(ctx, mediaDB.sql))
+	require.NoError(t, sqlAnalyze(ctx, mediaDB.sql.Load()))
 
-	dumpScraperPragmas(ctx, t, mediaDB.sql)
-	dumpSQLiteStats(ctx, t, mediaDB.sql)
+	dumpScraperPragmas(ctx, t, mediaDB.sql.Load())
+	dumpSQLiteStats(ctx, t, mediaDB.sql.Load())
 
 	// midName is the name of the 300th row — used as the cursor value for the
 	// non-first-page cases so we test the keyset seek half-way through.
@@ -165,7 +165,7 @@ func TestExplainBrowseFilesQuery(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			explainQueryPlan(ctx, t, mediaDB.sql, tc.query, tc.args...)
+			explainQueryPlan(ctx, t, mediaDB.sql.Load(), tc.query, tc.args...)
 
 			// Warm timing: run the query warmRuns times and drain results.
 			// This measures CPU cost on a cached (warm) database; it won't
@@ -174,7 +174,7 @@ func TestExplainBrowseFilesQuery(t *testing.T) {
 			start := time.Now()
 			for range warmRuns {
 				func() {
-					rows, err := mediaDB.sql.QueryContext(ctx, tc.query, tc.args...)
+					rows, err := mediaDB.sql.Load().QueryContext(ctx, tc.query, tc.args...)
 					require.NoError(t, err)
 					defer func() { require.NoError(t, rows.Close()) }()
 					for rows.Next() {
@@ -217,7 +217,7 @@ func seedBrowsePlanTestDB(t *testing.T, mediaDB *MediaDB, rows int) (parentDir s
 	t.Helper()
 	ctx := context.Background()
 	parentDir = filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "arcade")) + "/"
-	tx, err := mediaDB.sql.BeginTx(ctx, nil)
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 

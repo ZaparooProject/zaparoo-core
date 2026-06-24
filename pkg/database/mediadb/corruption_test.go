@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
@@ -77,7 +78,7 @@ func TestIsCorruptionError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tt.want, isCorruptionError(tt.err))
+			assert.Equal(t, tt.want, database.IsCorruptionError(tt.err))
 		})
 	}
 }

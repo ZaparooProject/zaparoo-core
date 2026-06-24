@@ -581,7 +581,7 @@ func TestClientAuthTokenColonCheckConstraint_Integration(t *testing.T) {
 	// *sql.DB. The Clients table CHECK clause must reject the colon-bearing
 	// token without any Go-level validation involved.
 	pairingKey := []byte("key-x-key-x-key-x-key-x-key-x-ab")
-	_, err := userDB.sql.ExecContext(context.Background(), `
+	_, err := userDB.sql.Load().ExecContext(context.Background(), `
 		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
 		VALUES (?, ?, ?, ?, ?, ?);
 	`, "raw-id", "Raw App", "evil:token", pairingKey, int64(1700000000), int64(1700000000))

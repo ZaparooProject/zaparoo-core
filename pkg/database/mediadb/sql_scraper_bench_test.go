@@ -110,7 +110,7 @@ func setupBenchMediaDB(b *testing.B, rows int) (mediaDB *MediaDB, cleanup func()
 func seedBenchScraperDB(b *testing.B, mediaDB *MediaDB, rows int) {
 	b.Helper()
 	ctx := context.Background()
-	tx, err := mediaDB.sql.BeginTx(ctx, nil)
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
 	require.NoError(b, err)
 	defer func() {
 		_ = tx.Rollback()

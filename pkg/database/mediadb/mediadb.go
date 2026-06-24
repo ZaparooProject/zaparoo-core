@@ -46,23 +46,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
-	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
-
-// isCorruptionError reports whether err indicates SQLite database corruption
-// (a malformed disk image or a non-database file). Mirrors the detection used by
-// the media scanner so corruption hit during background maintenance can be routed
-// to the same corrupt-database recovery path.
-func isCorruptionError(err error) bool {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) {
-		return sqliteErr.Code == sqlite3.ErrCorrupt || sqliteErr.Code == sqlite3.ErrNotADB
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "database disk image is malformed") ||
-		strings.Contains(msg, "file is not a database")
-}
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
 
@@ -92,19 +77,13 @@ const (
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
 const defaultSlugSearchLimit = 50
 
-// integrityReportMaxRows caps PRAGMA integrity_check output so a badly corrupt
-// database cannot flood the log; the first rows identify the damaged pages.
-const integrityReportMaxRows = 20
-
-// corruptMarkerSuffix names the sidecar file written next to the database to flag
-// detected corruption. It is the DB-independent signal the recovery path keys on.
-const corruptMarkerSuffix = ".corrupt"
-
 // maxSelectiveInvalidationSystems avoids huge per-commit IN clauses and debug
 // logs during full-library indexing while preserving selective reindexing wins.
 const maxSelectiveInvalidationSystems = 32
 
 const mediaStatsCacheWriteTimeout = 100 * time.Millisecond
+
+const mediaWALSizeWarnThreshold = 256 * 1024 * 1024
 
 // getSqliteConnParams constructs the SQLite connection string. MediaDB stores
 // user-owned metadata as well as rebuildable index rows, so use synchronous=FULL
@@ -124,7 +103,7 @@ type MediaDB struct {
 	stmtInsertMedia       *sql.Stmt
 	tx                    *sql.Tx
 	stmtInsertSystem      *sql.Stmt
-	sql                   *sql.DB
+	sql                   database.Conn
 	stmtInsertTag         *sql.Stmt
 	stmtInsertTagType     *sql.Stmt
 	batchInsertMediaTag   *BatchInserter
@@ -163,7 +142,7 @@ func (db *MediaDB) conn() sqlQueryable {
 	if db.tx != nil {
 		return db.tx
 	}
-	return db.sql
+	return db.sql.Load()
 }
 
 // invalidationScope describes what data was changed to determine cache invalidation scope
@@ -239,15 +218,14 @@ func invalidationScopeForSystemIDs(systemIDs []string) invalidationScope {
 	return invalidationScope{SystemIDs: systemIDs}
 }
 
-func shouldCheckpointAfterCommit(mode database.WALCheckpointMode, indexingStatus string, statusErr error) bool {
+func shouldCheckpointAfterCommit(mode database.WALCheckpointMode, _ string, _ error) bool {
 	switch mode {
 	case database.WALCheckpointSkip:
 		return false
 	case database.WALCheckpointForce:
 		return true
 	default:
-		return (statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows)) ||
-			indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending
+		return false
 	}
 }
 
@@ -281,7 +259,7 @@ func (db *MediaDB) flushBrowseCacheInvalidation() error {
 	if !db.browseCacheDirty {
 		return nil
 	}
-	err := sqlInvalidateBrowseCache(db.ctx, db.sql)
+	err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load())
 	if err != nil {
 		return err
 	}
@@ -296,7 +274,6 @@ func (db *MediaDB) clearBrowseCacheInvalidation() {
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
 	dbPath := filepath.Join(helpers.DataDir(pl), config.MediaDbFile)
 	db := &MediaDB{
-		sql:               nil,
 		pl:                pl,
 		dbPath:            dbPath,
 		ctx:               ctx,
@@ -330,7 +307,18 @@ func (db *MediaDB) Open() error {
 		return fmt.Errorf("failed to open media database: %w", err)
 	}
 	sqlInstance.SetMaxOpenConns(2)
-	db.sql = sqlInstance
+	db.sql.Store(sqlInstance)
+	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
+		if database.IsCorruptionError(err) {
+			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
+			log.Warn().Err(err).Msg("media database cell size check failed during open")
+		} else {
+			// cell_size_check is a best-effort safety pragma; a non-corruption failure
+			// (e.g. a transient "database is locked") must not disconnect an otherwise-usable
+			// database. Keep the connection and re-attempt the pragma on the next open.
+			log.Warn().Err(err).Msg("failed to enable media database cell size checks; continuing without")
+		}
+	}
 	clearUtilityTagCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
@@ -359,7 +347,7 @@ func (db *MediaDB) GetDBPath() string {
 // built by the post-indexing cache population are only a few MB, and the default
 // temp_store=FILE writes them to slow storage (SD card) on embedded devices.
 func (db *MediaDB) SetIndexingCacheSize(enable bool) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return
 	}
 
@@ -370,11 +358,11 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 		tempStore = "MEMORY"
 	}
 
-	_, err := db.sql.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
+	_, err := db.sql.Load().ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
 	if err != nil {
 		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing cache size")
 	}
-	_, err = db.sql.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore)
+	_, err = db.sql.Load().ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore)
 	if err != nil {
 		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing temp_store")
 	}
@@ -386,10 +374,10 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 // tables likely to benefit, which avoids multi-minute full-index scans on slow
 // MiSTer storage.
 func (db *MediaDB) AnalyzeApproximate() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	if _, err := db.sql.ExecContext(db.ctx, "PRAGMA optimize=0x10002"); err != nil {
+	if _, err := db.sql.Load().ExecContext(db.ctx, "PRAGMA optimize=0x10002"); err != nil {
 		return fmt.Errorf("failed to run pragma optimize: %w", err)
 	}
 	return nil
@@ -473,11 +461,11 @@ var secondaryIndexes = []secondaryIndex{
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
 // Call before a full reindex, then call CreateSecondaryIndexes after.
 func (db *MediaDB) DropSecondaryIndexes() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	for _, idx := range secondaryIndexes {
-		_, err := db.sql.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+idx.name)
+		_, err := db.sql.Load().ExecContext(db.ctx, "DROP INDEX IF EXISTS "+idx.name)
 		if err != nil {
 			return fmt.Errorf("failed to drop index %s: %w", idx.name, err)
 		}
@@ -523,7 +511,7 @@ func (db *MediaDB) missingSecondaryIndexes() ([]secondaryIndex, error) {
 // Called synchronously at the end of indexing so the database is fully
 // searchable when indexing completes.
 func (db *MediaDB) CreateSecondaryIndexes() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	rebuildRequested := db.needsIndexRebuild.Load()
@@ -545,7 +533,7 @@ func (db *MediaDB) CreateSecondaryIndexes() error {
 
 	for _, idx := range indexesToEnsure {
 		started := time.Now()
-		_, err := db.sql.ExecContext(db.ctx, idx.ddl)
+		_, err := db.sql.Load().ExecContext(db.ctx, idx.ddl)
 		if err != nil {
 			return fmt.Errorf("failed to create index %s: %w", idx.name, err)
 		}
@@ -560,11 +548,11 @@ func (db *MediaDB) CreateSecondaryIndexes() error {
 }
 
 func (db *MediaDB) Exists() bool {
-	return db.sql != nil
+	return db.sql.Load() != nil
 }
 
 func (db *MediaDB) UpdateLastGenerated() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -594,16 +582,16 @@ func (db *MediaDB) UpdateLastGenerated() error {
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return time.Time{}, ErrNullSQL
 	}
-	return sqlGetLastGenerated(db.ctx, db.sql)
+	return sqlGetLastGenerated(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) SetOptimizationStatus(status string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetOptimizationStatus(db.ctx, db.conn(), status)
@@ -612,16 +600,16 @@ func (db *MediaDB) SetOptimizationStatus(status string) error {
 func (db *MediaDB) GetOptimizationStatus() (string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", ErrNullSQL
 	}
-	return sqlGetOptimizationStatus(db.ctx, db.sql)
+	return sqlGetOptimizationStatus(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) SetOptimizationStep(step string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetOptimizationStep(db.ctx, db.conn(), step)
@@ -630,16 +618,16 @@ func (db *MediaDB) SetOptimizationStep(step string) error {
 func (db *MediaDB) GetOptimizationStep() (string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", ErrNullSQL
 	}
-	return sqlGetOptimizationStep(db.ctx, db.sql)
+	return sqlGetOptimizationStep(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) SetIndexingStatus(status string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetIndexingStatus(db.ctx, db.conn(), status)
@@ -648,10 +636,10 @@ func (db *MediaDB) SetIndexingStatus(status string) error {
 func (db *MediaDB) GetIndexingStatus() (string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", ErrNullSQL
 	}
-	return sqlGetIndexingStatus(db.ctx, db.sql)
+	return sqlGetIndexingStatus(db.ctx, db.sql.Load())
 }
 
 // QuickCheck runs PRAGMA quick_check(1) and reports whether the database passes.
@@ -662,11 +650,11 @@ func (db *MediaDB) GetIndexingStatus() (string, error) {
 func (db *MediaDB) QuickCheck() (bool, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return false, ErrNullSQL
 	}
 
-	rows, err := db.sql.QueryContext(db.ctx, "PRAGMA quick_check(1)")
+	rows, err := db.sql.Load().QueryContext(db.ctx, "PRAGMA quick_check(1)")
 	if err != nil {
 		return false, fmt.Errorf("quick_check query failed: %w", err)
 	}
@@ -691,35 +679,23 @@ func (db *MediaDB) QuickCheck() (bool, error) {
 	return false, nil
 }
 
-// corruptMarkerPath returns the sidecar path used to flag a corrupt database.
-func (db *MediaDB) corruptMarkerPath() string {
-	return db.dbPath + corruptMarkerSuffix
-}
-
 // MarkCorrupt writes a sidecar marker file next to the database recording that
 // corruption was detected. The marker is the authoritative, DB-independent signal
 // the recovery path keys on: unlike IndexingStatusCorrupt it does not require writing
 // to the (possibly unwritable) database. Best-effort — failures are logged, not returned.
 func (db *MediaDB) MarkCorrupt(reason string) {
-	path := db.corruptMarkerPath()
-	contents := fmt.Sprintf("%s\n%s\n", db.clock.Now().UTC().Format(time.RFC3339), reason)
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		log.Error().Err(err).Str("path", path).Msg("failed to write media database corrupt marker")
-		return
-	}
-	log.Warn().Str("path", path).Str("reason", reason).Msg("flagged media database as corrupt")
+	database.MarkCorrupt(db.dbPath, reason, db.clock.Now())
 }
 
 // IsMarkedCorrupt reports whether the corrupt marker sidecar exists.
 func (db *MediaDB) IsMarkedCorrupt() bool {
-	_, err := os.Stat(db.corruptMarkerPath())
-	return err == nil
+	return database.IsMarkedCorrupt(db.dbPath)
 }
 
 // ClearCorruptMarker removes the corrupt marker sidecar. No-op when absent.
 func (db *MediaDB) ClearCorruptMarker() error {
-	if err := os.Remove(db.corruptMarkerPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("failed to clear corrupt marker: %w", err)
+	if err := database.ClearCorruptMarker(db.dbPath); err != nil {
+		return fmt.Errorf("media database: %w", err)
 	}
 	return nil
 }
@@ -730,45 +706,19 @@ func (db *MediaDB) ClearCorruptMarker() error {
 // expensive integrity report is logged later by the recovery orchestration, not on every
 // failing query. Returns true when err was a corruption error.
 func (db *MediaDB) NoteCorruption(err error) bool {
-	if err == nil || !isCorruptionError(err) {
-		return false
-	}
-	if !db.IsMarkedCorrupt() {
-		db.MarkCorrupt(fmt.Sprintf("query error: %v", err))
-	}
-	return true
+	return database.NoteCorruption(db.dbPath, err, db.clock.Now())
 }
 
-// IntegrityReport runs PRAGMA integrity_check and returns up to integrityReportMaxRows
-// result rows. It captures a corruption fingerprint in the logs — which are uploadable
-// via the support bundle — when the database file itself cannot be retrieved. A healthy
-// database returns a single "ok" row.
+// IntegrityReport runs PRAGMA integrity_check and returns the result rows. It captures a
+// corruption fingerprint in the logs — which are uploadable via the support bundle — when
+// the database file itself cannot be retrieved. A healthy database returns a single "ok" row.
 func (db *MediaDB) IntegrityReport() []string {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return []string{"integrity check unavailable: database not connected"}
 	}
-
-	rows, err := db.sql.QueryContext(db.ctx, fmt.Sprintf("PRAGMA integrity_check(%d)", integrityReportMaxRows))
-	if err != nil {
-		return []string{fmt.Sprintf("integrity check failed: %v", err)}
-	}
-	defer func() { _ = rows.Close() }()
-
-	var report []string
-	for rows.Next() {
-		var line string
-		if scanErr := rows.Scan(&line); scanErr != nil {
-			report = append(report, fmt.Sprintf("integrity check scan error: %v", scanErr))
-			break
-		}
-		report = append(report, line)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		report = append(report, fmt.Sprintf("integrity check rows error: %v", rowsErr))
-	}
-	return report
+	return database.IntegrityReport(db.ctx, db.sql.Load(), database.DefaultIntegrityReportRows)
 }
 
 // RecreateAfterCorruption discards a corrupt database and reopens a fresh one. The
@@ -781,10 +731,10 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 	if err := db.Close(); err != nil {
 		log.Warn().Err(err).Msg("error closing corrupt media database before recreate")
 	}
-	db.sql = nil
+	db.sql.Store(nil)
 
 	if keepBackup {
-		backup := db.dbPath + corruptMarkerSuffix + ".bak"
+		backup := database.CorruptMarkerPath(db.dbPath) + ".bak"
 		_ = os.Remove(backup)
 		if err := os.Rename(db.dbPath, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn().Err(err).Msg("failed to preserve corrupt media database backup; deleting instead")
@@ -796,11 +746,7 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 		return fmt.Errorf("failed to remove corrupt media database: %w", err)
 	}
 
-	for _, sidecar := range []string{db.dbPath + "-wal", db.dbPath + "-shm"} {
-		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Warn().Err(err).Str("path", sidecar).Msg("failed to remove WAL sidecar during recreate")
-		}
-	}
+	database.RemoveSidecars(db.dbPath)
 
 	if err := db.Open(); err != nil {
 		return fmt.Errorf("failed to reopen media database after recreate: %w", err)
@@ -817,7 +763,7 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 func (db *MediaDB) SetScrapingStatus(status string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetScrapingStatus(db.ctx, db.conn(), status)
@@ -826,16 +772,16 @@ func (db *MediaDB) SetScrapingStatus(status string) error {
 func (db *MediaDB) GetScrapingStatus() (string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", ErrNullSQL
 	}
-	return sqlGetScrapingStatus(db.ctx, db.sql)
+	return sqlGetScrapingStatus(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) SetScrapingOperation(operation database.ScrapingOperation) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetScrapingOperation(db.ctx, db.conn(), operation)
@@ -844,16 +790,16 @@ func (db *MediaDB) SetScrapingOperation(operation database.ScrapingOperation) er
 func (db *MediaDB) GetScrapingOperation() (database.ScrapingOperation, bool, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.ScrapingOperation{}, false, ErrNullSQL
 	}
-	return sqlGetScrapingOperation(db.ctx, db.sql)
+	return sqlGetScrapingOperation(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) ClearScrapingOperation() error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlClearScrapingOperation(db.ctx, db.conn())
@@ -862,7 +808,7 @@ func (db *MediaDB) ClearScrapingOperation() error {
 func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetLastIndexedSystem(db.ctx, db.conn(), systemID)
@@ -871,10 +817,10 @@ func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 func (db *MediaDB) GetLastIndexedSystem() (string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", ErrNullSQL
 	}
-	return sqlGetLastIndexedSystem(db.ctx, db.sql)
+	return sqlGetLastIndexedSystem(db.ctx, db.sql.Load())
 }
 
 // RecomputeTitleDisambiguation recomputes the stored disambiguating tag types
@@ -884,7 +830,7 @@ func (db *MediaDB) GetLastIndexedSystem() (string, error) {
 func (db *MediaDB) RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlRecomputeTitleDisambiguation(ctx, db.conn(), titleDBIDs)
@@ -896,7 +842,7 @@ func (db *MediaDB) RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs 
 func (db *MediaDB) RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlRecomputeDisambiguationForSystems(ctx, db.conn(), systemDBIDs)
@@ -907,10 +853,10 @@ func (db *MediaDB) RecomputeSystemDisambiguation(ctx context.Context, systemDBID
 func (db *MediaDB) IndexGeneration() (int64, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlGetIndexGeneration(db.ctx, db.sql)
+	return sqlGetIndexGeneration(db.ctx, db.sql.Load())
 }
 
 // BumpIndexGeneration increments the index generation counter and returns
@@ -922,7 +868,7 @@ func (db *MediaDB) IndexGeneration() (int64, error) {
 func (db *MediaDB) BumpIndexGeneration() (int64, error) {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
 	return sqlBumpIndexGeneration(db.ctx, db.conn())
@@ -931,7 +877,7 @@ func (db *MediaDB) BumpIndexGeneration() (int64, error) {
 func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	return sqlSetIndexingSystems(db.ctx, db.conn(), systemIDs)
@@ -940,24 +886,24 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetIndexingSystems(db.ctx, db.sql)
+	return sqlGetIndexingSystems(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
-	return db.sql
+	return db.sql.Load()
 }
 
 func (db *MediaDB) Truncate() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	if err := sqlTruncate(db.ctx, db.sql); err != nil {
+	if err := sqlTruncate(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
-	if err := sqlInvalidateBrowseCache(db.ctx, db.sql); err != nil {
+	if err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
 
@@ -965,7 +911,7 @@ func (db *MediaDB) Truncate() error {
 	db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
 
 	// Reclaim disk space freed by the truncation
-	if err := sqlVacuum(db.ctx, db.sql); err != nil {
+	if err := sqlVacuum(db.ctx, db.sql.Load()); err != nil {
 		return fmt.Errorf("failed to vacuum after truncate: %w", err)
 	}
 
@@ -973,14 +919,14 @@ func (db *MediaDB) Truncate() error {
 }
 
 func (db *MediaDB) TruncateSystems(systemIDs []string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	err := sqlTruncateSystems(db.ctx, db.sql, systemIDs)
+	err := sqlTruncateSystems(db.ctx, db.sql.Load(), systemIDs)
 	if err != nil {
 		return err
 	}
-	if err := sqlInvalidateBrowseCache(db.ctx, db.sql); err != nil {
+	if err := sqlInvalidateBrowseCache(db.ctx, db.sql.Load()); err != nil {
 		return err
 	}
 
@@ -992,27 +938,27 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 }
 
 func (db *MediaDB) Allocate() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlAllocate(db.sql, db.dbPath)
+	return sqlAllocate(db.sql.Load(), db.dbPath)
 }
 
 func (db *MediaDB) MigrateUp() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlMigrateUp(db.sql, db.dbPath)
+	return sqlMigrateUp(db.sql.Load(), db.dbPath)
 }
 
 func (db *MediaDB) Vacuum() error {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlVacuum(db.ctx, db.sql)
+	return sqlVacuum(db.ctx, db.sql.Load())
 }
 
 // CleanMediaOrphans deletes every Media row where IsMissing=1, together with
@@ -1032,7 +978,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
 
@@ -1047,7 +993,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	// rows as IsMissing=1 at the start of a scan and clears the flag as files
 	// are confirmed present; deleting those rows mid-scan would corrupt the
 	// scanner's in-flight state.
-	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql.Load())
 	if statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows) {
 		return 0, fmt.Errorf("failed to check indexing status: %w", statusErr)
 	}
@@ -1061,7 +1007,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 		return 0, ErrOptimizationInProgress
 	}
 
-	deleted, err := sqlCleanMediaOrphans(ctx, db.sql)
+	deleted, err := sqlCleanMediaOrphans(ctx, db.sql.Load())
 	if err != nil {
 		return 0, err
 	}
@@ -1072,7 +1018,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 
 	if deleted > 0 {
 		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
-		if err := sqlInvalidateBrowseCache(ctx, db.sql); err != nil {
+		if err := sqlInvalidateBrowseCache(ctx, db.sql.Load()); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
 		}
 	}
@@ -1081,7 +1027,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 }
 
 func (db *MediaDB) Close() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil
 	}
 
@@ -1090,11 +1036,11 @@ func (db *MediaDB) Close() error {
 	db.WaitForBackgroundOperations()
 
 	logSQLTraceSummary()
-	clearUtilityTagCacheFor(db.sql)
-	clearImagePropertyTagCacheFor(db.sql)
-	clearPrefixPolicyCacheFor(db.sql)
+	clearUtilityTagCacheFor(db.sql.Load())
+	clearImagePropertyTagCacheFor(db.sql.Load())
+	clearPrefixPolicyCacheFor(db.sql.Load())
 
-	err := db.sql.Close()
+	err := db.sql.Load().Close()
 	if err != nil {
 		return fmt.Errorf("failed to close database: %w", err)
 	}
@@ -1104,7 +1050,7 @@ func (db *MediaDB) Close() error {
 func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationScope {
 	// CommitTransaction already holds db.sqlMu, so use the SQL helpers directly
 	// instead of getters that would try to take the lock again.
-	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql.Load())
 	if statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
 		scope := invalidationScope{AllSystems: true}
@@ -1118,7 +1064,7 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 		return scope
 	}
 
-	systemIDs, getSystemsErr := sqlGetIndexingSystems(db.ctx, db.sql)
+	systemIDs, getSystemsErr := sqlGetIndexingSystems(db.ctx, db.sql.Load())
 	if getSystemsErr != nil {
 		log.Warn().Err(getSystemsErr).Msg("failed to load indexing systems for cache invalidation")
 		scope := invalidationScope{AllSystems: true}
@@ -1134,7 +1080,7 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
 // This method should only be used in tests to set up in-memory databases.
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
-	db.sql = sqlDB
+	db.sql.Store(sqlDB)
 	clearUtilityTagCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
@@ -1337,7 +1283,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -1347,7 +1293,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	}
 
 	// Begin a proper transaction
-	tx, err := db.sql.BeginTx(db.ctx, nil)
+	tx, err := db.sql.Load().BeginTx(db.ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -1586,7 +1532,7 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	// During indexing, keep last-good slug search coverage available for
 	// foreground launches/searches, but still invalidate durable/count caches so
 	// random queries never trust stale MediaCountCache ranges after a commit.
-	indexingStatus, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	indexingStatus, statusErr := sqlGetIndexingStatus(db.ctx, db.sql.Load())
 	checkpointAfterCommit := shouldCheckpointAfterCommit(options.WALCheckpoint, indexingStatus, statusErr)
 	switch {
 	case statusErr != nil:
@@ -1604,14 +1550,18 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		return err
 	}
 
-	// Manual TRUNCATE checkpoint is only needed during indexing, where batch
-	// commits can grow the WAL quickly. Foreground metadata writes (favorite
-	// toggles) should not block on a full checkpoint; SQLite's autocheckpoint and
-	// background optimization still bound normal WAL growth.
+	// Foreground metadata writes (favorite toggles) should not block on a full
+	// checkpoint. During indexing, batch commits can grow the WAL quickly, but
+	// checkpointing every batch rewrites/syncs the main DB repeatedly on slow or
+	// unreliable SD/exFAT storage. Background optimization performs the durable
+	// checkpoint after indexing completes; here we only warn if the WAL grows too
+	// large before then.
 	if checkpointAfterCommit {
-		if _, chkErr := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); chkErr != nil {
+		if _, chkErr := db.sql.Load().ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); chkErr != nil {
 			log.Warn().Err(chkErr).Msg("failed to run WAL checkpoint after transaction commit")
 		}
+	} else {
+		db.warnLargeWAL()
 	}
 
 	return nil
@@ -1650,10 +1600,33 @@ func (db *MediaDB) Analyze() error {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlAnalyze(db.ctx, db.sql)
+	return sqlAnalyze(db.ctx, db.sql.Load())
+}
+
+func (db *MediaDB) warnLargeWAL() {
+	if db.dbPath == "" {
+		return
+	}
+	walPath := db.dbPath + "-wal"
+	info, err := os.Stat(walPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		log.Debug().Err(err).Str("path", walPath).Msg("failed to stat media database WAL")
+		return
+	}
+	if info.Size() < mediaWALSizeWarnThreshold {
+		return
+	}
+	log.Warn().
+		Str("path", walPath).
+		Int64("size", info.Size()).
+		Int64("threshold", mediaWALSizeWarnThreshold).
+		Msg("media database WAL is large; checkpoint deferred until indexing optimization")
 }
 
 // WALCheckpoint forces a WAL checkpoint to flush pending writes to the main database file.
@@ -1665,13 +1638,13 @@ func (db *MediaDB) WALCheckpoint() error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	if db.tx != nil {
 		return nil
 	}
-	_, err := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
+	_, err := db.sql.Load().ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 	if err != nil {
 		return fmt.Errorf("WAL checkpoint failed: %w", err)
 	}
@@ -1682,10 +1655,10 @@ func (db *MediaDB) WALCheckpoint() error {
 func (db *MediaDB) BrowseDirectories(
 	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	results, err := sqlBrowseDirectories(ctx, db.sql, opts)
+	results, err := sqlBrowseDirectories(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
 }
@@ -1696,10 +1669,10 @@ func (db *MediaDB) BrowseDirectories(
 func (db *MediaDB) BrowseFiles(
 	ctx context.Context, opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	results, err := sqlBrowseFiles(ctx, db.sql, opts)
+	results, err := sqlBrowseFiles(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
 }
@@ -1708,10 +1681,10 @@ func (db *MediaDB) BrowseFiles(
 func (db *MediaDB) BrowseFileCount(
 	ctx context.Context, opts database.BrowseFileCountOptions,
 ) (int, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlBrowseFileCount(ctx, db.sql, opts)
+	return sqlBrowseFileCount(ctx, db.sql.Load(), opts)
 }
 
 // BrowseIndex returns the ordered first-character buckets for a browse scope,
@@ -1720,20 +1693,20 @@ func (db *MediaDB) BrowseFileCount(
 func (db *MediaDB) BrowseIndex(
 	ctx context.Context, opts database.BrowseIndexOptions,
 ) (database.BrowseIndexResult, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.BrowseIndexResult{}, ErrNullSQL
 	}
-	return sqlBrowseIndex(ctx, db.sql, opts)
+	return sqlBrowseIndex(ctx, db.sql.Load(), opts)
 }
 
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
 func (db *MediaDB) BrowseVirtualSchemes(
 	ctx context.Context, opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseVirtualSchemes(ctx, db.sql, opts)
+	return sqlBrowseVirtualSchemes(ctx, db.sql.Load(), opts)
 }
 
 // BrowseRootCounts returns a map of root directory to count of indexed media
@@ -1742,20 +1715,20 @@ func (db *MediaDB) BrowseVirtualSchemes(
 func (db *MediaDB) BrowseRootCounts(
 	ctx context.Context, rootDirs []string,
 ) (map[string]*int, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseRootCounts(ctx, db.sql, rootDirs)
+	return sqlBrowseRootCounts(ctx, db.sql.Load(), rootDirs)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
 func (db *MediaDB) BrowseRouteCounts(
 	ctx context.Context, opts database.BrowseRouteCountsOptions,
 ) (map[string]database.BrowseRouteCount, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseRouteCounts(ctx, db.sql, opts)
+	return sqlBrowseRouteCounts(ctx, db.sql.Load(), opts)
 }
 
 // BrowseSystemRootCandidates returns, in two batched queries, the immediate
@@ -1765,35 +1738,35 @@ func (db *MediaDB) BrowseRouteCounts(
 func (db *MediaDB) BrowseSystemRootCandidates(
 	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
 ) (database.BrowseSystemRootCandidates, bool, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.BrowseSystemRootCandidates{}, false, ErrNullSQL
 	}
-	return sqlBrowseSystemRootCandidates(ctx, db.sql, opts)
+	return sqlBrowseSystemRootCandidates(ctx, db.sql.Load(), opts)
 }
 
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
 func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlPopulateBrowseCache(ctx, db.sql)
+	return sqlPopulateBrowseCache(ctx, db.sql.Load())
 }
 
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
 func (db *MediaDB) SearchMediaPathExact(
 	ctx context.Context, systems []systemdefs.System, query string,
 ) ([]database.SearchResult, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.SearchResult, 0), ErrNullSQL
 	}
-	return sqlSearchMediaPathExact(ctx, db.sql, systems, query)
+	return sqlSearchMediaPathExact(ctx, db.sql.Load(), systems, query)
 }
 
 func (db *MediaDB) SearchMediaWithFilters(
 	ctx context.Context,
 	filters *database.SearchFilters,
 ) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 
@@ -1870,7 +1843,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 		}
 
 		return sqlSearchMediaByTitleDBIDs(
-			ctx, db.sql, candidateIDs, filters.Tags,
+			ctx, db.sql.Load(), candidateIDs, filters.Tags,
 			filters.Letter, filters.Cursor, filters.Limit)
 	}
 
@@ -1883,7 +1856,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 		Bool("includeName", includeName).
 		Msg("media search falling back to SQL LIKE path")
 	results, err := sqlSearchMediaWithFilters(
-		ctx, db.sql, filters.Systems, variantGroups, qWords, filters.Tags,
+		ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
 		filters.Letter, filters.Cursor, filters.Limit, includeName)
 
 	return results, err
@@ -1926,7 +1899,7 @@ func (db *MediaDB) slugCacheSearch(
 	// Skip SQL-level tag filters for cache path — the Go-side selection
 	// logic handles missing/conflicting tags gracefully, and the INTERSECT
 	// subqueries are the most expensive part of the query on slow storage.
-	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.sql, candidates, nil, nil, nil, defaultSlugSearchLimit)
+	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.sql.Load(), candidates, nil, nil, nil, defaultSlugSearchLimit)
 	log.Debug().
 		Str("system", systemID).
 		Int("candidates", len(candidates)).
@@ -1937,7 +1910,7 @@ func (db *MediaDB) slugCacheSearch(
 func (db *MediaDB) SearchMediaBySlug(
 	ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 	if results, ok, err := db.slugCacheSearch(ctx, systemID, slug,
@@ -1947,33 +1920,33 @@ func (db *MediaDB) SearchMediaBySlug(
 	// SQL fallback (cache not ready) still applies tag filters in the query
 	// for performance. The cache path skips SQL tag filters — Go-side
 	// selection handles tag matching in both cases.
-	return sqlSearchMediaBySlug(ctx, db.sql, systemID, slug, tags)
+	return sqlSearchMediaBySlug(ctx, db.sql.Load(), systemID, slug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySecondarySlug(
 	ctx context.Context, systemID string, secondarySlug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 	if results, ok, err := db.slugCacheSearch(ctx, systemID, secondarySlug,
 		(*SlugSearchCache).ExactSecondarySlugMatch); ok || err != nil {
 		return results, err
 	}
-	return sqlSearchMediaBySecondarySlug(ctx, db.sql, systemID, secondarySlug, tags)
+	return sqlSearchMediaBySecondarySlug(ctx, db.sql.Load(), systemID, secondarySlug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySlugPrefix(
 	ctx context.Context, systemID string, slugPrefix string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 	if results, ok, err := db.slugCacheSearch(ctx, systemID, slugPrefix,
 		(*SlugSearchCache).PrefixSlugMatch); ok || err != nil {
 		return results, err
 	}
-	return sqlSearchMediaBySlugPrefix(ctx, db.sql, systemID, slugPrefix, tags)
+	return sqlSearchMediaBySlugPrefix(ctx, db.sql.Load(), systemID, slugPrefix, tags)
 }
 
 // SearchMediaBySlugIn searches for media items matching any of the provided slugs using an IN clause.
@@ -1981,7 +1954,7 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 func (db *MediaDB) SearchMediaBySlugIn(
 	ctx context.Context, systemID string, slugList []string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 
@@ -2009,10 +1982,10 @@ func (db *MediaDB) SearchMediaBySlugIn(
 		if len(candidates) == 0 {
 			return []database.SearchResultWithCursor{}, nil
 		}
-		return sqlSearchMediaByTitleDBIDs(ctx, db.sql, candidates, tags, nil, nil, defaultSlugSearchLimit)
+		return sqlSearchMediaByTitleDBIDs(ctx, db.sql.Load(), candidates, tags, nil, nil, defaultSlugSearchLimit)
 	}
 
-	return sqlSearchMediaBySlugIn(ctx, db.sql, systemID, slugList, tags)
+	return sqlSearchMediaBySlugIn(ctx, db.sql.Load(), systemID, slugList, tags)
 }
 
 // GetTitlesWithPreFilter retrieves media titles filtered by slug length and word count ranges.
@@ -2021,18 +1994,18 @@ func (db *MediaDB) SearchMediaBySlugIn(
 func (db *MediaDB) GetTitlesWithPreFilter(
 	ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 ) ([]database.MediaTitle, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.MediaTitle, 0), ErrNullSQL
 	}
 
 	// Look up system DBID from committed state. This path is used by foreground
 	// title resolution and must not read the active indexing transaction.
-	system, err := sqlFindSystemBySystemID(ctx, db.sql, systemID)
+	system, err := sqlFindSystemBySystemID(ctx, db.sql.Load(), systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find system '%s': %w", systemID, err)
 	}
 
-	return sqlGetCandidatesWithPreFilter(ctx, db.sql, system.DBID, PreFilterQuery{
+	return sqlGetCandidatesWithPreFilter(ctx, db.sql.Load(), system.DBID, PreFilterQuery{
 		MinLength:    minLength,
 		MaxLength:    maxLength,
 		MinWordCount: minWordCount,
@@ -2041,46 +2014,46 @@ func (db *MediaDB) GetTitlesWithPreFilter(
 }
 
 func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
-	return sqlGetTags(ctx, db.sql, systems)
+	return sqlGetTags(ctx, db.sql.Load(), systems)
 }
 
 // GetAllUsedTags returns all tags that are actually in use (have media associated)
 // This is optimized for the "all systems" case and avoids expensive system filtering
 func (db *MediaDB) GetAllUsedTags(ctx context.Context) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
 	if cache := db.inMemoryTagCache.Load(); cache != nil {
 		return slices.Clone(cache.allTags), nil
 	}
-	return sqlGetAllUsedTags(ctx, db.sql)
+	return sqlGetAllUsedTags(ctx, db.sql.Load())
 }
 
 // PopulateSystemTagsCache rebuilds the cache table for fast tag lookups by system
 // This should be called after media indexing completes
 func (db *MediaDB) PopulateSystemTagsCache(ctx context.Context) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlPopulateSystemTagsCache(ctx, db.sql)
+	return sqlPopulateSystemTagsCache(ctx, db.sql.Load())
 }
 
 // PopulateSystemTagsCacheForSystems rebuilds cache for specific systems only
 // Used for incremental cache updates after individual system changes
 func (db *MediaDB) PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlPopulateSystemTagsCacheForSystems(ctx, db.sql, systems)
+	return sqlPopulateSystemTagsCacheForSystems(ctx, db.sql.Load(), systems)
 }
 
 // GetSystemTagsCached retrieves tags for specific systems using the cache table
 // Falls back to the optimized subquery approach if cache is empty
 func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
 	if len(systems) == 0 {
@@ -2093,11 +2066,11 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 	}
 
 	// Fallback: try SQL cached approach
-	tags, err := sqlGetSystemTagsCached(ctx, db.sql, systems)
+	tags, err := sqlGetSystemTagsCached(ctx, db.sql.Load(), systems)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get cached tags, falling back to optimized query")
 		// Fallback to optimized subquery approach
-		return sqlGetTags(ctx, db.sql, systems)
+		return sqlGetTags(ctx, db.sql.Load(), systems)
 	}
 
 	// If cache is empty (no results), auto-populate for requested systems (self-healing)
@@ -2107,14 +2080,14 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 		// Self-healing: populate cache for requested systems
 		if populateErr := db.PopulateSystemTagsCacheForSystems(ctx, systems); populateErr != nil {
 			log.Warn().Err(populateErr).Msg("failed to populate cache, using direct query")
-			return sqlGetTags(ctx, db.sql, systems)
+			return sqlGetTags(ctx, db.sql.Load(), systems)
 		}
 
 		// Populate succeeded — re-read from cache table instead of running
 		// another expensive 6-table join query via sqlGetTags
-		tags, err = sqlGetSystemTagsCached(ctx, db.sql, systems)
+		tags, err = sqlGetSystemTagsCached(ctx, db.sql.Load(), systems)
 		if err != nil || len(tags) == 0 {
-			return sqlGetTags(ctx, db.sql, systems)
+			return sqlGetTags(ctx, db.sql.Load(), systems)
 		}
 
 		// Rebuild in-memory cache so subsequent requests are instant
@@ -2132,7 +2105,7 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 // Useful for incremental cache updates when only certain systems change
 // If no systems are provided, this is a no-op and returns success.
 func (db *MediaDB) InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -2140,14 +2113,14 @@ func (db *MediaDB) InvalidateSystemTagsCache(ctx context.Context, systems []syst
 		return nil // No-op for empty systems list
 	}
 
-	return sqlInvalidateSystemTagsCache(ctx, db.sql, systems)
+	return sqlInvalidateSystemTagsCache(ctx, db.sql.Load(), systems)
 }
 
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	// TODO: glob pattern matching unclear on some patterns
 	// query == path like with possible *
 	var nullResults []database.SearchResult
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nullResults, ErrNullSQL
 	}
 
@@ -2194,30 +2167,30 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 
 	// TODO: since we approximated a glob, we should actually check
 	//       result paths against base glob to confirm
-	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, variantGroups)
+	return sqlSearchMediaPathParts(db.ctx, db.sql.Load(), systems, variantGroups)
 }
 
 // SystemIndexed returns true if a specific system is indexed in the media database.
 func (db *MediaDB) SystemIndexed(system *systemdefs.System) bool {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return false
 	}
-	return sqlSystemIndexed(db.ctx, db.sql, system)
+	return sqlSystemIndexed(db.ctx, db.sql.Load(), system)
 }
 
 // IndexedSystems returns all systems indexed in the media database.
 func (db *MediaDB) IndexedSystems() ([]string, error) {
 	var systems []string
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return systems, ErrNullSQL
 	}
-	return sqlIndexedSystems(db.ctx, db.sql)
+	return sqlIndexedSystems(db.ctx, db.sql.Load())
 }
 
 // RandomGame returns a random game from specified systems.
 func (db *MediaDB) RandomGame(ctx context.Context, systems []systemdefs.System) (database.SearchResult, error) {
 	var result database.SearchResult
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return result, ErrNullSQL
 	}
 
@@ -2242,7 +2215,7 @@ func (db *MediaDB) RandomGame(ctx context.Context, systems []systemdefs.System) 
 			if !ok {
 				return result, sql.ErrNoRows
 			}
-			return sqlGetRandomMediaForTitle(ctx, db.sql, titleDBID)
+			return sqlGetRandomMediaForTitle(ctx, db.sql.Load(), titleDBID)
 		}
 	}
 
@@ -2251,7 +2224,7 @@ func (db *MediaDB) RandomGame(ctx context.Context, systems []systemdefs.System) 
 	for i, sys := range systems {
 		systemIDs[i] = sys.ID
 	}
-	indexedIDs, err := sqlFilterIndexedSystems(ctx, db.sql, systemIDs)
+	indexedIDs, err := sqlFilterIndexedSystems(ctx, db.sql.Load(), systemIDs)
 	if err != nil {
 		return result, fmt.Errorf("failed to filter indexed systems: %w", err)
 	}
@@ -2268,13 +2241,13 @@ func (db *MediaDB) RandomGame(ctx context.Context, systems []systemdefs.System) 
 		return result, fmt.Errorf("failed to get system definition: %w", sysErr)
 	}
 
-	return sqlRandomGame(ctx, db.sql, sys)
+	return sqlRandomGame(ctx, db.sql.Load(), sys)
 }
 
 // RandomGameWithQuery returns a random game matching the specified MediaQuery.
 func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.MediaQuery) (database.SearchResult, error) {
 	var result database.SearchResult
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return result, ErrNullSQL
 	}
 
@@ -2297,13 +2270,13 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 			if !ok {
 				return result, sql.ErrNoRows
 			}
-			return sqlGetRandomMediaForTitle(ctx, db.sql, titleDBID)
+			return sqlGetRandomMediaForTitle(ctx, db.sql.Load(), titleDBID)
 		}
 	}
 
 	// For SQL fallback, filter to indexed systems and pick one for equal weight
 	if len(query.Systems) > 1 {
-		indexedSystems, filterErr := sqlFilterIndexedSystems(ctx, db.sql, query.Systems)
+		indexedSystems, filterErr := sqlFilterIndexedSystems(ctx, db.sql.Load(), query.Systems)
 		if filterErr != nil {
 			return result, fmt.Errorf("failed to filter indexed systems: %w", filterErr)
 		}
@@ -2328,7 +2301,7 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	}
 
 	// Cache miss - use the full SQL implementation and cache the stats
-	result, stats, err := sqlRandomGameWithQueryAndStats(ctx, db.sql, query)
+	result, stats, err := sqlRandomGameWithQueryAndStats(ctx, db.sql.Load(), query)
 	if err != nil {
 		return result, err
 	}
@@ -2349,10 +2322,10 @@ func (db *MediaDB) cacheMediaStats(ctx context.Context, query *database.MediaQue
 
 // GetTotalMediaCount returns the total number of media entries in the database.
 func (db *MediaDB) GetTotalMediaCount() (int, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlGetTotalMediaCount(db.ctx, db.sql)
+	return sqlGetTotalMediaCount(db.ctx, db.sql.Load())
 }
 
 // MediaStats represents cached statistics for a media query
@@ -2365,7 +2338,7 @@ type MediaStats struct {
 // GetCachedStats returns cached statistics for the given media query, if available.
 // Returns the stats and true if found, or empty stats and false if not cached.
 func (db *MediaDB) GetCachedStats(ctx context.Context, query *database.MediaQuery) (MediaStats, bool) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return MediaStats{}, false
 	}
 
@@ -2376,7 +2349,7 @@ func (db *MediaDB) GetCachedStats(ctx context.Context, query *database.MediaQuer
 	}
 
 	var stats MediaStats
-	err = db.sql.QueryRowContext(ctx,
+	err = db.sql.Load().QueryRowContext(ctx,
 		"SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = ?",
 		queryHash).Scan(&stats.Count, &stats.MinDBID, &stats.MaxDBID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2419,7 +2392,7 @@ func (db *MediaDB) randomGameWithStats(
 	`, whereClause)
 
 	args = append(args, targetDBID)
-	err = db.sql.QueryRowContext(ctx, selectQuery, args...).Scan(
+	err = db.sql.Load().QueryRowContext(ctx, selectQuery, args...).Scan(
 		&row.SystemID,
 		&row.Path,
 		&row.MediaID,
@@ -2436,7 +2409,7 @@ func (db *MediaDB) randomGameWithStats(
 			LIMIT 1
 		`, whereClause)
 		args[len(args)-1] = targetDBID // Replace the last argument
-		err = db.sql.QueryRowContext(ctx, selectQuery, args...).Scan(
+		err = db.sql.Load().QueryRowContext(ctx, selectQuery, args...).Scan(
 			&row.SystemID,
 			&row.Path,
 			&row.MediaID,
@@ -2451,7 +2424,7 @@ func (db *MediaDB) randomGameWithStats(
 
 // SetCachedStats stores statistics for the given media query in the cache.
 func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuery, stats MediaStats) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	if db.inTransaction {
@@ -2468,7 +2441,7 @@ func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuer
 		return fmt.Errorf("failed to marshal query params: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.sql.Load().ExecContext(ctx, `
 		INSERT OR REPLACE INTO MediaCountCache (QueryHash, QueryParams, Count, MinDBID, MaxDBID, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, queryHash, string(queryParams), stats.Count, stats.MinDBID, stats.MaxDBID, time.Now().Unix())
@@ -2482,7 +2455,7 @@ func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuer
 // InvalidateCountCache clears all cached media counts.
 // This should be called after any operation that changes the media database content.
 func (db *MediaDB) InvalidateCountCache() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -2553,7 +2526,7 @@ func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
 	if db.stmtInsertSystem != nil {
 		result, err = db.insertSystemWithPreparedStmt(row)
 	} else {
-		result, err = sqlInsertSystem(db.ctx, db.sql, row)
+		result, err = sqlInsertSystem(db.ctx, db.sql.Load(), row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2597,7 +2570,7 @@ func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTit
 	if db.stmtInsertMediaTitle != nil {
 		result, err = db.insertMediaTitleWithPreparedStmt(row)
 	} else {
-		result, err = sqlInsertMediaTitle(db.ctx, db.sql, row)
+		result, err = sqlInsertMediaTitle(db.ctx, db.sql.Load(), row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2648,7 +2621,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) { //n
 	if db.stmtInsertMedia != nil {
 		result, err = db.insertMediaWithPreparedStmt(&row)
 	} else {
-		result, err = sqlInsertMedia(db.ctx, db.sql, &row)
+		result, err = sqlInsertMedia(db.ctx, db.sql.Load(), &row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2665,7 +2638,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) { //n
 }
 
 func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	if db.batchInsertMediaTitle != nil {
@@ -2688,7 +2661,7 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName st
 }
 
 func (db *MediaDB) UpdateMediaTitleName(titleDBID int64, name string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	if db.batchInsertMediaTitle != nil {
@@ -2711,7 +2684,7 @@ func (db *MediaDB) UpdateMediaTitleName(titleDBID int64, name string) error {
 }
 
 func (db *MediaDB) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -2728,10 +2701,10 @@ func (db *MediaDB) UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 }
 
 func (db *MediaDB) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return false, ErrNullSQL
 	}
-	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql)
+	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql.Load())
 	if err != nil {
 		return false, err
 	}
@@ -2739,19 +2712,19 @@ func (db *MediaDB) TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 		return false, nil
 	}
 
-	pending, err := sqlEmptyMediaParentDirsExist(ctx, db.sql)
+	pending, err := sqlEmptyMediaParentDirsExist(ctx, db.sql.Load())
 	if err != nil || pending {
 		return pending, err
 	}
 
-	if err := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql); err != nil {
+	if err := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql.Load()); err != nil {
 		return false, err
 	}
 	return false, nil
 }
 
 func (db *MediaDB) DeleteMediaTags(mediaDBID int64) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -2764,7 +2737,7 @@ func (db *MediaDB) DeleteMediaTags(mediaDBID int64) error {
 }
 
 func (db *MediaDB) DeleteMediaTag(mediaDBID, tagDBID int64) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -2777,7 +2750,7 @@ func (db *MediaDB) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 }
 
 func (db *MediaDB) DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -2790,7 +2763,7 @@ func (db *MediaDB) DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) erro
 }
 
 func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	err := sqlBulkSetMediaMissing(db.ctx, db.conn(), dbids)
@@ -2806,7 +2779,7 @@ func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 }
 
 func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	err := sqlResetMissingFlags(db.ctx, db.conn(), systemDBIDs)
@@ -2858,7 +2831,7 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 	if db.stmtInsertTagType != nil {
 		result, err = db.insertTagTypeWithPreparedStmt(row)
 	} else {
-		result, err = sqlInsertTagType(db.ctx, db.sql, row)
+		result, err = sqlInsertTagType(db.ctx, db.sql.Load(), row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2902,7 +2875,7 @@ func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 	if db.stmtInsertTag != nil {
 		result, err = db.insertTagWithPreparedStmt(row)
 	} else {
-		result, err = sqlInsertTag(db.ctx, db.sql, row)
+		result, err = sqlInsertTag(db.ctx, db.sql.Load(), row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2945,7 +2918,7 @@ func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, err
 	if db.stmtInsertMediaTag != nil {
 		result, err = db.insertMediaTagWithPreparedStmt(row)
 	} else {
-		result, err = sqlInsertMediaTag(db.ctx, db.sql, row)
+		result, err = sqlInsertMediaTag(db.ctx, db.sql.Load(), row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2966,59 +2939,59 @@ func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTa
 
 // GetMax*ID methods for resume functionality
 func (db *MediaDB) GetMaxSystemID() (int64, error) {
-	return sqlGetMaxID(db.ctx, db.sql, "Systems", "DBID")
+	return sqlGetMaxID(db.ctx, db.sql.Load(), "Systems", "DBID")
 }
 
 func (db *MediaDB) GetMaxTitleID() (int64, error) {
-	return sqlGetMaxID(db.ctx, db.sql, "MediaTitles", "DBID")
+	return sqlGetMaxID(db.ctx, db.sql.Load(), "MediaTitles", "DBID")
 }
 
 func (db *MediaDB) GetMaxMediaID() (int64, error) {
-	return sqlGetMaxID(db.ctx, db.sql, "Media", "DBID")
+	return sqlGetMaxID(db.ctx, db.sql.Load(), "Media", "DBID")
 }
 
 func (db *MediaDB) GetMaxTagTypeID() (int64, error) {
-	return sqlGetMaxID(db.ctx, db.sql, "TagTypes", "DBID")
+	return sqlGetMaxID(db.ctx, db.sql.Load(), "TagTypes", "DBID")
 }
 
 func (db *MediaDB) GetMaxTagID() (int64, error) {
-	return sqlGetMaxID(db.ctx, db.sql, "Tags", "DBID")
+	return sqlGetMaxID(db.ctx, db.sql.Load(), "Tags", "DBID")
 }
 
 func (db *MediaDB) GetMaxMediaTagID() (int64, error) {
-	return sqlGetMaxID(db.ctx, db.sql, "MediaTags", "DBID")
+	return sqlGetMaxID(db.ctx, db.sql.Load(), "MediaTags", "DBID")
 }
 
 func (db *MediaDB) GetAllSystems() ([]database.System, error) {
-	return sqlGetAllSystems(db.ctx, db.sql)
+	return sqlGetAllSystems(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) GetAllMediaTitles() ([]database.MediaTitle, error) {
-	return sqlGetAllMediaTitles(db.ctx, db.sql)
+	return sqlGetAllMediaTitles(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) GetAllMedia() ([]database.Media, error) {
-	return sqlGetAllMedia(db.ctx, db.sql)
+	return sqlGetAllMedia(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) GetAllTags() ([]database.Tag, error) {
-	return sqlGetAllTags(db.ctx, db.sql)
+	return sqlGetAllTags(db.ctx, db.sql.Load())
 }
 
 func (db *MediaDB) GetAllTagTypes() ([]database.TagType, error) {
-	return sqlGetAllTagTypes(db.ctx, db.sql)
+	return sqlGetAllTagTypes(db.ctx, db.sql.Load())
 }
 
 // GetTitlesWithSystems retrieves all media titles with their associated system IDs using a JOIN query.
 // This is more efficient than fetching titles and systems separately and matching them in application code.
 func (db *MediaDB) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
-	return sqlGetTitlesWithSystems(db.ctx, db.sql)
+	return sqlGetTitlesWithSystems(db.ctx, db.sql.Load())
 }
 
 // GetMediaWithFullPath retrieves all media with their associated title and system information using JOIN queries.
 // This eliminates the need for nested loops to match media with titles and systems.
 func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) {
-	return sqlGetMediaWithFullPath(db.ctx, db.sql)
+	return sqlGetMediaWithFullPath(db.ctx, db.sql.Load())
 }
 
 // GetTitlesBySystemID retrieves all media titles for a specific system with their associated system information.
@@ -3029,7 +3002,7 @@ func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) 
 // overhead on the scanner's bulk per-system reads. The scanner checks for
 // cancellation between queries instead.
 func (db *MediaDB) GetTitlesBySystemID(systemID string) ([]database.TitleWithSystem, error) {
-	return sqlGetTitlesBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
+	return sqlGetTitlesBySystemID(context.WithoutCancel(db.ctx), db.sql.Load(), systemID)
 }
 
 // GetMediaBySystemID retrieves all media for a specific system.
@@ -3038,7 +3011,7 @@ func (db *MediaDB) GetTitlesBySystemID(systemID string) ([]database.TitleWithSys
 // MediaTitles probe per media row to the scanner's hottest state-load query.
 // Non-cancellable context: see GetTitlesBySystemID.
 func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
-	return sqlGetMediaBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
+	return sqlGetMediaBySystemID(context.WithoutCancel(db.ctx), db.sql.Load(), systemID)
 }
 
 // GetMediaWithTagsBySystemID retrieves media for a system and, when loadMediaTags is
@@ -3047,50 +3020,50 @@ func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFull
 func (db *MediaDB) GetMediaWithTagsBySystemID(
 	systemID string, loadMediaTags bool,
 ) ([]database.MediaWithFullPath, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	return sqlGetMediaWithTagsBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID, loadMediaTags)
+	return sqlGetMediaWithTagsBySystemID(context.WithoutCancel(db.ctx), db.sql.Load(), systemID, loadMediaTags)
 }
 
 // GetMediaTagsBySystemID retrieves all media-tag links for a specific system.
 func (db *MediaDB) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	return sqlGetMediaTagsBySystemID(db.ctx, db.sql, systemID)
+	return sqlGetMediaTagsBySystemID(db.ctx, db.sql.Load(), systemID)
 }
 
 // GetScannerMediaTagsBySystemID retrieves scanner-managed media-tag links for a specific system.
 // Non-cancellable context: see GetTitlesBySystemID.
 func (db *MediaDB) GetScannerMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	return sqlGetScannerMediaTagsBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
+	return sqlGetScannerMediaTagsBySystemID(context.WithoutCancel(db.ctx), db.sql.Load(), systemID)
 }
 
 // GetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list.
 // This is optimized for selective indexing to avoid loading data for systems being reindexed.
 func (db *MediaDB) GetSystemsExcluding(excludeSystemIDs []string) ([]database.System, error) {
-	return sqlGetSystemsExcluding(db.ctx, db.sql, excludeSystemIDs)
+	return sqlGetSystemsExcluding(db.ctx, db.sql.Load(), excludeSystemIDs)
 }
 
 // GetTitlesWithSystemsExcluding retrieves all media titles with their associated system IDs,
 // excluding those belonging to systems in the excludeSystemIDs list.
 // This is optimized for selective indexing to avoid loading data for systems being reindexed.
 func (db *MediaDB) GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]database.TitleWithSystem, error) {
-	return sqlGetTitlesWithSystemsExcluding(db.ctx, db.sql, excludeSystemIDs)
+	return sqlGetTitlesWithSystemsExcluding(db.ctx, db.sql.Load(), excludeSystemIDs)
 }
 
 // GetMediaWithFullPathExcluding retrieves all media with their associated title and system information,
 // excluding those belonging to systems in the excludeSystemIDs list.
 // This is optimized for selective indexing to avoid loading data for systems being reindexed.
 func (db *MediaDB) GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]database.MediaWithFullPath, error) {
-	return sqlGetMediaWithFullPathExcluding(db.ctx, db.sql, excludeSystemIDs)
+	return sqlGetMediaWithFullPathExcluding(db.ctx, db.sql.Load(), excludeSystemIDs)
 }
 
 // RunBackgroundOptimization performs database optimization operations in the background.
@@ -3110,7 +3083,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 				statusCallback(false)
 			}
 			// Try to mark optimization as failed so it can be retried
-			if db.sql != nil {
+			if db.sql.Load() != nil {
 				_ = db.SetOptimizationStatus(IndexingStatusFailed)
 			}
 		}
@@ -3118,7 +3091,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		db.backgroundOps.Done()
 	}()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		log.Error().Msg("cannot run background optimization: database not connected")
 		// Notify that optimization has failed
 		if statusCallback != nil {
@@ -3268,7 +3241,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			// repair/rebuild flow instead of repeatedly failing maintenance. The sidecar
 			// marker is the durable signal recovery keys on, since the in-DB status write
 			// may itself fail on a malformed database.
-			if isCorruptionError(stepErr) {
+			if database.IsCorruptionError(stepErr) {
 				log.Error().Strs("integrity", db.IntegrityReport()).
 					Msg("media database integrity check after optimization failure")
 				db.MarkCorrupt(fmt.Sprintf("optimization step %s: %v", step.name, stepErr))
@@ -3340,11 +3313,11 @@ func (db *MediaDB) GetLaunchCommandForMedia(ctx context.Context, systemID, path 
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", ErrNullSQL
 	}
 
-	return sqlGetLaunchCommandForMedia(ctx, db.sql, systemID, path)
+	return sqlGetLaunchCommandForMedia(ctx, db.sql.Load(), systemID, path)
 }
 
 // CheckForDuplicateMediaTitles returns any MediaTitle records that have duplicate (SystemDBID, Slug) combinations.
@@ -3353,7 +3326,7 @@ func (db *MediaDB) CheckForDuplicateMediaTitles() ([]string, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
 
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
@@ -3364,7 +3337,7 @@ func (db *MediaDB) CheckForDuplicateMediaTitles() ([]string, error) {
 		HAVING cnt > 1
 	`
 
-	rows, err := db.sql.QueryContext(db.ctx, query)
+	rows, err := db.sql.Load().QueryContext(db.ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query duplicate media titles: %w", err)
 	}

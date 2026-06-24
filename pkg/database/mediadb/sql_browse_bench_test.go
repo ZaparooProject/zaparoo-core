@@ -85,7 +85,7 @@ func seedBenchBrowseDB(b *testing.B, mediaDB *MediaDB, rows int, withTags bool) 
 	b.Helper()
 	ctx := context.Background()
 	parentDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "bench")) + "/"
-	tx, err := mediaDB.sql.BeginTx(ctx, nil)
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
 	require.NoError(b, err)
 	defer func() { _ = tx.Rollback() }()
 

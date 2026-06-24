@@ -34,42 +34,42 @@ import (
 
 // AddMediaHistory adds a new media history entry and returns the DBID.
 func (db *UserDB) AddMediaHistory(entry *database.MediaHistoryEntry) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlAddMediaHistory(db.ctx, db.sql, entry)
+	return sqlAddMediaHistory(db.ctx, db.sql.Load(), entry)
 }
 
 // UpdateMediaHistoryTime updates only the PlayTime for currently playing media.
 func (db *UserDB) UpdateMediaHistoryTime(dbid int64, playTime int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlUpdateMediaHistoryTime(db.ctx, db.sql, dbid, playTime)
+	return sqlUpdateMediaHistoryTime(db.ctx, db.sql.Load(), dbid, playTime)
 }
 
 // CloseMediaHistory finalizes a media history entry with end time and final play time.
 func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseMediaHistory(db.ctx, db.sql, dbid, endTime, playTime)
+	return sqlCloseMediaHistory(db.ctx, db.sql.Load(), dbid, endTime, playTime)
 }
 
 // GetMediaHistory retrieves media history entries with pagination and optional system filtering.
 func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, lastID, limit)
+	return sqlGetMediaHistory(db.ctx, db.sql.Load(), systemIDs, lastID, limit)
 }
 
 // GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
 func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.MediaHistoryEntry{}, false, ErrNullSQL
 	}
-	return sqlGetLatestMediaHistory(db.ctx, db.sql)
+	return sqlGetLatestMediaHistory(db.ctx, db.sql.Load())
 }
 
 // GetMediaHistoryTop returns aggregated media history grouped by SystemID+MediaName,
@@ -77,36 +77,36 @@ func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, err
 func (db *UserDB) GetMediaHistoryTop(
 	systemIDs []string, since *time.Time, limit int,
 ) ([]database.MediaHistoryTopEntry, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistoryTop(db.ctx, db.sql, systemIDs, since, limit)
+	return sqlGetMediaHistoryTop(db.ctx, db.sql.Load(), systemIDs, since, limit)
 }
 
 // CloseHangingMediaHistory closes any media history entries left open from unclean shutdowns.
 // It sets EndTime = StartTime + PlayTime for entries where EndTime is NULL.
 func (db *UserDB) CloseHangingMediaHistory() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseHangingMediaHistory(db.ctx, db.sql)
+	return sqlCloseHangingMediaHistory(db.ctx, db.sql.Load())
 }
 
 // CleanupMediaHistory removes media history older than the retention period.
 func (db *UserDB) CleanupMediaHistory(retentionDays int) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlCleanupMediaHistory(db.ctx, db.sql, retentionDays)
+	return sqlCleanupMediaHistory(db.ctx, db.sql.Load(), retentionDays)
 }
 
 // HealTimestamps corrects timestamps for records created with unreliable clocks (MiSTer boot without NTP).
 // When NTP syncs, this reconstructs correct timestamps using: TrueStartTime = TrueBootTime + MonotonicStart
 func (db *UserDB) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlHealTimestamps(db.ctx, db.sql, bootUUID, trueBootTime)
+	return sqlHealTimestamps(db.ctx, db.sql.Load(), bootUUID, trueBootTime)
 }
 
 // SumMediaPlayTimeForDay returns the total seconds of completed play-time that
@@ -114,10 +114,10 @@ func (db *UserDB) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64
 // pro-rated: only the portion after dayStart is counted. The currently-active
 // session (EndTime IS NULL) is excluded; callers add it separately.
 func (db *UserDB) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql, dayStart)
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart)
 }
 
 /*

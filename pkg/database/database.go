@@ -255,6 +255,22 @@ type TagInfo struct {
 	Count int64  `json:"count,omitempty"`
 }
 
+type BackupInfo struct {
+	CreatedAt  time.Time `json:"createdAt"`
+	Name       string    `json:"name"`
+	Path       string    `json:"path"`
+	QuickCheck string    `json:"quickCheck"`
+	Reason     string    `json:"reason,omitempty"`
+	Size       int64     `json:"size"`
+	Valid      bool      `json:"valid"`
+	Manual     bool      `json:"manual"`
+}
+
+type RestoreInfo struct {
+	PreRestoreBackup *BackupInfo `json:"preRestoreBackup,omitempty"`
+	RestoredFrom     BackupInfo  `json:"restoredFrom"`
+}
+
 type WALCheckpointMode int
 
 const (
@@ -696,6 +712,16 @@ type UserDBI interface {
 	DeleteClient(clientID string) error
 	UpdateClientLastSeen(authToken string, lastSeenAt int64) error
 	CountClients() (int, error)
+	Backup(reason string, manual bool) (BackupInfo, error)
+	EnsureRecentBackup(maxAge time.Duration) (BackupInfo, bool, error)
+	ListBackups() ([]BackupInfo, error)
+	RestoreBackup(name string) (RestoreInfo, error)
+	IntegrityReport() []string
+	MarkCorrupt(reason string)
+	IsMarkedCorrupt() bool
+	ClearCorruptMarker() error
+	NoteCorruption(err error) bool
+	RecoverFromCorruption() (RestoreInfo, error)
 }
 
 type MediaDBI interface {

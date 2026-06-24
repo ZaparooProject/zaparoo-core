@@ -31,7 +31,7 @@ import (
 // insertTestSystem inserts a System row and returns its DBID.
 func insertTestSystem(t *testing.T, db *MediaDB, systemID, name string) int64 {
 	t.Helper()
-	result, err := db.sql.ExecContext(
+	result, err := db.sql.Load().ExecContext(
 		context.Background(),
 		`INSERT INTO Systems (SystemID, Name) VALUES (?, ?)`,
 		systemID, name,
@@ -45,7 +45,7 @@ func insertTestSystem(t *testing.T, db *MediaDB, systemID, name string) int64 {
 // insertTestMediaTitle inserts a MediaTitle row and returns its DBID.
 func insertTestMediaTitle(t *testing.T, db *MediaDB, systemDBID int64, slug, name string) int64 {
 	t.Helper()
-	result, err := db.sql.ExecContext(
+	result, err := db.sql.Load().ExecContext(
 		context.Background(),
 		`INSERT INTO MediaTitles (SystemDBID, Slug, Name) VALUES (?, ?, ?)`,
 		systemDBID, slug, name,
@@ -59,7 +59,7 @@ func insertTestMediaTitle(t *testing.T, db *MediaDB, systemDBID int64, slug, nam
 // insertTestMedia inserts a Media row with IsMissing=0 and returns its DBID.
 func insertTestMedia(t *testing.T, db *MediaDB, mediaTitleDBID, systemDBID int64, path string) int64 {
 	t.Helper()
-	result, err := db.sql.ExecContext(
+	result, err := db.sql.Load().ExecContext(
 		context.Background(),
 		`INSERT INTO Media (MediaTitleDBID, SystemDBID, Path) VALUES (?, ?, ?)`,
 		mediaTitleDBID, systemDBID, path,
@@ -74,7 +74,7 @@ func insertTestMedia(t *testing.T, db *MediaDB, mediaTitleDBID, systemDBID int64
 func countMissingBySystem(t *testing.T, db *MediaDB, systemDBID int64) int {
 	t.Helper()
 	var count int
-	err := db.sql.QueryRowContext(
+	err := db.sql.Load().QueryRowContext(
 		context.Background(),
 		`SELECT COUNT(*) FROM Media WHERE SystemDBID = ? AND IsMissing = 1`,
 		systemDBID,
@@ -87,7 +87,7 @@ func countMissingBySystem(t *testing.T, db *MediaDB, systemDBID int64) int {
 func countNonMissingBySystem(t *testing.T, db *MediaDB, systemDBID int64) int {
 	t.Helper()
 	var count int
-	err := db.sql.QueryRowContext(
+	err := db.sql.Load().QueryRowContext(
 		context.Background(),
 		`SELECT COUNT(*) FROM Media WHERE SystemDBID = ? AND IsMissing = 0`,
 		systemDBID,
@@ -104,7 +104,7 @@ func TestSqlBulkSetMediaMissing_EmptyInput(t *testing.T) {
 	db, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
-	err := sqlBulkSetMediaMissing(context.Background(), db.sql, map[int]struct{}{})
+	err := sqlBulkSetMediaMissing(context.Background(), db.sql.Load(), map[int]struct{}{})
 	assert.NoError(t, err)
 }
 
@@ -128,7 +128,7 @@ func TestSqlBulkSetMediaMissing_SingleChunk(t *testing.T) {
 
 	require.Equal(t, 0, countMissingBySystem(t, db, sysDBID), "no rows should be missing before call")
 
-	err := sqlBulkSetMediaMissing(context.Background(), db.sql, ids)
+	err := sqlBulkSetMediaMissing(context.Background(), db.sql.Load(), ids)
 	require.NoError(t, err)
 
 	assert.Equal(t, count, countMissingBySystem(t, db, sysDBID), "all rows should be marked missing")
@@ -156,7 +156,7 @@ func TestSqlBulkSetMediaMissing_MultipleChunks(t *testing.T) {
 
 	require.Equal(t, 0, countMissingBySystem(t, db, sysDBID), "no rows should be missing before call")
 
-	err := sqlBulkSetMediaMissing(context.Background(), db.sql, ids)
+	err := sqlBulkSetMediaMissing(context.Background(), db.sql.Load(), ids)
 	require.NoError(t, err)
 
 	assert.Equal(t, count, countMissingBySystem(t, db, sysDBID),
@@ -189,14 +189,14 @@ func TestSqlBulkSetMediaMissing_SkipsAlreadyMissing(t *testing.T) {
 		}
 		return 0
 	}()
-	_, err := db.sql.ExecContext(
+	_, err := db.sql.Load().ExecContext(
 		context.Background(),
 		`UPDATE Media SET IsMissing = 1 WHERE DBID = ?`,
 		firstID,
 	)
 	require.NoError(t, err)
 
-	err = sqlBulkSetMediaMissing(context.Background(), db.sql, ids)
+	err = sqlBulkSetMediaMissing(context.Background(), db.sql.Load(), ids)
 	require.NoError(t, err)
 
 	// All 3 rows should now be missing (including the one pre-set).
@@ -211,7 +211,7 @@ func TestSqlResetMissingFlags_EmptyInput(t *testing.T) {
 	db, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
-	err := sqlResetMissingFlags(context.Background(), db.sql, []int{})
+	err := sqlResetMissingFlags(context.Background(), db.sql.Load(), []int{})
 	assert.NoError(t, err)
 }
 
@@ -237,14 +237,14 @@ func TestSqlResetMissingFlags_OnlyTargetedSystem(t *testing.T) {
 	}
 
 	// Mark all rows missing.
-	_, err := db.sql.ExecContext(context.Background(), `UPDATE Media SET IsMissing = 1`)
+	_, err := db.sql.Load().ExecContext(context.Background(), `UPDATE Media SET IsMissing = 1`)
 	require.NoError(t, err)
 
 	require.Equal(t, perSystem, countMissingBySystem(t, db, sys1DBID))
 	require.Equal(t, perSystem, countMissingBySystem(t, db, sys2DBID))
 
 	// Reset only system 1.
-	err = sqlResetMissingFlags(context.Background(), db.sql, []int{int(sys1DBID)})
+	err = sqlResetMissingFlags(context.Background(), db.sql.Load(), []int{int(sys1DBID)})
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, countMissingBySystem(t, db, sys1DBID), "system 1 rows should be reset")
@@ -274,11 +274,11 @@ func TestSqlResetMissingFlags_MultipleSystemsPartialReset(t *testing.T) {
 	}
 
 	// Mark all rows missing.
-	_, err := db.sql.ExecContext(context.Background(), `UPDATE Media SET IsMissing = 1`)
+	_, err := db.sql.Load().ExecContext(context.Background(), `UPDATE Media SET IsMissing = 1`)
 	require.NoError(t, err)
 
 	// Reset sys1 and sys3; leave sys2 missing.
-	err = sqlResetMissingFlags(context.Background(), db.sql, []int{int(sys1DBID), int(sys3DBID)})
+	err = sqlResetMissingFlags(context.Background(), db.sql.Load(), []int{int(sys1DBID), int(sys3DBID)})
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, countMissingBySystem(t, db, sys1DBID), "sys1 should be reset")
