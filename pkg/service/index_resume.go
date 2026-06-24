@@ -285,11 +285,15 @@ func checkAndResumeScraping(
 	}
 }
 
-func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification, pauser *syncutil.Pauser) {
+// checkAndResumeOptimization resumes an interrupted optimization, or flags the database
+// corrupt when a failed optimization turns out to be a malformed file. It returns true
+// when it marked the database corrupt, so the caller can trigger recovery immediately
+// rather than waiting for the next startup.
+func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification, pauser *syncutil.Pauser) bool {
 	status, err := db.MediaDB.GetOptimizationStatus()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get optimization status during startup check")
-		return
+		return false
 	}
 
 	// Resume if optimization was interrupted or failed
@@ -311,7 +315,7 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 				if setErr := db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
 					log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
 				}
-				return
+				return true
 			}
 		}
 		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
@@ -325,4 +329,5 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 	} else {
 		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)
 	}
+	return false
 }

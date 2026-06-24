@@ -586,23 +586,32 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 				log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to clear scraping operation")
 			}
 		}
-		checkpointScrapingWAL(db.MediaDB, scraperID)
+		if checkpointScrapingWAL(db.MediaDB, scraperID) {
+			// Wake the corruption-recovery watcher, which only observes media-indexing
+			// notifications. Scraping status is already terminal here, so recovery won't defer.
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{Exists: true, Indexing: false})
+		}
 		log.Info().Str("scraper", scraperID).Str("status", finalStatus).Msg("scraper run complete")
 	}()
 
 	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start
 }
 
-func checkpointScrapingWAL(mediaDB database.MediaDBI, scraperID string) {
+// checkpointScrapingWAL flushes the WAL after a scraper run. It returns true when the
+// checkpoint failure flagged the database corrupt, so the caller can wake the recovery
+// watcher; the scrape flow otherwise emits only scraping notifications, which the watcher
+// does not observe.
+func checkpointScrapingWAL(mediaDB database.MediaDBI, scraperID string) (corrupt bool) {
 	started := time.Now()
 	if err := mediaDB.WALCheckpoint(); err != nil {
 		// A malformed-page failure during the post-scrape checkpoint flags the database
 		// corrupt so the recovery flow rebuilds it rather than serving a broken cache.
-		mediaDB.NoteCorruption(err)
+		corrupt = mediaDB.NoteCorruption(err)
 		log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to checkpoint WAL after scraper run")
-		return
+		return corrupt
 	}
 	log.Debug().Str("scraper", scraperID).Dur("duration", time.Since(started)).Msg("checkpointed WAL after scraper run")
+	return false
 }
 
 // HandleMediaScrapeStatus returns the latest known media.scrape status snapshot.

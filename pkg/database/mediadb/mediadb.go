@@ -800,12 +800,14 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 		}
 	}
 
-	if err := db.ClearCorruptMarker(); err != nil {
-		log.Warn().Err(err).Msg("failed to clear corrupt marker during recreate")
-	}
-
 	if err := db.Open(); err != nil {
 		return fmt.Errorf("failed to reopen media database after recreate: %w", err)
+	}
+
+	// Clear the marker only after the fresh database opens, so a failed reopen leaves
+	// the durable corrupt signal in place for the next recovery attempt.
+	if err := db.ClearCorruptMarker(); err != nil {
+		log.Warn().Err(err).Msg("failed to clear corrupt marker during recreate")
 	}
 	return nil
 }

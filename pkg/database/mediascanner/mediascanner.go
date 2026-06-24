@@ -81,6 +81,22 @@ func isSQLiteDatabaseCorrupt(err error) bool {
 		strings.Contains(msg, "file is not a database")
 }
 
+// noteIndexingCorruption flags the media database corrupt during indexing so the
+// recovery flow rebuilds it: it logs an integrity fingerprint, writes the durable
+// corrupt marker, persists the corrupt status, and clears the last-indexed-system
+// pointer. Callers return the corruption error after invoking it.
+func noteIndexingCorruption(db database.MediaDBI, reason string) {
+	log.Error().Strs("integrity", db.IntegrityReport()).
+		Msg("media database integrity check after corruption detected during indexing")
+	db.MarkCorrupt(reason)
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+	}
+	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+	}
+}
+
 // logMaintenanceError logs an indexing maintenance failure (status writes, cache
 // population). When the failure is just the service context being cancelled
 // mid-index — an expected shutdown condition — it logs at Debug; any other
@@ -825,15 +841,7 @@ func NewNamesIndex(
 			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
 		}
 		if isSQLiteDatabaseCorrupt(err) {
-			log.Error().Strs("integrity", db.IntegrityReport()).
-				Msg("media database integrity check after corruption detected during indexing")
-			db.MarkCorrupt(fmt.Sprintf("scan state population: %v", err))
-			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
-			}
-			if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
-			}
+			noteIndexingCorruption(db, fmt.Sprintf("scan state population: %v", err))
 			return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, err)
 		}
 		return 0, fmt.Errorf("failed to populate scan state: %w", err)
@@ -979,6 +987,10 @@ func NewNamesIndex(
 		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) {
 				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+			}
+			if isSQLiteDatabaseCorrupt(loadErr) {
+				noteIndexingCorruption(db, fmt.Sprintf("persistent scan state load for %s: %v", systemID, loadErr))
+				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, loadErr)
 			}
 			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
 		}
@@ -1166,6 +1178,10 @@ func NewNamesIndex(
 					uniqueConstraintFailures++
 					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
 					continue
+				}
+				if isSQLiteDatabaseCorrupt(addErr) {
+					noteIndexingCorruption(db, fmt.Sprintf("media insert for %s: %v", systemID, addErr))
+					return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, addErr)
 				}
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}

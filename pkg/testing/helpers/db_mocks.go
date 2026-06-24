@@ -729,7 +729,7 @@ func (m *MockMediaDBI) ClearCorruptMarker() error {
 
 func (m *MockMediaDBI) NoteCorruption(err error) bool {
 	if !m.hasExpectation("NoteCorruption") {
-		return err != nil
+		return false
 	}
 	args := m.Called(err)
 	return args.Bool(0)

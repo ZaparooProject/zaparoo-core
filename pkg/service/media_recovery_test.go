@@ -20,13 +20,19 @@
 package service
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // The recovery happy path runs a real reindex via methods.GenerateMediaDB and is covered
@@ -73,9 +79,115 @@ func TestCheckAndResumeOptimization_FailedCorruptMarksAndSkips(t *testing.T) {
 	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil)
 
 	ns := make(chan models.Notification, 10)
-	checkAndResumeOptimization(&database.Database{MediaDB: mockDB}, ns, syncutil.NewPauser())
+	flaggedCorrupt := checkAndResumeOptimization(&database.Database{MediaDB: mockDB}, ns, syncutil.NewPauser())
 
+	assert.True(t, flaggedCorrupt, "must report corruption so the caller can trigger recovery")
 	mockDB.AssertCalled(t, "MarkCorrupt", "quick_check failed before optimization resume")
 	mockDB.AssertCalled(t, "SetIndexingStatus", mediadb.IndexingStatusCorrupt)
 	mockDB.AssertNotCalled(t, "RunBackgroundOptimization")
+}
+
+// TestCheckAndResumeOptimization_HealthyResumes verifies that a recoverable interrupted
+// optimization resumes and is not reported as corrupt.
+func TestCheckAndResumeOptimization_HealthyResumes(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusPending, nil)
+	mockDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return()
+
+	ns := make(chan models.Notification, 10)
+	flaggedCorrupt := checkAndResumeOptimization(&database.Database{MediaDB: mockDB}, ns, syncutil.NewPauser())
+
+	assert.False(t, flaggedCorrupt)
+	mockDB.AssertCalled(t, "RunBackgroundOptimization", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "MarkCorrupt", mock.Anything)
+}
+
+// TestCheckAndResumeOptimization_NoResumeNeeded verifies a completed optimization is left
+// alone and not reported as corrupt.
+func TestCheckAndResumeOptimization_NoResumeNeeded(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil)
+
+	ns := make(chan models.Notification, 10)
+	flaggedCorrupt := checkAndResumeOptimization(&database.Database{MediaDB: mockDB}, ns, syncutil.NewPauser())
+
+	assert.False(t, flaggedCorrupt)
+	mockDB.AssertNotCalled(t, "RunBackgroundOptimization", mock.Anything, mock.Anything)
+}
+
+// TestCheckAndRecoverCorruptMediaDB_DefersWhenScrapingInFlight covers the scraping guard:
+// a flagged-corrupt database must not be rebuilt while a scrape is running.
+func TestCheckAndRecoverCorruptMediaDB_DefersWhenScrapingInFlight(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	mockDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil)
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", mock.Anything)
+}
+
+// TestCheckAndRecoverCorruptMediaDB_StatusBackstopWithoutMarker covers the backstop that
+// trusts a persisted corrupt status even when the sidecar marker is missing.
+func TestCheckAndRecoverCorruptMediaDB_StatusBackstopWithoutMarker(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(false)
+	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil)
+	// Corruption is detected via the status backstop; a running scrape then defers recovery,
+	// keeping the test off the heavy reindex path.
+	mockDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil)
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertCalled(t, "GetScrapingStatus")
+	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", mock.Anything)
+}
+
+// TestWatchForCorruptMediaDBRecovery verifies the watcher runs a recovery check when a
+// media-indexing notification arrives and shuts down cleanly on context cancellation.
+func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	checked := make(chan struct{}, 1)
+	mockDB.On("IsMarkedCorrupt").Return(false).Run(func(mock.Arguments) {
+		select {
+		case checked <- struct{}{}:
+		default:
+		}
+	})
+	mockDB.On("GetIndexingStatus").Return("", nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	source := make(chan models.Notification, 10)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+
+	done := make(chan struct{})
+	go func() {
+		watchForCorruptMediaDBRecovery(ctx, b, nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+		close(done)
+	}()
+
+	// Re-publish until the watcher has subscribed and run a recovery check. Re-publishing
+	// is harmless: with no marker, each check is an idempotent no-op.
+	require.Eventually(t, func() bool {
+		select {
+		case source <- models.Notification{Method: models.NotificationMediaIndexing}:
+		default:
+		}
+		select {
+		case <-checked:
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not exit after context cancellation")
+	}
+	b.Stop()
 }
