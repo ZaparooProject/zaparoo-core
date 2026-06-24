@@ -37,8 +37,8 @@ func TestSetGetScrapingStatus(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
-
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigScrapingStatus, IndexingStatusRunning).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -60,7 +60,8 @@ func TestGetScrapingStatusNoRows(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ?").
 		WithArgs(DBConfigScrapingStatus).
 		WillReturnError(sql.ErrNoRows)
@@ -78,7 +79,8 @@ func TestGetScrapingOperationNoRows(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ?").
 		WithArgs(DBConfigScrapingOperation).
 		WillReturnError(sql.ErrNoRows)
@@ -97,7 +99,8 @@ func TestSetGetClearScrapingOperation(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	operation := database.ScrapingOperation{
 		ScraperID: "gamelistxml",
 		Systems:   []string{"snes", "genesis"},

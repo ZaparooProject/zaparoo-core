@@ -41,6 +41,8 @@ import (
 
 const zapLinkHostExpiration = 30 * 24 * time.Hour
 
+const userDBBackupMaxAge = 24 * time.Hour
+
 func setupEnvironment(pl platforms.Platform) error {
 	return setupEnvironmentFS(afero.NewOsFs(), pl)
 }
@@ -96,16 +98,13 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	}
 
 	log.Debug().Msg("opening user database")
-	userDB, err := userdb.OpenUserDB(ctx, pl)
-	if err != nil {
-		return db, fmt.Errorf("failed to open user database: %w", err)
-	}
+	userDB, err := openAndRecoverUserDB(ctx, pl)
+	// Assign before the error check: openAndRecoverUserDB can return a non-nil
+	// handle alongside an error, and the deferred closeDatabase only closes what
+	// is stored on db. Assigning here ensures that handle is not leaked.
 	db.UserDB = userDB
-
-	log.Debug().Msg("running user database migrations")
-	err = userDB.MigrateUp()
 	if err != nil {
-		return db, fmt.Errorf("error migrating userdb: %w", err)
+		return db, err
 	}
 
 	// migrate old boltdb mappings if required
@@ -117,6 +116,54 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	success = true
 	return db, nil
+}
+
+func openAndRecoverUserDB(ctx context.Context, pl platforms.Platform) (*userdb.UserDB, error) {
+	userDB, err := userdb.OpenUserDB(ctx, pl)
+	if err != nil {
+		if userDB != nil && userDB.NoteCorruption(err) {
+			logUserDBIntegrityReport(userDB)
+			if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
+				return userDB, fmt.Errorf("failed to recover corrupt user database after open error: %w", recoverErr)
+			}
+			return userDB, nil
+		}
+		return userDB, fmt.Errorf("failed to open user database: %w", err)
+	}
+	if userDB.IsMarkedCorrupt() {
+		logUserDBIntegrityReport(userDB)
+		if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
+			return userDB, fmt.Errorf("failed to recover marked corrupt user database: %w", recoverErr)
+		}
+		return userDB, nil
+	}
+
+	log.Debug().Msg("running user database migrations")
+	if err = userDB.MigrateUp(); err != nil {
+		if userDB.NoteCorruption(err) {
+			logUserDBIntegrityReport(userDB)
+			if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
+				return userDB, fmt.Errorf(
+					"failed to recover corrupt user database after migration error: %w", recoverErr,
+				)
+			}
+			return userDB, nil
+		}
+		return userDB, fmt.Errorf("error migrating userdb: %w", err)
+	}
+
+	if backup, created, backupErr := userDB.EnsureRecentBackup(userDBBackupMaxAge); backupErr != nil {
+		log.Warn().Err(backupErr).Msg("failed to ensure recent user database backup")
+	} else if created {
+		log.Info().Str("path", backup.Path).Msg("created scheduled user database backup")
+	}
+	return userDB, nil
+}
+
+func logUserDBIntegrityReport(userDB *userdb.UserDB) {
+	for _, line := range userDB.IntegrityReport() {
+		log.Warn().Str("report", line).Msg("user database integrity report")
+	}
 }
 
 func closeDatabase(db *database.Database) {

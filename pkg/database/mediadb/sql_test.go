@@ -297,7 +297,7 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
-	db := mediaDB.sql
+	db := mediaDB.sql.Load()
 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO TagTypes (DBID, Type) VALUES (1, 'genre'), (2, 'platform');
@@ -343,7 +343,7 @@ func TestSqlTruncateSystems_EmptyList(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
-	err := sqlTruncateSystems(context.Background(), mediaDB.sql, []string{})
+	err := sqlTruncateSystems(context.Background(), mediaDB.sql.Load(), []string{})
 	assert.NoError(t, err)
 }
 
@@ -443,7 +443,7 @@ func TestSqlTruncateSystems_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	err := sqlTruncateSystems(ctx, mediaDB.sql, []string{"NES"})
+	err := sqlTruncateSystems(ctx, mediaDB.sql.Load(), []string{"NES"})
 	require.Error(t, err)
 }
 
@@ -1620,7 +1620,8 @@ func TestCheckForDuplicateMediaTitles_WithDuplicates(t *testing.T) {
 	mock.ExpectQuery(`SELECT SystemDBID, Slug, COUNT.*FROM MediaTitles.*GROUP BY SystemDBID, Slug.*HAVING cnt > 1`).
 		WillReturnRows(rows)
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
 	require.NoError(t, err)
 
@@ -2023,7 +2024,8 @@ func TestCheckForDuplicateMediaTitles_NoDuplicates(t *testing.T) {
 	mock.ExpectQuery(`SELECT SystemDBID, Slug, COUNT.*FROM MediaTitles.*GROUP BY SystemDBID, Slug.*HAVING cnt > 1`).
 		WillReturnRows(rows)
 
-	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mediaDB := &MediaDB{ctx: context.Background()}
+	mediaDB.sql.Store(db)
 	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
 	require.NoError(t, err)
 	assert.Empty(t, duplicates, "Should have no duplicates")

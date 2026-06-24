@@ -141,7 +141,7 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 // RebuildTagCache builds or rebuilds the in-memory tag cache from the
 // SystemTagsCache SQL table. Should be called after media indexing completes.
 func (db *MediaDB) RebuildTagCache() error {
-	cache, err := buildTagCache(db.ctx, db.sql)
+	cache, err := buildTagCache(db.ctx, db.sql.Load())
 	if err != nil {
 		return fmt.Errorf("failed to build tag cache: %w", err)
 	}

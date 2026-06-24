@@ -49,10 +49,10 @@ func TestWALCheckpointing(t *testing.T) {
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()
@@ -186,10 +186,10 @@ func TestTransactionPerformanceWithWAL(t *testing.T) {
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()
@@ -265,10 +265,10 @@ func TestWALSizeManagement(t *testing.T) {
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()

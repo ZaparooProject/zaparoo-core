@@ -47,7 +47,7 @@ func TestMediaDB_QuickCheck_CorruptFileFails(t *testing.T) {
 	// Overwrite the on-disk file with non-database bytes, then reopen.
 	path := mediaDB.GetDBPath()
 	require.NoError(t, mediaDB.Close())
-	mediaDB.sql = nil
+	mediaDB.sql.Store(nil)
 	require.NoError(t, os.WriteFile(path, []byte("this is not a sqlite database file at all"), 0o600))
 	require.NoError(t, mediaDB.Open())
 
@@ -76,7 +76,7 @@ func TestMediaDB_CorruptMarkerLifecycle(t *testing.T) {
 
 	mediaDB.MarkCorrupt("test reason")
 	assert.True(t, mediaDB.IsMarkedCorrupt())
-	_, statErr := os.Stat(mediaDB.GetDBPath() + corruptMarkerSuffix)
+	_, statErr := os.Stat(mediaDB.GetDBPath() + database.CorruptMarkerSuffix)
 	require.NoError(t, statErr, "marker sidecar file should exist on disk")
 
 	require.NoError(t, mediaDB.ClearCorruptMarker())
@@ -107,13 +107,13 @@ func TestMediaDB_RecreateAfterCorruption_KeepBackup(t *testing.T) {
 	// Forensic backup kept, marker cleared. (The reopened WAL database creates fresh
 	// -wal/-shm sidecars; the point is the stale corrupt ones don't survive into it,
 	// which the empty+queryable check below confirms.)
-	_, backupErr := os.Stat(path + corruptMarkerSuffix + ".bak")
+	_, backupErr := os.Stat(path + database.CorruptMarkerSuffix + ".bak")
 	require.NoError(t, backupErr, "backup copy should be kept when keepBackup=true")
 	assert.False(t, mediaDB.IsMarkedCorrupt(), "marker should be cleared after recreate")
 
 	// Fresh schema: queryable and empty.
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(context.Background(),
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM Media").Scan(&count))
 	assert.Equal(t, 0, count, "recreated database should be empty")
 }
@@ -124,8 +124,8 @@ func TestMediaDB_RecreateAfterCorruption_KeepBackup(t *testing.T) {
 func zeroHighPages(t *testing.T, db *MediaDB) {
 	t.Helper()
 	var pageSize, pageCount int
-	require.NoError(t, db.sql.QueryRowContext(context.Background(), "PRAGMA page_size").Scan(&pageSize))
-	require.NoError(t, db.sql.QueryRowContext(context.Background(), "PRAGMA page_count").Scan(&pageCount))
+	require.NoError(t, db.sql.Load().QueryRowContext(context.Background(), "PRAGMA page_size").Scan(&pageSize))
+	require.NoError(t, db.sql.Load().QueryRowContext(context.Background(), "PRAGMA page_count").Scan(&pageCount))
 	require.Greater(t, pageCount, 10, "need a DB with enough data pages to corrupt")
 
 	// Flush the WAL into the main file and remove sidecars so the zeroing is not undone by
@@ -133,7 +133,7 @@ func zeroHighPages(t *testing.T, db *MediaDB) {
 	require.NoError(t, db.WALCheckpoint())
 	path := db.GetDBPath()
 	require.NoError(t, db.Close())
-	db.sql = nil
+	db.sql.Store(nil)
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")
 
@@ -181,16 +181,16 @@ func TestMediaDB_BrowseFiles_RoutesCorruptionToMarker(t *testing.T) {
 	// the question we care about: does a corruption error on the read path flag the DB?
 	path := mediaDB.GetDBPath()
 	require.NoError(t, mediaDB.Close())
-	mediaDB.sql = nil
+	mediaDB.sql.Store(nil)
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")
 	require.NoError(t, os.WriteFile(path, []byte("not a sqlite database — corrupted on purpose"), 0o600))
 	require.NoError(t, mediaDB.Open())
-	require.False(t, mediaDB.IsMarkedCorrupt())
+	assert.True(t, mediaDB.IsMarkedCorrupt(), "cell_size_check should mark a malformed DB during open")
 
 	_, err := mediaDB.BrowseFiles(context.Background(), &database.BrowseFilesOptions{})
 	require.Error(t, err)
-	assert.True(t, mediaDB.IsMarkedCorrupt(), "a malformed browse read must mark the DB corrupt")
+	assert.True(t, mediaDB.IsMarkedCorrupt(), "a malformed browse read must keep the DB marked corrupt")
 }
 
 func TestMediaDB_RecreateAfterCorruption_DeleteWhenNoBackup(t *testing.T) {
@@ -203,12 +203,12 @@ func TestMediaDB_RecreateAfterCorruption_DeleteWhenNoBackup(t *testing.T) {
 
 	require.NoError(t, mediaDB.RecreateAfterCorruption(false))
 
-	_, backupErr := os.Stat(path + corruptMarkerSuffix + ".bak")
+	_, backupErr := os.Stat(path + database.CorruptMarkerSuffix + ".bak")
 	assert.True(t, os.IsNotExist(backupErr), "no backup should be kept when keepBackup=false")
 	assert.False(t, mediaDB.IsMarkedCorrupt())
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(context.Background(),
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM Media").Scan(&count))
 	assert.Equal(t, 0, count)
 }

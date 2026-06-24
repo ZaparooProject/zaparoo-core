@@ -96,7 +96,8 @@ func setupTraceBenchMediaDB(b *testing.B, rows int, collector *sqlTraceCollector
 	require.NoError(b, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	mediaDB := &MediaDB{sql: sqlDB, dbPath: dbPath, ctx: context.Background()}
+	mediaDB := &MediaDB{dbPath: dbPath, ctx: context.Background()}
+	mediaDB.sql.Store(sqlDB)
 	require.NoError(b, mediaDB.Allocate())
 	seedBenchScraperDB(b, mediaDB, rows)
 

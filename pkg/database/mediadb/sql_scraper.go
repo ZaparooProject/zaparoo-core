@@ -37,10 +37,10 @@ import (
 func (db *MediaDB) FindMediaBySystemAndPath(
 	ctx context.Context, systemDBID int64, path string,
 ) (*database.Media, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
 		WHERE SystemDBID = ? AND Path = ?
@@ -80,7 +80,7 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 	if len(paths) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
@@ -91,7 +91,7 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
 		WHERE SystemDBID = ? AND Path IN (`+prepareVariadic("?", ",", len(paths))+`)
@@ -128,7 +128,7 @@ func (db *MediaDB) FindMediaIDsByPaths(
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
@@ -145,7 +145,7 @@ func (db *MediaDB) FindMediaIDsByPaths(
 	results := make([]database.MediaPathID, 0, len(uniquePaths))
 	for start := 0; start < len(uniquePaths); start += sqliteMaxParams {
 		end := min(start+sqliteMaxParams, len(uniquePaths))
-		batchResults, err := findMediaIDsByPathBatch(ctx, db.sql, uniquePaths[start:end])
+		batchResults, err := findMediaIDsByPathBatch(ctx, db.sql.Load(), uniquePaths[start:end])
 		if err != nil {
 			return nil, err
 		}
@@ -190,12 +190,12 @@ func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []strin
 func (db *MediaDB) FindSingleContainerLaunchMedia(
 	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	prefix := strings.TrimRight(containerPath, "/") + "/"
-	hasNested, err := containerHasNestedMedia(ctx, db.sql, systemDBID, prefix)
+	hasNested, err := containerHasNestedMedia(ctx, db.sql.Load(), systemDBID, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func (db *MediaDB) FindSingleContainerLaunchMedia(
 		return nil, nil //nolint:nilnil // nested containers remain browseable, not launch aliases
 	}
 
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
 		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir = ?
@@ -369,10 +369,10 @@ func stringPrefixUpperBound(prefix string) string {
 func (db *MediaDB) FindMediaBySystemAndPathFold(
 	ctx context.Context, systemDBID int64, path string,
 ) (*database.Media, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
 		WHERE SystemDBID = ? AND LOWER(Path) = LOWER(?)
@@ -411,12 +411,12 @@ func (db *MediaDB) FindMediaBySystemAndPathFold(
 func (db *MediaDB) FindMediaBySystemAndPathSuffix(
 	ctx context.Context, systemDBID int64, filename string,
 ) ([]database.Media, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(filename)
 	pattern := "%/" + escaped
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
 		WHERE SystemDBID = ? AND Path LIKE ? ESCAPE '\'
@@ -453,7 +453,7 @@ func (db *MediaDB) FindMediaBySystemAndPathSuffix(
 // before the colon is matched against TagTypes.Type, everything after is matched
 // against Tags.Tag (padded and unpadded forms are both checked).
 func (db *MediaDB) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return false, ErrNullSQL
 	}
 
@@ -466,7 +466,7 @@ func (db *MediaDB) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue st
 	tagPart := tagValue[idx+1:]
 	padded := tags.PadTagValue(tagPart)
 
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT 1
 		FROM MediaTags mt
 		JOIN Tags t ON mt.TagDBID = t.DBID
@@ -499,17 +499,17 @@ func (db *MediaDB) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue st
 // GetScrapedMediaCount returns the number of distinct media rows marked as
 // successfully scraped by the given scraper.
 func (db *MediaDB) GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
 
 	tagDBIDs, err := findScraperSentinelTagDBIDs(
-		ctx, db.sql, string(tags.ScraperType(scraperID)), string(tags.TagScraperScraped),
+		ctx, db.sql.Load(), string(tags.ScraperType(scraperID)), string(tags.TagScraperScraped),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to find scraper sentinel tag for scraper %q: %w", scraperID, err)
 	}
-	count, err := countMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
+	count, err := countMediaTagsForTagDBIDs(ctx, db.sql.Load(), tagDBIDs)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count scraped media for scraper %q: %w", scraperID, err)
 	}
@@ -519,15 +519,15 @@ func (db *MediaDB) GetScrapedMediaCount(ctx context.Context, scraperID string) (
 // GetTotalScrapedMediaCount returns the number of distinct media rows marked
 // as successfully scraped by any scraper sentinel tag.
 func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
 
-	tagDBIDs, err := findAllScraperSentinelTagDBIDs(ctx, db.sql)
+	tagDBIDs, err := findAllScraperSentinelTagDBIDs(ctx, db.sql.Load())
 	if err != nil {
 		return 0, fmt.Errorf("failed to find scraper sentinel tags: %w", err)
 	}
-	count, err := countMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
+	count, err := countMediaTagsForTagDBIDs(ctx, db.sql.Load(), tagDBIDs)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count scraped media: %w", err)
 	}
@@ -539,17 +539,17 @@ func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 func (db *MediaDB) GetScrapedMediaIDs(
 	ctx context.Context, scraperID string, systemDBID int64,
 ) (map[int64]struct{}, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	tagDBIDs, err := findScraperSentinelTagDBIDs(
-		ctx, db.sql, string(tags.ScraperType(scraperID)), string(tags.TagScraperScraped),
+		ctx, db.sql.Load(), string(tags.ScraperType(scraperID)), string(tags.TagScraperScraped),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find scraper sentinel tag for scraper %q: %w", scraperID, err)
 	}
-	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql, systemDBID, tagDBIDs)
+	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql.Load(), systemDBID, tagDBIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query scraped media IDs for scraper %q: %w", scraperID, err)
 	}
@@ -561,18 +561,18 @@ func (db *MediaDB) GetScrapedMediaIDs(
 func (db *MediaDB) GetScrapeRunMediaIDs(
 	ctx context.Context, scraperID, runID string, systemDBID int64,
 ) (map[int64]struct{}, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 	if runID == "" {
 		return map[int64]struct{}{}, nil
 	}
 
-	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, string(tags.ScraperRunType(scraperID)), runID)
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql.Load(), string(tags.ScraperRunType(scraperID)), runID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
 	}
-	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql, systemDBID, tagDBIDs)
+	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql.Load(), systemDBID, tagDBIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query scrape run media IDs for scraper %q run %q: %w", scraperID, runID, err)
 	}
@@ -582,18 +582,18 @@ func (db *MediaDB) GetScrapeRunMediaIDs(
 // ClearScrapeRunMarkers removes per-run completion markers after a scraper
 // operation reaches a terminal state.
 func (db *MediaDB) ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	if runID == "" {
 		return nil
 	}
 
-	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, string(tags.ScraperRunType(scraperID)), runID)
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql.Load(), string(tags.ScraperRunType(scraperID)), runID)
 	if err != nil {
 		return fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
 	}
-	return clearMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
+	return clearMediaTagsForTagDBIDs(ctx, db.sql.Load(), tagDBIDs)
 }
 
 func getMediaIDsForTagDBIDs(
@@ -780,10 +780,10 @@ func scanInt64Rows(rows *sql.Rows, label string) ([]int64, error) {
 // TagTypes.IsExclusive: exclusive types delete existing tags of that type first;
 // additive types use INSERT OR IGNORE.
 func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfos []database.TagInfo) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return upsertTags(ctx, db.sql, tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+	return upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
 		_, err := tx.ExecContext(ctx,
 			`DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
 			mediaDBID, typeDBID,
@@ -806,10 +806,10 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 
 // UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
 func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tagInfos []database.TagInfo) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return upsertTags(ctx, db.sql, tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+	return upsertTags(ctx, db.sql.Load(), tagInfos, func(tx *sql.Tx, typeDBID int64) error {
 		const q = `DELETE FROM MediaTitleTags` +
 			` WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
 		_, err := tx.ExecContext(ctx, q, mediaTitleDBID, typeDBID)
@@ -1449,10 +1449,10 @@ func upsertTagsWithContext(
 func (db *MediaDB) UpsertMediaTitleProperties(
 	ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty,
 ) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	tx, err := db.sql.BeginTx(ctx, nil)
+	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("UpsertMediaTitleProperties: begin transaction: %w", err)
 	}
@@ -1526,10 +1526,10 @@ func upsertMediaTitleProperty(
 // p.TypeTag must be set to the full "type:value" string; TypeTagDBID is resolved
 // from the Tags table automatically.
 func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []database.MediaProperty) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	tx, err := db.sql.BeginTx(ctx, nil)
+	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("UpsertMediaProperties: begin transaction: %w", err)
 	}
@@ -1555,7 +1555,7 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 func (db *MediaDB) ApplyScrapeResult(
 	ctx context.Context, mediaDBID, mediaTitleDBID int64, write *database.ScrapeWrite,
 ) (retErr error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	// A malformed-page error while writing scraped properties (the table this corruption
@@ -1566,7 +1566,7 @@ func (db *MediaDB) ApplyScrapeResult(
 		return err
 	}
 
-	tx, err := db.sql.BeginTx(ctx, nil)
+	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("ApplyScrapeResult: begin transaction: %w", err)
 	}
@@ -1599,7 +1599,7 @@ func (db *MediaDB) ApplyScrapeResult(
 // Each target's sentinel is written after its metadata, and the whole batch rolls
 // back if any target fails.
 func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.ScrapeWriteTarget) (retErr error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 	defer func() { db.NoteCorruption(retErr) }()
@@ -1612,7 +1612,7 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		return nil
 	}
 
-	tx, err := db.sql.BeginTx(ctx, nil)
+	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("ApplyScrapeResults: begin transaction: %w", err)
 	}
@@ -2142,10 +2142,10 @@ func upsertMediaProperty(
 // DeleteMediaTitleProperty removes the property row for (mediaTitleDBID, typeTagDBID)
 // from MediaTitleProperties. It is a no-op when no matching row exists.
 func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID, typeTagDBID int64) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	_, err := db.sql.ExecContext(ctx,
+	_, err := db.sql.Load().ExecContext(ctx,
 		`DELETE FROM MediaTitleProperties WHERE MediaTitleDBID = ? AND TypeTagDBID = ?`,
 		mediaTitleDBID, typeTagDBID,
 	)
@@ -2160,10 +2160,10 @@ func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID,
 // DeleteMediaProperty removes the property row for (mediaDBID, typeTagDBID)
 // from MediaProperties. It is a no-op when no matching row exists.
 func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDBID int64) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	_, err := db.sql.ExecContext(ctx,
+	_, err := db.sql.Load().ExecContext(ctx,
 		`DELETE FROM MediaProperties WHERE MediaDBID = ? AND TypeTagDBID = ?`,
 		mediaDBID, typeTagDBID,
 	)
@@ -2211,7 +2211,7 @@ func resolvePropertyTypeTag(ctx context.Context, db sqlQueryable, typeTag string
 func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 	ctx context.Context, systemDBID int64, sentinelTag string,
 ) ([]database.MediaTitle, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
@@ -2221,12 +2221,12 @@ func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 	}
 	tagType := sentinelTag[:idx]
 	tagPart := sentinelTag[idx+1:]
-	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, tagType, tagPart)
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql.Load(), tagType, tagPart)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find sentinel tag DBIDs: %w", err)
 	}
 	if len(tagDBIDs) == 0 {
-		return findMediaTitlesBySystemDBID(ctx, db.sql, systemDBID)
+		return findMediaTitlesBySystemDBID(ctx, db.sql.Load(), systemDBID)
 	}
 
 	placeholders := prepareVariadic("?", ",", len(tagDBIDs))
@@ -2237,7 +2237,7 @@ func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
 		FROM MediaTitles mt
 		WHERE mt.SystemDBID = ?
@@ -2282,10 +2282,10 @@ func (db *MediaDB) FindMediaTitlesWithoutSentinel(
 // FindMediaTitleByDBID returns the MediaTitle with the given DBID, or nil, nil
 // when not found.
 func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*database.MediaTitle, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT DBID, SystemDBID, Slug, Name
 		FROM MediaTitles
 		WHERE DBID = ?
@@ -2316,10 +2316,10 @@ func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*datab
 func (db *MediaDB) FindMediaTitleBySystemAndSlug(
 	ctx context.Context, systemDBID int64, slug string,
 ) (*database.MediaTitle, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT DBID, SystemDBID, Slug, Name
 		FROM MediaTitles
 		WHERE SystemDBID = ? AND Slug = ?
@@ -2356,10 +2356,10 @@ func (db *MediaDB) GetMediaTitleProperties(
 func (db *MediaDB) loadMediaTitleProperties(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.MediaProperty, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, mediaTitlePropertyQuery(
+	stmt, err := db.sql.Load().PrepareContext(ctx, mediaTitlePropertyQuery(
 		"WHERE mtp.MediaTitleDBID = ?", propertyGroupOmit))
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare GetMediaTitleProperties: %w", err)
@@ -2398,14 +2398,14 @@ func (db *MediaDB) loadMediaTitlePropertiesByMediaTitleDBIDs(
 	if len(mediaTitleDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaTitleDBIDs)
 	where := `WHERE mtp.MediaTitleDBID IN (` + prepareVariadic("?", ",", len(mediaTitleDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, mediaTitlePropertyQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(ctx, mediaTitlePropertyQuery(where, propertyGroupInclude), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaTitlePropertiesByMediaTitleDBIDs: %w", err)
 	}
@@ -2421,10 +2421,10 @@ func (db *MediaDB) loadMediaTitlePropertiesByMediaTitleDBIDs(
 func (db *MediaDB) GetMediaTitlePropertyMetadata(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.MediaProperty, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, mediaTitlePropertyMetadataQuery(
+	stmt, err := db.sql.Load().PrepareContext(ctx, mediaTitlePropertyMetadataQuery(
 		"WHERE mtp.MediaTitleDBID = ?", propertyGroupOmit,
 	))
 	if err != nil {
@@ -2456,14 +2456,14 @@ func (db *MediaDB) GetMediaTitlePropertyMetadataByMediaTitleDBIDs(
 	if len(mediaTitleDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaTitleDBIDs)
 	where := `WHERE mtp.MediaTitleDBID IN (` + prepareVariadic("?", ",", len(mediaTitleDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, mediaTitlePropertyMetadataQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(ctx, mediaTitlePropertyMetadataQuery(where, propertyGroupInclude), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaTitlePropertyMetadataByMediaTitleDBIDs: %w", err)
 	}
@@ -2485,10 +2485,10 @@ func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]d
 func (db *MediaDB) loadMediaProperties(
 	ctx context.Context, mediaDBID int64,
 ) ([]database.MediaProperty, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, mediaPropertyQuery("WHERE mp.MediaDBID = ?", propertyGroupOmit))
+	stmt, err := db.sql.Load().PrepareContext(ctx, mediaPropertyQuery("WHERE mp.MediaDBID = ?", propertyGroupOmit))
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare GetMediaProperties: %w", err)
 	}
@@ -2526,14 +2526,14 @@ func (db *MediaDB) loadMediaPropertiesByMediaDBIDs(
 	if len(mediaDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaDBIDs)
 	where := `WHERE mp.MediaDBID IN (` + prepareVariadic("?", ",", len(mediaDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, mediaPropertyQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(ctx, mediaPropertyQuery(where, propertyGroupInclude), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaPropertiesByMediaDBIDs: %w", err)
 	}
@@ -2547,10 +2547,11 @@ func (db *MediaDB) loadMediaPropertiesByMediaDBIDs(
 }
 
 func (db *MediaDB) GetMediaPropertyMetadata(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, mediaPropertyMetadataQuery("WHERE mp.MediaDBID = ?", propertyGroupOmit))
+	query := mediaPropertyMetadataQuery("WHERE mp.MediaDBID = ?", propertyGroupOmit)
+	stmt, err := db.sql.Load().PrepareContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare GetMediaPropertyMetadata: %w", err)
 	}
@@ -2580,14 +2581,14 @@ func (db *MediaDB) GetMediaPropertyMetadataByMediaDBIDs(
 	if len(mediaDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaDBIDs)
 	where := `WHERE mp.MediaDBID IN (` + prepareVariadic("?", ",", len(mediaDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, mediaPropertyMetadataQuery(where, propertyGroupInclude), args...)
+	rows, err := db.sql.Load().QueryContext(ctx, mediaPropertyMetadataQuery(where, propertyGroupInclude), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaPropertyMetadataByMediaDBIDs: %w", err)
 	}
@@ -2604,11 +2605,11 @@ func (db *MediaDB) GetMediaPropertyMetadataByMediaDBIDs(
 // MediaTitle and System via a single JOIN query. Returns nil, nil when the
 // mediaDBID does not exist. IsMissing is NOT filtered.
 func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int64) (*database.MediaFullRow, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
@@ -2654,13 +2655,13 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	if len(mediaDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
@@ -2700,11 +2701,11 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 // GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a single
 // Media row, ordered by type then tag value.
 func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
@@ -2741,13 +2742,13 @@ func (db *MediaDB) GetMediaTagsByMediaDBIDs(
 	if len(mediaDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT MediaTags.MediaDBID, Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
@@ -2772,11 +2773,11 @@ func (db *MediaDB) GetMediaTagsByMediaDBIDs(
 func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	stmt, err := db.sql.PrepareContext(ctx, `
+	stmt, err := db.sql.Load().PrepareContext(ctx, `
 		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTitleTags
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
@@ -2813,13 +2814,13 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBIDs(
 	if len(mediaTitleDBIDs) == 0 {
 		return results, nil
 	}
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	args := int64Args(mediaTitleDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT MediaTitleTags.MediaTitleDBID, Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTitleTags
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
@@ -3098,7 +3099,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	systemDBID int64,
 	dirCandidates []database.SingletonAliasCandidate,
 ) ([]database.SingletonContainerAlias, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 	if len(dirCandidates) == 0 {
@@ -3120,7 +3121,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	// One query for the direct media rows of all candidate dirs, served by
 	// idx_media_parentdir_system.
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
 		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir IN (`+
@@ -3214,7 +3215,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	}
 
 	// Populate ZapScriptTags from each title's precomputed disambiguating types.
-	if err := attachZapScriptTags(ctx, db.sql, synthetic); err != nil {
+	if err := attachZapScriptTags(ctx, db.sql.Load(), synthetic); err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases disambiguation: %w", err)
 	}
 	for i := range aliases {
@@ -3223,7 +3224,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 
 	// Batch cover-flag check: one indexed UNION ALL query for all alias media.
 	// Populates HasCover so aliased directory entries show art in the grid.
-	if err := fetchAndAttachCoverFlags(ctx, db.sql, synthetic); err != nil {
+	if err := fetchAndAttachCoverFlags(ctx, db.sql.Load(), synthetic); err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases cover flags: %w", err)
 	}
 	for i := range aliases {

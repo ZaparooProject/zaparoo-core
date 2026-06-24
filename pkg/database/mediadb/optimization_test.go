@@ -133,12 +133,12 @@ func TestSetGetOptimizationStatus(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql:               db,
 				ctx:               ctx,
 				clock:             clockwork.NewFakeClock(),
 				analyzeRetryDelay: 1 * time.Millisecond,
 				vacuumRetryDelay:  1 * time.Millisecond,
 			}
+			mediaDB.sql.Store(db)
 
 			// Mock set operation
 			mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -169,12 +169,12 @@ func TestGetOptimizationStatus_NoStatus(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock no rows found
 	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ?").
@@ -219,12 +219,12 @@ func TestSetGetOptimizationStep(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql:               db,
 				ctx:               ctx,
 				clock:             clockwork.NewFakeClock(),
 				analyzeRetryDelay: 1 * time.Millisecond,
 				vacuumRetryDelay:  1 * time.Millisecond,
 			}
+			mediaDB.sql.Store(db)
 
 			// Mock set operation
 			mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -255,12 +255,12 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Set optimization as already running
 	mediaDB.isOptimizing.Store(true)
@@ -275,10 +275,10 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 func TestRunBackgroundOptimization_NilDatabase(t *testing.T) {
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:   nil,
 		ctx:   ctx,
 		clock: clockwork.NewFakeClock(),
 	}
+	mediaDB.sql.Store(nil)
 
 	// This should return immediately without panicking
 	mediaDB.RunBackgroundOptimization(nil, nil)
@@ -294,12 +294,12 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Steps run in order: temporary_repair_parent_dirs → pragma_optimize →
 	// page_prefetch → browse_cache → wal_checkpoint.
@@ -329,12 +329,12 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -369,12 +369,12 @@ func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) 
 	defer func() { _ = db.Close() }()
 
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               context.Background(),
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
@@ -406,12 +406,12 @@ func TestConcurrentOptimization(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock successful optimization for the first call
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -476,12 +476,12 @@ func TestOptimizationDatabaseError(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Mock failure to set initial status
 	statusError := errors.New("database connection lost")
@@ -505,12 +505,12 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewFakeClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
@@ -557,12 +557,12 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewRealClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -614,12 +614,12 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewFakeClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
@@ -649,12 +649,12 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		ctx := context.Background()
 		mediaDB := &MediaDB{
-			sql:               db,
 			ctx:               ctx,
 			clock:             clockwork.NewFakeClock(),
 			analyzeRetryDelay: 1 * time.Millisecond,
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
+		mediaDB.sql.Store(db)
 
 		// Mock failure to set initial status
 		statusError := errors.New("database connection lost")
@@ -695,12 +695,12 @@ func TestRunBackgroundOptimization_PausesAndResumes(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql:               db,
 		ctx:               ctx,
 		clock:             clockwork.NewFakeClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
+	mediaDB.sql.Store(db)
 
 	// Set up expectations for a full successful run
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

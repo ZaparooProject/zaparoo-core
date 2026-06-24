@@ -24,25 +24,25 @@ import (
 )
 
 func (db *UserDB) CreateClient(c *database.Client) error {
-	return sqlCreateClient(db.ctx, db.sql, c)
+	return sqlCreateClient(db.ctx, db.sql.Load(), c)
 }
 
 func (db *UserDB) GetClientByToken(authToken string) (*database.Client, error) {
-	return sqlGetClientByToken(db.ctx, db.sql, authToken)
+	return sqlGetClientByToken(db.ctx, db.sql.Load(), authToken)
 }
 
 func (db *UserDB) ListClients() ([]database.Client, error) {
-	return sqlListClients(db.ctx, db.sql)
+	return sqlListClients(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) DeleteClient(clientID string) error {
-	return sqlDeleteClient(db.ctx, db.sql, clientID)
+	return sqlDeleteClient(db.ctx, db.sql.Load(), clientID)
 }
 
 func (db *UserDB) UpdateClientLastSeen(authToken string, lastSeenAt int64) error {
-	return sqlUpdateClientLastSeen(db.ctx, db.sql, authToken, lastSeenAt)
+	return sqlUpdateClientLastSeen(db.ctx, db.sql.Load(), authToken, lastSeenAt)
 }
 
 func (db *UserDB) CountClients() (int, error) {
-	return sqlCountClients(db.ctx, db.sql)
+	return sqlCountClients(db.ctx, db.sql.Load())
 }

@@ -53,6 +53,9 @@ type Flags struct {
 	ShowPicker *string
 	Reload     *bool
 	Pair       *bool
+	Backup     *bool
+	Backups    *bool
+	Restore    *string
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -102,6 +105,21 @@ func SetupFlags() *Flags {
 			"pair",
 			false,
 			"start pairing flow and display PIN for client to enter",
+		),
+		Backup: flag.Bool(
+			"backup",
+			false,
+			"create a backup of the database",
+		),
+		Backups: flag.Bool(
+			"backups",
+			false,
+			"list available database backups",
+		),
+		Restore: flag.String(
+			"restore",
+			"",
+			"restore the database from the named backup",
 		),
 	}
 }
@@ -295,9 +313,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		}
 
 		_, _ = fmt.Fprint(os.Stderr, "Pairing successful!\n")
-		sanitizedResult := strings.ReplaceAll(result, "\n", "")
-		sanitizedResult = strings.ReplaceAll(sanitizedResult, "\r", "")
-		_, _ = fmt.Println(sanitizedResult)
+		_, _ = fmt.Println(sanitizeForOutput(result))
 		os.Exit(0)
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
@@ -307,7 +323,51 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case *f.Backup:
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackup, "")
+		if err != nil {
+			logClientCommandError(err, "error creating backup")
+			_, _ = fmt.Fprintf(os.Stderr, "Error creating backup: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(resp))
+		os.Exit(0)
+	case *f.Backups:
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackupList, "")
+		if err != nil {
+			logClientCommandError(err, "error listing backups")
+			_, _ = fmt.Fprintf(os.Stderr, "Error listing backups: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(resp))
+		os.Exit(0)
+	case isFlagPassed("restore"):
+		if *f.Restore == "" {
+			_, _ = fmt.Fprint(os.Stderr, "Error: restore flag requires a backup name\n")
+			os.Exit(1)
+		}
+		data, err := json.Marshal(&models.BackupRestoreParams{Name: *f.Restore})
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
+			os.Exit(1)
+		}
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackupRestore, string(data))
+		if err != nil {
+			logClientCommandError(err, "error restoring backup")
+			_, _ = fmt.Fprintf(os.Stderr, "Error restoring backup: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(resp))
+		os.Exit(0)
 	}
+}
+
+// sanitizeForOutput strips carriage returns and newlines from a server response
+// before it is printed, so a value carried through from a remote source cannot
+// inject extra lines into terminal output.
+func sanitizeForOutput(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	return strings.ReplaceAll(s, "\n", "")
 }
 
 // Setup initializes the user config and logging. Returns a user config object.

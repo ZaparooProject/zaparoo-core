@@ -505,6 +505,106 @@ func (m *MockUserDBI) CountClients() (int, error) {
 	return count, nil
 }
 
+func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, error) {
+	args := m.Called(reason, manual)
+	info, ok := args.Get(0).(database.BackupInfo)
+	if !ok {
+		return database.BackupInfo{}, errors.New("mock UserDBI backup returned invalid backup info")
+	}
+	if err := args.Error(1); err != nil {
+		return info, fmt.Errorf("mock UserDBI backup failed: %w", err)
+	}
+	return info, nil
+}
+
+func (m *MockUserDBI) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo, bool, error) {
+	args := m.Called(maxAge)
+	info, ok := args.Get(0).(database.BackupInfo)
+	if !ok {
+		return database.BackupInfo{}, false, errors.New(
+			"mock UserDBI ensure recent backup returned invalid backup info",
+		)
+	}
+	created, ok := args.Get(1).(bool)
+	if !ok {
+		return info, false, errors.New("mock UserDBI ensure recent backup returned invalid created flag")
+	}
+	if err := args.Error(2); err != nil {
+		return info, created, fmt.Errorf("mock UserDBI ensure recent backup failed: %w", err)
+	}
+	return info, created, nil
+}
+
+func (m *MockUserDBI) ListBackups() ([]database.BackupInfo, error) {
+	args := m.Called()
+	if backups, ok := args.Get(0).([]database.BackupInfo); ok {
+		if err := args.Error(1); err != nil {
+			return backups, fmt.Errorf("mock UserDBI list backups failed: %w", err)
+		}
+		return backups, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list backups failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) RestoreBackup(name string) (database.RestoreInfo, error) {
+	args := m.Called(name)
+	info, ok := args.Get(0).(database.RestoreInfo)
+	if !ok {
+		return database.RestoreInfo{}, errors.New("mock UserDBI restore backup returned invalid restore info")
+	}
+	if err := args.Error(1); err != nil {
+		return info, fmt.Errorf("mock UserDBI restore backup failed: %w", err)
+	}
+	return info, nil
+}
+
+func (m *MockUserDBI) IntegrityReport() []string {
+	args := m.Called()
+	if report, ok := args.Get(0).([]string); ok {
+		return report
+	}
+	return nil
+}
+
+func (m *MockUserDBI) MarkCorrupt(reason string) {
+	m.Called(reason)
+}
+
+func (m *MockUserDBI) IsMarkedCorrupt() bool {
+	args := m.Called()
+	marked, ok := args.Get(0).(bool)
+	return ok && marked
+}
+
+func (m *MockUserDBI) ClearCorruptMarker() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI clear corrupt marker failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) NoteCorruption(err error) bool {
+	args := m.Called(err)
+	marked, ok := args.Get(0).(bool)
+	return ok && marked
+}
+
+func (m *MockUserDBI) RecoverFromCorruption() (database.RestoreInfo, error) {
+	args := m.Called()
+	info, ok := args.Get(0).(database.RestoreInfo)
+	if !ok {
+		return database.RestoreInfo{}, errors.New("mock UserDBI recover returned invalid restore info")
+	}
+	if err := args.Error(1); err != nil {
+		return info, fmt.Errorf("mock UserDBI recover from corruption failed: %w", err)
+	}
+	return info, nil
+}
+
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock

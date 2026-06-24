@@ -664,7 +664,7 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 func seedImagePropertyTags(t *testing.T, mediaDB *MediaDB) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
 		INSERT OR IGNORE INTO Tags (DBID, TypeDBID, Tag) VALUES (901, 900, 'image-boxart');
 	`)
@@ -724,7 +724,7 @@ func TestFetchAndAttachCoverFlags_Integration_MediaLevelProperty(t *testing.T) {
 		{MediaID: mediaB.DBID, MediaTitleID: titleB.DBID, Name: "Game Without Cover"},
 	}
 
-	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql, results))
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
 	assert.True(t, results[0].HasCover, "media with image property should have HasCover=true")
 	assert.False(t, results[1].HasCover, "media without image property should have HasCover=false")
 }
@@ -775,7 +775,7 @@ func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
 		{MediaID: mediaB.DBID, MediaTitleID: title.DBID, Name: "Rev B"},
 	}
 
-	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql, results))
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
 	assert.True(t, results[0].HasCover, "media whose title has an image property should have HasCover=true")
 	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
 }
@@ -818,7 +818,7 @@ func TestBrowseFiles_SortNameFallback_Integration(t *testing.T) {
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	// Blank out SortName directly so the scan loop hits the fallback path.
-	_, err = mediaDB.sql.ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, media.DBID)
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, media.DBID)
 	require.NoError(t, err)
 
 	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{

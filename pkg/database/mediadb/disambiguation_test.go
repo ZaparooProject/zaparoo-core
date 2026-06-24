@@ -94,7 +94,7 @@ func setupDisambTitle(
 func titleDisambiguationTypes(t *testing.T, mediaDB *MediaDB, titleDBID int64) string {
 	t.Helper()
 	var types string
-	err := mediaDB.sql.QueryRowContext(
+	err := mediaDB.sql.Load().QueryRowContext(
 		context.Background(), `SELECT DisambiguationTypes FROM MediaTitles WHERE DBID = ?`, titleDBID,
 	).Scan(&types)
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 		{MediaID: mediaIDs[0], Name: "Sonic", SystemID: "NES", DisambiguationTypes: "release"},
 		{MediaID: mediaIDs[1], Name: "Sonic", SystemID: "NES", DisambiguationTypes: "release"},
 	}
-	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
 	require.Len(t, results[0].ZapScriptTags, 1)
 	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, results[0].ZapScriptTags[0])
 	require.Len(t, results[1].ZapScriptTags, 1)
@@ -145,7 +145,7 @@ func TestRecomputeSystemDisambiguation_IdenticalTagsDoNotDisambiguate(t *testing
 		{MediaID: mediaIDs[0], Name: "Tetris", SystemID: "NES"},
 		{MediaID: mediaIDs[1], Name: "Tetris", SystemID: "NES"},
 	}
-	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
 	assert.Empty(t, results[0].ZapScriptTags)
 	assert.NotNil(t, results[0].ZapScriptTags, "ZapScriptTags should be a non-nil empty slice")
 	assert.Empty(t, results[1].ZapScriptTags)
@@ -169,7 +169,7 @@ func TestRecomputeSystemDisambiguation_OnlyDifferingTypeSelected(t *testing.T) {
 	results := []database.SearchResultWithCursor{
 		{MediaID: mediaIDs[0], Name: "Street Fighter", SystemID: "Arcade", DisambiguationTypes: "players"},
 	}
-	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
 	require.Len(t, results[0].ZapScriptTags, 1)
 	assert.Equal(t, database.TagInfo{Type: "players", Tag: "2"}, results[0].ZapScriptTags[0])
 }
@@ -201,7 +201,7 @@ func TestRecomputeSystemDisambiguation_MissingMediaExcluded(t *testing.T) {
 
 	// Mark the Europe variant missing: only one present variant remains, so the
 	// title no longer disambiguates.
-	_, err := mediaDB.sql.ExecContext(ctx, `UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, mediaIDs[1])
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `UPDATE Media SET IsMissing = 1 WHERE DBID = ?`, mediaIDs[1])
 	require.NoError(t, err)
 
 	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
@@ -356,7 +356,7 @@ func TestRecomputeSystemDisambiguation_RegionDisambiguates(t *testing.T) {
 	results := []database.SearchResultWithCursor{
 		{MediaID: mediaIDs[0], Name: "Sonic The Hedgehog", SystemID: "Genesis", DisambiguationTypes: "region"},
 	}
-	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
 	require.Len(t, results[0].ZapScriptTags, 1)
 	assert.Equal(t, database.TagInfo{Type: "region", Tag: "us"}, results[0].ZapScriptTags[0])
 }
@@ -380,7 +380,7 @@ func TestAttachZapScriptTags_OrdersByDisplayPriority(t *testing.T) {
 	results := []database.SearchResultWithCursor{
 		{MediaID: mediaIDs[0], Name: "Streets of Rage", SystemID: "Genesis", DisambiguationTypes: stored},
 	}
-	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql, results))
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
 	require.Len(t, results[0].ZapScriptTags, 3)
 	gotOrder := []string{
 		results[0].ZapScriptTags[0].Type,

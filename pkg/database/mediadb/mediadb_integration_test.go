@@ -337,7 +337,7 @@ func assertBrowseCacheDir(
 
 	var name string
 	var isVirtual bool
-	err := mediaDB.sql.QueryRowContext(
+	err := mediaDB.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT Name, IsVirtual FROM BrowseDirs WHERE Path = ?",
 		dirPath,
@@ -353,7 +353,7 @@ func browseCacheDirID(t *testing.T, mediaDB *MediaDB, dirPath string) int64 {
 	t.Helper()
 
 	var id int64
-	err := mediaDB.sql.QueryRowContext(
+	err := mediaDB.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT DBID FROM BrowseDirs WHERE Path = ?",
 		dirPath,
@@ -373,7 +373,7 @@ func countTableRows(t *testing.T, mediaDB *MediaDB, table, where string, args ..
 		query += " WHERE " + where
 	}
 	var count int
-	err := mediaDB.sql.QueryRowContext(context.Background(), query, args...).Scan(&count)
+	err := mediaDB.sql.Load().QueryRowContext(context.Background(), query, args...).Scan(&count)
 	require.NoError(t, err)
 	return count
 }
@@ -395,7 +395,7 @@ func getDBConfigValue(t *testing.T, mediaDB *MediaDB, name string) string {
 	t.Helper()
 
 	var value string
-	err := mediaDB.sql.QueryRowContext(
+	err := mediaDB.sql.Load().QueryRowContext(
 		context.Background(),
 		"SELECT Value FROM DBConfig WHERE Name = ?",
 		name,
@@ -2982,7 +2982,7 @@ func TestMediaDB_TemporaryParentDirRepair_MarksCurrentWhenNoEmptyRows_Integratio
 	assert.False(t, repairPending)
 
 	var version string
-	err = mediaDB.sql.QueryRowContext(ctx,
+	err = mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",
 		DBConfigTemporaryRepairParentDirVersion,
 	).Scan(&version)
@@ -3044,10 +3044,10 @@ func TestMediaDB_SystemBrowseFallsBackWhenBrowseCacheNotReady_Integration(t *tes
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
 
-	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
 	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 
-	_, err = mediaDB.sql.ExecContext(ctx, "DELETE FROM BrowseDirs")
+	_, err = mediaDB.sql.Load().ExecContext(ctx, "DELETE FROM BrowseDirs")
 	require.NoError(t, err)
 
 	routeCounts, err := mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
@@ -3085,7 +3085,7 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "nes", "mario.nes")))
 	insertSystemMedia(t, mediaDB, snesSystem, "Steam Game", "steam://440/Team%20Fortress%202")
 
-	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
 	assert.Equal(t, browseCacheSchemaVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 
 	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms")) + "/"
@@ -3136,14 +3136,14 @@ func TestSqlInvalidateBrowseCache_MarksBrowseCacheStale_Integration(t *testing.T
 	defer cleanup()
 
 	ctx := context.Background()
-	_, err := mediaDB.sql.ExecContext(ctx,
+	_, err := mediaDB.sql.Load().ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigBrowseIndexVersion,
 		browseCacheSchemaVersion,
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 }
@@ -3162,7 +3162,7 @@ func TestMediaDB_UnfilteredBrowseReadsFromMediaWhenBrowseCacheEmpty_Integration(
 	insertSystemMedia(t, mediaDB, snesSystem, "Action Game",
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "Action", "action.sfc")))
 	insertSystemMedia(t, mediaDB, snesSystem, "Steam Game", "steam://440/Team%20Fortress%202")
-	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	romsPrefix := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms")) + "/"
 	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{PathPrefix: romsPrefix})
@@ -3775,7 +3775,7 @@ func TestMediaDB_BrowseSystemRootCandidates_RootWithSubdirsReturnsChildren_Integ
 	insertSystemMedia(t, mediaDB, snesSystem, "Action Game",
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "Action", "action.sfc")))
 
-	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	snesSys, err := systemdefs.GetSystem("SNES")
 	require.NoError(t, err)
@@ -3806,7 +3806,7 @@ func TestMediaDB_BrowseSystemRootCandidates_RootWithOnlyDirectFilesHasMediaButNo
 	insertSystemWithMedia(t, mediaDB, "SNES", "Direct File",
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "direct.sfc")))
 
-	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	snesSys, err := systemdefs.GetSystem("SNES")
 	require.NoError(t, err)
@@ -3836,7 +3836,7 @@ func TestMediaDB_BrowseSystemRootCandidates_RootWithoutMediaIsAbsent_Integration
 	insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG",
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "super-rpg.sfc")))
 
-	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	snesSys, err := systemdefs.GetSystem("SNES")
 	require.NoError(t, err)
@@ -3867,7 +3867,7 @@ func TestMediaDB_BrowseSystemRootCandidates_FiltersBySystem_Integration(t *testi
 	insertSystemWithMedia(t, mediaDB, "NES", "Mario",
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "nes", "mario.nes")))
 
-	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	snesSys, err := systemdefs.GetSystem("SNES")
 	require.NoError(t, err)
@@ -3899,7 +3899,7 @@ func TestMediaDB_BrowseSystemRootCandidates_MultipleRootsBatched_Integration(t *
 	insertSystemWithMedia(t, mediaDB, "NES", "Mario",
 		filepath.ToSlash(filepath.Join(string(filepath.Separator), "media", "usb0", "nes", "mario.nes")))
 
-	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	snesSys, err := systemdefs.GetSystem("SNES")
 	require.NoError(t, err)

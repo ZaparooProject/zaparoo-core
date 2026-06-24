@@ -100,6 +100,10 @@ type ReaderWriteParams struct {
 	Text     string  `json:"text" validate:"required"`
 }
 
+type BackupRestoreParams struct {
+	Name string `json:"name" validate:"required"`
+}
+
 type ReaderWriteCancelParams struct {
 	ReaderID *string `json:"readerId,omitempty"`
 }

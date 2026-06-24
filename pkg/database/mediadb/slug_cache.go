@@ -82,7 +82,7 @@ func generateSlugCacheKey(systemID, slug string, tagFilters []zapscript.TagFilte
 func (db *MediaDB) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
 ) (mediaDBID int64, strategy string, found bool) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, "", false
 	}
 
@@ -92,7 +92,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 		return 0, "", false
 	}
 
-	err = db.sql.QueryRowContext(ctx,
+	err = db.sql.Load().QueryRowContext(ctx,
 		"SELECT MediaDBID, Strategy FROM SlugResolutionCache WHERE CacheKey = ?",
 		cacheKey).Scan(&mediaDBID, &strategy)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -117,7 +117,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 func (db *MediaDB) SetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
 ) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -131,7 +131,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 		return fmt.Errorf("failed to marshal tag filters: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.sql.Load().ExecContext(ctx, `
 		INSERT OR REPLACE INTO SlugResolutionCache
 		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -153,7 +153,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 // InvalidateSlugCache clears all cached slug resolutions.
 // This should be called after any operation that changes the media database content.
 func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -169,7 +169,7 @@ func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
 // InvalidateSlugCacheForSystems clears cached slug resolutions for specific systems.
 // This is used during selective system reindexing to avoid invalidating the entire cache.
 func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -200,7 +200,7 @@ func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs 
 // GetMediaByDBID retrieves a single SearchResultWithCursor by Media DBID.
 // This is used to reconstruct the full result from a cached Media DBID.
 func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.SearchResultWithCursor{}, ErrNullSQL
 	}
 
@@ -208,7 +208,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 
 	// Query for media information from committed state. Foreground title
 	// resolution must not read an active indexing transaction.
-	err := db.sql.QueryRowContext(ctx, `
+	err := db.sql.Load().QueryRowContext(ctx, `
 		SELECT
 			Systems.SystemID,
 			MediaTitles.Name,
@@ -229,7 +229,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	}
 
 	// Fetch tags from both MediaTags (file-level) and MediaTitleTags (title-level)
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
@@ -279,14 +279,14 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	ctx context.Context, systemID, path string,
 ) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
 	// The disambiguating types are precomputed per title, so this is a single
 	// indexed lookup: return the target media's tags whose type is listed for its
 	// title. The comma-boundary membership test never matches a type prefix.
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT TagTypes.Type, Tags.Tag, Tags.DisplayName
 		FROM Media
 		JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID

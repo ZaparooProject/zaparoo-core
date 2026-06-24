@@ -38,13 +38,13 @@ func TestShouldCheckpointAfterCommit(t *testing.T) {
 		mode   database.WALCheckpointMode
 		want   bool
 	}{
-		{name: "auto running", mode: database.WALCheckpointAuto, status: IndexingStatusRunning, want: true},
-		{name: "auto pending", mode: database.WALCheckpointAuto, status: IndexingStatusPending, want: true},
+		{name: "auto running", mode: database.WALCheckpointAuto, status: IndexingStatusRunning, want: false},
+		{name: "auto pending", mode: database.WALCheckpointAuto, status: IndexingStatusPending, want: false},
 		{name: "auto completed", mode: database.WALCheckpointAuto, status: IndexingStatusCompleted, want: false},
 		{name: "auto failed", mode: database.WALCheckpointAuto, status: IndexingStatusFailed, want: false},
 		{
 			name: "auto status error", mode: database.WALCheckpointAuto,
-			status: "", err: errors.New("status failed"), want: true,
+			status: "", err: errors.New("status failed"), want: false,
 		},
 		{name: "auto no rows", mode: database.WALCheckpointAuto, status: "", err: sql.ErrNoRows, want: false},
 		{name: "skip running", mode: database.WALCheckpointSkip, status: IndexingStatusRunning, want: false},

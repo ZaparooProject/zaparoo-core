@@ -87,15 +87,15 @@ func (db *UserDB) AddMapping(m *database.Mapping) error {
 
 	m.Added = time.Now().Unix()
 
-	return sqlAddMapping(db.ctx, db.sql, *m)
+	return sqlAddMapping(db.ctx, db.sql.Load(), *m)
 }
 
 func (db *UserDB) GetMapping(id int64) (database.Mapping, error) {
-	return sqlGetMapping(db.ctx, db.sql, id)
+	return sqlGetMapping(db.ctx, db.sql.Load(), id)
 }
 
 func (db *UserDB) DeleteMapping(id int64) error {
-	return sqlDeleteMapping(db.ctx, db.sql, id)
+	return sqlDeleteMapping(db.ctx, db.sql.Load(), id)
 }
 
 func (db *UserDB) UpdateMapping(id int64, m *database.Mapping) error {
@@ -122,15 +122,15 @@ func (db *UserDB) UpdateMapping(id int64, m *database.Mapping) error {
 		}
 	}
 
-	return sqlUpdateMapping(db.ctx, db.sql, id, *m)
+	return sqlUpdateMapping(db.ctx, db.sql.Load(), id, *m)
 }
 
 func (db *UserDB) GetAllMappings() ([]database.Mapping, error) {
-	return sqlGetAllMappings(db.ctx, db.sql)
+	return sqlGetAllMappings(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) GetEnabledMappings() ([]database.Mapping, error) {
-	return sqlGetEnabledMappings(db.ctx, db.sql)
+	return sqlGetEnabledMappings(db.ctx, db.sql.Load())
 }
 
 func isCfgRegex(s string) bool {
