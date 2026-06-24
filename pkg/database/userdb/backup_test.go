@@ -21,6 +21,7 @@ package userdb
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -78,6 +79,93 @@ func TestUserDBEnsureRecentBackupReusesFreshBackup(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, didCreate)
 	assert.Equal(t, created.Name, backup.Name)
+}
+
+// TestUserDBPruneAutoBackupsRetainsLimit verifies scheduled backups are pruned to the
+// retention limit while a manual backup is never removed.
+func TestUserDBPruneAutoBackupsRetainsLimit(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Each scheduled (auto) backup triggers pruning at the end of Backup.
+	for range autoBackupKeep + 2 {
+		_, err := userDB.Backup("scheduled", false)
+		require.NoError(t, err)
+	}
+	manual, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+
+	backups, err := userDB.ListBackups()
+	require.NoError(t, err)
+
+	autoCount := 0
+	manualPresent := false
+	for _, b := range backups {
+		if isAutoBackupName(b.Name) {
+			autoCount++
+		}
+		if b.Name == manual.Name {
+			manualPresent = true
+		}
+	}
+	assert.Equal(t, autoBackupKeep, autoCount, "auto backups pruned to retention limit")
+	assert.True(t, manualPresent, "manual backup must survive pruning")
+}
+
+// TestUserDBEnsureRecentBackupCreatesWhenAbsent covers the branch where no recent backup
+// exists, so a scheduled one is created.
+func TestUserDBEnsureRecentBackupCreatesWhenAbsent(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	backup, didCreate, err := userDB.EnsureRecentBackup(24 * time.Hour)
+	require.NoError(t, err)
+	assert.True(t, didCreate, "a backup must be created when none exists")
+	assert.True(t, backup.Valid)
+	assert.False(t, backup.Manual, "a scheduled backup is an auto backup")
+}
+
+// TestUserDBRestoreBackupRejectsInvalidName verifies restore refuses names that escape the
+// backup directory or aren't backup files, before the live connection is touched.
+func TestUserDBRestoreBackupRejectsInvalidName(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	for _, name := range []string{
+		filepath.Join("..", "escape.db"),
+		filepath.Join("sub", "backup-x.db"),
+		"not-a-backup.txt",
+	} {
+		_, err := userDB.RestoreBackup(name)
+		require.Error(t, err, "name %q must be rejected", name)
+	}
+
+	// Rejection happens before any Close, so the database is still usable.
+	_, err := userDB.GetAllMappings()
+	require.NoError(t, err)
+}
+
+// TestUserDBRestoreBackupRejectsInvalidBackup verifies a backup file that fails quick_check
+// is reported invalid and refused, leaving the live database untouched.
+func TestUserDBRestoreBackupRejectsInvalidBackup(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, os.MkdirAll(userDB.backupDir(), 0o750))
+	badPath := filepath.Join(userDB.backupDir(), "backup-00000000-000000-000000000-manual.db")
+	require.NoError(t, os.WriteFile(badPath, []byte("not a sqlite database"), 0o600))
+
+	backups, err := userDB.ListBackups()
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	assert.False(t, backups[0].Valid, "garbage file must fail quick_check")
+
+	_, err = userDB.RestoreBackup(backups[0].Name)
+	require.Error(t, err, "must refuse to restore an invalid backup")
+
+	// The live database is untouched and usable.
+	_, err = userDB.GetAllMappings()
+	require.NoError(t, err)
 }
 
 // TestUserDBRecoverFromCorruptionRestoresBackup verifies the recovery flow preserves the
