@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"testing"
 	"time"
 
@@ -83,12 +84,14 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 }
 
 func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) {
-	t.Parallel()
+	imageStarted := make(chan struct{}, wsLowConcurrency+1)
+	releaseImages := make(chan struct{})
 
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodMediaImage, func(env requests.RequestEnv) (any, error) {
+		imageStarted <- struct{}{}
 		select {
-		case <-time.After(250 * time.Millisecond):
+		case <-releaseImages:
 			return map[string]string{"kind": "image"}, nil
 		case <-env.Context.Done():
 			return nil, env.Context.Err()
@@ -108,8 +111,23 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
 			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
 	}
+	for range wsLowConcurrency {
+		select {
+		case <-imageStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("media.image did not start")
+		}
+	}
+	select {
+	case <-imageStarted:
+		t.Fatal("third media.image ran before a low-priority worker was free")
+	default:
+	}
+
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
 		[]byte(`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":4}`)))
+	waitForMediaDBWriterPending(t)
+	close(releaseImages)
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	seen := make([]models.RPCID, 0, 4)
@@ -126,6 +144,25 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	require.NotEqual(t, -1, favoriteIndex)
 	require.NotEqual(t, -1, thirdImageIndex)
 	assert.Less(t, favoriteIndex, thirdImageIndex, "mutation should bypass queued image work")
+}
+
+func waitForMediaDBWriterPending(t *testing.T) {
+	t.Helper()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if !wsMediaDBMu.TryRLock() {
+			return
+		}
+		wsMediaDBMu.RUnlock()
+
+		select {
+		case <-deadline:
+			t.Fatal("media.tags.update did not wait for the media DB write lock")
+		default:
+			runtime.Gosched()
+		}
+	}
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
