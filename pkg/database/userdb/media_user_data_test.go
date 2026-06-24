@@ -79,6 +79,36 @@ func TestMediaUserDataCRUD(t *testing.T) {
 	require.NoError(t, userDB.DeleteMediaUserData("NES", path))
 }
 
+func TestUpsertMediaUserDataEmptyIntentDeletes(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	path := filepath.Join("roms", "NES", "Game.nes")
+
+	// Upserting an empty-intent row persists nothing.
+	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
+		SystemID: "NES", Path: path,
+	}))
+	_, found, err := userDB.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	assert.False(t, found, "empty-intent upsert must not persist a row")
+
+	all, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, all, "ListMediaUserData stays empty so the backfill guard is not blocked")
+
+	// Upserting an empty-intent row also removes an existing row for the key.
+	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
+		SystemID: "NES", Path: path, IsFavorite: true,
+	}))
+	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
+		SystemID: "NES", Path: path,
+	}))
+	_, found, err = userDB.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	assert.False(t, found, "empty-intent upsert must delete the pre-existing row")
+}
+
 func TestMediaUserDataUniquePerSystemAndPath(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()

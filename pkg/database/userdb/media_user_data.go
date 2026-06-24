@@ -38,9 +38,15 @@ func (db *UserDB) GetMediaUserData(systemID, path string) (database.MediaUserDat
 }
 
 // UpsertMediaUserData inserts or updates the user-data row for (SystemID, Path).
-// CreatedAt is set on insert only; UpdatedAt is set on every write.
+// CreatedAt is set on insert only; UpdatedAt is set on every write. A row with no
+// favourite and no launcher override carries no user intent, so it is deleted
+// rather than persisted (keeping ListMediaUserData and the backfill guard honest).
 func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
-	return sqlUpsertMediaUserData(db.ctx, db.sql.Load(), data, time.Now().Unix())
+	conn := db.sql.Load()
+	if !data.IsFavorite && data.LauncherOverride == "" {
+		return sqlDeleteMediaUserData(db.ctx, conn, data.SystemID, data.Path)
+	}
+	return sqlUpsertMediaUserData(db.ctx, conn, data, time.Now().Unix())
 }
 
 // SetMediaUserFavorite records (or clears) the favourite intent for a media
