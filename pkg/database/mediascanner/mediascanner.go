@@ -1402,6 +1402,18 @@ func NewNamesIndex(
 	}
 	logPhaseMetrics("update_last_generated")
 
+	// Re-materialize user-owned data (favourites, launcher overrides) from UserDB
+	// onto the freshly built media.db, before the caches below are populated so
+	// they reflect it. Best-effort: a failure here only means the projection is
+	// stale until the next reindex; the truth in UserDB is unaffected.
+	t0 = time.Now()
+	if applied, reapplyErr := reapplyMediaUserData(ctx, db, fdb.UserDB); reapplyErr != nil {
+		log.Error().Err(reapplyErr).Msg("failed to re-apply media user data")
+	} else {
+		log.Info().Dur("elapsed", time.Since(t0)).Int("applied", applied).Msg("re-apply media user data complete")
+	}
+	logPhaseMetrics("reapply_media_user_data")
+
 	status.Phase = PhaseBuildingCaches
 	update(status)
 

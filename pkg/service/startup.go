@@ -114,8 +114,56 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		log.Error().Err(err).Msg("error migrating old boltdb mappings")
 	}
 
+	// One-time import of favourites/launcher overrides that older versions wrote
+	// only to media.db, so they live in UserDB (the source of truth) and survive a
+	// future media.db rebuild.
+	backfillMediaUserData(ctx, db)
+
 	success = true
 	return db, nil
+}
+
+// backfillMediaUserData seeds UserDB from favourites/launcher overrides that older
+// versions stored only in media.db. It runs only while UserDB has no media user
+// data yet: once any row exists, UserDB is authoritative and media.db's copy is
+// never re-read (re-reading could resurrect a favourite the user removed if a prior
+// projection write had failed). Best-effort: failures are logged, not fatal.
+func backfillMediaUserData(ctx context.Context, db *database.Database) {
+	if db == nil || db.UserDB == nil || db.MediaDB == nil {
+		return
+	}
+
+	existing, err := db.UserDB.ListMediaUserData()
+	if err != nil {
+		log.Warn().Err(err).Msg("skipping media user data backfill: failed to read user database")
+		return
+	}
+	if len(existing) > 0 {
+		return
+	}
+
+	rows, err := db.MediaDB.GetExistingMediaUserData(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read existing media user data for backfill")
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+
+	migrated := 0
+	for i := range rows {
+		row := rows[i]
+		if upErr := db.UserDB.UpsertMediaUserData(&row); upErr != nil {
+			log.Warn().Err(upErr).
+				Str("system", row.SystemID).Str("path", row.Path).
+				Msg("failed to backfill media user data row")
+			continue
+		}
+		migrated++
+	}
+	log.Info().Int("migrated", migrated).Int("found", len(rows)).
+		Msg("backfilled media user data into user database")
 }
 
 func openAndRecoverUserDB(ctx context.Context, pl platforms.Platform) (*userdb.UserDB, error) {

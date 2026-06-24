@@ -37,15 +37,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeMediaMetaUpdateEnv(mockMediaDB *testhelpers.MockMediaDBI, params string) requests.RequestEnv {
+func makeMediaMetaUpdateEnv(t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, params string) requests.RequestEnv {
+	t.Helper()
 	launcherCache := &phelpers.LauncherCache{}
 	launcherCache.InitializeFromSlice([]platforms.Launcher{
 		{ID: "RetroArch", SystemID: "NES"},
 		{ID: "OtherSystem", SystemID: "SNES"},
 	})
+	userDB, cleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(cleanup)
 	return requests.RequestEnv{
 		Context:       context.Background(),
-		Database:      &database.Database{MediaDB: mockMediaDB},
+		Database:      &database.Database{MediaDB: mockMediaDB, UserDB: userDB},
 		LauncherCache: launcherCache,
 		Params:        []byte(params),
 	}
@@ -103,7 +106,7 @@ func TestHandleMediaMetaUpdate_SetsLauncherOverride(t *testing.T) {
 	}})
 
 	result, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(
-		mockDB, `{"mediaId":1,"media":{"launcherOverride":"retroarch"}}`,
+		t, mockDB, `{"mediaId":1,"media":{"launcherOverride":"retroarch"}}`,
 	))
 	require.NoError(t, err)
 
@@ -140,7 +143,7 @@ func TestHandleMediaMetaUpdate_SetsLauncherOverrideFromPlatformWhenCacheMissing(
 		TypeTag: launcherOverridePropertyTypeTag(),
 		Text:    "RetroArch",
 	}})
-	env := makeMediaMetaUpdateEnv(mockDB, `{"mediaId":1,"media":{"launcherOverride":"retroarch"}}`)
+	env := makeMediaMetaUpdateEnv(t, mockDB, `{"mediaId":1,"media":{"launcherOverride":"retroarch"}}`)
 	env.LauncherCache = nil
 	env.Platform = mockPlatform
 
@@ -170,7 +173,7 @@ func TestHandleMediaMetaUpdate_ClearsLauncherOverride(t *testing.T) {
 	expectMediaMetaUpdateResponse(mockDB, &row, nil)
 
 	result, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(
-		mockDB, `{"mediaId":1,"media":{"launcherOverride":null}}`,
+		t, mockDB, `{"mediaId":1,"media":{"launcherOverride":null}}`,
 	))
 	require.NoError(t, err)
 
@@ -189,7 +192,7 @@ func TestHandleMediaMetaUpdate_RejectsWrongSystemLauncher(t *testing.T) {
 		Return(map[int64]database.MediaFullRow{1: row}, nil).Once()
 
 	_, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(
-		mockDB, `{"mediaId":1,"media":{"launcherOverride":"OtherSystem"}}`,
+		t, mockDB, `{"mediaId":1,"media":{"launcherOverride":"OtherSystem"}}`,
 	))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support system")
@@ -205,7 +208,7 @@ func TestHandleMediaMetaUpdate_RejectsUnknownLauncher(t *testing.T) {
 		Return(map[int64]database.MediaFullRow{1: row}, nil).Once()
 
 	_, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(
-		mockDB, `{"mediaId":1,"media":{"launcherOverride":"Missing"}}`,
+		t, mockDB, `{"mediaId":1,"media":{"launcherOverride":"Missing"}}`,
 	))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "launcher not found")
@@ -224,7 +227,7 @@ func TestHandleMediaMetaUpdate_ClearIgnoresMissingPropertyTag(t *testing.T) {
 	expectMediaMetaUpdateResponse(mockDB, &row, nil)
 
 	result, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(
-		mockDB, `{"mediaId":1,"media":{"launcherOverride":null}}`,
+		t, mockDB, `{"mediaId":1,"media":{"launcherOverride":null}}`,
 	))
 	require.NoError(t, err)
 
@@ -255,7 +258,7 @@ func TestHandleMediaMetaUpdate_RejectsMissingOrInvalidMediaPatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockDB := testhelpers.NewMockMediaDBI()
-			_, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(mockDB, tt.params))
+			_, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(t, mockDB, tt.params))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			mockDB.AssertExpectations(t)
@@ -268,7 +271,7 @@ func TestHandleMediaMetaUpdate_RejectsUnsupportedMediaField(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	_, err := HandleMediaMetaUpdate(makeMediaMetaUpdateEnv(
-		mockDB, `{"mediaId":1,"media":{"unknown":"value"}}`,
+		t, mockDB, `{"mediaId":1,"media":{"unknown":"value"}}`,
 	))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported media field")

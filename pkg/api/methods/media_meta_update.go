@@ -76,7 +76,13 @@ func HandleMediaMetaUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 
 	row := resolved[0].Row
 	if patch.LauncherOverrideSet {
+		// Write the durable truth (UserDB) before the media.db projection. If the
+		// projection write fails the truth is still saved and the next reindex
+		// re-materializes it.
 		if patch.LauncherOverride == nil {
+			if udErr := setMediaUserLauncherOverride(&env, row.System.SystemID, row.Path, ""); udErr != nil {
+				return nil, udErr
+			}
 			if err := clearMediaLauncherOverride(&env, row.DBID); err != nil {
 				return nil, err
 			}
@@ -84,6 +90,9 @@ func HandleMediaMetaUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 			launcherID, err := resolveLauncherOverrideID(&env, row.System.SystemID, *patch.LauncherOverride)
 			if err != nil {
 				return nil, err
+			}
+			if udErr := setMediaUserLauncherOverride(&env, row.System.SystemID, row.Path, launcherID); udErr != nil {
+				return nil, udErr
 			}
 			if err := setMediaLauncherOverride(&env, row.DBID, launcherID); err != nil {
 				return nil, err

@@ -228,6 +228,65 @@ func (m *MockUserDBI) GetEnabledMappings() ([]database.Mapping, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) GetMediaUserData(systemID, path string) (database.MediaUserData, bool, error) {
+	args := m.Called(systemID, path)
+	data, ok := args.Get(0).(database.MediaUserData)
+	if !ok {
+		data = database.MediaUserData{}
+	}
+	found := args.Bool(1)
+	if err := args.Error(2); err != nil {
+		return data, found, fmt.Errorf("mock UserDBI get media user data failed: %w", err)
+	}
+	return data, found, nil
+}
+
+func (m *MockUserDBI) SetMediaUserFavorite(systemID, path string, favorite bool) error {
+	args := m.Called(systemID, path, favorite)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user favorite failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
+	args := m.Called(systemID, path, launcherID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user launcher override failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) UpsertMediaUserData(data *database.MediaUserData) error {
+	args := m.Called(data)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI upsert media user data failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteMediaUserData(systemID, path string) error {
+	args := m.Called(systemID, path)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete media user data failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ListMediaUserData() ([]database.MediaUserData, error) {
+	args := m.Called()
+	if data, ok := args.Get(0).([]database.MediaUserData); ok {
+		if err := args.Error(1); err != nil {
+			return data, fmt.Errorf("mock UserDBI list media user data failed: %w", err)
+		}
+		return data, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list media user data failed: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockUserDBI) UpdateZapLinkHost(host string, isZapScript int) error {
 	args := m.Called(host, isZapScript)
 	if err := args.Error(0); err != nil {
@@ -1828,6 +1887,20 @@ func (m *MockMediaDBI) GetAllTagTypes() ([]database.TagType, error) {
 	return []database.TagType{}, nil
 }
 
+func (m *MockMediaDBI) GetExistingMediaUserData(ctx context.Context) ([]database.MediaUserData, error) {
+	args := m.Called(ctx)
+	if data, ok := args.Get(0).([]database.MediaUserData); ok {
+		if err := args.Error(1); err != nil {
+			return data, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return data, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.MediaUserData{}, nil
+}
+
 // GetTitlesWithSystems mock method for optimized JOIN query
 func (m *MockMediaDBI) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
 	args := m.Called()
@@ -2337,7 +2410,12 @@ func ExpectTransactionRollback(mockDB sqlmock.Sqlmock) {
 //		userDB.AssertExpectations(t)
 //	}
 func NewMockUserDBI() *MockUserDBI {
-	return &MockUserDBI{}
+	m := &MockUserDBI{}
+	// A reindex always lists media user data to re-materialize the media.db
+	// projection. Default to an empty list so tests exercising NewNamesIndex
+	// don't each need to stub it; tests can override with their own expectation.
+	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	return m
 }
 
 // NewMockMediaDBI creates a new mock MediaDBI interface for testing.
