@@ -137,6 +137,40 @@ func TestHandleBackup_RejectsNonLocal(t *testing.T) {
 	mockUserDB.AssertNotCalled(t, "Backup")
 }
 
+func TestHandleBackupList_RejectsNonLocal(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+		IsLocal:  false,
+	}
+
+	_, err := HandleBackupList(env)
+	require.Error(t, err)
+	mockUserDB.AssertNotCalled(t, "ListBackups")
+}
+
+func TestHandleBackupRestore_RejectsNonLocal(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	params, err := json.Marshal(map[string]string{"name": "backup-a-manual.db"})
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+		IsLocal:  false,
+		Params:   params,
+	}
+
+	_, err = HandleBackupRestore(env)
+	require.Error(t, err)
+	mockUserDB.AssertNotCalled(t, "RestoreBackup")
+}
+
 func TestHandleBackup_RejectsUnavailableDatabase(t *testing.T) {
 	t.Parallel()
 

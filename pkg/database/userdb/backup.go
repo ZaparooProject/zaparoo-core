@@ -151,10 +151,15 @@ func (db *UserDB) Backup(reason string, manual bool) (database.BackupInfo, error
 
 	info, err := backupInfo(backupPath, true)
 	if err != nil {
+		// The VACUUM INTO file exists but could not be inspected; don't leave it behind.
+		_ = os.Remove(backupPath)
 		return database.BackupInfo{}, err
 	}
 	info.Reason = reason
 	if !info.Valid {
+		// A backup that fails quick_check is useless; remove it rather than leaving an
+		// invalid file to be re-checked on every ListBackups.
+		_ = os.Remove(backupPath)
 		return info, fmt.Errorf("user database backup failed validation: %s", info.QuickCheck)
 	}
 	if !manual {
@@ -270,7 +275,10 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 
 	var preRestore *database.BackupInfo
 	if db.sql.Load() != nil {
-		pre, backupErr := db.Backup("pre-restore", true)
+		// Created as an auto backup so the standard retention policy prunes it;
+		// otherwise every restore would leave a permanent backup behind. It is the
+		// newest backup when written, so a failed restore still recovers from it.
+		pre, backupErr := db.Backup("pre-restore", false)
 		if backupErr != nil {
 			log.Warn().Err(backupErr).Msg("failed to create pre-restore user database backup")
 		} else {

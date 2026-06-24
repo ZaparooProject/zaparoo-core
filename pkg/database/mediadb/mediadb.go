@@ -737,6 +737,12 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 	// dereference. A guard check (Load() == nil) followed by a second Load() for the
 	// query would otherwise race the swap-to-nil and panic.
 
+	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
+	// the reopen below. The caller guarantees no transaction is in flight during
+	// recovery, so this write needs no sqlMu (matching the lock-free Close()/Open() swap).
+	db.tx = nil
+	db.inTransaction = false
+
 	if keepBackup {
 		backup := database.CorruptMarkerPath(db.dbPath) + ".bak"
 		_ = os.Remove(backup)

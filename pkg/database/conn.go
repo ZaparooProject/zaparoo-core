@@ -33,6 +33,14 @@ import (
 // connection (returning a clean "database is closed" error) or the new one, never
 // a torn pointer. Both UserDB and MediaDB embed Conn so they manage their
 // connection handle identically.
+//
+// Invariant: production code never clears the handle back to nil. A runtime swap
+// always goes Open -> Store(new), so once a database has been opened Load() stays
+// non-nil. Several call sites rely on this by reading Load() more than once per
+// method without re-checking: because the handle is never swapped to nil, a guard
+// check (Load() == nil) followed by a later Load() for the query cannot observe nil
+// in between. Only tests call Store(nil). A future change that clears the handle in
+// production would reintroduce that nil-dereference race across those call sites.
 type Conn struct {
 	ptr atomic.Pointer[sql.DB]
 }
@@ -42,7 +50,9 @@ func (c *Conn) Load() *sql.DB {
 	return c.ptr.Load()
 }
 
-// Store replaces the current handle. Pass nil to clear it.
+// Store replaces the current handle. Production code only ever stores a freshly
+// opened, non-nil handle; passing nil to clear it is reserved for tests (see the
+// Conn invariant above).
 func (c *Conn) Store(db *sql.DB) {
 	c.ptr.Store(db)
 }
