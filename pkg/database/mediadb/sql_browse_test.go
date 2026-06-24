@@ -552,7 +552,8 @@ func expectImagePropertyTagLookup(mock sqlmock.Sqlmock, ids ...int64) {
 	for _, id := range ids {
 		rows.AddRow(id)
 	}
-	mock.ExpectQuery(`SELECT t\.DBID\s+FROM Tags t\s+JOIN TagTypes tt ON tt\.DBID = t\.TypeDBID\s+WHERE tt\.Type = \? AND t\.Tag LIKE \?\s+ORDER BY t\.DBID`).
+	mock.ExpectQuery(`SELECT t\.DBID\s+FROM Tags t\s+JOIN TagTypes tt ON tt\.DBID = t\.TypeDBID`+
+		`\s+WHERE tt\.Type = \? AND t\.Tag LIKE \?\s+ORDER BY t\.DBID`).
 		WithArgs(string(tags.TagTypeProperty), imagePropertyValuePrefix+"%").
 		WillReturnRows(rows)
 }
