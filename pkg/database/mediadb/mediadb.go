@@ -731,7 +731,11 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 	if err := db.Close(); err != nil {
 		log.Warn().Err(err).Msg("error closing corrupt media database before recreate")
 	}
-	db.sql.Store(nil)
+	// Deliberately do not Store(nil) here: leaving the closed handle in place until
+	// Open() swaps in the fresh one means a racing reader that loaded the handle
+	// before this point gets a clean "database is closed" error instead of a nil
+	// dereference. A guard check (Load() == nil) followed by a second Load() for the
+	// query would otherwise race the swap-to-nil and panic.
 
 	if keepBackup {
 		backup := database.CorruptMarkerPath(db.dbPath) + ".bak"

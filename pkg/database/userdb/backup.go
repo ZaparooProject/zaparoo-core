@@ -283,19 +283,32 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	}
 	database.RemoveSidecars(db.GetDBPath())
 	if err = copyFileSync(backupPath, db.GetDBPath(), 0o600); err != nil {
-		return database.RestoreInfo{}, fmt.Errorf("failed to restore user database backup: %w", err)
+		return db.restoreFailed(fmt.Errorf("failed to restore user database backup: %w", err))
 	}
 	if err = db.Open(); err != nil {
-		return database.RestoreInfo{}, fmt.Errorf("failed to reopen restored user database: %w", err)
+		return db.restoreFailed(fmt.Errorf("failed to reopen restored user database: %w", err))
 	}
 	if err = db.MigrateUp(); err != nil {
-		return database.RestoreInfo{}, fmt.Errorf("failed to migrate restored user database: %w", err)
+		return db.restoreFailed(fmt.Errorf("failed to migrate restored user database: %w", err))
 	}
 	if err = db.ClearCorruptMarker(); err != nil {
 		log.Warn().Err(err).Msg("failed to clear user database corrupt marker after restore")
 	}
 
 	return database.RestoreInfo{RestoredFrom: backup, PreRestoreBackup: preRestore}, nil
+}
+
+// restoreFailed leaves the user database connection usable after a restore step
+// fails once the live connection has already been closed. It runs the
+// corruption-recovery flow, which preserves the bad file and reopens from a valid
+// backup — including the pre-restore backup taken at the start of RestoreBackup —
+// so subsequent UserDB operations don't all fail with ErrNullSQL. The original
+// restore error is returned regardless of recovery's outcome.
+func (db *UserDB) restoreFailed(cause error) (database.RestoreInfo, error) {
+	if _, recoverErr := db.RecoverFromCorruption(); recoverErr != nil {
+		log.Error().Err(recoverErr).Msg("failed to recover user database after restore failure")
+	}
+	return database.RestoreInfo{}, cause
 }
 
 func preserveCorruptFile(path string) {

@@ -99,10 +99,13 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	log.Debug().Msg("opening user database")
 	userDB, err := openAndRecoverUserDB(ctx, pl)
+	// Assign before the error check: openAndRecoverUserDB can return a non-nil
+	// handle alongside an error, and the deferred closeDatabase only closes what
+	// is stored on db. Assigning here ensures that handle is not leaked.
+	db.UserDB = userDB
 	if err != nil {
 		return db, err
 	}
-	db.UserDB = userDB
 
 	// migrate old boltdb mappings if required
 	log.Debug().Msg("checking for boltdb migration")

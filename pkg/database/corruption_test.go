@@ -20,6 +20,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -28,6 +29,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,6 +112,61 @@ func TestRemoveSidecars(t *testing.T) {
 	}
 	// Removing absent sidecars is a no-op.
 	RemoveSidecars(dbPath)
+}
+
+func TestIntegrityReport_HealthyReturnsOK(t *testing.T) {
+	t.Parallel()
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	report := IntegrityReport(context.Background(), db, DefaultIntegrityReportRows)
+	assert.Equal(t, []string{"ok"}, report)
+}
+
+func TestIntegrityReport_QueryErrorReported(t *testing.T) {
+	t.Parallel()
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	// Close the handle so the integrity_check query fails rather than panicking.
+	require.NoError(t, db.Close())
+
+	report := IntegrityReport(context.Background(), db, DefaultIntegrityReportRows)
+	require.Len(t, report, 1)
+	assert.Contains(t, report[0], "integrity check failed")
+}
+
+func TestIntegrityReport_ScanErrorReported(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Two columns against a single scan destination forces a Scan error.
+	mock.ExpectQuery("PRAGMA integrity_check").
+		WillReturnRows(sqlmock.NewRows([]string{"a", "b"}).AddRow("x", "y"))
+
+	report := IntegrityReport(context.Background(), db, DefaultIntegrityReportRows)
+	require.Len(t, report, 1)
+	assert.Contains(t, report[0], "integrity check scan error")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestIntegrityReport_RowsErrorReported(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("PRAGMA integrity_check").
+		WillReturnRows(sqlmock.NewRows([]string{"integrity_check"}).
+			AddRow("ok").
+			RowError(0, errors.New("row iteration boom")))
+
+	report := IntegrityReport(context.Background(), db, DefaultIntegrityReportRows)
+	require.NotEmpty(t, report)
+	assert.Contains(t, report[len(report)-1], "integrity check rows error")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestConnLoadStore(t *testing.T) {
