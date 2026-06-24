@@ -64,3 +64,19 @@ func TestNewNamesIndex_CancellationPreservesCancelledStatus(t *testing.T) {
 	assert.Equal(t, mediadb.IndexingStatusCancelled, status,
 		"cancellation must leave Cancelled status, not be overwritten to Failed by the deferred handler")
 }
+
+// TestNoteIndexingCorruption verifies the helper persists the corrupt signal: it logs an
+// integrity report, writes the marker, sets the corrupt status, and clears the
+// last-indexed-system pointer so the recovery flow rebuilds the database.
+func TestNoteIndexingCorruption(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("IntegrityReport").Return([]string{"Page 5: btree corrupt"})
+	mockDB.On("MarkCorrupt", "persistent scan state load for nes: boom").Return()
+	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil)
+	mockDB.On("SetLastIndexedSystem", "").Return(nil)
+
+	noteIndexingCorruption(mockDB, "persistent scan state load for nes: boom")
+
+	mockDB.AssertExpectations(t)
+}

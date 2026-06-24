@@ -1334,3 +1334,38 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 	mockDB.AssertExpectations(t)
 }
+
+// TestCheckpointScrapingWAL_CorruptionReported verifies that a checkpoint failure flagged
+// as corruption is reported back so the caller can wake the recovery watcher.
+func TestCheckpointScrapingWAL_CorruptionReported(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("WALCheckpoint").Return(errors.New("database disk image is malformed"))
+	mockDB.On("NoteCorruption", assertmock.Anything).Return(true)
+
+	assert.True(t, checkpointScrapingWAL(mockDB, "scraper-1"))
+	mockDB.AssertExpectations(t)
+}
+
+// TestCheckpointScrapingWAL_NonCorruptionError verifies that a non-corruption checkpoint
+// failure is not reported as corruption.
+func TestCheckpointScrapingWAL_NonCorruptionError(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("WALCheckpoint").Return(errors.New("disk full"))
+	mockDB.On("NoteCorruption", assertmock.Anything).Return(false)
+
+	assert.False(t, checkpointScrapingWAL(mockDB, "scraper-1"))
+	mockDB.AssertExpectations(t)
+}
+
+// TestCheckpointScrapingWAL_Success verifies the healthy path reports no corruption and
+// does not consult corruption detection.
+func TestCheckpointScrapingWAL_Success(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("WALCheckpoint").Return(nil)
+
+	assert.False(t, checkpointScrapingWAL(mockDB, "scraper-1"))
+	mockDB.AssertNotCalled(t, "NoteCorruption", assertmock.Anything)
+}
