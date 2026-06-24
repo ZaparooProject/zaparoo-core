@@ -136,3 +136,17 @@ func TestHandleBackup_RejectsNonLocal(t *testing.T) {
 	require.Error(t, err)
 	mockUserDB.AssertNotCalled(t, "Backup")
 }
+
+func TestHandleBackup_RejectsUnavailableDatabase(t *testing.T) {
+	t.Parallel()
+
+	// A nil UserDB must be rejected by the access gate rather than panicking.
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: nil},
+		IsLocal:  true,
+	}
+
+	_, err := HandleBackup(env)
+	require.Error(t, err)
+}

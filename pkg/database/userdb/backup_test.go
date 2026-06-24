@@ -20,6 +20,7 @@
 package userdb
 
 import (
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -77,6 +78,77 @@ func TestUserDBEnsureRecentBackupReusesFreshBackup(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, didCreate)
 	assert.Equal(t, created.Name, backup.Name)
+}
+
+// TestUserDBRecoverFromCorruptionRestoresBackup verifies the recovery flow preserves the
+// damaged file and reinstates the most recent valid backup, leaving the connection usable.
+func TestUserDBRecoverFromCorruptionRestoresBackup(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "Keep",
+		Enabled:  true,
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "keep-me",
+		Override: "**launch.system:n64",
+	}))
+
+	backup, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+	require.True(t, backup.Valid)
+
+	// A mapping added after the backup must not survive recovery from that backup.
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "Discard",
+		Enabled:  true,
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "discard-me",
+		Override: "**launch.system:n64",
+	}))
+
+	info, err := userDB.RecoverFromCorruption()
+	require.NoError(t, err)
+	assert.Equal(t, backup.Name, info.RestoredFrom.Name)
+
+	// The pre-recovery file is preserved alongside the database for forensics.
+	_, statErr := os.Stat(userDB.GetDBPath() + database.CorruptMarkerSuffix + ".bak")
+	require.NoError(t, statErr, "corrupt file should be preserved")
+
+	mappings, err := userDB.GetAllMappings()
+	require.NoError(t, err)
+	require.Len(t, mappings, 1)
+	assert.Equal(t, "keep-me", mappings[0].Pattern)
+}
+
+// TestUserDBRecoverFromCorruptionWithoutBackupCreatesFresh verifies that with no valid
+// backup available, recovery still leaves a usable (empty) database rather than a dead one.
+func TestUserDBRecoverFromCorruptionWithoutBackupCreatesFresh(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "Gone",
+		Enabled:  true,
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "gone",
+		Override: "**launch.system:n64",
+	}))
+
+	info, err := userDB.RecoverFromCorruption()
+	require.NoError(t, err)
+	assert.Empty(t, info.RestoredFrom.Name, "no backup means nothing was restored")
+
+	_, statErr := os.Stat(userDB.GetDBPath() + database.CorruptMarkerSuffix + ".bak")
+	require.NoError(t, statErr, "corrupt file should be preserved")
+
+	// The fresh database is usable and empty.
+	mappings, err := userDB.GetAllMappings()
+	require.NoError(t, err)
+	assert.Empty(t, mappings)
 }
 
 // TestUserDBRestoreConcurrentReaders exercises the live-restore hazard: RestoreBackup
