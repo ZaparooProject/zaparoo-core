@@ -39,10 +39,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeMediaTagsUpdateEnv(mockMediaDB *testhelpers.MockMediaDBI, params string) requests.RequestEnv {
+func makeMediaTagsUpdateEnv(t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, params string) requests.RequestEnv {
+	t.Helper()
+	userDB, cleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(cleanup)
 	return requests.RequestEnv{
 		Context:  context.Background(),
-		Database: &database.Database{MediaDB: mockMediaDB},
+		Database: &database.Database{MediaDB: mockMediaDB, UserDB: userDB},
 		Params:   []byte(params),
 	}
 }
@@ -76,7 +79,7 @@ func TestHandleMediaTagsUpdate_AddsFavoriteTag(t *testing.T) {
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
 		Return([]database.TagInfo{}, nil).Once()
 
-	result, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	result, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
 	require.NoError(t, err)
 
 	resp, ok := result.(models.TagsResponse)
@@ -89,7 +92,7 @@ func TestHandleMediaTagsUpdate_RejectsSearchOperators(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["~user:favorite"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["~user:favorite"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tag operators are not allowed")
 	mockDB.AssertExpectations(t)
@@ -99,7 +102,7 @@ func TestHandleMediaTagsUpdate_RejectsEmptyTags(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":[" "]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":[" "]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tag cannot be empty")
 	mockDB.AssertExpectations(t)
@@ -109,7 +112,7 @@ func TestHandleMediaTagsUpdate_RejectsUnsupportedTags(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only user:favorite can be mutated")
 	mockDB.AssertExpectations(t)
@@ -126,7 +129,7 @@ func TestHandleMediaTagsUpdate_RollsBackWhenAddFails(t *testing.T) {
 		Return(database.TagType{}, errors.New("tag type insert failed")).Once()
 	mockDB.On("RollbackTransaction").Return(nil).Once()
 
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to find or insert tag type")
 	mockDB.AssertExpectations(t)
@@ -149,7 +152,7 @@ func TestHandleMediaTagsUpdate_RollsBackWhenCommitFails(t *testing.T) {
 	mockDB.On("CommitTransactionWithOptions", commitOptions).Return(errors.New("commit failed")).Once()
 	mockDB.On("RollbackTransaction").Return(nil).Once()
 
-	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(t, mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to commit media tag update transaction")
 	mockDB.AssertExpectations(t)
@@ -168,9 +171,11 @@ func TestHandleMediaTagsUpdate_RealMediaDBFavoriteFlow(t *testing.T) {
 	favoriteID := mediaIDs[0]
 	otherID := mediaIDs[1]
 
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
 	baseEnv := requests.RequestEnv{
 		Context:  ctx,
-		Database: &database.Database{MediaDB: mediaDB},
+		Database: &database.Database{MediaDB: mediaDB, UserDB: userDB},
 	}
 
 	addParams := fmt.Sprintf(`{"mediaId":%d,"add":["user:favorite"]}`, favoriteID)

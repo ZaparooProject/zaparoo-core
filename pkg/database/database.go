@@ -172,6 +172,23 @@ type MediaFullRow struct {
 	Title MediaTitle
 }
 
+// MediaUserData is the source-of-truth record for user-authored data about a
+// single media path: whether it is a favourite and any per-game launcher
+// override. It lives in UserDB (durable, power-loss safe) and is materialized
+// into media.db's MediaTags/MediaProperties projection both on edit and on
+// reindex. Keyed by (SystemID, Path) because a Media row's DBID is not stable
+// across a full media.db rebuild. A row with IsFavorite false and an empty
+// LauncherOverride carries no user intent and should be deleted rather than kept.
+type MediaUserData struct {
+	SystemID         string
+	Path             string
+	LauncherOverride string
+	DBID             int64
+	CreatedAt        int64
+	UpdatedAt        int64
+	IsFavorite       bool
+}
+
 // MediaPathID identifies a Media row by its system ID and path, used for batch
 // media-ID resolution of API responses.
 type MediaPathID struct {
@@ -696,6 +713,12 @@ type UserDBI interface {
 	UpdateMapping(id int64, m *Mapping) error
 	GetAllMappings() ([]Mapping, error)
 	GetEnabledMappings() ([]Mapping, error)
+	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
+	SetMediaUserFavorite(systemID, path string, favorite bool) error
+	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
+	UpsertMediaUserData(data *MediaUserData) error
+	DeleteMediaUserData(systemID, path string) error
+	ListMediaUserData() ([]MediaUserData, error)
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
 	GetSupportedZapLinkHosts() ([]string, error)
@@ -909,6 +932,9 @@ type MediaDBI interface {
 	GetAllMedia() ([]Media, error)
 	GetAllTags() ([]Tag, error)
 	GetAllTagTypes() ([]TagType, error)
+	// GetExistingMediaUserData returns user-authored data (favourites, launcher
+	// overrides) already stored in media.db, for the one-time UserDB backfill.
+	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
 
 	// Optimized JOIN query methods for populating scan state
 	GetTitlesWithSystems() ([]TitleWithSystem, error)
