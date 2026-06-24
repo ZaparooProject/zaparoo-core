@@ -679,6 +679,73 @@ func (m *MockMediaDBI) WALCheckpoint() error {
 	return nil
 }
 
+func (m *MockMediaDBI) QuickCheck() (bool, error) {
+	if !m.hasExpectation("QuickCheck") {
+		return true, nil
+	}
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return args.Bool(0), fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
+func (m *MockMediaDBI) IntegrityReport() []string {
+	if !m.hasExpectation("IntegrityReport") {
+		return []string{"ok"}
+	}
+	args := m.Called()
+	if report, ok := args.Get(0).([]string); ok {
+		return report
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) MarkCorrupt(reason string) {
+	if !m.hasExpectation("MarkCorrupt") {
+		return
+	}
+	m.Called(reason)
+}
+
+func (m *MockMediaDBI) IsMarkedCorrupt() bool {
+	if !m.hasExpectation("IsMarkedCorrupt") {
+		return false
+	}
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockMediaDBI) ClearCorruptMarker() error {
+	if !m.hasExpectation("ClearCorruptMarker") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) NoteCorruption(err error) bool {
+	if !m.hasExpectation("NoteCorruption") {
+		return false
+	}
+	args := m.Called(err)
+	return args.Bool(0)
+}
+
+func (m *MockMediaDBI) RecreateAfterCorruption(keepBackup bool) error {
+	if !m.hasExpectation("RecreateAfterCorruption") {
+		return nil
+	}
+	args := m.Called(keepBackup)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) UpdateLastGenerated() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {

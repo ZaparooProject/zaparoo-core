@@ -44,8 +44,9 @@ const (
 
 // Category constants for deduplication
 const (
-	CategoryNone            = "" // No deduplication
-	CategoryUpdateAvailable = "update_available"
+	CategoryNone                      = "" // No deduplication
+	CategoryMediaDBCorruptionRecovery = "mediadb_corruption_recovery"
+	CategoryUpdateAvailable           = "update_available"
 )
 
 // MessageOptions configures optional fields for inbox messages.

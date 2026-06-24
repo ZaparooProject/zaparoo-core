@@ -426,6 +426,18 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				)
 			), '')
 			WHERE MediaTitles.%s IN (%s)
+			  -- Skip the per-title subquery for single-media titles that are already
+			  -- blank: a title with <=1 non-missing media can never have variant
+			  -- disambiguation, so its value is necessarily ''. Still process any
+			  -- title that currently has a value (so a title that dropped from
+			  -- multi-media to single-media is reset to '').
+			  AND (
+				MediaTitles.DisambiguationTypes != ''
+				OR (
+					SELECT COUNT(*) FROM Media
+					WHERE Media.MediaTitleDBID = MediaTitles.DBID AND Media.IsMissing = 0
+				) > 1
+			  )
 		`, typeHolders, filterCol, prepareVariadic("?", ",", len(chunk)))
 
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {

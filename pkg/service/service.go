@@ -356,6 +356,10 @@ func Start(
 				return
 			}
 
+			// Recover a corrupt media database before any other startup work reads it,
+			// so cache loads and resume checks operate on the fresh DB.
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+
 			var tagCacheLoaded, slugCacheLoaded bool
 			if db.MediaDB != nil {
 				tagCacheStarted := time.Now()
@@ -383,7 +387,11 @@ func Start(
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
 			checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-			checkAndResumeOptimization(db, st.Notifications, indexPauser)
+			if checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+				// A failed optimization revealed a corrupt database; rebuild it now
+				// rather than waiting for the next startup.
+				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			}
 
 			rebuildStartupSlugSearchCache(db.MediaDB, slugCacheLoaded)
 		},
@@ -427,6 +435,7 @@ func Start(
 	)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
+	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)

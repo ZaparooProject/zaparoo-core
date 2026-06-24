@@ -1554,10 +1554,13 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 // The sentinel tag is inserted last so interrupted writes remain retryable.
 func (db *MediaDB) ApplyScrapeResult(
 	ctx context.Context, mediaDBID, mediaTitleDBID int64, write *database.ScrapeWrite,
-) error {
+) (retErr error) {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	// A malformed-page error while writing scraped properties (the table this corruption
+	// class targets) flags the database corrupt so recovery rebuilds it.
+	defer func() { db.NoteCorruption(retErr) }()
 	target := database.ScrapeWriteTarget{MediaDBID: mediaDBID, MediaTitleDBID: mediaTitleDBID, Write: write}
 	if err := validateScrapeWriteTarget("ApplyScrapeResult", target); err != nil {
 		return err
@@ -1595,10 +1598,11 @@ func (db *MediaDB) ApplyScrapeResult(
 // ApplyScrapeResults writes multiple scraper payloads in one transaction.
 // Each target's sentinel is written after its metadata, and the whole batch rolls
 // back if any target fails.
-func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.ScrapeWriteTarget) error {
+func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.ScrapeWriteTarget) (retErr error) {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	defer func() { db.NoteCorruption(retErr) }()
 	for _, target := range targets {
 		if err := validateScrapeWriteTarget("ApplyScrapeResults", target); err != nil {
 			return err

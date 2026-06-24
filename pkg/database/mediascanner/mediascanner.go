@@ -81,6 +81,22 @@ func isSQLiteDatabaseCorrupt(err error) bool {
 		strings.Contains(msg, "file is not a database")
 }
 
+// noteIndexingCorruption flags the media database corrupt during indexing so the
+// recovery flow rebuilds it: it logs an integrity fingerprint, writes the durable
+// corrupt marker, persists the corrupt status, and clears the last-indexed-system
+// pointer. Callers return the corruption error after invoking it.
+func noteIndexingCorruption(db database.MediaDBI, reason string) {
+	log.Error().Strs("integrity", db.IntegrityReport()).
+		Msg("media database integrity check after corruption detected during indexing")
+	db.MarkCorrupt(reason)
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+	}
+	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+	}
+}
+
 // logMaintenanceError logs an indexing maintenance failure (status writes, cache
 // population). When the failure is just the service context being cancelled
 // mid-index — an expected shutdown condition — it logs at Debug; any other
@@ -607,7 +623,7 @@ func NewNamesIndex(
 	fdb *database.Database,
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
-) (int, error) {
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
 	metrics := perfmetrics.NewRecorderForDB(db)
@@ -638,9 +654,6 @@ func NewNamesIndex(
 	log.Info().
 		Int("systemCount", len(systems)).
 		Msg("starting media indexing")
-
-	var indexedFiles int
-	var err error
 
 	// Track requested systems for resume validation before platform/path filtering.
 	requestedSystemIDs := make([]string, 0, len(systems))
@@ -825,12 +838,7 @@ func NewNamesIndex(
 			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
 		}
 		if isSQLiteDatabaseCorrupt(err) {
-			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
-			}
-			if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
-			}
+			noteIndexingCorruption(db, fmt.Sprintf("scan state population: %v", err))
 			return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, err)
 		}
 		return 0, fmt.Errorf("failed to populate scan state: %w", err)
@@ -860,8 +868,11 @@ func NewNamesIndex(
 			}
 		}
 
-		if err != nil {
-			// Mark indexing as failed on error
+		// Mark indexing as failed on a genuine error. Cancellation (handleCancellation sets
+		// Cancelled and returns ctx.Err()) and corruption (noteIndexingCorruption sets Corrupt)
+		// already persist their own terminal status, so they must not be overwritten here.
+		if err != nil && !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) && !isSQLiteDatabaseCorrupt(err) {
 			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 				logMaintenanceError(setErr, "failed to set indexing status to failed after error")
 			}
@@ -913,6 +924,19 @@ func NewNamesIndex(
 	batchStarted := false
 	pendingSystems := make([]string, 0)
 
+	// Sub-phase wall-time accumulators across the systems loop, logged once after
+	// it so the monolithic "systems" phase can be attributed to its parts:
+	// per-system state load, file collection (filesystem scan + scanners), media
+	// row inserts, per-system finalize (flush + missing flags + disambiguation),
+	// and transaction commits (the fsync + checkpoint cost).
+	var (
+		stateLoadDur time.Duration
+		collectDur   time.Duration
+		insertDur    time.Duration
+		finalizeDur  time.Duration
+		commitDur    time.Duration
+	)
+
 	// TODO: skip unchanged systems via a per-system fingerprint — store
 	// hash(sorted walked paths) + parser version + media row count after each
 	// system completes; on match at the next run, skip the state load, parse,
@@ -959,15 +983,22 @@ func NewNamesIndex(
 		scanState.MissingMedia = make(map[int]struct{})
 
 		// Load existing data for this system — always persistent.
+		stateLoadStart := time.Now()
 		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) {
 				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
 			}
+			if isSQLiteDatabaseCorrupt(loadErr) {
+				noteIndexingCorruption(db, fmt.Sprintf("persistent scan state load for %s: %v", systemID, loadErr))
+				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, loadErr)
+			}
 			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
 		}
+		stateLoadDur += time.Since(stateLoadStart)
 
 		files := make([]platforms.ScanResult, 0)
 		systemStartTime := time.Now()
+		collectStart := time.Now()
 
 		log.Info().
 			Str("system", systemID).
@@ -1102,6 +1133,8 @@ func NewNamesIndex(
 				Msg("calculated directory prefix policies")
 		}
 
+		collectDur += time.Since(collectStart)
+
 		for fileIdx, file := range files {
 			// Check for cancellation or pause between file processing
 			select {
@@ -1133,9 +1166,11 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			prefixPolicy := prefixPolicyByDir[dir]
 
+			insertStart := time.Now()
 			_, _, addErr := AddMediaPathWithPrefixPolicy(
 				db, &scanState, systemID, file.Path, file.Name, file.NoExt, prefixPolicy, cfg, mediaType,
 			)
+			insertDur += time.Since(insertStart)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
 				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
@@ -1143,6 +1178,10 @@ func NewNamesIndex(
 					uniqueConstraintFailures++
 					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
 					continue
+				}
+				if isSQLiteDatabaseCorrupt(addErr) {
+					noteIndexingCorruption(db, fmt.Sprintf("media insert for %s: %v", systemID, addErr))
+					return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, addErr)
 				}
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}
@@ -1171,6 +1210,7 @@ func NewNamesIndex(
 					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
 				}
 				commitElapsed := time.Since(commitStart)
+				commitDur += commitElapsed
 				log.Debug().
 					Str("system", systemID).
 					Int("files", filesInBatch).
@@ -1207,6 +1247,7 @@ func NewNamesIndex(
 		// rows just inserted for this system are flushed (not committed) so the
 		// disambiguation query observes them; the commit itself is deferred to a
 		// batch boundary below so the fsync + checkpoint cost is amortised.
+		finalizeStart := time.Now()
 		systemDBID, found := scanState.SystemIDs[systemID]
 		if found {
 			// A mid-system file-limit commit may have closed the transaction on the
@@ -1245,6 +1286,7 @@ func NewNamesIndex(
 		// Populate* re-loads them for the next system. In-memory only; safe to do
 		// with the transaction still open.
 		FlushScanStateMaps(&scanState)
+		finalizeDur += time.Since(finalizeStart)
 
 		// Commit at a batch boundary: when accumulated files reach the limit or
 		// this is the last system. This is the only place the fsync + checkpoint is
@@ -1261,6 +1303,7 @@ func NewNamesIndex(
 				return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 			}
 			commitElapsed := time.Since(commitStart)
+			commitDur += commitElapsed
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
@@ -1309,6 +1352,13 @@ func NewNamesIndex(
 		}
 	}
 
+	log.Info().
+		Dur("stateLoad", stateLoadDur).
+		Dur("collect", collectDur).
+		Dur("insert", insertDur).
+		Dur("finalize", finalizeDur).
+		Dur("commit", commitDur).
+		Msg("media indexing systems sub-phase breakdown")
 	logPhaseMetrics("systems")
 
 	status.Step++

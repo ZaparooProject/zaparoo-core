@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -90,6 +91,14 @@ const (
 
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
 const defaultSlugSearchLimit = 50
+
+// integrityReportMaxRows caps PRAGMA integrity_check output so a badly corrupt
+// database cannot flood the log; the first rows identify the damaged pages.
+const integrityReportMaxRows = 20
+
+// corruptMarkerSuffix names the sidecar file written next to the database to flag
+// detected corruption. It is the DB-independent signal the recovery path keys on.
+const corruptMarkerSuffix = ".corrupt"
 
 // maxSelectiveInvalidationSystems avoids huge per-commit IN clauses and debug
 // logs during full-library indexing while preserving selective reindexing wins.
@@ -641,6 +650,166 @@ func (db *MediaDB) GetIndexingStatus() (string, error) {
 		return "", ErrNullSQL
 	}
 	return sqlGetIndexingStatus(db.ctx, db.sql)
+}
+
+// QuickCheck runs PRAGMA quick_check(1) and reports whether the database passes.
+// quick_check is a bounded integrity scan — it skips integrity_check's expensive
+// index-vs-table cross-checks and the argument stops it after the first error — so it
+// is cheap enough to confirm suspected corruption before acting on it. Returns
+// ok=true only when SQLite reports the single sentinel row "ok".
+func (db *MediaDB) QuickCheck() (bool, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql == nil {
+		return false, ErrNullSQL
+	}
+
+	rows, err := db.sql.QueryContext(db.ctx, "PRAGMA quick_check(1)")
+	if err != nil {
+		return false, fmt.Errorf("quick_check query failed: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var lines []string
+	for rows.Next() {
+		var line string
+		if scanErr := rows.Scan(&line); scanErr != nil {
+			return false, fmt.Errorf("quick_check scan failed: %w", scanErr)
+		}
+		lines = append(lines, line)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return false, fmt.Errorf("quick_check rows failed: %w", rowsErr)
+	}
+
+	if len(lines) == 1 && lines[0] == "ok" {
+		return true, nil
+	}
+	log.Warn().Strs("details", lines).Msg("media database quick_check reported integrity errors")
+	return false, nil
+}
+
+// corruptMarkerPath returns the sidecar path used to flag a corrupt database.
+func (db *MediaDB) corruptMarkerPath() string {
+	return db.dbPath + corruptMarkerSuffix
+}
+
+// MarkCorrupt writes a sidecar marker file next to the database recording that
+// corruption was detected. The marker is the authoritative, DB-independent signal
+// the recovery path keys on: unlike IndexingStatusCorrupt it does not require writing
+// to the (possibly unwritable) database. Best-effort — failures are logged, not returned.
+func (db *MediaDB) MarkCorrupt(reason string) {
+	path := db.corruptMarkerPath()
+	contents := fmt.Sprintf("%s\n%s\n", db.clock.Now().UTC().Format(time.RFC3339), reason)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		log.Error().Err(err).Str("path", path).Msg("failed to write media database corrupt marker")
+		return
+	}
+	log.Warn().Str("path", path).Str("reason", reason).Msg("flagged media database as corrupt")
+}
+
+// IsMarkedCorrupt reports whether the corrupt marker sidecar exists.
+func (db *MediaDB) IsMarkedCorrupt() bool {
+	_, err := os.Stat(db.corruptMarkerPath())
+	return err == nil
+}
+
+// ClearCorruptMarker removes the corrupt marker sidecar. No-op when absent.
+func (db *MediaDB) ClearCorruptMarker() error {
+	if err := os.Remove(db.corruptMarkerPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to clear corrupt marker: %w", err)
+	}
+	return nil
+}
+
+// NoteCorruption flags the database corrupt when err indicates SQLite corruption, so any
+// path that first touches a malformed page (a read, a scraper write, a checkpoint) routes
+// into the recovery flow instead of silently failing. It only writes the marker once — the
+// expensive integrity report is logged later by the recovery orchestration, not on every
+// failing query. Returns true when err was a corruption error.
+func (db *MediaDB) NoteCorruption(err error) bool {
+	if err == nil || !isCorruptionError(err) {
+		return false
+	}
+	if !db.IsMarkedCorrupt() {
+		db.MarkCorrupt(fmt.Sprintf("query error: %v", err))
+	}
+	return true
+}
+
+// IntegrityReport runs PRAGMA integrity_check and returns up to integrityReportMaxRows
+// result rows. It captures a corruption fingerprint in the logs — which are uploadable
+// via the support bundle — when the database file itself cannot be retrieved. A healthy
+// database returns a single "ok" row.
+func (db *MediaDB) IntegrityReport() []string {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql == nil {
+		return []string{"integrity check unavailable: database not connected"}
+	}
+
+	rows, err := db.sql.QueryContext(db.ctx, fmt.Sprintf("PRAGMA integrity_check(%d)", integrityReportMaxRows))
+	if err != nil {
+		return []string{fmt.Sprintf("integrity check failed: %v", err)}
+	}
+	defer func() { _ = rows.Close() }()
+
+	var report []string
+	for rows.Next() {
+		var line string
+		if scanErr := rows.Scan(&line); scanErr != nil {
+			report = append(report, fmt.Sprintf("integrity check scan error: %v", scanErr))
+			break
+		}
+		report = append(report, line)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		report = append(report, fmt.Sprintf("integrity check rows error: %v", rowsErr))
+	}
+	return report
+}
+
+// RecreateAfterCorruption discards a corrupt database and reopens a fresh one. The
+// connection is closed; the main file is either preserved as a <db>.corrupt.bak forensic
+// copy (keepBackup — development builds only) or deleted; the -wal/-shm sidecars and the
+// corrupt marker are removed (a stale WAL would re-corrupt the new file); and Open()
+// allocates a fresh schema. MediaDB is a rebuildable cache, so nothing is salvaged — the
+// caller triggers a reindex afterwards.
+func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
+	if err := db.Close(); err != nil {
+		log.Warn().Err(err).Msg("error closing corrupt media database before recreate")
+	}
+	db.sql = nil
+
+	if keepBackup {
+		backup := db.dbPath + corruptMarkerSuffix + ".bak"
+		_ = os.Remove(backup)
+		if err := os.Rename(db.dbPath, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn().Err(err).Msg("failed to preserve corrupt media database backup; deleting instead")
+			if rmErr := os.Remove(db.dbPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				return fmt.Errorf("failed to remove corrupt media database: %w", rmErr)
+			}
+		}
+	} else if err := os.Remove(db.dbPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to remove corrupt media database: %w", err)
+	}
+
+	for _, sidecar := range []string{db.dbPath + "-wal", db.dbPath + "-shm"} {
+		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn().Err(err).Str("path", sidecar).Msg("failed to remove WAL sidecar during recreate")
+		}
+	}
+
+	if err := db.Open(); err != nil {
+		return fmt.Errorf("failed to reopen media database after recreate: %w", err)
+	}
+
+	// Clear the marker only after the fresh database opens, so a failed reopen leaves
+	// the durable corrupt signal in place for the next recovery attempt.
+	if err := db.ClearCorruptMarker(); err != nil {
+		log.Warn().Err(err).Msg("failed to clear corrupt marker during recreate")
+	}
+	return nil
 }
 
 func (db *MediaDB) SetScrapingStatus(status string) error {
@@ -1484,9 +1653,19 @@ func (db *MediaDB) Analyze() error {
 }
 
 // WALCheckpoint forces a WAL checkpoint to flush pending writes to the main database file.
+// It holds sqlMu so the TRUNCATE checkpoint is serialized with commits and other writes
+// (matching the in-commit checkpoint in CommitTransactionWithOptions), and is a no-op
+// while a transaction is open — truncating the WAL out from under an active writer on the
+// other pool connection would only ever return SQLITE_BUSY.
 func (db *MediaDB) WALCheckpoint() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
 	if db.sql == nil {
 		return ErrNullSQL
+	}
+	if db.tx != nil {
+		return nil
 	}
 	_, err := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 	if err != nil {
@@ -1502,17 +1681,23 @@ func (db *MediaDB) BrowseDirectories(
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseDirectories(ctx, db.sql, opts)
+	results, err := sqlBrowseDirectories(ctx, db.sql, opts)
+	db.NoteCorruption(err)
+	return results, err
 }
 
 // BrowseFiles returns indexed media files that are immediate children of the given path prefix.
+// A malformed-page error here (the cover-flags join reads MediaTitleProperties, where scraped
+// artwork lives) flags the database corrupt so the recovery flow rebuilds it.
 func (db *MediaDB) BrowseFiles(
 	ctx context.Context, opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseFiles(ctx, db.sql, opts)
+	results, err := sqlBrowseFiles(ctx, db.sql, opts)
+	db.NoteCorruption(err)
+	return results, err
 }
 
 // BrowseFileCount returns the total number of immediate child files under a path prefix.
@@ -3019,6 +3204,11 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		// reuses free pages on the next INSERT, so disk reclamation is not needed.
 	)
 
+	// Per-step resource metrics so post-index/startup housekeeping (browse cache
+	// rebuild, pragma optimize, page prefetch) shows real wall time and write cost
+	// in logs, not just start/complete markers.
+	stepRecorder := perfmetrics.NewRecorderForDB(db)
+
 	// Execute each step with retry logic
 	for _, step := range steps {
 		// Wait if paused (e.g. game is running)
@@ -3050,6 +3240,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		}
 
 		// Execute step with retry and exponential backoff
+		stepMetricsStart := stepRecorder.Capture(db.ctx, true)
 		var stepErr error
 		for attempt := 0; attempt <= step.maxRetries; attempt++ {
 			stepErr = step.fn()
@@ -3070,8 +3261,13 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, step.maxRetries+1)
 			// Database corruption can't be repaired by optimization. Route it to the
 			// same corrupt-database state the indexer uses so the app surfaces the
-			// repair/rebuild flow instead of repeatedly failing maintenance.
+			// repair/rebuild flow instead of repeatedly failing maintenance. The sidecar
+			// marker is the durable signal recovery keys on, since the in-DB status write
+			// may itself fail on a malformed database.
 			if isCorruptionError(stepErr) {
+				log.Error().Strs("integrity", db.IntegrityReport()).
+					Msg("media database integrity check after optimization failure")
+				db.MarkCorrupt(fmt.Sprintf("optimization step %s: %v", step.name, stepErr))
 				if setErr := db.SetIndexingStatus(IndexingStatusCorrupt); setErr != nil {
 					log.Error().Err(setErr).Msg("failed to mark media database as corrupt after optimization failure")
 				}
@@ -3090,6 +3286,10 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			}
 			return
 		}
+
+		stepMetricsEnd := stepRecorder.Capture(db.ctx, true)
+		perfmetrics.AddDelta(log.Info().Str("step", step.name), &stepMetricsStart, &stepMetricsEnd).
+			Msg("optimization step metrics")
 
 		log.Info().Msgf("optimization step %s completed", step.name)
 	}

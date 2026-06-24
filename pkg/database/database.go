@@ -722,6 +722,13 @@ type MediaDBI interface {
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
 	WALCheckpoint() error
+	QuickCheck() (bool, error)
+	IntegrityReport() []string
+	MarkCorrupt(reason string)
+	IsMarkedCorrupt() bool
+	ClearCorruptMarker() error
+	NoteCorruption(err error) bool
+	RecreateAfterCorruption(keepBackup bool) error
 
 	// On-disk persistence for the rebuilt caches. Persist* writes the
 	// current in-memory cache atomically; LoadCached* reads it back at
