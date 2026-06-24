@@ -49,6 +49,9 @@ const (
 	browseSortRankPrefixDesc = "rank-prefix-desc"
 	browseSortDatePrefixAsc  = "date-prefix-asc"
 	browseSortDatePrefixDesc = "date-prefix-desc"
+
+	browseSlowCoverFlagsThreshold = 2 * time.Second
+	browseSlowFilesThreshold      = 5 * time.Second
 )
 
 // utilityTagCache memoises resolved utility tag DBIDs per DB connection so
@@ -80,6 +83,36 @@ func clearUtilityTagCacheFor(db sqlQueryable) {
 	delete(utilityTagCacheMap, db)
 	if len(utilityTagCacheMap) == 0 {
 		utilityTagCacheMap = nil
+	}
+}
+
+// imagePropertyTagCache memoises image property tag DBIDs per DB handle so
+// fetchAndAttachCoverFlags avoids joining Tags/TagTypes and LIKE-scanning on
+// every browse page. Cleared with utility tags because both depend on tag DBIDs.
+var (
+	imagePropertyTagCacheMu  syncutil.RWMutex
+	imagePropertyTagCacheMap map[sqlQueryable][]int64
+)
+
+func clearImagePropertyTagCache() {
+	imagePropertyTagCacheMu.Lock()
+	defer imagePropertyTagCacheMu.Unlock()
+	imagePropertyTagCacheMap = nil
+}
+
+func clearImagePropertyTagCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	imagePropertyTagCacheMu.Lock()
+	defer imagePropertyTagCacheMu.Unlock()
+	if imagePropertyTagCacheMap == nil {
+		return
+	}
+	delete(imagePropertyTagCacheMap, db)
+	if len(imagePropertyTagCacheMap) == 0 {
+		imagePropertyTagCacheMap = nil
 	}
 }
 
@@ -195,6 +228,48 @@ func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]dat
 	utilityTagCacheMap[db] = tagInfoByDBID
 	utilityTagCacheMu.Unlock()
 	return tagInfoByDBID, nil
+}
+
+func resolveImagePropertyTagDBIDs(ctx context.Context, db sqlQueryable) ([]int64, error) {
+	imagePropertyTagCacheMu.RLock()
+	if imagePropertyTagCacheMap != nil {
+		if cached, ok := imagePropertyTagCacheMap[db]; ok {
+			imagePropertyTagCacheMu.RUnlock()
+			return cached, nil
+		}
+	}
+	imagePropertyTagCacheMu.RUnlock()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT t.DBID
+		FROM Tags t
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE tt.Type = ? AND t.Tag LIKE ?
+		ORDER BY t.DBID`, string(tags.TagTypeProperty), imagePropertyValuePrefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("browse image property tags query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tagIDs []int64
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("browse image property tags scan: %w", scanErr)
+		}
+		tagIDs = append(tagIDs, id)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("browse image property tags rows: %w", rowsErr)
+	}
+
+	imagePropertyTagCacheMu.Lock()
+	if imagePropertyTagCacheMap == nil {
+		imagePropertyTagCacheMap = make(map[sqlQueryable][]int64)
+	}
+	imagePropertyTagCacheMap[db] = tagIDs
+	imagePropertyTagCacheMu.Unlock()
+	return tagIDs, nil
 }
 
 func browseSystemFilterClause(column string, systems []systemdefs.System) (clause string, args []any) {
@@ -714,25 +789,34 @@ func sqlBrowseFilesFromMedia(
 	if err := attachZapScriptTags(ctx, db, results); err != nil {
 		return nil, fmt.Errorf("browse files disambiguation: %w", err)
 	}
+	siblingsElapsed := time.Since(siblingsStarted)
+	browseElapsed := sortModeElapsed + queryElapsed + tagsElapsed + coverFlagsElapsed + siblingsElapsed
 
-	log.Debug().
+	logEvent := log.Debug()
+	message := "browse files step timing"
+	if coverFlagsElapsed >= browseSlowCoverFlagsThreshold || browseElapsed >= browseSlowFilesThreshold {
+		logEvent = log.Warn()
+		message = "slow browse files step timing"
+	}
+	logEvent.
 		Str("pathPrefix", opts.PathPrefix).
 		Strs("systems", browseSystemIDsForLog(opts.Systems)).
 		Int("rows", len(results)).
+		Dur("duration", browseElapsed).
 		Dur("sortModeDuration", sortModeElapsed).
 		Dur("queryDuration", queryElapsed).
 		Dur("tagsDuration", tagsElapsed).
 		Dur("coverFlagsDuration", coverFlagsElapsed).
-		Dur("siblingsDuration", time.Since(siblingsStarted)).
-		Msg("browse files step timing")
+		Dur("siblingsDuration", siblingsElapsed).
+		Msg(message)
 	return results, nil
 }
 
 // fetchAndAttachCoverFlags sets HasCover on each result based on whether the
-// media or its title has at least one image property row. A single UNION ALL
-// query covers both MediaProperties (media-level) and MediaTitleProperties
-// (title-level), both of which are indexed by their respective IDs. Results
-// with no image property get HasCover=false.
+// media or its title has at least one image property row. Image property tag
+// DBIDs are resolved once per database handle, so every browse page can check
+// MediaProperties/MediaTitleProperties directly without joining Tags/TagTypes
+// or LIKE-scanning tag strings. Results with no image property get HasCover=false.
 func fetchAndAttachCoverFlags(
 	ctx context.Context,
 	db sqlQueryable,
@@ -742,43 +826,63 @@ func fetchAndAttachCoverFlags(
 		return nil
 	}
 
-	mediaIDs := make([]int64, len(results))
-	for i := range results {
-		mediaIDs[i] = results[i].MediaID
+	imageTagIDs, err := resolveImagePropertyTagDBIDs(ctx, db)
+	if err != nil {
+		return fmt.Errorf("browse cover flags image tags: %w", err)
+	}
+	if len(imageTagIDs) == 0 {
+		return nil
 	}
 
-	placeholders := prepareVariadic("?", ",", len(mediaIDs))
-	args := make([]any, 0, len(mediaIDs)*2)
+	mediaIDs := make([]int64, 0, len(results))
+	titleIDs := make([]int64, 0, len(results))
+	mediaIndex := make(map[int64][]int, len(results))
+	titleIndex := make(map[int64][]int, len(results))
+	for i := range results {
+		if _, ok := mediaIndex[results[i].MediaID]; !ok {
+			mediaIDs = append(mediaIDs, results[i].MediaID)
+		}
+		mediaIndex[results[i].MediaID] = append(mediaIndex[results[i].MediaID], i)
+		if results[i].MediaTitleID == 0 {
+			continue
+		}
+		if _, ok := titleIndex[results[i].MediaTitleID]; !ok {
+			titleIDs = append(titleIDs, results[i].MediaTitleID)
+		}
+		titleIndex[results[i].MediaTitleID] = append(titleIndex[results[i].MediaTitleID], i)
+	}
+
+	mediaPlaceholders := prepareVariadic("?", ",", len(mediaIDs))
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	args := make([]any, 0, len(mediaIDs)+len(titleIDs)+len(imageTagIDs)*2)
+	queryParts := []string{`
+		SELECT 'media' AS Scope, mp.MediaDBID AS ID
+		FROM MediaProperties mp
+		WHERE mp.MediaDBID IN (` + mediaPlaceholders + `)
+		  AND mp.TypeTagDBID IN (` + tagPlaceholders + `)`}
 	for _, id := range mediaIDs {
 		args = append(args, id)
 	}
-	for _, id := range mediaIDs {
+	for _, id := range imageTagIDs {
 		args = append(args, id)
+	}
+	if len(titleIDs) > 0 {
+		titlePlaceholders := prepareVariadic("?", ",", len(titleIDs))
+		queryParts = append(queryParts, `
+		SELECT 'title' AS Scope, mtp.MediaTitleDBID AS ID
+		FROM MediaTitleProperties mtp
+		WHERE mtp.MediaTitleDBID IN (`+titlePlaceholders+`)
+		  AND mtp.TypeTagDBID IN (`+tagPlaceholders+`)`)
+		for _, id := range titleIDs {
+			args = append(args, id)
+		}
+		for _, id := range imageTagIDs {
+			args = append(args, id)
+		}
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
-	query := `
-		SELECT DISTINCT sub.MediaDBID
-		FROM (
-			SELECT mp.MediaDBID
-			FROM MediaProperties mp
-			JOIN Tags t      ON t.DBID  = mp.TypeTagDBID
-			JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-			WHERE mp.MediaDBID IN (` + placeholders + `)
-			  AND tt.Type = '` + string(tags.TagTypeProperty) + `'
-			  AND t.Tag LIKE '` + imagePropertyValuePrefix + `%'
-
-			UNION ALL
-
-			SELECT m.DBID AS MediaDBID
-			FROM Media m
-			JOIN MediaTitleProperties mtp ON mtp.MediaTitleDBID = m.MediaTitleDBID
-			JOIN Tags t      ON t.DBID  = mtp.TypeTagDBID
-			JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-			WHERE m.DBID IN (` + placeholders + `)
-			  AND tt.Type = '` + string(tags.TagTypeProperty) + `'
-			  AND t.Tag LIKE '` + imagePropertyValuePrefix + `%'
-		) sub`
+	query := strings.Join(queryParts, "\n\t\tUNION ALL\n")
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -786,20 +890,25 @@ func fetchAndAttachCoverFlags(
 	}
 	defer func() { _ = rows.Close() }()
 
-	withCover := make(map[int64]bool, len(results))
 	for rows.Next() {
+		var scope string
 		var id int64
-		if scanErr := rows.Scan(&id); scanErr != nil {
+		if scanErr := rows.Scan(&scope, &id); scanErr != nil {
 			return fmt.Errorf("browse cover flags scan: %w", scanErr)
 		}
-		withCover[id] = true
+		switch scope {
+		case "media":
+			for _, idx := range mediaIndex[id] {
+				results[idx].HasCover = true
+			}
+		case "title":
+			for _, idx := range titleIndex[id] {
+				results[idx].HasCover = true
+			}
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return fmt.Errorf("browse cover flags rows: %w", err)
-	}
-
-	for i := range results {
-		results[i].HasCover = withCover[results[i].MediaID]
 	}
 	return nil
 }
