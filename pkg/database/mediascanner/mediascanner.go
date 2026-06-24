@@ -623,7 +623,7 @@ func NewNamesIndex(
 	fdb *database.Database,
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
-) (int, error) {
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
 	metrics := perfmetrics.NewRecorderForDB(db)
@@ -654,9 +654,6 @@ func NewNamesIndex(
 	log.Info().
 		Int("systemCount", len(systems)).
 		Msg("starting media indexing")
-
-	var indexedFiles int
-	var err error
 
 	// Track requested systems for resume validation before platform/path filtering.
 	requestedSystemIDs := make([]string, 0, len(systems))
@@ -871,8 +868,11 @@ func NewNamesIndex(
 			}
 		}
 
-		if err != nil {
-			// Mark indexing as failed on error
+		// Mark indexing as failed on a genuine error. Cancellation (handleCancellation sets
+		// Cancelled and returns ctx.Err()) and corruption (noteIndexingCorruption sets Corrupt)
+		// already persist their own terminal status, so they must not be overwritten here.
+		if err != nil && !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) && !isSQLiteDatabaseCorrupt(err) {
 			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 				logMaintenanceError(setErr, "failed to set indexing status to failed after error")
 			}
