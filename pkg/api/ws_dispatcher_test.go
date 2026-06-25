@@ -84,7 +84,11 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 }
 
 func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) {
-	imageStarted := make(chan struct{}, wsLowConcurrency+1)
+	imageRequests := wsLowConcurrency + 1
+	queuedImageID := imageRequests
+	mutationID := imageRequests + 1
+	totalResponses := imageRequests + 1
+	imageStarted := make(chan struct{}, imageRequests)
 	releaseImages := make(chan struct{})
 
 	var methodMap MethodMap
@@ -107,7 +111,7 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	conn := dialWS(t, wsURL)
 	defer func() { _ = conn.Close() }()
 
-	for id := 1; id <= 3; id++ {
+	for id := 1; id <= imageRequests; id++ {
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
 			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
 	}
@@ -120,18 +124,21 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	}
 	select {
 	case <-imageStarted:
-		t.Fatal("third media.image ran before a low-priority worker was free")
+		t.Fatal("queued media.image ran before a low-priority worker was free")
 	default:
 	}
 
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":4}`)))
+		[]byte(fmt.Sprintf(
+			`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":%d}`,
+			mutationID,
+		))))
 	waitForMediaDBWriterPending(t)
 	close(releaseImages)
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
-	seen := make([]models.RPCID, 0, 4)
-	for range 4 {
+	seen := make([]models.RPCID, 0, totalResponses)
+	for range totalResponses {
 		_, msg, err := conn.ReadMessage()
 		require.NoError(t, err)
 		var resp models.ResponseObject
@@ -139,11 +146,11 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		seen = append(seen, resp.ID)
 	}
 
-	favoriteIndex := indexRPCID(seen, models.NewNumberID(4))
-	thirdImageIndex := indexRPCID(seen, models.NewNumberID(3))
+	favoriteIndex := indexRPCID(seen, models.NewNumberID(int64(mutationID)))
+	queuedImageIndex := indexRPCID(seen, models.NewNumberID(int64(queuedImageID)))
 	require.NotEqual(t, -1, favoriteIndex)
-	require.NotEqual(t, -1, thirdImageIndex)
-	assert.Less(t, favoriteIndex, thirdImageIndex, "mutation should bypass queued image work")
+	require.NotEqual(t, -1, queuedImageIndex)
+	assert.Less(t, favoriteIndex, queuedImageIndex, "mutation should bypass queued image work")
 }
 
 func waitForMediaDBWriterPending(t *testing.T) {
