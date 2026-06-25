@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"testing"
 	"time"
 
@@ -83,12 +84,18 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 }
 
 func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) {
-	t.Parallel()
+	imageRequests := wsLowConcurrency + 1
+	queuedImageID := imageRequests
+	mutationID := imageRequests + 1
+	totalResponses := imageRequests + 1
+	imageStarted := make(chan struct{}, imageRequests)
+	releaseImages := make(chan struct{})
 
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodMediaImage, func(env requests.RequestEnv) (any, error) {
+		imageStarted <- struct{}{}
 		select {
-		case <-time.After(250 * time.Millisecond):
+		case <-releaseImages:
 			return map[string]string{"kind": "image"}, nil
 		case <-env.Context.Done():
 			return nil, env.Context.Err()
@@ -104,16 +111,34 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	conn := dialWS(t, wsURL)
 	defer func() { _ = conn.Close() }()
 
-	for id := 1; id <= 3; id++ {
+	for id := 1; id <= imageRequests; id++ {
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
 			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
 	}
+	for range wsLowConcurrency {
+		select {
+		case <-imageStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("media.image did not start")
+		}
+	}
+	select {
+	case <-imageStarted:
+		t.Fatal("queued media.image ran before a low-priority worker was free")
+	default:
+	}
+
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":4}`)))
+		[]byte(fmt.Sprintf(
+			`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":%d}`,
+			mutationID,
+		))))
+	waitForMediaDBWriterPending(t)
+	close(releaseImages)
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
-	seen := make([]models.RPCID, 0, 4)
-	for range 4 {
+	seen := make([]models.RPCID, 0, totalResponses)
+	for range totalResponses {
 		_, msg, err := conn.ReadMessage()
 		require.NoError(t, err)
 		var resp models.ResponseObject
@@ -121,11 +146,30 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		seen = append(seen, resp.ID)
 	}
 
-	favoriteIndex := indexRPCID(seen, models.NewNumberID(4))
-	thirdImageIndex := indexRPCID(seen, models.NewNumberID(3))
+	favoriteIndex := indexRPCID(seen, models.NewNumberID(int64(mutationID)))
+	queuedImageIndex := indexRPCID(seen, models.NewNumberID(int64(queuedImageID)))
 	require.NotEqual(t, -1, favoriteIndex)
-	require.NotEqual(t, -1, thirdImageIndex)
-	assert.Less(t, favoriteIndex, thirdImageIndex, "mutation should bypass queued image work")
+	require.NotEqual(t, -1, queuedImageIndex)
+	assert.Less(t, favoriteIndex, queuedImageIndex, "mutation should bypass queued image work")
+}
+
+func waitForMediaDBWriterPending(t *testing.T) {
+	t.Helper()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if !wsMediaDBMu.TryRLock() {
+			return
+		}
+		wsMediaDBMu.RUnlock()
+
+		select {
+		case <-deadline:
+			t.Fatal("media.tags.update did not wait for the media DB write lock")
+		default:
+			runtime.Gosched()
+		}
+	}
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {

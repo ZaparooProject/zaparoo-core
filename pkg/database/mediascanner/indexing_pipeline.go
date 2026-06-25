@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
@@ -1156,13 +1157,7 @@ func PopulateScanStateForSelectiveIndexing(
 func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	f := MediaPathFragments{}
 
-	// don't clean the :// in custom scheme paths
-	if helpers.ReURI.MatchString(params.Path) {
-		f.Path = params.Path
-	} else {
-		// Clean and normalize to forward slashes for cross-platform consistency
-		f.Path = filepath.ToSlash(filepath.Clean(params.Path))
-	}
+	f.Path = pathutil.CanonicalMediaPath(params.Path)
 
 	// Use FilenameFromPath for virtual paths to get URL-decoded names
 	// For regular paths, extract basename manually

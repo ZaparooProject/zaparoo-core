@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,7 +35,7 @@ import (
 // when no row exists for the (systemID, path) key, in which case the media has no
 // favourite or launcher-override intent recorded.
 func (db *UserDB) GetMediaUserData(systemID, path string) (database.MediaUserData, bool, error) {
-	return sqlGetMediaUserData(db.ctx, db.sql.Load(), systemID, path)
+	return sqlGetMediaUserData(db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path))
 }
 
 // UpsertMediaUserData inserts or updates the user-data row for (SystemID, Path).
@@ -43,10 +44,12 @@ func (db *UserDB) GetMediaUserData(systemID, path string) (database.MediaUserDat
 // rather than persisted (keeping ListMediaUserData and the backfill guard honest).
 func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
 	conn := db.sql.Load()
-	if !data.IsFavorite && data.LauncherOverride == "" {
-		return sqlDeleteMediaUserData(db.ctx, conn, data.SystemID, data.Path)
+	normalized := *data
+	normalized.Path = pathutil.CanonicalMediaPath(data.Path)
+	if !normalized.IsFavorite && normalized.LauncherOverride == "" {
+		return sqlDeleteMediaUserData(db.ctx, conn, normalized.SystemID, normalized.Path)
 	}
-	return sqlUpsertMediaUserData(db.ctx, conn, data, time.Now().Unix())
+	return sqlUpsertMediaUserData(db.ctx, conn, &normalized, time.Now().Unix())
 }
 
 // SetMediaUserFavorite records (or clears) the favourite intent for a media
@@ -55,20 +58,24 @@ func (db *UserDB) UpsertMediaUserData(data *database.MediaUserData) error {
 // concurrent edits to the same path (e.g. a favourite toggle and a launcher
 // override) cannot read-modify-write over each other.
 func (db *UserDB) SetMediaUserFavorite(systemID, path string, favorite bool) error {
-	return sqlSetMediaUserFavorite(db.ctx, db.sql.Load(), systemID, path, favorite, time.Now().Unix())
+	return sqlSetMediaUserFavorite(
+		db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path), favorite, time.Now().Unix(),
+	)
 }
 
 // SetMediaUserLauncherOverride records (or clears, when launcherID is empty) the
 // launcher-override intent for a media path without disturbing the favourite
 // flag on the same row. See SetMediaUserFavorite for the concurrency guarantee.
 func (db *UserDB) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
-	return sqlSetMediaUserLauncherOverride(db.ctx, db.sql.Load(), systemID, path, launcherID, time.Now().Unix())
+	return sqlSetMediaUserLauncherOverride(
+		db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path), launcherID, time.Now().Unix(),
+	)
 }
 
 // DeleteMediaUserData removes the user-data row for (SystemID, Path). Deleting a
 // row that does not exist is not an error.
 func (db *UserDB) DeleteMediaUserData(systemID, path string) error {
-	return sqlDeleteMediaUserData(db.ctx, db.sql.Load(), systemID, path)
+	return sqlDeleteMediaUserData(db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path))
 }
 
 // ListMediaUserData returns every user-data row, used by the reindex re-apply
@@ -110,6 +117,7 @@ func sqlGetMediaUserData(
 	if err != nil {
 		return row, false, fmt.Errorf("failed to scan media user data row: %w", err)
 	}
+	row.Path = pathutil.CanonicalMediaPath(row.Path)
 	return row, true, nil
 }
 
@@ -254,6 +262,7 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 		if scanErr != nil {
 			return list, fmt.Errorf("failed to scan media user data row: %w", scanErr)
 		}
+		row.Path = pathutil.CanonicalMediaPath(row.Path)
 		list = append(list, row)
 	}
 	if err = rows.Err(); err != nil {
