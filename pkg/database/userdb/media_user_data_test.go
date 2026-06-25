@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +78,29 @@ func TestMediaUserDataCRUD(t *testing.T) {
 
 	// Deleting a missing row is not an error.
 	require.NoError(t, userDB.DeleteMediaUserData("NES", path))
+}
+
+func TestMediaUserDataNormalizesNativePathSeparators(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	path := filepath.Join("roms", "NES", "Game.nes")
+	canonicalPath := pathutil.CanonicalMediaPath(path)
+
+	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
+		SystemID:   "NES",
+		Path:       path,
+		IsFavorite: true,
+	}))
+	all, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Equal(t, canonicalPath, all[0].Path)
+
+	got, found, err := userDB.GetMediaUserData("NES", path)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, canonicalPath, got.Path)
 }
 
 func TestUpsertMediaUserDataEmptyIntentDeletes(t *testing.T) {
