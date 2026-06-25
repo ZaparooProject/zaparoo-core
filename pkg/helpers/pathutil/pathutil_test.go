@@ -37,7 +37,11 @@ func TestCanonicalMediaPath(t *testing.T) {
 		{name: "empty", path: "", expected: ""},
 		{name: "native path", path: filepath.Join("roms", "NES", "Game.nes"), expected: "roms/NES/Game.nes"},
 		{name: "backslash path", path: `roms\NES\Game.nes`, expected: "roms/NES/Game.nes"},
-		{name: "cleans filesystem path", path: filepath.Join("roms", "NES", "..", "SNES", "Game.sfc"), expected: "roms/SNES/Game.sfc"},
+		{
+			name:     "cleans filesystem path",
+			path:     filepath.Join("roms", "NES", "..", "SNES", "Game.sfc"),
+			expected: "roms/SNES/Game.sfc",
+		},
 		{name: "uri unchanged", path: "steam://12345", expected: "steam://12345"},
 	}
 
