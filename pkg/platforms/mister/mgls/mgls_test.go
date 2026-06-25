@@ -221,6 +221,16 @@ func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
 func TestGenerateMgl(t *testing.T) {
 	t.Parallel()
 
+	atari5200Path := filepath.Join(
+		string(filepath.Separator),
+		"media", "fat", "cifs", "games", "ATARI5200", "Activision Decathlon, The (USA).car",
+	)
+	atari5200MGLPath := filepath.ToSlash(filepath.Join(
+		"..", "..", "..", "..", "..", "media", "fat", "cifs", "games", "ATARI5200",
+		"Activision Decathlon, The (USA).car",
+	))
+	atari5200Core := cores.Systems["Atari5200"]
+
 	tests := []struct {
 		name     string
 		core     *cores.Core
@@ -323,6 +333,14 @@ func TestGenerateMgl(t *testing.T) {
 	<rbf>_Console/NES</rbf>
 	<file delay="2" type="f" index="1" path="../../../../../media/fat/games/NES/Mario.nes"/>
 </mistergamedescription>`,
+		},
+		{
+			name: "Atari5200 car uses load-file slot",
+			core: &atari5200Core,
+			path: atari5200Path,
+			want: "<mistergamedescription>\n\t<rbf>_Console/Atari5200</rbf>\n" +
+				"\t<file delay=\"1\" type=\"f\" index=\"1\" path=\"" + atari5200MGLPath + "\"/>\n" +
+				"</mistergamedescription>",
 		},
 		{
 			name: "game launch with reset tag (Jaguar)",

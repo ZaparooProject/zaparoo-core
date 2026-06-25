@@ -176,7 +176,7 @@ var Systems = map[string]Core{
 				Exts:  []string{".car", ".a52", ".bin", ".rom"},
 				Mgl: &MGLParams{
 					Delay:  1,
-					Method: "s",
+					Method: "f",
 					Index:  1,
 				},
 			},
