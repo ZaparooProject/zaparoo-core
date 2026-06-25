@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -129,7 +130,7 @@ func mediaDBIDForPath(
 	t.Helper()
 	system, err := db.FindSystemBySystemID(systemID)
 	require.NoError(t, err)
-	media, err := db.FindMediaBySystemAndPath(ctx, system.DBID, path)
+	media, err := db.FindMediaBySystemAndPath(ctx, system.DBID, pathutil.CanonicalMediaPath(path))
 	require.NoError(t, err)
 	require.NotNil(t, media)
 	return media.DBID
