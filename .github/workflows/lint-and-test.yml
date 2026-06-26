@@ -70,7 +70,7 @@ jobs:
       - name: Restore Go cache (Unix)
         id: restore-go-cache-unix
         if: matrix.os != 'windows'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -80,7 +80,7 @@ jobs:
       - name: Restore Go cache (Windows)
         id: restore-go-cache-windows
         if: matrix.os == 'windows'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -292,7 +292,7 @@ jobs:
 
       - name: Restore Go cache (macOS)
         if: matrix.os == 'macos'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
@@ -301,7 +301,7 @@ jobs:
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
