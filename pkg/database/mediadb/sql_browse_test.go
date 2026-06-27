@@ -780,6 +780,65 @@ func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
 	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
 }
 
+// TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse reproduces the
+// regression where a browse that runs before the image-* property tags are seeded
+// (which happens inside the indexing pipeline) pins an empty tag set in the
+// process-lifetime cache, leaving every later browse reporting HasCover=false until
+// the process restarts. The scrape/index-completion path never invalidates this
+// cache, so the only recovery without this fix is a restart.
+func TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game With Cover"),
+		Name:       "Game With Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "with_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// First browse runs before any image-* property tag exists, mirroring a browse
+	// landing mid-reindex before SeedCanonicalTags. No covers can exist yet, so
+	// HasCover=false here is correct — but it must not be cached for the DB handle.
+	firstPass := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, MediaTitleID: title.DBID, Name: "Game With Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), firstPass))
+	require.False(t, firstPass[0].HasCover, "no image tags seeded yet, so HasCover must be false")
+
+	// Indexing then seeds the image-* tags and the scraper writes the cover property.
+	seedImagePropertyTags(t, mediaDB)
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "with_cover.png")},
+	}))
+
+	// A subsequent browse on the same DB handle must now see the cover. Without the
+	// empty-result guard in resolveImagePropertyTagDBIDs, the first pass would have
+	// cached an empty tag set and this would still report false.
+	secondPass := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, MediaTitleID: title.DBID, Name: "Game With Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), secondPass))
+	assert.True(t, secondPass[0].HasCover,
+		"cover must be detected once image tags are seeded, even if an earlier browse ran first")
+}
+
 // Sibling disambiguation is exercised end-to-end in disambiguation_test.go: it
 // now reads stored per-title types (RecomputeSystemDisambiguation) instead of
 // grouping a page in memory, so it is correct across page boundaries.
