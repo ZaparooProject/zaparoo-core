@@ -263,6 +263,16 @@ func resolveImagePropertyTagDBIDs(ctx context.Context, db sqlQueryable) ([]int64
 		return nil, fmt.Errorf("browse image property tags rows: %w", rowsErr)
 	}
 
+	// Never cache an empty result. The image-* property tags are seeded during
+	// indexing (SeedCanonicalTags), so a browse that runs before they exist would
+	// otherwise pin an empty set for the process lifetime — making every entry report
+	// HasCover=false until the process restarts, since the scrape/index-completion
+	// path does not invalidate this cache. Re-querying while empty is cheap; once the
+	// tags exist the non-empty result is cached normally.
+	if len(tagIDs) == 0 {
+		return tagIDs, nil
+	}
+
 	imagePropertyTagCacheMu.Lock()
 	if imagePropertyTagCacheMap == nil {
 		imagePropertyTagCacheMap = make(map[sqlQueryable][]int64)
