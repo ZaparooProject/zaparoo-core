@@ -1668,6 +1668,12 @@ func (db *MediaDB) BrowseDirectories(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	// Non-cancellable context: with a cancellable context, mattn/go-sqlite3
+	// spawns a goroutine + channel per rows.Next() call. A directory with
+	// thousands of children returns one row per child, so that per-row overhead
+	// dominates the scan on weak hardware (MiSTer). This is a bounded indexed
+	// read, so dropping mid-iteration cancellation is safe.
+	ctx = context.WithoutCancel(ctx)
 	results, err := sqlBrowseDirectories(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
