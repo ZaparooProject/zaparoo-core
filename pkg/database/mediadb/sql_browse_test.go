@@ -229,6 +229,99 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheParentMissing(t *testing.T)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseDirCount_CacheSingleSystem(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM BrowseDirCounts").
+		WithArgs(int64(10), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(7))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 7, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_CacheNoSystemUsesDistinct(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT d.DBID\\) FROM BrowseDirCounts").
+		WithArgs(int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(13))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: gamesDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 13, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_FallsBackToMediaWhenParentMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	romsDir := browseTestDir("roms")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(romsDir).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM \\(WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: romsDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_FallsBackToMediaWhenCacheNotReady(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	romsDir := browseTestDir("roms")
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM \\(WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(9))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: romsDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseVirtualSchemesFromCache_ReturnsEmptyWithoutMediaFallback(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()

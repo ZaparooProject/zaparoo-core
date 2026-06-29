@@ -3106,14 +3106,6 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
 	}
 
-	// Non-cancellable context: with a cancellable context, mattn/go-sqlite3
-	// spawns a goroutine + channel per rows.Next() call. This function runs five
-	// bulk reads that each return up to one row per candidate directory, so on a
-	// large folder (thousands of singleton containers) that per-row overhead
-	// dominates on weak hardware (MiSTer). These are bounded indexed reads, so
-	// dropping mid-iteration cancellation is safe.
-	ctx = context.WithoutCancel(ctx)
-
 	// Per-step timing, emitted once at debug level so the on-device breakdown of
 	// a slow resolution is visible without changing behaviour.
 	var inScanDur, fullRowsDur, tagsDur, zapDur, coverDur time.Duration

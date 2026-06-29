@@ -2570,6 +2570,22 @@ func (m *MockMediaDBI) BrowseDirectories(
 	return []database.BrowseDirectoryResult{}, nil
 }
 
+func (m *MockMediaDBI) BrowseDirCount(
+	ctx context.Context, opts database.BrowseDirCountOptions,
+) (int, error) {
+	args := m.Called(ctx, opts)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 func (m *MockMediaDBI) BrowseFiles(
 	ctx context.Context, opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {

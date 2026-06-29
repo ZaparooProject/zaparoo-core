@@ -38,12 +38,35 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Browse pagination phases. A cursor in the dirs phase pages through
+// directories (keyed by Name); the files phase pages through files. Directories
+// always fully precede files, so a cursor only ever resumes one stream.
+const (
+	browsePhaseDirs  = "dirs"
+	browsePhaseFiles = "files"
+)
+
 // browseCursorData is the JSON-serializable keyset cursor for browse pagination.
+// Phase selects the stream the cursor resumes ("dirs" or "files"; absent means a
+// legacy file-only cursor). DirName is the dirs-phase keyset; SortValue/SortMode/
+// LastID are the files-phase keyset. TotalFiles/TotalDirs carry the first-page
+// counts forward so cursor pages do not rerun the count queries.
 type browseCursorData struct {
 	SortValue  string `json:"sortValue"`
 	SortMode   string `json:"sortMode,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	DirName    string `json:"dirName,omitempty"`
 	LastID     int64  `json:"lastId"`
 	TotalFiles int    `json:"totalFiles,omitempty"`
+	TotalDirs  int    `json:"totalDirs,omitempty"`
+}
+
+func encodeCursorData(data *browseCursorData) (string, error) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal browse cursor: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
 }
 
 func encodeBrowseCursor(lastID int64, sortValue string, totalFiles ...int) (string, error) {
@@ -51,11 +74,7 @@ func encodeBrowseCursor(lastID int64, sortValue string, totalFiles ...int) (stri
 	if len(totalFiles) > 0 && totalFiles[0] > 0 {
 		data.TotalFiles = totalFiles[0]
 	}
-	b, err := json.Marshal(data)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal browse cursor: %w", err)
-	}
-	return base64.StdEncoding.EncodeToString(b), nil
+	return encodeCursorData(&data)
 }
 
 func encodeBrowseCursorWithMode(lastID int64, sortValue, sortMode string, totalFiles int) (string, error) {
@@ -63,11 +82,40 @@ func encodeBrowseCursorWithMode(lastID int64, sortValue, sortMode string, totalF
 	if totalFiles > 0 {
 		data.TotalFiles = totalFiles
 	}
-	b, err := json.Marshal(data)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal browse cursor: %w", err)
-	}
-	return base64.StdEncoding.EncodeToString(b), nil
+	return encodeCursorData(&data)
+}
+
+// encodeDirCursor builds a dirs-phase cursor positioned after dirName.
+func encodeDirCursor(dirName string, totalFiles, totalDirs int) (string, error) {
+	return encodeCursorData(&browseCursorData{
+		Phase:      browsePhaseDirs,
+		DirName:    dirName,
+		TotalFiles: totalFiles,
+		TotalDirs:  totalDirs,
+	})
+}
+
+// encodeFileCursor builds a files-phase cursor from the last file's keyset.
+func encodeFileCursor(lastID int64, sortValue, sortMode string, totalFiles, totalDirs int) (string, error) {
+	return encodeCursorData(&browseCursorData{
+		Phase:      browsePhaseFiles,
+		SortValue:  sortValue,
+		SortMode:   sortMode,
+		LastID:     lastID,
+		TotalFiles: totalFiles,
+		TotalDirs:  totalDirs,
+	})
+}
+
+// encodeFilesStartCursor builds a files-phase cursor with no keyset (LastID 0),
+// marking the transition from the dirs phase so the next page starts files from
+// the beginning.
+func encodeFilesStartCursor(totalFiles, totalDirs int) (string, error) {
+	return encodeCursorData(&browseCursorData{
+		Phase:      browsePhaseFiles,
+		TotalFiles: totalFiles,
+		TotalDirs:  totalDirs,
+	})
 }
 
 func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
@@ -89,7 +137,10 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 		LastID:     data.LastID,
 		SortValue:  data.SortValue,
 		SortMode:   data.SortMode,
+		Phase:      data.Phase,
+		DirName:    data.DirName,
 		TotalFiles: data.TotalFiles,
+		TotalDirs:  data.TotalDirs,
 	}, nil
 }
 
@@ -562,32 +613,128 @@ func browseFilesystem(
 
 	ctx := env.Context
 
-	// Get subdirectories (only on first page)
-	var dirs []database.BrowseDirectoryResult
-	if cursor == nil {
-		var err error
+	// Counts are computed once on the first page and carried forward in the
+	// cursor so paging through a large directory does not rerun them.
+	var totalDirs, totalFiles int
+	if cursor != nil {
+		totalDirs = cursor.TotalDirs
+		totalFiles = cursor.TotalFiles
+	}
+
+	// Directory phase: directories are paginated by name and always precede
+	// files, so a cursor only ever resumes one stream. The letter filter targets
+	// files, so a letter query skips directories entirely.
+	inDirsPhase := letter == nil && (cursor == nil || cursor.Phase == browsePhaseDirs)
+	if inDirsPhase {
+		afterName := ""
+		if cursor != nil {
+			afterName = cursor.DirName
+		}
 		started := time.Now()
-		dirs, err = env.Database.MediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		dirs, err := env.Database.MediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
 			PathPrefix: prefix,
+			AfterName:  afterName,
 			Systems:    systems,
+			Limit:      maxResults + 1,
 		})
 		logBrowseTiming("directories", prefix, started, len(dirs))
 		if err != nil {
 			return nil, fmt.Errorf("error browsing directories: %w", err)
 		}
+
+		if cursor == nil {
+			started = time.Now()
+			totalDirs, err = env.Database.MediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+				PathPrefix: prefix,
+				Systems:    systems,
+			})
+			logBrowseTiming("dir_count", prefix, started, totalDirs)
+			if err != nil {
+				return nil, fmt.Errorf("error getting directory count: %w", err)
+			}
+		}
+
+		hasMoreDirs := len(dirs) > maxResults
+		if hasMoreDirs {
+			dirs = dirs[:maxResults]
+		}
+
+		// More directories remain: emit a directory-only page keyed by name.
+		if hasMoreDirs {
+			if cursor == nil {
+				totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems)
+				if err != nil {
+					return nil, err
+				}
+			}
+			next, encErr := encodeDirCursor(dirs[len(dirs)-1].Name, totalFiles, totalDirs)
+			if encErr != nil {
+				return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
+			}
+			return buildBrowseResponse(env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, &next, true, systems)
+		}
+
+		// Directories are exhausted. Fill the rest of the page with the first
+		// files so small folders return in a single round-trip (mixed boundary
+		// page), then continue paging files from there.
+		if cursor == nil {
+			totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems)
+			if err != nil {
+				return nil, err
+			}
+		}
+		remaining := maxResults - len(dirs)
+		if remaining <= 0 {
+			// The page is already full of directories; transition to the files
+			// phase on the next page if any files exist.
+			var next *string
+			hasNext := totalFiles > 0
+			if hasNext {
+				encoded, encErr := encodeFilesStartCursor(totalFiles, totalDirs)
+				if encErr != nil {
+					return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
+				}
+				next = &encoded
+			}
+			return buildBrowseResponse(
+				env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, next, hasNext, systems)
+		}
+
+		started = time.Now()
+		files, err := env.Database.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+			PathPrefix: prefix,
+			Limit:      remaining + 1,
+			Sort:       sort,
+			Systems:    systems,
+		})
+		logBrowseTiming("files", prefix, started, len(files))
+		if err != nil {
+			return nil, fmt.Errorf("error browsing files: %w", err)
+		}
+		files, next, encErr := paginateFiles(files, remaining, totalFiles, totalDirs, sort)
+		if encErr != nil {
+			return nil, encErr
+		}
+		return buildBrowseResponse(
+			env, cleaned, dirs, files, maxResults, totalFiles, totalDirs, next, next != nil, systems)
 	}
 
-	// Get files
-	opts := &database.BrowseFilesOptions{
+	// Files phase. A files-phase cursor with no keyset (LastID == 0) marks the
+	// transition out of the dirs phase, so files start from the beginning.
+	fileCursor := cursor
+	if cursor != nil && cursor.Phase == browsePhaseFiles && cursor.LastID == 0 {
+		fileCursor = nil
+	}
+
+	started := time.Now()
+	files, err := env.Database.MediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
 		PathPrefix: prefix,
-		Cursor:     cursor,
+		Cursor:     fileCursor,
 		Limit:      maxResults + 1,
 		Letter:     letter,
 		Sort:       sort,
 		Systems:    systems,
-	}
-	started := time.Now()
-	files, err := env.Database.MediaDB.BrowseFiles(ctx, opts)
+	})
 	logBrowseTiming("files", prefix, started, len(files))
 	if err != nil {
 		return nil, fmt.Errorf("error browsing files: %w", err)
@@ -595,23 +742,69 @@ func browseFilesystem(
 
 	// Get total file count. First-page cursors carry this forward so loading
 	// additional pages in large directories does not repeat the same count query.
-	var totalFiles int
-	if cursor != nil && cursor.TotalFiles > 0 {
-		totalFiles = cursor.TotalFiles
-	} else if len(files) > 0 || cursor != nil {
-		started = time.Now()
-		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
-			PathPrefix: prefix,
-			Letter:     letter,
-			Systems:    systems,
-		})
-		logBrowseTiming("file_count", prefix, started, totalFiles)
+	if totalFiles == 0 && (len(files) > 0 || cursor != nil) {
+		totalFiles, err = browseTotalFileCount(ctx, env, prefix, letter, systems)
 		if err != nil {
-			return nil, fmt.Errorf("error getting file count: %w", err)
+			return nil, err
 		}
 	}
 
-	return buildBrowseResponse(env, cleaned, dirs, files, maxResults, totalFiles, sort, systems)
+	files, next, encErr := paginateFiles(files, maxResults, totalFiles, totalDirs, sort)
+	if encErr != nil {
+		return nil, encErr
+	}
+	return buildBrowseResponse(env, cleaned, nil, files, maxResults, totalFiles, totalDirs, next, next != nil, systems)
+}
+
+// browseTotalFileCount returns the direct-child file count for a path prefix,
+// logging the query timing.
+func browseTotalFileCount(
+	ctx context.Context,
+	env *requests.RequestEnv,
+	prefix string,
+	letter *string,
+	systems []systemdefs.System,
+) (int, error) {
+	started := time.Now()
+	count, err := env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		PathPrefix: prefix,
+		Letter:     letter,
+		Systems:    systems,
+	})
+	logBrowseTiming("file_count", prefix, started, count)
+	if err != nil {
+		return 0, fmt.Errorf("error getting file count: %w", err)
+	}
+	return count, nil
+}
+
+// paginateFiles trims an over-fetched file slice to the page limit and, when
+// more rows remain, encodes the keyset cursor for the next page.
+func paginateFiles(
+	files []database.SearchResultWithCursor,
+	limit int,
+	totalFiles, totalDirs int,
+	sort string,
+) (page []database.SearchResultWithCursor, next *string, err error) {
+	if len(files) <= limit {
+		return files, nil, nil
+	}
+	files = files[:limit]
+	last := files[len(files)-1]
+	sortValue := last.SortValue
+	if sortValue == "" {
+		switch sort {
+		case "filename-asc", "filename-desc":
+			sortValue = last.Path
+		default:
+			sortValue = last.Name
+		}
+	}
+	encoded, encErr := encodeFileCursor(last.MediaID, sortValue, last.SortMode, totalFiles, totalDirs)
+	if encErr != nil {
+		return nil, nil, fmt.Errorf("failed to encode cursor: %w", encErr)
+	}
+	return files, &encoded, nil
 }
 
 // browseVirtual lists all indexed media entries under a virtual URI scheme.
@@ -650,22 +843,24 @@ func browseVirtual(
 	if cursor != nil && cursor.TotalFiles > 0 {
 		totalFiles = cursor.TotalFiles
 	} else {
-		started = time.Now()
-		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
-			PathPrefix: schemePath,
-			Letter:     letter,
-			Systems:    systems,
-		})
-		logBrowseTiming("virtual_file_count", schemePath, started, totalFiles)
+		totalFiles, err = browseTotalFileCount(ctx, env, schemePath, letter, systems)
 		if err != nil {
-			return nil, fmt.Errorf("error getting virtual file count: %w", err)
+			return nil, err
 		}
 	}
 
-	return buildBrowseResponse(env, schemePath, nil, files, maxResults, totalFiles, sort, systems)
+	files, next, encErr := paginateFiles(files, maxResults, totalFiles, 0, sort)
+	if encErr != nil {
+		return nil, encErr
+	}
+	return buildBrowseResponse(env, schemePath, nil, files, maxResults, totalFiles, 0, next, next != nil, systems)
 }
 
-// buildBrowseResponse assembles the BrowseResults from directories, files, and pagination info.
+// buildBrowseResponse assembles a BrowseResults page from directory and file
+// entries plus precomputed pagination. Directory entries are singleton-alias
+// enriched; pagination is attached whenever the page has entries so the caller's
+// next cursor (directory keyset, files-phase transition, or file keyset) is
+// surfaced.
 func buildBrowseResponse(
 	env *requests.RequestEnv,
 	path string,
@@ -673,92 +868,19 @@ func buildBrowseResponse(
 	files []database.SearchResultWithCursor,
 	maxResults int,
 	totalFiles int,
-	sort string,
+	totalDirs int,
+	nextCursor *string,
+	hasNextPage bool,
 	systems []systemdefs.System,
 ) (any, error) {
-	hasNextPage := len(files) > maxResults
-	if hasNextPage {
-		files = files[:maxResults]
-	}
-
-	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
-
 	var rootDirs []string
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
 
-	// Batch-resolve singleton container aliases for the page's candidate
-	// directories when browsing a single system. Only small dirs (recursive
-	// FileCount <= maxSingletonAliasCandidateFiles) are considered, so large
-	// trees like MiSTer's _Arcade/_alternatives are never scanned.
-	var singletonAliases map[string]database.SingletonContainerAlias
-	if len(dirs) > 0 && env.Database != nil && env.Database.MediaDB != nil {
-		// Determine which system to resolve against. Use the explicit filter if
-		// exactly one system was requested; otherwise infer from the directory
-		// entries (all dirs with media must belong to the same single system).
-		var systemID string
-		if len(systems) == 1 {
-			systemID = systems[0].ID
-		} else if len(systems) == 0 {
-			for _, dir := range dirs {
-				if len(dir.SystemIDs) == 0 {
-					continue
-				}
-				if len(dir.SystemIDs) > 1 || (systemID != "" && systemID != dir.SystemIDs[0]) {
-					systemID = ""
-					break
-				}
-				systemID = dir.SystemIDs[0]
-			}
-		}
-		var candidates []database.SingletonAliasCandidate
-		if systemID != "" {
-			prefix := path
-			if !strings.HasSuffix(prefix, "/") {
-				prefix += "/"
-			}
-			for _, dir := range dirs {
-				if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
-					continue
-				}
-				if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
-					continue
-				}
-				candidates = append(candidates, database.SingletonAliasCandidate{
-					ChildDir:  prefix + dir.Name + "/",
-					FileCount: dir.FileCount,
-				})
-			}
-		}
-		if len(candidates) > 0 && singletonMediaAliasesEnabled(env) {
-			started := time.Now()
-			system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
-			if sysErr == nil {
-				aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
-					env.Context, system.DBID, candidates,
-				)
-				if aliasErr == nil && len(aliases) > 0 {
-					singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
-					for i := range aliases {
-						singletonAliases[aliases[i].ChildDir] = aliases[i]
-					}
-				} else if aliasErr != nil {
-					log.Debug().Err(aliasErr).Str("path", path).Msg("browse singleton alias batch resolution failed")
-				}
-			} else {
-				log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
-			}
-			log.Debug().
-				Str("path", path).
-				Int("candidates", len(candidates)).
-				Int("aliases", len(singletonAliases)).
-				Dur("duration", time.Since(started)).
-				Msg("browse singleton alias resolution timing")
-		}
-	}
+	singletonAliases := resolveDirSingletonAliases(env, path, dirs, systems)
 
-	// Add directory entries
+	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
 	for _, dir := range dirs {
 		dirPath := filepath.ToSlash(filepath.Join(path, dir.Name))
 		entry := models.BrowseEntry{
@@ -791,35 +913,13 @@ func buildBrowseResponse(
 		entries = append(entries, entry)
 	}
 
-	// Build file entries
 	for i := range files {
 		entry := buildMediaEntry(&files[i], env, rootDirs)
 		entries = append(entries, entry)
 	}
 
-	// Build pagination
 	var pagination *models.PaginationInfo
-	if len(files) > 0 {
-		var nextCursor *string
-		if hasNextPage {
-			lastResult := files[len(files)-1]
-			sortValue := lastResult.SortValue
-			if sortValue == "" {
-				switch sort {
-				case "filename-asc", "filename-desc":
-					sortValue = lastResult.Path
-				default:
-					sortValue = lastResult.Name
-				}
-			}
-			encoded, encErr := encodeBrowseCursorWithMode(
-				lastResult.MediaID, sortValue, lastResult.SortMode, totalFiles,
-			)
-			if encErr != nil {
-				return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
-			}
-			nextCursor = &encoded
-		}
+	if len(entries) > 0 {
 		pagination = &models.PaginationInfo{
 			NextCursor:  nextCursor,
 			HasNextPage: hasNextPage,
@@ -832,7 +932,94 @@ func buildBrowseResponse(
 		Entries:    entries,
 		Pagination: pagination,
 		TotalFiles: totalFiles,
+		TotalDirs:  totalDirs,
 	}, nil
+}
+
+// resolveDirSingletonAliases batch-resolves singleton container aliases for the
+// page's candidate directories when browsing a single system. Only small dirs
+// (recursive FileCount <= maxSingletonAliasCandidateFiles) are considered, so
+// large trees like MiSTer's _Arcade/_alternatives are never scanned.
+func resolveDirSingletonAliases(
+	env *requests.RequestEnv,
+	path string,
+	dirs []database.BrowseDirectoryResult,
+	systems []systemdefs.System,
+) map[string]database.SingletonContainerAlias {
+	if len(dirs) == 0 || env.Database == nil || env.Database.MediaDB == nil {
+		return nil
+	}
+
+	// Determine which system to resolve against. Use the explicit filter if
+	// exactly one system was requested; otherwise infer from the directory
+	// entries (all dirs with media must belong to the same single system).
+	var systemID string
+	if len(systems) == 1 {
+		systemID = systems[0].ID
+	} else if len(systems) == 0 {
+		for _, dir := range dirs {
+			if len(dir.SystemIDs) == 0 {
+				continue
+			}
+			if len(dir.SystemIDs) > 1 || (systemID != "" && systemID != dir.SystemIDs[0]) {
+				systemID = ""
+				break
+			}
+			systemID = dir.SystemIDs[0]
+		}
+	}
+	if systemID == "" {
+		return nil
+	}
+
+	var candidates []database.SingletonAliasCandidate
+	prefix := path
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	for _, dir := range dirs {
+		if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
+			continue
+		}
+		if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
+			continue
+		}
+		candidates = append(candidates, database.SingletonAliasCandidate{
+			ChildDir:  prefix + dir.Name + "/",
+			FileCount: dir.FileCount,
+		})
+	}
+	if len(candidates) == 0 || !singletonMediaAliasesEnabled(env) {
+		return nil
+	}
+
+	started := time.Now()
+	system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
+	if sysErr != nil {
+		log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
+		return nil
+	}
+	aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
+		env.Context, system.DBID, candidates,
+	)
+	if aliasErr != nil {
+		log.Debug().Err(aliasErr).Str("path", path).Msg("browse singleton alias batch resolution failed")
+		return nil
+	}
+	var singletonAliases map[string]database.SingletonContainerAlias
+	if len(aliases) > 0 {
+		singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
+		for i := range aliases {
+			singletonAliases[aliases[i].ChildDir] = aliases[i]
+		}
+	}
+	log.Debug().
+		Str("path", path).
+		Int("candidates", len(candidates)).
+		Int("aliases", len(singletonAliases)).
+		Dur("duration", time.Since(started)).
+		Msg("browse singleton alias resolution timing")
+	return singletonAliases
 }
 
 func browseMediaDisplayName(path, sortName, titleName string) string {

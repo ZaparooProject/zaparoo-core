@@ -76,6 +76,7 @@ type BrowseResults struct {
 	Path       string          `json:"path"`
 	Entries    []BrowseEntry   `json:"entries"`
 	TotalFiles int             `json:"totalFiles"`
+	TotalDirs  int             `json:"totalDirs"`
 }
 
 // BrowseIndexGroup is one first-character section of a browse list. Key is the

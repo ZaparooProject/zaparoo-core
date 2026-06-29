@@ -1668,12 +1668,6 @@ func (db *MediaDB) BrowseDirectories(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	// Non-cancellable context: with a cancellable context, mattn/go-sqlite3
-	// spawns a goroutine + channel per rows.Next() call. A directory with
-	// thousands of children returns one row per child, so that per-row overhead
-	// dominates the scan on weak hardware (MiSTer). This is a bounded indexed
-	// read, so dropping mid-iteration cancellation is safe.
-	ctx = context.WithoutCancel(ctx)
 	results, err := sqlBrowseDirectories(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
@@ -1701,6 +1695,18 @@ func (db *MediaDB) BrowseFileCount(
 		return 0, ErrNullSQL
 	}
 	return sqlBrowseFileCount(ctx, db.sql.Load(), opts)
+}
+
+// BrowseDirCount returns the total number of immediate child directories under a path prefix.
+func (db *MediaDB) BrowseDirCount(
+	ctx context.Context, opts database.BrowseDirCountOptions,
+) (int, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	count, err := sqlBrowseDirCount(ctx, db.sql.Load(), opts)
+	db.NoteCorruption(err)
+	return count, err
 }
 
 // BrowseIndex returns the ordered first-character buckets for a browse scope,
