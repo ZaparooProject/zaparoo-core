@@ -346,20 +346,38 @@ type SingletonAliasCandidate struct {
 }
 
 // BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
+// AfterName is the keyset cursor for directory pagination: only directories
+// whose Name sorts strictly after it are returned (directory names are unique
+// within a parent, so Name alone is a stable keyset). Limit caps the number of
+// directories returned; 0 means no limit (full listing).
 type BrowseDirectoriesOptions struct {
+	PathPrefix string
+	AfterName  string
+	Systems    []systemdefs.System
+	Limit      int
+}
+
+// BrowseDirCountOptions contains parameters for the BrowseDirCount query.
+type BrowseDirCountOptions struct {
 	PathPrefix string
 	Systems    []systemdefs.System
 }
 
 // BrowseCursor holds the keyset pagination state for browse queries.
-// SortValue is the value of the sort column (Name or Path) from the last
-// result, LastID is the DBID tiebreaker, and TotalFiles carries the first-page
-// count so cursor pages do not need to rerun the same count query.
+//
+// media.browse pages directories first (ordered by Name), then files, under a
+// single cursor. Phase selects which stream the cursor resumes: "dirs" uses
+// DirName as the keyset, "files" (or empty, for legacy file-only cursors) uses
+// SortValue/SortMode/LastID. TotalFiles and TotalDirs carry the first-page
+// counts so cursor pages do not rerun the count queries.
 type BrowseCursor struct {
 	SortValue  string
 	SortMode   string
+	Phase      string
+	DirName    string
 	LastID     int64
 	TotalFiles int
+	TotalDirs  int
 }
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
@@ -852,6 +870,7 @@ type MediaDBI interface {
 
 	// Browse methods for directory-style navigation of indexed content
 	BrowseDirectories(ctx context.Context, opts BrowseDirectoriesOptions) ([]BrowseDirectoryResult, error)
+	BrowseDirCount(ctx context.Context, opts BrowseDirCountOptions) (int, error)
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)

@@ -381,7 +381,16 @@ func sqlBrowseDirectoriesFromMediaFallback(
 	if len(opts.Systems) > 0 {
 		return sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, opts)
 	}
-	return sqlBrowseDirectoriesFromMedia(ctx, db, opts.PathPrefix)
+	return sqlBrowseDirectoriesFromMedia(ctx, db, opts)
+}
+
+// browseDirLimitClause returns a trailing LIMIT clause and its args for a
+// directory listing. A limit of 0 means no limit (full listing).
+func browseDirLimitClause(limit int) (clause string, args []any) {
+	if limit > 0 {
+		return " LIMIT ?", []any{limit}
+	}
+	return "", nil
 }
 
 func browseSystemIDsForLog(systems []systemdefs.System) []string {
@@ -408,7 +417,7 @@ func sqlBrowseDirectoriesFromCache(
 		return nil, false, nil
 	}
 	if len(opts.Systems) == 1 {
-		results, cacheErr := sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts.Systems[0].ID)
+		results, cacheErr := sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts)
 		return results, true, cacheErr
 	}
 
@@ -423,7 +432,15 @@ func sqlBrowseDirectoriesFromCache(
 		query += ` AND ` + systemClause
 		args = append(args, systemArgs...)
 	}
+	if opts.AfterName != "" {
+		query += ` AND d.Name > ?`
+		args = append(args, opts.AfterName)
+	}
 	query += ` GROUP BY d.DBID, d.Name ORDER BY d.Name ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -451,17 +468,29 @@ func sqlBrowseDirectoriesFromCacheForSingleSystem(
 	ctx context.Context,
 	db sqlQueryable,
 	parentID int64,
-	systemID string,
+	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	rows, err := db.QueryContext(ctx, `SELECT d.Name, c.FileCount
+	systemID := opts.Systems[0].ID
+	args := []any{parentID, systemID}
+	query := `SELECT d.Name, c.FileCount
 		FROM BrowseDirCounts c
 		INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
 		INNER JOIN Systems s ON c.SystemDBID = s.DBID
 		WHERE c.ParentDirDBID = ?
 			AND c.ChildDirDBID != c.ParentDirDBID
 			AND d.IsVirtual = 0
-			AND s.SystemID = ?
-		ORDER BY d.Name ASC`, parentID, systemID)
+			AND s.SystemID = ?`
+	if opts.AfterName != "" {
+		query += ` AND d.Name > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY d.Name ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse cache single-system directories query: %w", err)
 	}
@@ -485,24 +514,30 @@ func sqlBrowseDirectoriesFromCacheForSingleSystem(
 func sqlBrowseDirectoriesFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
-	pathPrefix string,
+	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	pathCondition, pathArgs := browsePathPrefixCondition("Path", pathPrefix)
-	args := append([]any{pathPrefix}, pathArgs...)
-	rows, err := db.QueryContext(ctx,
-		`WITH matched AS (
+	pathCondition, pathArgs := browsePathPrefixCondition("Path", opts.PathPrefix)
+	args := append([]any{opts.PathPrefix}, pathArgs...)
+	query := `WITH matched AS (
 			 SELECT substr(Path, length(?) + 1) AS Rest
 			 FROM Media
-			 WHERE IsMissing = 0 AND `+pathCondition+`
+			 WHERE IsMissing = 0 AND ` + pathCondition + `
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
 			COUNT(*) AS FileCount
 		 FROM matched
 		 WHERE instr(Rest, '/') > 0
-		 GROUP BY Name
-		 ORDER BY Name ASC`,
-		args...,
-	)
+		 GROUP BY Name`
+	if opts.AfterName != "" {
+		query += ` HAVING Name > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY Name ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories media query: %w", err)
 	}
@@ -533,22 +568,28 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 	args = append(args, opts.PathPrefix)
 	args = append(args, pathArgs...)
 	args = append(args, systemArgs...)
-	rows, err := db.QueryContext(ctx,
-		`WITH matched AS (
+	query := `WITH matched AS (
 			 SELECT substr(m.Path, length(?) + 1) AS Rest, s.SystemID
 			 FROM Media m
 			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			 WHERE m.IsMissing = 0 AND `+pathCondition+` AND `+systemClause+`
+			 WHERE m.IsMissing = 0 AND ` + pathCondition + ` AND ` + systemClause + `
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
 			COUNT(*) AS FileCount,
 			GROUP_CONCAT(DISTINCT SystemID)
 		 FROM matched
 		 WHERE instr(Rest, '/') > 0
-		 GROUP BY Name
-		 ORDER BY Name ASC`,
-		args...,
-	)
+		 GROUP BY Name`
+	if opts.AfterName != "" {
+		query += ` HAVING Name > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY Name ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories by system media query: %w", err)
 	}
@@ -1031,6 +1072,112 @@ func sqlBrowseFileCountFromMedia(
 	var count int
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("browse file count: %w", err)
+	}
+	return count, nil
+}
+
+// sqlBrowseDirCount returns the total number of immediate child directories
+// under a path prefix, routed the same way as the directory listing (cache when
+// ready and the parent is present, media otherwise) so the count matches what
+// the listing pages through.
+func sqlBrowseDirCount(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+) (int, error) {
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	if ready {
+		count, parentFound, cacheErr := sqlBrowseDirCountFromCache(ctx, db, opts)
+		if cacheErr != nil || parentFound {
+			return count, cacheErr
+		}
+	}
+	return sqlBrowseDirCountFromMedia(ctx, db, opts)
+}
+
+func sqlBrowseDirCountFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+) (count int, parentFound bool, err error) {
+	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		return 0, false, nil
+	}
+
+	args := []any{parentID}
+	base := `FROM BrowseDirCounts c
+		INNER JOIN BrowseDirs d ON c.ChildDirDBID = d.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE c.ParentDirDBID = ? AND c.ChildDirDBID != c.ParentDirDBID AND d.IsVirtual = 0`
+	if len(opts.Systems) == 1 {
+		base += ` AND s.SystemID = ?`
+		args = append(args, opts.Systems[0].ID)
+		if scanErr := db.QueryRowContext(ctx, `SELECT COUNT(*) `+base, args...).Scan(&count); scanErr != nil {
+			return 0, true, fmt.Errorf("browse cache single-system dir count: %w", scanErr)
+		}
+		return count, true, nil
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	if systemClause != "" {
+		base += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	if scanErr := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT d.DBID) `+base, args...).Scan(&count); scanErr != nil {
+		return 0, true, fmt.Errorf("browse cache dir count: %w", scanErr)
+	}
+	return count, true, nil
+}
+
+func sqlBrowseDirCountFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirCountOptions,
+) (int, error) {
+	var (
+		inner string
+		args  []any
+	)
+	if len(opts.Systems) > 0 {
+		systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+		pathCondition, pathArgs := browsePathPrefixCondition("m.Path", opts.PathPrefix)
+		args = append(args, opts.PathPrefix)
+		args = append(args, pathArgs...)
+		args = append(args, systemArgs...)
+		inner = `WITH matched AS (
+				 SELECT substr(m.Path, length(?) + 1) AS Rest
+				 FROM Media m
+				 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+				 WHERE m.IsMissing = 0 AND ` + pathCondition + ` AND ` + systemClause + `
+			 )
+			 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name
+			 FROM matched
+			 WHERE instr(Rest, '/') > 0
+			 GROUP BY Name`
+	} else {
+		pathCondition, pathArgs := browsePathPrefixCondition("Path", opts.PathPrefix)
+		args = append(args, opts.PathPrefix)
+		args = append(args, pathArgs...)
+		inner = `WITH matched AS (
+				 SELECT substr(Path, length(?) + 1) AS Rest
+				 FROM Media
+				 WHERE IsMissing = 0 AND ` + pathCondition + `
+			 )
+			 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name
+			 FROM matched
+			 WHERE instr(Rest, '/') > 0
+			 GROUP BY Name`
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+inner+`)`, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("browse dir count from media: %w", err)
 	}
 	return count, nil
 }

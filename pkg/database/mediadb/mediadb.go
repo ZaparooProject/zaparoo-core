@@ -1697,6 +1697,18 @@ func (db *MediaDB) BrowseFileCount(
 	return sqlBrowseFileCount(ctx, db.sql.Load(), opts)
 }
 
+// BrowseDirCount returns the total number of immediate child directories under a path prefix.
+func (db *MediaDB) BrowseDirCount(
+	ctx context.Context, opts database.BrowseDirCountOptions,
+) (int, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	count, err := sqlBrowseDirCount(ctx, db.sql.Load(), opts)
+	db.NoteCorruption(err)
+	return count, err
+}
+
 // BrowseIndex returns the ordered first-character buckets for a browse scope,
 // each with a count and the keyset needed to seek a media.browse page to the
 // bucket's first item.

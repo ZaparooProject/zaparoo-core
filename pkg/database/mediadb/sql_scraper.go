@@ -3106,6 +3106,22 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
 	}
 
+	// Per-step timing, emitted once at debug level so the on-device breakdown of
+	// a slow resolution is visible without changing behaviour.
+	var inScanDur, fullRowsDur, tagsDur, zapDur, coverDur time.Duration
+	var inScanRows int
+	defer func() {
+		log.Debug().
+			Int("candidates", len(dirCandidates)).
+			Int("inScanRows", inScanRows).
+			Dur("inScanDuration", inScanDur).
+			Dur("fullRowsDuration", fullRowsDur).
+			Dur("tagsDuration", tagsDur).
+			Dur("zapScriptDuration", zapDur).
+			Dur("coverFlagsDuration", coverDur).
+			Msg("resolve singleton aliases step timing")
+	}()
+
 	expectedCounts := make(map[string]int, len(dirCandidates))
 	args := make([]any, 0, 1+len(dirCandidates))
 	args = append(args, systemDBID)
@@ -3120,6 +3136,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 
 	// One query for the direct media rows of all candidate dirs, served by
 	// idx_media_parentdir_system.
+	inScanStart := time.Now()
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
 	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
@@ -3144,10 +3161,12 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 			return nil, fmt.Errorf("resolve singleton aliases scan: %w", scanErr)
 		}
 		childDirRows[m.ParentDir] = append(childDirRows[m.ParentDir], m)
+		inScanRows++
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("resolve singleton aliases rows: %w", rowsErr)
 	}
+	inScanDur = time.Since(inScanStart)
 
 	// For each candidate dir: skip if the recursive FileCount exceeds the
 	// direct rows (media in nested subdirectories). Otherwise apply
@@ -3177,14 +3196,18 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	for _, c := range candidates {
 		mediaDBIDs = append(mediaDBIDs, c.media.DBID)
 	}
+	fullRowsStart := time.Now()
 	fullRows, err := db.GetMediaWithTitleAndSystemByIDs(ctx, mediaDBIDs)
 	if err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases full rows: %w", err)
 	}
+	fullRowsDur = time.Since(fullRowsStart)
+	tagsStart := time.Now()
 	tagsMap, err := db.GetMediaTagsByMediaDBIDs(ctx, mediaDBIDs)
 	if err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases tags: %w", err)
 	}
+	tagsDur = time.Since(tagsStart)
 
 	// Build the alias list and a parallel synthetic results slice carrying each
 	// title's stored DisambiguationTypes, which attachZapScriptTags reads to
@@ -3215,18 +3238,22 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	}
 
 	// Populate ZapScriptTags from each title's precomputed disambiguating types.
+	zapStart := time.Now()
 	if err := attachZapScriptTags(ctx, db.sql.Load(), synthetic); err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases disambiguation: %w", err)
 	}
+	zapDur = time.Since(zapStart)
 	for i := range aliases {
 		aliases[i].ZapScriptTags = synthetic[i].ZapScriptTags
 	}
 
 	// Batch cover-flag check: one indexed UNION ALL query for all alias media.
 	// Populates HasCover so aliased directory entries show art in the grid.
+	coverStart := time.Now()
 	if err := fetchAndAttachCoverFlags(ctx, db.sql.Load(), synthetic); err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases cover flags: %w", err)
 	}
+	coverDur = time.Since(coverStart)
 	for i := range aliases {
 		aliases[i].HasCover = synthetic[i].HasCover
 	}
