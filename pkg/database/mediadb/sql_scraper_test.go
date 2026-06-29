@@ -2548,3 +2548,60 @@ func TestResolveSingletonContainerAliases_HasCoverSet(t *testing.T) {
 	assert.True(t, byDir[coverDir].HasCover, "aliased dir with image property should have HasCover=true")
 	assert.False(t, byDir[noCoverDir].HasCover, "aliased dir without image property should have HasCover=false")
 }
+
+// TestResolveSingletonContainerAliases_HasCoverSetFromTitleProperty verifies that
+// HasCover is true when the cover art is title-scoped (MediaTitleProperties) rather
+// than media-scoped. Scrapers store artwork at the title level, so without the
+// alias's MediaTitleID populated the cover-flag lookup skips the title-scope branch
+// and folder-based systems (e.g. PSX) render a blank grid.
+func TestResolveSingletonContainerAliases_HasCoverSetFromTitleProperty(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed the minimal tag rows needed by fetchAndAttachCoverFlags.
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
+		INSERT OR IGNORE INTO Tags    (DBID, TypeDBID, Tag)      VALUES (901, 900, 'image-boxart');
+	`)
+	require.NoError(t, err)
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+
+	// gameWithCover — title-level image property inserted below.
+	coverDir := aliasTestDir(parent, "WithCover")
+	coverPath := filepath.ToSlash(filepath.Join(parent, "WithCover", "cover.chd"))
+	// gameNoCover — no property.
+	noCoverDir := aliasTestDir(parent, "NoCover")
+	noCoverPath := filepath.ToSlash(filepath.Join(parent, "NoCover", "nocov.chd"))
+
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'with-cover', 'With Cover'),
+			(2, 2, 'no-cover',   'No Cover');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 2, 2, ?, ?);
+	`, coverPath, coverDir, noCoverPath, noCoverDir)
+	require.NoError(t, err)
+
+	// Title-scope property for MediaTitle DBID=1 (no media-scope property anywhere).
+	_, err = mediaDB.sql.Load().ExecContext(ctx,
+		`INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text) VALUES (1, 901, 'cover.jpg')`)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: coverDir, FileCount: 1},
+		{ChildDir: noCoverDir, FileCount: 1},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 2)
+
+	byDir := make(map[string]database.SingletonContainerAlias, 2)
+	for _, a := range aliases {
+		byDir[a.ChildDir] = a
+	}
+	assert.True(t, byDir[coverDir].HasCover, "aliased dir with title-scope image property should have HasCover=true")
+	assert.False(t, byDir[noCoverDir].HasCover, "aliased dir without image property should have HasCover=false")
+}

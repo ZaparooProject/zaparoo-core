@@ -868,6 +868,12 @@ func sqlBrowseFilesFromMedia(
 // DBIDs are resolved once per database handle, so every browse page can check
 // MediaProperties/MediaTitleProperties directly without joining Tags/TagTypes
 // or LIKE-scanning tag strings. Results with no image property get HasCover=false.
+//
+// The title-scope check keys off MediaTitleID. A caller that builds results
+// without populating it (e.g. a synthetic singleton container alias) would
+// otherwise silently skip title-scoped covers, blanking the grid for folder-based
+// systems. backfillMissingTitleIDs resolves any missing IDs first, so cover flags
+// are correct regardless of which fields the caller filled in.
 func fetchAndAttachCoverFlags(
 	ctx context.Context,
 	db sqlQueryable,
@@ -883,6 +889,10 @@ func fetchAndAttachCoverFlags(
 	}
 	if len(imageTagIDs) == 0 {
 		return nil
+	}
+
+	if err = backfillMissingTitleIDs(ctx, db, results); err != nil {
+		return fmt.Errorf("browse cover flags backfill title ids: %w", err)
 	}
 
 	mediaIDs := make([]int64, 0, len(results))
@@ -960,6 +970,59 @@ func fetchAndAttachCoverFlags(
 	}
 	if err = rows.Err(); err != nil {
 		return fmt.Errorf("browse cover flags rows: %w", err)
+	}
+	return nil
+}
+
+// backfillMissingTitleIDs populates MediaTitleID for any result that has a MediaID
+// but no MediaTitleID, resolving it from the Media row (Media.MediaTitleDBID is NOT
+// NULL). Callers that already set MediaTitleID — the file-browse path — pay nothing:
+// the function returns before querying when no result is missing a title ID. The
+// lookup is a single primary-key IN query, so it stays cheap for the alias path.
+func backfillMissingTitleIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	missing := make([]int64, 0)
+	byMediaID := make(map[int64][]int)
+	for i := range results {
+		if results[i].MediaTitleID != 0 || results[i].MediaID == 0 {
+			continue
+		}
+		if _, ok := byMediaID[results[i].MediaID]; !ok {
+			missing = append(missing, results[i].MediaID)
+		}
+		byMediaID[results[i].MediaID] = append(byMediaID[results[i].MediaID], i)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(missing))
+	args := make([]any, len(missing))
+	for i, id := range missing {
+		args[i] = id
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	rows, err := db.QueryContext(ctx,
+		`SELECT DBID, MediaTitleDBID FROM Media WHERE DBID IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return fmt.Errorf("query media title ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var mediaID, titleID int64
+		if scanErr := rows.Scan(&mediaID, &titleID); scanErr != nil {
+			return fmt.Errorf("scan media title id: %w", scanErr)
+		}
+		for _, idx := range byMediaID[mediaID] {
+			results[idx].MediaTitleID = titleID
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("media title id rows: %w", err)
 	}
 	return nil
 }

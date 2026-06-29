@@ -3232,6 +3232,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 			SystemID:            row.System.SystemID,
 			Name:                row.Title.Name,
 			MediaID:             row.DBID,
+			MediaTitleID:        row.Title.DBID,
 			Tags:                mediaTags,
 			DisambiguationTypes: row.Title.DisambiguationTypes,
 		})
