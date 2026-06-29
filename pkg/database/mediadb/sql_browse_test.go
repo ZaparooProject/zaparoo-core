@@ -775,14 +775,16 @@ func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	results := []database.SearchResultWithCursor{
-		{MediaID: 1, Name: "NoCoverGame"},
-		{MediaID: 2, Name: "AnotherNoCoverGame"},
+		{MediaID: 1, MediaTitleID: 101, Name: "NoCoverGame"},
+		{MediaID: 2, MediaTitleID: 102, Name: "AnotherNoCoverGame"},
 	}
 
-	// Query returns no rows — neither media ID has any image property.
+	// Query returns no rows — neither media ID has any image property. Title IDs
+	// are populated so no backfill query runs; the media leg binds mediaIDs and
+	// the title leg binds titleIDs.
 	expectImagePropertyTagLookup(mock, 901)
 	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(1), int64(2), int64(901)).
+		WithArgs(int64(1), int64(2), int64(901), int64(101), int64(102), int64(901)).
 		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
@@ -799,14 +801,14 @@ func TestFetchAndAttachCoverFlags_MediaLevelCover(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	results := []database.SearchResultWithCursor{
-		{MediaID: 10, Name: "GameWithCover"},
-		{MediaID: 20, Name: "GameWithoutCover"},
+		{MediaID: 10, MediaTitleID: 110, Name: "GameWithCover"},
+		{MediaID: 20, MediaTitleID: 120, Name: "GameWithoutCover"},
 	}
 
 	// Query returns mediaID 10 as having a cover (media-level property).
 	expectImagePropertyTagLookup(mock, 901)
 	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(10), int64(20), int64(901)).
+		WithArgs(int64(10), int64(20), int64(901), int64(110), int64(120), int64(901)).
 		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("media", int64(10)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
@@ -849,12 +851,12 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	results := []database.SearchResultWithCursor{
-		{MediaID: 5, Name: "SomeGame"},
+		{MediaID: 5, MediaTitleID: 105, Name: "SomeGame"},
 	}
 
 	expectImagePropertyTagLookup(mock, 901)
 	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(5), int64(901)).
+		WithArgs(int64(5), int64(901), int64(105), int64(901)).
 		WillReturnError(errors.New("db unavailable"))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
@@ -988,6 +990,53 @@ func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
 	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
 	assert.True(t, results[0].HasCover, "media whose title has an image property should have HasCover=true")
 	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
+}
+
+// TestFetchAndAttachCoverFlags_Integration_TitleCoverWithoutMediaTitleID verifies
+// that a title-scoped cover is detected even when the result omits MediaTitleID.
+// The cover query resolves the title through the Media row (Media.MediaTitleDBID is
+// NOT NULL), so callers that build results without populating MediaTitleID — such as
+// singleton container aliases — still get correct title-scope cover flags. This
+// guards against the regression where folder-based systems showed a blank grid.
+func TestFetchAndAttachCoverFlags_Integration_TitleCoverWithoutMediaTitleID(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Title Only Cover"),
+		Name:       "Title Only Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "title_only.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "title_only.png")},
+	}))
+
+	// MediaTitleID deliberately left zero, mirroring a synthetic result.
+	results := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, Name: "Title Only Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
+	assert.True(t, results[0].HasCover,
+		"title-scope cover must resolve via the Media row even when MediaTitleID is omitted")
 }
 
 // TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse reproduces the
