@@ -77,9 +77,10 @@ func browseDirectoriesOpts(pathPrefix string) any {
 	})
 }
 
-func browseDirectoriesAfterOpts(pathPrefix, afterName string) any {
+func browseDirectoriesAfterOpts(pathPrefix, afterName string, limit int) any {
 	return mock.MatchedBy(func(opts database.BrowseDirectoriesOptions) bool {
-		return opts.PathPrefix == pathPrefix && opts.AfterName == afterName && len(opts.Systems) == 0
+		return opts.PathPrefix == pathPrefix && opts.AfterName == afterName &&
+			opts.Limit == limit && len(opts.Systems) == 0
 	})
 }
 
@@ -1365,17 +1366,19 @@ func TestHandleMediaBrowse_DirPaginationCursorAdvance(t *testing.T) {
 	cursorStr, err := encodeDirCursor("Beta", 5, 10)
 	require.NoError(t, err)
 
+	path := "/roms/SNES"
+	maxResults := 2
+
 	mockMediaDB := helpers.NewMockMediaDBI()
-	// The next page is fetched with AfterName="Beta"; still more dirs remain.
-	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesAfterOpts("/roms/SNES/", "Beta")).
+	// The next page is fetched with AfterName="Beta" and the overfetch limit
+	// (maxResults+1) to detect whether more dirs remain.
+	mockMediaDB.On("BrowseDirectories", mock.Anything,
+		browseDirectoriesAfterOpts("/roms/SNES/", "Beta", maxResults+1)).
 		Return([]database.BrowseDirectoryResult{
 			{Name: "Delta", FileCount: 1},
 			{Name: "Epsilon", FileCount: 1},
 			{Name: "Zeta", FileCount: 1},
 		}, nil)
-
-	path := "/roms/SNES"
-	maxResults := 2
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
 		Path:       &path,
 		MaxResults: &maxResults,
@@ -1519,6 +1522,33 @@ func TestHandleMediaBrowse_CursorRoundTrip(t *testing.T) {
 	assert.False(t, browseResults.Pagination.HasNextPage)
 
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestDecodeBrowseCursor_RejectsInvalidPhase(t *testing.T) {
+	t.Parallel()
+
+	bogus, err := encodeCursorData(&browseCursorData{Phase: "bogus"})
+	require.NoError(t, err)
+
+	cursor, decErr := decodeBrowseCursor(bogus)
+	require.Error(t, decErr)
+	assert.Nil(t, cursor)
+	var clientErr *models.ClientError
+	assert.ErrorAs(t, decErr, &clientErr, "expected a client error for an invalid phase")
+}
+
+func TestDecodeBrowseCursor_AcceptsValidPhases(t *testing.T) {
+	t.Parallel()
+
+	for _, phase := range []string{"", browsePhaseDirs, browsePhaseFiles} {
+		encoded, err := encodeCursorData(&browseCursorData{Phase: phase})
+		require.NoError(t, err)
+
+		cursor, decErr := decodeBrowseCursor(encoded)
+		require.NoError(t, decErr)
+		require.NotNil(t, cursor)
+		assert.Equal(t, phase, cursor.Phase)
+	}
 }
 
 func TestHandleMediaBrowse_CursorTotalFilesSkipsCountQuery(t *testing.T) {

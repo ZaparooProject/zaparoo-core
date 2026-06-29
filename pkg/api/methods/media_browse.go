@@ -133,6 +133,12 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 		return nil, models.ClientErrf("invalid cursor data: %w", err)
 	}
 
+	switch data.Phase {
+	case "", browsePhaseDirs, browsePhaseFiles:
+	default:
+		return nil, models.ClientErrf("invalid cursor phase: %q", data.Phase)
+	}
+
 	return &database.BrowseCursor{
 		LastID:     data.LastID,
 		SortValue:  data.SortValue,
@@ -973,10 +979,6 @@ func resolveDirSingletonAliases(
 	}
 
 	var candidates []database.SingletonAliasCandidate
-	prefix := path
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
 	for _, dir := range dirs {
 		if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
 			continue
@@ -985,7 +987,7 @@ func resolveDirSingletonAliases(
 			continue
 		}
 		candidates = append(candidates, database.SingletonAliasCandidate{
-			ChildDir:  prefix + dir.Name + "/",
+			ChildDir:  filepath.ToSlash(filepath.Join(path, dir.Name)) + "/",
 			FileCount: dir.FileCount,
 		})
 	}

@@ -229,6 +229,123 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheParentMissing(t *testing.T)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseDirectoriesFromCache_SingleSystemPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	// Keyset (AfterName) and overfetch (Limit) are bound after the system filter.
+	mock.ExpectQuery("SELECT d.Name, c.FileCount").
+		WithArgs(int64(10), "SNES", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("Delta", 1).AddRow("Epsilon", 1))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesFromCache_MultiSystemPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	// System filter args precede the keyset and overfetch limit.
+	mock.ExpectQuery("SELECT d.Name, SUM").
+		WithArgs(int64(10), "NES", "SNES", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+			AddRow("Delta", 1, "SNES").AddRow("Epsilon", 1, "NES"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "NES"}, {ID: "SNES"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_MediaFallbackPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	romsDir := browseTestDir("roms")
+	// HAVING keyset and LIMIT are bound after the path-prefix args.
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("Delta", 2).AddRow("Epsilon", 2))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: romsDir,
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesForSystems_MediaFallbackPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	psxDir := browseTestDir("media", "fat", "games", "PSX")
+	// Path-prefix args, then system filter, then keyset and limit.
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+			AddRow("USA", 273, "PSX").AddRow("World", 10, "PSX"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: psxDir,
+		Systems:    []systemdefs.System{{ID: "PSX"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "USA", results[0].Name)
+	assert.Equal(t, "World", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseDirCount_CacheSingleSystem(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
