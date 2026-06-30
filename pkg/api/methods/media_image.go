@@ -39,6 +39,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/KarpelesLab/gowebp"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -51,6 +52,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"golang.org/x/image/draw"
+	"golang.org/x/image/webp"
 )
 
 const (
@@ -60,6 +62,21 @@ const (
 	// mediaThumbCacheDirName is the sub-directory under the core cache dir where
 	// resized thumbnail files are persisted across restarts.
 	mediaThumbCacheDirName = "thumbs"
+	// mediaThumbCacheVersion identifies the on-disk encode scheme. The live cache
+	// directory is thumbs/v<N>; bumping this constant changes the live directory
+	// so a new build invalidates the cache automatically (the old v<N-1> dir is
+	// reaped on start and thumbnails regenerate lazily) without users reindexing.
+	// Bump whenever the resized output changes: format, quality, or resize
+	// algorithm. v1 introduces lossy WebP output (was lossless PNG / JPEG q85).
+	mediaThumbCacheVersion = 1
+	// mediaThumbWebPQuality and mediaThumbWebPMethod are the lossy VP8 settings
+	// used to re-encode resized thumbnails. q75/method2 was selected by
+	// benchmarking real covers as the best size/speed point: ~13x smaller than
+	// the previous lossless-PNG output while preserving alpha, and faster to
+	// encode than the higher methods. Resized output is always WebP regardless
+	// of source format.
+	mediaThumbWebPQuality = 75
+	mediaThumbWebPMethod  = 2
 )
 
 // mediaImageSem limits concurrent image lookups so high-volume image misses do
@@ -70,20 +87,27 @@ var mediaImageBeforeSemAcquire func()
 
 // mediaThumbCachePointer is the process-wide thumbnail disk cache stored as an
 // atomic pointer so concurrent StartWithReady calls in tests do not race on it.
+// mediaThumbCacheGeneration only supplies a unique suffix for the directories
+// moved aside during a runtime wipe; it does not affect the live directory name.
 var (
 	mediaThumbCachePointer    atomic.Pointer[mediaThumbCache]
 	mediaThumbCacheGeneration atomic.Uint64
 )
 
 // mediaThumbCache persists resized cover images to disk so that the expensive
-// decode+bilinear-resize+transparency-scan is only performed once per unique
+// decode+bilinear-resize+encode is only performed once per unique
 // (identity, imageType, maxSize) triple. The cache survives core restarts and
 // reboots; it is wiped entirely when a scrape completes (scraping replaces
 // image sources under a stable cache key) and when a media reindex completes
 // (insurance against id:DBID-keyed entries colliding if the MediaDB is reset).
 //
+// The live directory is thumbs/v<mediaThumbCacheVersion> — deterministic across
+// restarts. On start, reapStaleVersions removes any sibling that is not the
+// current version, so a version bump invalidates the cache and any directory
+// abandoned by a crash mid-wipe (v<N>.stale<gen>) or an older build is reaped.
+//
 // Keys are SHA-256 hashes of the logical identity string; values are stored as
-// <hash>.jpg or <hash>.png to encode the content-type implicitly.
+// <hash>.<ext> to encode the content-type implicitly.
 //
 // resolvedTypes is an in-memory map from early key (identity+prefs+maxSize) to
 // resolved typeTag. It enables a pre-semaphore cache hit that skips the entire
@@ -95,6 +119,45 @@ type mediaThumbCache struct {
 	resolvedMu    syncutil.RWMutex
 }
 
+// mediaThumbCacheVersionDir is the basename of the live cache directory for the
+// current encode scheme version.
+func mediaThumbCacheVersionDir() string {
+	return fmt.Sprintf("v%d", mediaThumbCacheVersion)
+}
+
+// mediaThumbSizeTiers are the standard thumbnail sizes a requested max_size is
+// snapped onto. Each distinct cached size is a separate cold resize per cover
+// (read source off slow storage, decode, resize, encode) and a separate entry
+// competing for the client's image cache, so the number of variants per cover
+// must stay bounded — but a single hardcoded size throws away the resolution
+// information clients legitimately have (CRT vs grid vs list vs detail, display
+// density, grid-size preferences). The ladder is the middle ground: clients
+// request their true ideal size and it snaps up to the nearest tier.
+//
+// Powers of two are the conventional thumbnail-cache ladder. Steps are denser at
+// the large end (768 = 512×1.5) because wasted bytes grow with size, and the
+// ladder tops out near the ~680px native cover dimension — larger requests would
+// only upscale. 128 ≈ list/CRT, 256 ≈ small grid, 512 ≈ grid @2x / detail @1x,
+// 768 ≈ detail @2x. Keep ascending.
+var mediaThumbSizeTiers = []int32{128, 256, 512, 768}
+
+// snapThumbMaxSize maps a requested max_size to the smallest standard tier that
+// is >= the request, capping at the largest tier. This bounds the number of
+// cached variants per cover and enforces an upper bound on the resize dimension
+// (a huge request is snapped down before any decode/allocation). A non-positive
+// request means "full size" and is returned unchanged so no resize is performed.
+func snapThumbMaxSize(requested int32) int32 {
+	if requested <= 0 {
+		return requested
+	}
+	for _, tier := range mediaThumbSizeTiers {
+		if requested <= tier {
+			return tier
+		}
+	}
+	return mediaThumbSizeTiers[len(mediaThumbSizeTiers)-1]
+}
+
 func newMediaThumbCache(pl platforms.Platform) *mediaThumbCache {
 	return newMediaThumbCacheWithFS(pl, nil)
 }
@@ -103,14 +166,37 @@ func newMediaThumbCacheWithFS(pl platforms.Platform, fs afero.Fs) *mediaThumbCac
 	if fs == nil {
 		fs = afero.NewOsFs()
 	}
-	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName, "current")
+	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName, mediaThumbCacheVersionDir())
 	return &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]string)}
 }
 
-func (c *mediaThumbCache) nextGeneration() *mediaThumbCache {
-	generation := mediaThumbCacheGeneration.Add(1)
-	dir := filepath.Join(filepath.Dir(c.dir), fmt.Sprintf("gen-%d", generation))
-	return &mediaThumbCache{fs: c.fs, dir: dir, resolvedTypes: make(map[string]string)}
+// reapStaleVersions ensures the live versioned directory exists and removes
+// every sibling under thumbs/ that is not the current version. This invalidates
+// the cache after a mediaThumbCacheVersion bump and reaps directories left by a
+// crash mid-wipe or by an older build (the previous current/ and gen-N layout).
+func (c *mediaThumbCache) reapStaleVersions() {
+	if err := c.fs.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
+		log.Debug().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to create dir")
+		return
+	}
+	parent := filepath.Dir(c.dir)
+	live := filepath.Base(c.dir)
+	entries, err := afero.ReadDir(c.fs, parent)
+	if err != nil {
+		log.Debug().Err(err).Str("dir", parent).Msg("media.image: thumb cache: failed to read parent for reap")
+		return
+	}
+	for _, entry := range entries {
+		if entry.Name() == live {
+			continue
+		}
+		stale := filepath.Join(parent, entry.Name())
+		if err := c.fs.RemoveAll(stale); err != nil {
+			log.Warn().Err(err).Str("dir", stale).Msg("media.image: thumb cache: failed to reap stale dir")
+		} else {
+			log.Debug().Str("dir", stale).Msg("media.image: thumb cache: reaped stale dir")
+		}
+	}
 }
 
 // earlyThumbKey returns a cache key derived only from request-time parameters
@@ -223,35 +309,59 @@ func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, da
 	}
 }
 
-// wipe removes the entire thumbnail cache directory and clears the in-memory
-// resolved-type memo. Called after a successful scrape or media reindex so
-// stale or cross-contaminated entries do not accumulate.
+// wipe empties the thumbnail cache and clears the in-memory resolved-type memo.
+// The live directory name (v<N>) is kept stable so it stays deterministic across
+// restarts: the current directory is renamed aside to v<N>.stale<gen> and a
+// fresh empty v<N> is created immediately, then the moved-aside copy is removed.
+// In-flight image requests keep reading/writing the stable v<N> path. Called
+// after a successful scrape or media reindex so stale entries do not accumulate.
 func (c *mediaThumbCache) wipe() {
-	if err := c.fs.RemoveAll(c.dir); err != nil {
-		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache")
+	generation := mediaThumbCacheGeneration.Add(1)
+	staleDir := fmt.Sprintf("%s.stale%d", c.dir, generation)
+	if _, err := c.fs.Stat(c.dir); err == nil {
+		if renameErr := c.fs.Rename(c.dir, staleDir); renameErr != nil {
+			// Rename failed (e.g. memmap edge case) — fall back to a direct,
+			// blocking removal of the live directory.
+			log.Warn().Err(renameErr).Str("dir", c.dir).
+				Msg("media.image: thumb cache: rename for wipe failed, removing in place")
+			if rmErr := c.fs.RemoveAll(c.dir); rmErr != nil {
+				log.Warn().Err(rmErr).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache")
+			}
+			staleDir = ""
+		}
 	} else {
-		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped")
+		staleDir = ""
 	}
+	if err := c.fs.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
+		log.Debug().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to recreate dir after wipe")
+	}
+	if staleDir != "" {
+		if err := c.fs.RemoveAll(staleDir); err != nil {
+			log.Warn().Err(err).Str("dir", staleDir).Msg("media.image: failed to remove stale thumb cache")
+		}
+	}
+	log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped")
 	c.resolvedMu.Lock()
 	c.resolvedTypes = make(map[string]string)
 	c.resolvedMu.Unlock()
 }
 
 // InitMediaThumbCache creates or replaces the process-wide thumb cache for the
-// given platform. Must be called once during service start, before any
-// media.image requests are handled. Uses atomic store so concurrent
-// StartWithReady calls in tests do not race.
+// given platform and reaps any stale-version directories. Must be called once
+// during service start, before any media.image requests are handled. Uses atomic
+// store so concurrent StartWithReady calls in tests do not race.
 func InitMediaThumbCache(pl platforms.Platform) {
-	mediaThumbCachePointer.Store(newMediaThumbCache(pl))
+	cache := newMediaThumbCache(pl)
+	cache.reapStaleVersions()
+	mediaThumbCachePointer.Store(cache)
 }
 
 // WipeMediaThumbCache removes all cached thumbnails. Called after a successful
 // scrape (image sources may have changed) or media reindex so the cache does
 // not serve stale art.
 func WipeMediaThumbCache() {
-	if old := mediaThumbCachePointer.Load(); old != nil {
-		mediaThumbCachePointer.Store(old.nextGeneration())
-		old.wipe()
+	if cache := mediaThumbCachePointer.Load(); cache != nil {
+		cache.wipe()
 	}
 }
 
@@ -285,10 +395,14 @@ type rawMediaImage struct {
 	binary      []byte
 }
 
-// resizeImageIfNeeded decodes binary, and if either dimension exceeds maxSize,
-// scales it down to fit within a maxSize×maxSize bounding box and re-encodes
-// opaque images as JPEG (q85) or transparent images as PNG. Returns the original
-// bytes unchanged when no resize is needed or when the source cannot be decoded.
+// resizeImageIfNeeded decodes binary, scales it down to fit within a
+// maxSize×maxSize bounding box when either dimension exceeds maxSize, and
+// re-encodes the result as lossy WebP with alpha preserved. When the source
+// already fits, it is still re-encoded as WebP (keeping native dimensions) so
+// callers requesting a tier at or above native size get the format win — unless
+// the WebP would be no smaller, in which case the original bytes are kept.
+// Returns the original bytes unchanged when maxSize <= 0 (full size requested)
+// or when the source cannot be decoded.
 func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resized []byte, resizedType string) {
 	if maxSize <= 0 || len(binary) == 0 {
 		return binary, contentType
@@ -299,32 +413,37 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 	}
 	bounds := src.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
-	if w <= maxSize && h <= maxSize {
+	// Downscale to fit the maxSize box when larger; otherwise keep native
+	// dimensions. Either way the frame is re-encoded as WebP below — a request
+	// that snaps to a tier at or above the native size still gets the format win
+	// instead of falling back to the original (often large lossless PNG).
+	frame := src
+	newW, newH := w, h
+	if w > maxSize || h > maxSize {
+		larger := w
+		if h > larger {
+			larger = h
+		}
+		scale := float64(maxSize) / float64(larger)
+		newW = int(math.Round(float64(w) * scale))
+		newH = int(math.Round(float64(h) * scale))
+		if newW < 1 {
+			newW = 1
+		}
+		if newH < 1 {
+			newH = 1
+		}
+		dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, bounds, draw.Over, nil)
+		frame = dst
+	}
+	out, outputType, err := encodeResizedImage(frame)
+	if err != nil {
 		return binary, contentType
 	}
-	larger := w
-	if h > larger {
-		larger = h
-	}
-	scale := float64(maxSize) / float64(larger)
-	newW := int(math.Round(float64(w) * scale))
-	newH := int(math.Round(float64(h) * scale))
-	if newW < 1 {
-		newW = 1
-	}
-	if newH < 1 {
-		newH = 1
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
-	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, bounds, draw.Over, nil)
-	var out bytes.Buffer
-	outputType := "image/jpeg"
-	if imageHasTransparency(src) {
-		outputType = "image/png"
-		if err := png.Encode(&out, dst); err != nil {
-			return binary, contentType
-		}
-	} else if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 85}); err != nil {
+	// When no downscale happened, only adopt the WebP if it actually shrank the
+	// payload; some already-compact sources re-encode larger.
+	if newW == w && newH == h && len(out) >= len(binary) {
 		return binary, contentType
 	}
 	log.Debug().
@@ -336,9 +455,24 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 		Int("resizedWidth", newW).
 		Int("resizedHeight", newH).
 		Int("inputBytes", len(binary)).
-		Int("resizedBytes", out.Len()).
+		Int("resizedBytes", len(out)).
 		Msg("media.image: resized image")
-	return out.Bytes(), outputType
+	return out, outputType
+}
+
+// encodeResizedImage encodes a resized frame as lossy WebP (VP8) with alpha
+// preserved. Isolated in one function so the encoder can be swapped without
+// touching the resize pipeline.
+func encodeResizedImage(img image.Image) (data []byte, contentType string, err error) {
+	var out bytes.Buffer
+	if encErr := gowebp.Encode(&out, img, &gowebp.Options{
+		Lossy:   true,
+		Quality: mediaThumbWebPQuality,
+		Method:  mediaThumbWebPMethod,
+	}); encErr != nil {
+		return nil, "", fmt.Errorf("encode resized webp: %w", encErr)
+	}
+	return out.Bytes(), "image/webp", nil
 }
 
 func decodeResizableImage(binary []byte, contentType string) (image.Image, error) {
@@ -356,12 +490,21 @@ func decodeResizableImage(binary []byte, contentType string) (image.Image, error
 		}
 		return img, nil
 	}
+	decodeWebP := func() (image.Image, error) {
+		img, err := webp.Decode(bytes.NewReader(binary))
+		if err != nil {
+			return nil, fmt.Errorf("decode WebP for resize: %w", err)
+		}
+		return img, nil
+	}
 
 	switch extensionFromContentType(contentType) {
 	case "jpg":
 		return decodeJPEG()
 	case "png":
 		return decodePNG()
+	case "webp":
+		return decodeWebP()
 	}
 
 	if bytes.HasPrefix(binary, []byte("\x89PNG\r\n\x1a\n")) {
@@ -369,6 +512,9 @@ func decodeResizableImage(binary []byte, contentType string) (image.Image, error
 	}
 	if len(binary) >= 2 && binary[0] == 0xff && binary[1] == 0xd8 {
 		return decodeJPEG()
+	}
+	if len(binary) >= 12 && bytes.HasPrefix(binary, []byte("RIFF")) && bytes.Equal(binary[8:12], []byte("WEBP")) {
+		return decodeWebP()
 	}
 	return nil, fmt.Errorf("unsupported image type for resize: %s", contentType)
 }
@@ -541,6 +687,13 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	ref, err := parseMediaImageRequest(env.Params)
 	if err != nil {
 		return nil, err
+	}
+	// Snap the requested size onto a standard tier so every view shares one
+	// cached image per cover and the resize dimension is bounded. All downstream
+	// uses (cache keys, resolved-type memo, resize) see the snapped value.
+	if ref.MaxSize != nil {
+		snapped := snapThumbMaxSize(*ref.MaxSize)
+		ref.MaxSize = &snapped
 	}
 	prefs := imagePrefs(nil, ref.ImageTypes)
 

@@ -229,7 +229,13 @@ type MediaMetaUpdateParams struct {
 }
 
 type MediaImageParams struct {
-	MediaID    *int64   `json:"mediaId,omitempty"`
+	MediaID *int64 `json:"mediaId,omitempty"`
+	// MaxSize is a hint for the longest edge (in pixels) of the returned image.
+	// The server resizes down to fit a MaxSize×MaxSize box and caches the result;
+	// omit it to receive the full-size image. Requests are snapped to a small set
+	// of standard sizes server-side, so the returned image may be larger than
+	// requested — clients should downscale to their final display size.
+	MaxSize    *int32   `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
 	System     string   `json:"system"            validate:"omitempty,min=1"`
 	Path       string   `json:"path"              validate:"omitempty,min=1"`
 	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`

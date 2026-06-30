@@ -59,7 +59,8 @@ worktrees/
 /pkg/platforms/mister/arcadedb/ArcadeDatabase.csv
 
 /scripts/batocera/template/userdata/roms/ports/Zaparoo.sh
-.mcp.json
 
+.mcp.json
 CLAUDE.md
-core.log
+
+/*.log

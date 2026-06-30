@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -44,6 +45,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/image/webp"
 )
 
 func makeMediaImageEnv(
@@ -133,56 +135,137 @@ func TestMediaThumbCache_SkipsUnsupportedContentType(t *testing.T) {
 	assert.False(t, found)
 }
 
-func TestWipeMediaThumbCache_SwapsGenerationBeforeWiping(t *testing.T) {
+func TestWipeMediaThumbCache_EmptiesLiveDirInPlace(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	oldCache := &mediaThumbCache{
-		fs:            fs,
-		dir:           filepath.Join("cache", "thumbs", "current"),
-		resolvedTypes: make(map[string]string),
-	}
-	mediaThumbCachePointer.Store(oldCache)
+	thumbs := filepath.Join("cache", "thumbs")
+	dir := filepath.Join(thumbs, mediaThumbCacheVersionDir())
+	cache := &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]string)}
+	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	mediaID := int64(1)
+	ref := mediaRefParam{MediaID: &mediaID}
+	cache.set(ref, "property:image-boxart", 512, []byte("webp-bytes"), "image/webp")
+	cache.setResolvedTypeTag(ref, nil, 512, "property:image-boxart")
+	_, _, found := cache.get(ref, "property:image-boxart", 512)
+	require.True(t, found)
 
 	WipeMediaThumbCache()
 
-	newCache := mediaThumbCachePointer.Load()
-	require.NotNil(t, newCache)
-	assert.NotEqual(t, oldCache.dir, newCache.dir)
-	_, err := fs.Stat(oldCache.dir)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	// The live dir keeps its deterministic name (stable across restarts) rather
+	// than rolling to a new generation directory.
+	live := mediaThumbCachePointer.Load()
+	require.NotNil(t, live)
+	assert.Equal(t, dir, live.dir)
+
+	// Cached contents and the resolved-type memo are cleared.
+	_, _, found = cache.get(ref, "property:image-boxart", 512)
+	assert.False(t, found)
+	_, memoOK := cache.getResolvedTypeTag(ref, nil, 512)
+	assert.False(t, memoOK)
+
+	// No moved-aside stale directory is left behind (removal is synchronous).
+	entries, err := afero.ReadDir(fs, thumbs)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{mediaThumbCacheVersionDir()}, names)
 }
 
-func TestResizeImageIfNeeded_TransparentPNGPreservesAlpha(t *testing.T) {
+func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	t.Parallel()
 
-	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
-	for y := range 4 {
-		for x := range 4 {
-			src.Set(x, y, color.RGBA{R: 255, A: 255})
+	fs := afero.NewMemMapFs()
+	thumbs := filepath.Join("cache", "thumbs")
+	// Leftovers from older builds and prior versions, plus a crash-abandoned
+	// moved-aside wipe directory.
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "current"), 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(thumbs, "current", "old.png"), []byte("x"), 0o600))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "gen-3"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, "v0"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(thumbs, mediaThumbCacheVersionDir()+".stale7"), 0o750))
+
+	// The current-version dir already has content that must be preserved — a
+	// version bump invalidates other versions, but restarting on the same
+	// version must keep the warm cache, not cold-wipe it every boot.
+	live := filepath.Join(thumbs, mediaThumbCacheVersionDir())
+	require.NoError(t, fs.MkdirAll(live, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(live, "keep.webp"), []byte("y"), 0o600))
+
+	cache := &mediaThumbCache{fs: fs, dir: live, resolvedTypes: make(map[string]string)}
+	cache.reapStaleVersions()
+
+	entries, err := afero.ReadDir(fs, thumbs)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{mediaThumbCacheVersionDir()}, names, "only the current version dir should remain")
+
+	kept, err := afero.Exists(fs, filepath.Join(live, "keep.webp"))
+	require.NoError(t, err)
+	assert.True(t, kept, "current-version contents must be preserved across restart")
+}
+
+func TestSnapThumbMaxSize(t *testing.T) {
+	t.Parallel()
+
+	// Non-positive means "full size" — returned unchanged so no resize happens.
+	assert.Equal(t, int32(0), snapThumbMaxSize(0))
+	assert.Equal(t, int32(-5), snapThumbMaxSize(-5))
+	// A positive request snaps up to the smallest tier that is >= the request.
+	assert.Equal(t, int32(128), snapThumbMaxSize(1))
+	assert.Equal(t, int32(128), snapThumbMaxSize(128))
+	assert.Equal(t, int32(256), snapThumbMaxSize(129))
+	assert.Equal(t, int32(512), snapThumbMaxSize(257))
+	assert.Equal(t, int32(512), snapThumbMaxSize(512))
+	assert.Equal(t, int32(768), snapThumbMaxSize(513))
+	// Oversized requests are capped to the largest tier.
+	assert.Equal(t, int32(768), snapThumbMaxSize(9999))
+}
+
+func TestResizeImageIfNeeded_TransparentImageOutputsWebPWithAlpha(t *testing.T) {
+	t.Parallel()
+
+	// A larger transparent source so the lossy encoder has real content to work
+	// with and the output is unambiguously WebP after the downscale.
+	const dim = 64
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			// Opaque red on the right half, transparent green on the left half.
+			if x < dim/2 {
+				src.Set(x, y, color.RGBA{G: 255, A: 32})
+			} else {
+				src.Set(x, y, color.RGBA{R: 255, A: 255})
+			}
 		}
 	}
-	src.Set(0, 0, color.RGBA{G: 255, A: 64})
 
 	var in bytes.Buffer
 	require.NoError(t, png.Encode(&in, src))
 
-	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 2)
-	require.Equal(t, "image/png", contentType)
+	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 16)
+	require.Equal(t, "image/webp", contentType)
+	assert.Less(t, len(resized), in.Len(), "resized webp should be smaller than the source png")
 
-	decoded, decodedType, err := image.Decode(bytes.NewReader(resized))
+	decoded, err := webp.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
-	assert.Equal(t, "png", decodedType)
-	assert.Equal(t, 2, decoded.Bounds().Dx())
-	assert.Equal(t, 2, decoded.Bounds().Dy())
-	assert.True(t, imageHasTransparency(decoded))
+	assert.Equal(t, 16, decoded.Bounds().Dx())
+	assert.Equal(t, 16, decoded.Bounds().Dy())
+	assert.True(t, imageHasTransparency(decoded), "alpha must survive the lossy webp encode")
 }
 
-func TestResizeImageIfNeeded_OpaqueImageUsesJPEG(t *testing.T) {
+func TestResizeImageIfNeeded_OpaqueImageOutputsWebP(t *testing.T) {
 	t.Parallel()
 
-	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
-	for y := range 4 {
-		for x := range 4 {
+	const dim = 64
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
 			src.Set(x, y, color.RGBA{R: 255, G: 128, B: 64, A: 255})
 		}
 	}
@@ -190,14 +273,282 @@ func TestResizeImageIfNeeded_OpaqueImageUsesJPEG(t *testing.T) {
 	var in bytes.Buffer
 	require.NoError(t, png.Encode(&in, src))
 
-	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 2)
-	require.Equal(t, "image/jpeg", contentType)
+	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 16)
+	require.Equal(t, "image/webp", contentType)
 
-	decoded, decodedType, err := image.Decode(bytes.NewReader(resized))
+	decoded, err := webp.Decode(bytes.NewReader(resized))
 	require.NoError(t, err)
-	assert.Equal(t, "jpeg", decodedType)
-	assert.Equal(t, 2, decoded.Bounds().Dx())
-	assert.Equal(t, 2, decoded.Bounds().Dy())
+	assert.Equal(t, 16, decoded.Bounds().Dx())
+	assert.Equal(t, 16, decoded.Bounds().Dy())
+}
+
+func TestResizeImageIfNeeded_DecodesWebPSource(t *testing.T) {
+	t.Parallel()
+
+	// A webp source (an accepted artwork format) must be resizable, not passed
+	// through untouched.
+	const dim = 64
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{R: 10, G: 200, B: 90, A: 255})
+		}
+	}
+	webpBytes, _, err := encodeResizedImage(src)
+	require.NoError(t, err)
+
+	resized, contentType := resizeImageIfNeeded(webpBytes, "image/webp", 16)
+	require.Equal(t, "image/webp", contentType)
+	decoded, err := webp.Decode(bytes.NewReader(resized))
+	require.NoError(t, err)
+	assert.Equal(t, 16, decoded.Bounds().Dx())
+}
+
+func TestResizeImageIfNeeded_FitsTierReencodesToWebP(t *testing.T) {
+	t.Parallel()
+
+	// Source already fits the requested tier (no downscale), but must still be
+	// re-encoded to WebP at native dimensions so a request snapped to a tier at
+	// or above native size gets the format win. High-frequency content that PNG
+	// cannot compress but lossy WebP can guarantees the WebP comes out smaller.
+	const dim = 64
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{
+				R: uint8((x*53 ^ y*97) & 0xff),
+				G: uint8((x*131 + y*29) & 0xff),
+				B: uint8((x*17 ^ y*191) & 0xff),
+				A: 255,
+			})
+		}
+	}
+	var in bytes.Buffer
+	require.NoError(t, png.Encode(&in, src))
+
+	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 128)
+	require.Equal(t, "image/webp", contentType)
+	assert.Less(t, len(resized), in.Len(), "lossy webp should beat the high-entropy png")
+	decoded, err := webp.Decode(bytes.NewReader(resized))
+	require.NoError(t, err)
+	assert.Equal(t, dim, decoded.Bounds().Dx(), "native dimensions preserved when no downscale")
+	assert.Equal(t, dim, decoded.Bounds().Dy())
+}
+
+func TestResizeImageIfNeeded_KeepsOriginalWhenWebPNotSmaller(t *testing.T) {
+	t.Parallel()
+
+	// A smooth gradient compresses to a smaller PNG than lossy WebP can manage.
+	// With no downscale needed, the original bytes must be kept rather than
+	// inflated, and the no-inflation invariant must hold either way.
+	const dim = 64
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{R: uint8(x * 4), G: uint8(y * 4), B: uint8(x + y), A: 255})
+		}
+	}
+	var in bytes.Buffer
+	require.NoError(t, png.Encode(&in, src))
+
+	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 128)
+	assert.LessOrEqual(t, len(resized), in.Len(), "result must never inflate when no downscale happens")
+	assert.Equal(t, "image/png", contentType, "original kept when webp would not shrink it")
+	assert.Equal(t, in.Bytes(), resized)
+}
+
+func TestResizeImageIfNeeded_PassesThroughUnchanged(t *testing.T) {
+	t.Parallel()
+
+	var pngBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, image.NewRGBA(image.Rect(0, 0, 8, 8))))
+
+	tests := []struct {
+		name        string
+		contentType string
+		binary      []byte
+		maxSize     int
+	}{
+		// Full size requested: nothing is resized or re-encoded.
+		{name: "non-positive maxSize", contentType: "image/png", binary: pngBytes.Bytes(), maxSize: 0},
+		{name: "negative maxSize", contentType: "image/png", binary: pngBytes.Bytes(), maxSize: -10},
+		// Empty payload short-circuits.
+		{name: "empty binary", contentType: "image/png", binary: nil, maxSize: 128},
+		// Undecodable source is served as-is rather than dropped.
+		{name: "undecodable source", contentType: "image/png", binary: []byte("not an image"), maxSize: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resized, contentType := resizeImageIfNeeded(tt.binary, tt.contentType, tt.maxSize)
+			assert.Equal(t, tt.contentType, contentType)
+			assert.Equal(t, tt.binary, resized)
+		})
+	}
+}
+
+func TestDecodeResizableImage(t *testing.T) {
+	t.Parallel()
+
+	const dim = 8
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{R: 200, G: 100, B: 50, A: 255})
+		}
+	}
+	var pngBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, src))
+	var jpegBytes bytes.Buffer
+	require.NoError(t, jpeg.Encode(&jpegBytes, src, nil))
+	webpBytes, _, err := encodeResizedImage(src)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		contentType string
+		binary      []byte
+		wantErr     bool
+	}{
+		// Declared content type drives the decoder directly.
+		{name: "png by content type", contentType: "image/png", binary: pngBytes.Bytes()},
+		{name: "jpeg by content type", contentType: "image/jpeg", binary: jpegBytes.Bytes()},
+		{name: "webp by content type", contentType: "image/webp", binary: webpBytes},
+		// Content type missing or wrong: the magic-byte sniff must still decode,
+		// since stored sources do not always carry an accurate type.
+		{name: "png sniffed when type empty", contentType: "", binary: pngBytes.Bytes()},
+		{name: "jpeg sniffed when type wrong", contentType: "application/octet-stream", binary: jpegBytes.Bytes()},
+		{name: "webp sniffed when type empty", contentType: "", binary: webpBytes},
+		// Undecodable input must error, not panic — it is untrusted.
+		{name: "unsupported bytes error", contentType: "text/plain", binary: []byte("not an image"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			img, decErr := decodeResizableImage(tt.binary, tt.contentType)
+			if tt.wantErr {
+				require.Error(t, decErr)
+				assert.Nil(t, img)
+				return
+			}
+			require.NoError(t, decErr)
+			require.NotNil(t, img)
+			assert.Equal(t, dim, img.Bounds().Dx())
+			assert.Equal(t, dim, img.Bounds().Dy())
+		})
+	}
+}
+
+// noOpaqueImage is a minimal image.Image that deliberately implements neither a
+// special-cased opaque type nor an Opaque() helper, forcing imageHasTransparency
+// down its per-pixel fallback scan.
+type noOpaqueImage struct{ inner *image.RGBA }
+
+func (n noOpaqueImage) ColorModel() color.Model { return n.inner.ColorModel() }
+func (n noOpaqueImage) Bounds() image.Rectangle { return n.inner.Bounds() }
+func (n noOpaqueImage) At(x, y int) color.Color { return n.inner.At(x, y) }
+
+func TestImageHasTransparency(t *testing.T) {
+	t.Parallel()
+
+	const dim = 4
+	opaqueRGBA := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	transparentRGBA := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			opaqueRGBA.Set(x, y, color.RGBA{R: 255, A: 255})
+			transparentRGBA.Set(x, y, color.RGBA{R: 255, A: 128})
+		}
+	}
+
+	tests := []struct {
+		img  image.Image
+		name string
+		want bool
+	}{
+		// JPEG decodes to YCbCr; the short-circuit must report opaque without a
+		// pixel scan (the ARM hot path for every JPEG cover).
+		{name: "ycbcr is opaque", img: image.NewYCbCr(image.Rect(0, 0, dim, dim), image.YCbCrSubsampleRatio444)},
+		{name: "gray is opaque", img: image.NewGray(image.Rect(0, 0, dim, dim))},
+		// Opaque() helper branch, both outcomes.
+		{name: "opaque rgba", img: opaqueRGBA},
+		{name: "transparent rgba", img: transparentRGBA, want: true},
+		// Per-pixel fallback for a type without an Opaque() helper.
+		{name: "fallback scan opaque", img: noOpaqueImage{inner: opaqueRGBA}},
+		{name: "fallback scan transparent", img: noOpaqueImage{inner: transparentRGBA}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, imageHasTransparency(tt.img))
+		})
+	}
+}
+
+func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
+	// Not parallel: installs the process-wide thumb cache pointer.
+	fs := afero.NewMemMapFs()
+	cache := &mediaThumbCache{
+		fs:            fs,
+		dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]string),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	// A high-entropy source larger than the snapped tier (256), so the handler
+	// both downscales it and re-encodes to a smaller WebP than the source PNG.
+	const dim = 300
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{
+				R: uint8((x*53 ^ y*97) & 0xff),
+				G: uint8((x*131 + y*29) & 0xff),
+				B: uint8((x*17 ^ y*191) & 0xff),
+				A: 255,
+			})
+		}
+	}
+	var blob bytes.Buffer
+	require.NoError(t, png.Encode(&blob, src))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(1, 10)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blob.Bytes()},
+		}, nil)
+
+	// First request: loads the original, resizes to a 256px WebP, caches it.
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "image/webp", resp.ContentType)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	firstData, err := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, err)
+	decoded, err := webp.Decode(bytes.NewReader(firstData))
+	require.NoError(t, err)
+	assert.Equal(t, 256, decoded.Bounds().Dx(), "downscaled to the snapped tier")
+	assert.Less(t, len(firstData), blob.Len(), "resized webp is smaller than the source png")
+
+	// Second request: the pre-semaphore fast path must serve it from the disk
+	// thumb cache and the resolved-type memo without touching the database. A
+	// strict mock with no expectations fails on any unexpected call.
+	strictDB := testhelpers.NewMockMediaDBI()
+	env2 := makeMediaImageEnv(t, strictDB, mediaImageParams(row, `"maxSize": 256`))
+	result2, err := HandleMediaImage(env2)
+	require.NoError(t, err)
+	resp2, ok := result2.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, resp.Data, resp2.Data, "cache hit returns the identical thumbnail")
+	strictDB.AssertExpectations(t)
 }
 
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes

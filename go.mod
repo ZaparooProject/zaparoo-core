@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	fyne.io/systray v1.12.2
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/KarpelesLab/gowebp v0.1.1
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-pn532 v0.22.1
 	github.com/ZaparooProject/go-zapscript v0.15.0
@@ -54,7 +55,7 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.8.0
-	golang.org/x/image v0.38.0
+	golang.org/x/image v0.43.0
 	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/text v0.38.0
