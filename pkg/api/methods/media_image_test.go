@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -354,6 +355,134 @@ func TestResizeImageIfNeeded_KeepsOriginalWhenWebPNotSmaller(t *testing.T) {
 	assert.LessOrEqual(t, len(resized), in.Len(), "result must never inflate when no downscale happens")
 	assert.Equal(t, "image/png", contentType, "original kept when webp would not shrink it")
 	assert.Equal(t, in.Bytes(), resized)
+}
+
+func TestResizeImageIfNeeded_PassesThroughUnchanged(t *testing.T) {
+	t.Parallel()
+
+	var pngBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, image.NewRGBA(image.Rect(0, 0, 8, 8))))
+
+	tests := []struct {
+		name        string
+		contentType string
+		binary      []byte
+		maxSize     int
+	}{
+		// Full size requested: nothing is resized or re-encoded.
+		{name: "non-positive maxSize", contentType: "image/png", binary: pngBytes.Bytes(), maxSize: 0},
+		{name: "negative maxSize", contentType: "image/png", binary: pngBytes.Bytes(), maxSize: -10},
+		// Empty payload short-circuits.
+		{name: "empty binary", contentType: "image/png", binary: nil, maxSize: 128},
+		// Undecodable source is served as-is rather than dropped.
+		{name: "undecodable source", contentType: "image/png", binary: []byte("not an image"), maxSize: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resized, contentType := resizeImageIfNeeded(tt.binary, tt.contentType, tt.maxSize)
+			assert.Equal(t, tt.contentType, contentType)
+			assert.Equal(t, tt.binary, resized)
+		})
+	}
+}
+
+func TestDecodeResizableImage(t *testing.T) {
+	t.Parallel()
+
+	const dim = 8
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{R: 200, G: 100, B: 50, A: 255})
+		}
+	}
+	var pngBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, src))
+	var jpegBytes bytes.Buffer
+	require.NoError(t, jpeg.Encode(&jpegBytes, src, nil))
+	webpBytes, _, err := encodeResizedImage(src)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		contentType string
+		binary      []byte
+		wantErr     bool
+	}{
+		// Declared content type drives the decoder directly.
+		{name: "png by content type", contentType: "image/png", binary: pngBytes.Bytes()},
+		{name: "jpeg by content type", contentType: "image/jpeg", binary: jpegBytes.Bytes()},
+		{name: "webp by content type", contentType: "image/webp", binary: webpBytes},
+		// Content type missing or wrong: the magic-byte sniff must still decode,
+		// since stored sources do not always carry an accurate type.
+		{name: "png sniffed when type empty", contentType: "", binary: pngBytes.Bytes()},
+		{name: "jpeg sniffed when type wrong", contentType: "application/octet-stream", binary: jpegBytes.Bytes()},
+		{name: "webp sniffed when type empty", contentType: "", binary: webpBytes},
+		// Undecodable input must error, not panic — it is untrusted.
+		{name: "unsupported bytes error", contentType: "text/plain", binary: []byte("not an image"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			img, decErr := decodeResizableImage(tt.binary, tt.contentType)
+			if tt.wantErr {
+				require.Error(t, decErr)
+				assert.Nil(t, img)
+				return
+			}
+			require.NoError(t, decErr)
+			require.NotNil(t, img)
+			assert.Equal(t, dim, img.Bounds().Dx())
+			assert.Equal(t, dim, img.Bounds().Dy())
+		})
+	}
+}
+
+// noOpaqueImage is a minimal image.Image that deliberately implements neither a
+// special-cased opaque type nor an Opaque() helper, forcing imageHasTransparency
+// down its per-pixel fallback scan.
+type noOpaqueImage struct{ inner *image.RGBA }
+
+func (n noOpaqueImage) ColorModel() color.Model { return n.inner.ColorModel() }
+func (n noOpaqueImage) Bounds() image.Rectangle { return n.inner.Bounds() }
+func (n noOpaqueImage) At(x, y int) color.Color { return n.inner.At(x, y) }
+
+func TestImageHasTransparency(t *testing.T) {
+	t.Parallel()
+
+	const dim = 4
+	opaqueRGBA := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	transparentRGBA := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			opaqueRGBA.Set(x, y, color.RGBA{R: 255, A: 255})
+			transparentRGBA.Set(x, y, color.RGBA{R: 255, A: 128})
+		}
+	}
+
+	tests := []struct {
+		img  image.Image
+		name string
+		want bool
+	}{
+		// JPEG decodes to YCbCr; the short-circuit must report opaque without a
+		// pixel scan (the ARM hot path for every JPEG cover).
+		{name: "ycbcr is opaque", img: image.NewYCbCr(image.Rect(0, 0, dim, dim), image.YCbCrSubsampleRatio444)},
+		{name: "gray is opaque", img: image.NewGray(image.Rect(0, 0, dim, dim))},
+		// Opaque() helper branch, both outcomes.
+		{name: "opaque rgba", img: opaqueRGBA},
+		{name: "transparent rgba", img: transparentRGBA, want: true},
+		// Per-pixel fallback for a type without an Opaque() helper.
+		{name: "fallback scan opaque", img: noOpaqueImage{inner: opaqueRGBA}},
+		{name: "fallback scan transparent", img: noOpaqueImage{inner: transparentRGBA}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, imageHasTransparency(tt.img))
+		})
+	}
 }
 
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes
