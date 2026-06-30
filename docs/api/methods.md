@@ -1674,8 +1674,12 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
-| imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
-Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+| imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
+| maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. |
+
+Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+
+Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`128`, `256`, `512`, `768`) server-side, so the returned image may be **larger** than requested (never smaller than the snapped tier, and never upscaled past the source) — request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
 
 #### Result
 
@@ -1698,7 +1702,8 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
   "params": {
     "system": "SNES",
     "path": "/roms/snes/Super Mario World.sfc",
-    "imageTypes": ["boxart", "image"]
+    "imageTypes": ["boxart", "image"],
+    "maxSize": 512
   }
 }
 ```
@@ -1710,9 +1715,9 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
   "jsonrpc": "2.0",
   "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
   "result": {
-    "contentType": "image/png",
-    "extension": "png",
-    "data": "iVBORw0KGgoAAAANSUhEUgAA...",
+    "contentType": "image/webp",
+    "extension": "webp",
+    "data": "UklGRiQAAABXRUJQVlA4...",
     "typeTag": "property:image-boxart"
   }
 }

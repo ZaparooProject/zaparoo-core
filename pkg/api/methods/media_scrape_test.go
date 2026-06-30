@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -405,9 +404,10 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 
 			newCache := mediaThumbCachePointer.Load()
 			require.NotNil(t, newCache)
-			assert.NotEqual(t, oldCache.dir, newCache.dir, "thumb cache generation should swap on scrape completion")
-			_, statErr := fs.Stat(oldCache.dir)
-			assert.ErrorIs(t, statErr, os.ErrNotExist, "old thumb cache dir should be removed")
+			assert.Equal(t, oldCache.dir, newCache.dir,
+				"wipe keeps the deterministic version dir in place")
+			_, _, found := newCache.get(mediaRefParam{MediaID: &mediaID}, "property:image-boxart", 100)
+			assert.False(t, found, "scrape completion should wipe cached thumbnails")
 		})
 	}
 }

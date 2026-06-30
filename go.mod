@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	fyne.io/systray v1.12.2
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/KarpelesLab/gowebp v0.1.1
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-pn532 v0.22.1
 	github.com/ZaparooProject/go-zapscript v0.15.0
