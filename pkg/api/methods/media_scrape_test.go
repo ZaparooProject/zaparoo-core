@@ -340,7 +340,7 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 			fs := afero.NewMemMapFs()
 			oldCache := &mediaThumbCache{
 				fs:            fs,
-				dir:           filepath.Join("cache", "thumbs", "current"),
+				dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
 				resolvedTypes: make(map[string]string),
 			}
 			mediaID := int64(1)
@@ -406,6 +406,8 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 			require.NotNil(t, newCache)
 			assert.Equal(t, oldCache.dir, newCache.dir,
 				"wipe keeps the deterministic version dir in place")
+			assert.Equal(t, mediaThumbCacheVersionDir(), filepath.Base(newCache.dir),
+				"live cache stays in the versioned thumbs/v<N> directory")
 			_, _, found := newCache.get(mediaRefParam{MediaID: &mediaID}, "property:image-boxart", 100)
 			assert.False(t, found, "scrape completion should wipe cached thumbnails")
 		})
