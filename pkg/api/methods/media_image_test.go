@@ -485,6 +485,72 @@ func TestImageHasTransparency(t *testing.T) {
 	}
 }
 
+func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
+	// Not parallel: installs the process-wide thumb cache pointer.
+	fs := afero.NewMemMapFs()
+	cache := &mediaThumbCache{
+		fs:            fs,
+		dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]string),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	// A high-entropy source larger than the snapped tier (256), so the handler
+	// both downscales it and re-encodes to a smaller WebP than the source PNG.
+	const dim = 300
+	src := image.NewRGBA(image.Rect(0, 0, dim, dim))
+	for y := range dim {
+		for x := range dim {
+			src.Set(x, y, color.RGBA{
+				R: uint8((x*53 ^ y*97) & 0xff),
+				G: uint8((x*131 + y*29) & 0xff),
+				B: uint8((x*17 ^ y*191) & 0xff),
+				A: 255,
+			})
+		}
+	}
+	var blob bytes.Buffer
+	require.NoError(t, png.Encode(&blob, src))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(1, 10)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blob.Bytes()},
+		}, nil)
+
+	// First request: loads the original, resizes to a 256px WebP, caches it.
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"maxSize": 256`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "image/webp", resp.ContentType)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	firstData, err := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, err)
+	decoded, err := webp.Decode(bytes.NewReader(firstData))
+	require.NoError(t, err)
+	assert.Equal(t, 256, decoded.Bounds().Dx(), "downscaled to the snapped tier")
+	assert.Less(t, len(firstData), blob.Len(), "resized webp is smaller than the source png")
+
+	// Second request: the pre-semaphore fast path must serve it from the disk
+	// thumb cache and the resolved-type memo without touching the database. A
+	// strict mock with no expectations fails on any unexpected call.
+	strictDB := testhelpers.NewMockMediaDBI()
+	env2 := makeMediaImageEnv(t, strictDB, mediaImageParams(row, `"maxSize": 256`))
+	result2, err := HandleMediaImage(env2)
+	require.NoError(t, err)
+	resp2, ok := result2.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, resp.Data, resp2.Data, "cache hit returns the identical thumbnail")
+	strictDB.AssertExpectations(t)
+}
+
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes
 // param is given, the handler uses the default preference order and returns the
 // first matching title-level property with inline binary data.
