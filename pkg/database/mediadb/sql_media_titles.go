@@ -433,7 +433,7 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				HAVING COUNT(*) > 1
 			),
 			mvs AS (
-				SELECT tid, typ, mid, group_concat(tag) AS vs
+				SELECT tid, typ, mid, group_concat(tag ORDER BY tag) AS vs
 				FROM (
 					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag
 					FROM tot
@@ -442,7 +442,6 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 					JOIN Tags t ON t.DBID = x.TagDBID
 					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
 					WHERE m.IsMissing = 0%s
-					ORDER BY m.MediaTitleDBID, tt.Type, m.DBID, t.Tag
 				)
 				GROUP BY tid, typ, mid
 			),
@@ -456,8 +455,8 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				WHERE agg.dv > 1 OR agg.mtc < tot.tm
 			),
 			grp AS (
-				SELECT tid, group_concat(typ, ',') AS types
-				FROM (SELECT tid, typ FROM qual ORDER BY tid, typ)
+				SELECT tid, group_concat(typ, ',' ORDER BY typ) AS types
+				FROM qual
 				GROUP BY tid
 			),
 			result AS (
