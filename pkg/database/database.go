@@ -506,15 +506,18 @@ type SearchResultWithCursor struct {
 // siblings, so a sole differentiator always survives truncation regardless of its rank.
 // Rank is the slice index.
 var TagTypeDisplayPriority = []string{
-	"unfinished", "unlicensed", "region", "disc", "edition", "rev", "builddate",
-	"lang", "distribution", "media", "release", "year",
-	"players", "developer", "publisher", "credit",
+	"unfinished", "unlicensed", "region", "video", "disc", "disctotal", "edition",
+	"rev", "arcadeboard", "cabinet", "protection", "set", "input", "dump", "alt", "compatibility", "builddate",
+	"lang", "distribution", "media", "addon", "release", "year",
+	"players", "developer", "publisher", "copyright", "credit",
+	"track",
 }
 
-// ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
-// title commands. Only these types are considered when checking for disambiguation. This
-// is the same set as TagTypeDisplayPriority; order is irrelevant here (used for SQL
-// membership), so it aliases the priority list to keep the two in sync.
+// ZapScriptTagTypes is the allowlist of tag types eligible for sibling disambiguation:
+// only these types are considered when deciding whether a title's media differ. It is the
+// same set as TagTypeDisplayPriority (order is irrelevant here, used only for SQL
+// membership), so it aliases the priority list to keep the two in sync. "unknown" is
+// deliberately absent — unclassified tokens never disambiguate.
 var ZapScriptTagTypes = TagTypeDisplayPriority
 
 // TagTypeDisplayRank returns the display-importance rank of a tag type (lower is more

@@ -268,6 +268,89 @@ func TestRecomputeSystemDisambiguation_DifferingMultiValueSetsDisambiguate(t *te
 	assert.Equal(t, "region", titleDisambiguationTypes(t, mediaDB, titleDBID))
 }
 
+// TestRecomputeSystemDisambiguation_PresenceAbsenceDisambiguates covers the arcade
+// "Jackal" case: three siblings share region:world, but one adds an input tag
+// (Rotary) and another an unlicensed tag ([bl] → bootleg). Neither tag is shared, so
+// presence vs absence must distinguish them; region (identical on all) must not. The
+// tag values mirror what the filename parser actually emits for these names.
+func TestRecomputeSystemDisambiguation_PresenceAbsenceDisambiguates(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "Arcade", "Jackal", []disambTitleMedia{
+		{path: browseTestPath("roms", "arcade", "jackal-w.mra"), tags: map[string]string{"region": "world"}},
+		{
+			path: browseTestPath("roms", "arcade", "jackal-w-rotary.mra"),
+			tags: map[string]string{"region": "world", "input": "joystick:rotary"},
+		},
+		{
+			path: browseTestPath("roms", "arcade", "jackal-w-bl.mra"),
+			tags: map[string]string{"region": "world", "unlicensed": "bootleg"},
+		},
+	})
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Equal(t, "input,unlicensed", titleDisambiguationTypes(t, mediaDB, titleDBID))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaIDs[0], Name: "Jackal", SystemID: "Arcade", DisambiguationTypes: "input,unlicensed"},
+		{MediaID: mediaIDs[1], Name: "Jackal", SystemID: "Arcade", DisambiguationTypes: "input,unlicensed"},
+		{MediaID: mediaIDs[2], Name: "Jackal", SystemID: "Arcade", DisambiguationTypes: "input,unlicensed"},
+	}
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
+	assert.Empty(t, results[0].ZapScriptTags, "plain (W) sibling has no distinguishing tag")
+	require.Len(t, results[1].ZapScriptTags, 1)
+	assert.Equal(t, database.TagInfo{Type: "input", Tag: "joystick:rotary"}, results[1].ZapScriptTags[0])
+	require.Len(t, results[2].ZapScriptTags, 1)
+	assert.Equal(t, database.TagInfo{Type: "unlicensed", Tag: "bootleg"}, results[2].ZapScriptTags[0])
+}
+
+// TestRecomputeSystemDisambiguation_MultipleTitlesInOnePass verifies the single-pass
+// recompute handles several titles in one call: a title that disambiguates and one that
+// does not must both get the correct value from the same system-scoped recompute.
+func TestRecomputeSystemDisambiguation_MultipleTitlesInOnePass(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	sysA, titleA, _ := setupDisambTitle(t, mediaDB, "Arcade", "Contra", []disambTitleMedia{
+		{path: browseTestPath("roms", "arcade", "contra-w.mra"), tags: map[string]string{"region": "world"}},
+		{path: browseTestPath("roms", "arcade", "contra-jp.mra"), tags: map[string]string{"region": "jp"}},
+	})
+	sysB, titleB, _ := setupDisambTitle(t, mediaDB, "Arcade", "Gradius", []disambTitleMedia{
+		{path: browseTestPath("roms", "arcade", "gradius-1.mra"), tags: map[string]string{"region": "world"}},
+		{path: browseTestPath("roms", "arcade", "gradius-2.mra"), tags: map[string]string{"region": "world"}},
+	})
+	require.Equal(t, sysA, sysB, "both titles must share one system")
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{sysA}))
+	assert.Equal(t, "region", titleDisambiguationTypes(t, mediaDB, titleA), "differing region disambiguates")
+	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, titleB), "identical siblings do not disambiguate")
+}
+
+// TestRecomputeSystemDisambiguation_ClearsStaleValue verifies the reset step: a title
+// carrying a stale DisambiguationTypes whose media no longer disagree is cleared to ”.
+func TestRecomputeSystemDisambiguation_ClearsStaleValue(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	sysID, titleID, _ := setupDisambTitle(t, mediaDB, "Arcade", "Gradius", []disambTitleMedia{
+		{path: browseTestPath("roms", "arcade", "gradius-1.mra"), tags: map[string]string{"region": "world"}},
+		{path: browseTestPath("roms", "arcade", "gradius-2.mra"), tags: map[string]string{"region": "world"}},
+	})
+	_, err := mediaDB.sql.Load().ExecContext(
+		ctx, `UPDATE MediaTitles SET DisambiguationTypes = 'region' WHERE DBID = ?`, titleID)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{sysID}))
+	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, titleID), "stale value must be cleared")
+}
+
 // TestRecomputeTitleDisambiguation_Success exercises the title-scoped entry point
 // (RecomputeTitleDisambiguation) directly, complementing the system-scoped tests.
 func TestRecomputeTitleDisambiguation_Success(t *testing.T) {

@@ -35,6 +35,15 @@ var (
 	// Special pattern extraction (complex patterns that still use regex)
 	reTransBracketed = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
 
+	// "side-N-of-M" — a disk side plus the total disk/side count.
+	reSideOf = regexp.MustCompile(`^side-(\d+)-of-(\d+)$`)
+
+	// Raw TOSEC/GoodTools dump-flag bracket grammar: a 1-2 letter flag, an optional numeric
+	// index ("f1", "a2"), and/or a whitespace-separated cracker/group name ("cr XOR",
+	// "h ASS", "t +2 XOR"). A hyphen after the flag is deliberately NOT accepted, so
+	// hyphenated words like "b-side"/"a-team" are never misread as flag+credit.
+	reDumpFlag = regexp.MustCompile(`^([a-z]{1,2})(\d+)?(?:\s+(\S.*))?$`)
+
 	// Scene release artifact patterns (for modern media: movies, TV shows)
 	// Note: These patterns match AFTER separator normalization, so hyphens have become spaces
 	reResolution = regexp.MustCompile(`(?i)\b(480p|720p|1080p|2160p|4K|8K|UHD)\b`)
@@ -270,9 +279,24 @@ func classifyUnmappedParen(normalized, _ string) ([]CanonicalTag, bool) {
 		}
 	}
 
-	// Version phrases — drop, no tag ("version" or its Romance-language equivalents)
-	for _, t := range tokens {
+	// "Side 1 of 2" → media side + disc total.
+	if sideTags, ok := parseSideOfToken(normalized); ok {
+		return sideTags, true
+	}
+
+	// Version phrases. "(System 16C version)" carries a meaningful board id before the
+	// "version" word — map the leading tokens if they resolve. Bare "(version)" or phrases
+	// whose leader doesn't map (e.g. "(final version)") drop with no tag.
+	for i, t := range tokens {
 		if t == "version" || t == "versione" || t == "versao" {
+			if i > 0 {
+				if mapped := mapFilenameTagToCanonical(strings.Join(tokens[:i], "-")); len(mapped) > 0 {
+					for j := range mapped {
+						mapped[j].Source = TagSourceBracketed
+					}
+					return mapped, true
+				}
+			}
 			return nil, true
 		}
 	}
@@ -1100,6 +1124,12 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 			}
 		}
 		if !matched {
+			if vTags, ok := parseVersionToken(normalized); ok {
+				results = append(results, vTags...)
+				matched = true
+			}
+		}
+		if !matched {
 			unmatched = append(unmatched, normalized)
 		}
 	}
@@ -1107,14 +1137,31 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 	// MiSTer Arcade also writes the region and date as separate comma-parts, e.g.
 	// "(EU, 961004)". A standalone 6-digit number is normally rejected as a date, but
 	// the presence of a region sibling makes it unambiguous, so accept it here.
+	consumed := make([]bool, len(unmatched))
 	if hasTagType(results, TagTypeRegion) {
-		for _, u := range unmatched {
+		for i, u := range unmatched {
 			if v, ok := parseBuildDate(u); ok {
 				results = append(results, CanonicalTag{
 					Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed,
 				})
+				consumed[i] = true
 				break
 			}
+		}
+	}
+
+	// Any remaining unmatched comma-part is run through classifyUnmappedParen so a
+	// correctly-typed qualifier (set/edition/hack/crack/classics) is not silently dropped
+	// just because it sits after a comma — "(World, Set 1)" now yields set:1. The
+	// company-name→credit fallback is deliberately NOT applied here: a comma-part like
+	// "CPS Changer" is hardware, not a credit, and gets its correct type via an explicit
+	// mapping instead of being mislabeled.
+	for i, u := range unmatched {
+		if consumed[i] {
+			continue
+		}
+		if res, classified := classifyUnmappedParen(u, u); classified {
+			results = append(results, res...)
 		}
 	}
 
@@ -1123,6 +1170,33 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 	}
 	return nil
 }
+
+// parseVersionToken recognizes MAME/arcade software-version parens like "(ver. 100)" or
+// "(Ver. 1.01)" (normalized to "ver-100" / "ver-1-01") and maps them to a revision tag.
+// The value must start with a digit so it never matches word-shaped tokens. Returns the
+// rev tag(s) and true on a match.
+func parseVersionToken(normalized string) ([]CanonicalTag, bool) {
+	for _, prefix := range []string{"version-", "ver-"} {
+		rest, ok := strings.CutPrefix(normalized, prefix)
+		if !ok || rest == "" || !isASCIIDigit(rest[0]) {
+			continue
+		}
+		valid := true
+		for i := range len(rest) {
+			if !isASCIIDigit(rest[i]) && rest[i] != '-' {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return []CanonicalTag{{Type: TagTypeRev, Value: TagValue(rest), Source: TagSourceBracketed}}, true
+		}
+	}
+	return nil, false
+}
+
+// isASCIIDigit reports whether b is an ASCII digit.
+func isASCIIDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 // parseRegionDateToken handles the MiSTer Arcade naming convention where a single
 // parenthetical packs a region word and a build date, space-separated (normalization
@@ -1227,8 +1301,138 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 		return rdTags
 	}
 
+	// Arcade software version "(ver. 100)" → rev:100. Checked before the generic
+	// paren fallback so it is not mis-classified as a credit/company name.
+	if vTags, ok := parseVersionToken(normalized); ok {
+		return vTags
+	}
+
+	// Arcade protection chip "(FD1094 317-0154)" → protection:fd1094.
+	if pTags, ok := parseProtectionChip(normalized); ok {
+		return pTags
+	}
+
 	// For parentheses tags, use position and context
 	return mapParenthesisTag(normalized, ctx)
+}
+
+// parseProtectionChip recognizes an arcade protection-chip token — a chip family followed by
+// a serial ("fd1094-317-0060", "fd1089b-317-0018", "8751-317-0078") — and returns
+// protection:<family>, dropping the open-ended serial. Must run after explicit keyword
+// mappings. Returns the tag and true on a match.
+func parseProtectionChip(normalized string) ([]CanonicalTag, bool) {
+	var value TagValue
+	switch {
+	case strings.HasPrefix(normalized, "fd1094"):
+		value = TagProtectionFD1094
+	case strings.HasPrefix(normalized, "fd1089"):
+		value = TagProtectionFD1089
+	case strings.HasPrefix(normalized, "8751"):
+		value = TagProtection8751
+	case strings.HasPrefix(normalized, "mc-8123"), strings.HasPrefix(normalized, "mc8123"):
+		value = TagProtectionMC8123
+	default:
+		return nil, false
+	}
+	return []CanonicalTag{{Type: TagTypeProtection, Value: value, Source: TagSourceBracketed}}, true
+}
+
+// parseSideOfToken maps "side-N-of-M" (e.g. "Side 1 of 2") to a media side value plus the
+// disc/side total. Returns the tags and true on a match.
+func parseSideOfToken(normalized string) ([]CanonicalTag, bool) {
+	m := reSideOf.FindStringSubmatch(normalized)
+	if m == nil {
+		return nil, false
+	}
+	sides := map[string]TagValue{"1": TagMediaSideA, "2": TagMediaSideB, "3": TagMediaSideC, "4": TagMediaSideD}
+	side, ok := sides[m[1]]
+	if !ok {
+		return nil, false
+	}
+	result := []CanonicalTag{{Type: TagTypeMedia, Value: side, Source: TagSourceBracketed}}
+	totals := map[string]TagValue{
+		"2": TagDiscTotal2, "3": TagDiscTotal3, "4": TagDiscTotal4, "5": TagDiscTotal5, "6": TagDiscTotal6,
+	}
+	if total, ok := totals[m[2]]; ok {
+		result = append(result, CanonicalTag{Type: TagTypeDiscTotal, Value: total, Source: TagSourceBracketed})
+	}
+	return result, true
+}
+
+// dumpFlagValues maps a TOSEC/GoodTools bracket dump-flag letter to its canonical value.
+var dumpFlagValues = map[string]TagValue{
+	"a": TagDumpAlternate, "b": TagDumpBad, "cr": TagDumpCracked, "f": TagDumpFixed,
+	"h": TagDumpHacked, "m": TagDumpModified, "o": TagDumpOverdump, "p": TagDumpPirated,
+	"t": TagDumpTrained, "tr": TagDumpTranslated, "u": TagDumpUnderdump, "v": TagDumpVirus,
+}
+
+// parseDumpFlagBracket handles the TOSEC/GoodTools dump-flag bracket grammar: a flag letter
+// optionally followed by an index ("[f1]", "[a2]") and/or a whitespace-separated cracker/
+// group name ("[cr XOR]", "[h ASS]", "[t +2 XOR]"). The flag sets the dump status; a trailing
+// group name becomes a credit. It parses the RAW bracket tag (not the normalized form) so the
+// cracker convention's space separator is distinguishable from a plain hyphen — hyphenated
+// words like "b-side"/"a-team" must not be misread as flag+credit. Must run AFTER explicit
+// keyword mappings so tokens like "a000" (a load address) are not misread as flag "a".
+func parseDumpFlagBracket(rawTag string) ([]CanonicalTag, bool) {
+	m := reDumpFlag.FindStringSubmatch(strings.ToLower(strings.TrimSpace(rawTag)))
+	if m == nil {
+		return nil, false
+	}
+	value, ok := dumpFlagValues[m[1]]
+	if !ok {
+		return nil, false
+	}
+	result := []CanonicalTag{{Type: TagTypeDump, Value: value, Source: TagSourceBracketed}}
+	if m[3] != "" && looksLikeCompanyName(m[3]) {
+		result = append(result, CanonicalTag{
+			Type: TagTypeCredit, Value: NormalizeCompanyName(m[3]), Source: TagSourceBracketed,
+		})
+	}
+	return result, true
+}
+
+// parseTrackNumber recognizes a music track number token ("01", "12", "track-3") and returns
+// its leading-zero-stripped value.
+func parseTrackNumber(normalized string) (string, bool) {
+	s := normalized
+	if rest, ok := strings.CutPrefix(s, "track-"); ok {
+		s = rest
+	}
+	if s == "" || len(s) > 3 || !allDigits(s) {
+		return "", false
+	}
+	stripped := strings.TrimLeft(s, "0")
+	if stripped == "" {
+		stripped = "0"
+	}
+	return stripped, true
+}
+
+// mapMusicBracket maps the bracket conventions of SPC/NSF music libraries, where brackets
+// carry track numbers, alternate-sound sets, and composer/annotation text rather than dump
+// status. Returns nil if the token is not a recognized music bracket.
+func mapMusicBracket(normalized string) []CanonicalTag {
+	if n, ok := parseTrackNumber(normalized); ok {
+		return []CanonicalTag{{Type: TagTypeTrack, Value: TagValue(n), Source: TagSourceBracketed}}
+	}
+	// Alternate sound set "as1".."asN" → alt:N.
+	if rest, ok := strings.CutPrefix(normalized, "as"); ok && rest != "" && allDigits(rest) {
+		n := strings.TrimLeft(rest, "0")
+		if n == "" {
+			n = "0"
+		}
+		return []CanonicalTag{{Type: TagTypeAlt, Value: TagValue(n), Source: TagSourceBracketed}}
+	}
+	if normalized == "sfx" {
+		return []CanonicalTag{{Type: TagTypeAlt, Value: TagAlt, Source: TagSourceBracketed}}
+	}
+	// Composer / annotation free-text is a credit.
+	if looksLikeCompanyName(normalized) {
+		return []CanonicalTag{{
+			Type: TagTypeCredit, Value: NormalizeCompanyName(normalized), Source: TagSourceBracketed,
+		}}
+	}
+	return nil
 }
 
 // mapBracketTag maps tags from square brackets [].
@@ -1255,6 +1459,23 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 	// Normalize the tag for regular processing
 	normalized := cachedNormalizeTag(tag)
 
+	// A bracketed build date ("[2017-10-31]", "[1988-01]") is a date in any context. Only
+	// the dash-delimited forms are accepted here: bare 6-/8-digit tokens (e.g. "[010203]")
+	// are far more likely to be catalog numbers or ids than dates, so they stay dump info.
+	if strings.Contains(normalized, "-") {
+		if v, ok := parseBuildDate(normalized); ok {
+			return []CanonicalTag{{Type: TagTypeBuildDate, Value: TagValue(v), Source: TagSourceBracketed}}
+		}
+	}
+
+	// Music libraries use brackets for track numbers, alternate-sound sets, and composer
+	// text rather than dump status.
+	if mediaType == slugs.MediaTypeMusic {
+		if musicTags := mapMusicBracket(normalized); musicTags != nil {
+			return musicTags
+		}
+	}
+
 	if structuralTags, ok := parseStructuralSetTag(normalized, TagSourceBracketed); ok {
 		return structuralTags
 	}
@@ -1279,23 +1500,64 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpCracked, Source: TagSourceBracketed}}
 	case "t":
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpTrained, Source: TagSourceBracketed}}
+	case "bl":
+		// MAME/arcade "[bl]" marks a bootleg romset.
+		return []CanonicalTag{{Type: TagTypeUnlicensed, Value: TagUnlicensedBootleg, Source: TagSourceBracketed}}
 	default:
-		// Try default mapping, filtering for known tag types
-		// Allow dump, unlicensed, language, and region tags through
+		// Try the keyword mapping and accept any concrete hardware/spec/status type it
+		// yields — memory ([128K]) → compatibility, [PAL] → video, board ids → arcadeboard,
+		// as well as the dump/unlicensed/lang/region markers. Only the company/person types
+		// (credit/publisher/developer) are excluded: those belong to parens, never brackets.
 		mapped := mapFilenameTagToCanonical(normalized)
 		var knownTags []CanonicalTag
 		for _, ct := range mapped {
-			if ct.Type == TagTypeDump || ct.Type == TagTypeUnlicensed ||
-				ct.Type == TagTypeLang || ct.Type == TagTypeRegion {
-				ct.Source = TagSourceBracketed
-				knownTags = append(knownTags, ct)
+			// Skip the company/person types — those belong to parens, never brackets.
+			if ct.Type == TagTypeUnknown || ct.Type == TagTypeCredit ||
+				ct.Type == TagTypePublisher || ct.Type == TagTypeDeveloper {
+				continue
 			}
+			ct.Source = TagSourceBracketed
+			knownTags = append(knownTags, ct)
 		}
 		if len(knownTags) > 0 {
 			return knownTags
 		}
+		// Arcade protection chip "[FD1094 317-0060]" → protection:fd1094 (before the dump-flag
+		// parser so it is not misread, and after explicit mappings).
+		if pTags, ok := parseProtectionChip(normalized); ok {
+			return pTags
+		}
+		// TOSEC dump flags with an index or cracker/group suffix: "[f1]", "[a2]", "[cr XOR]",
+		// "[h ASS]". Parses the raw tag (space vs hyphen) so hyphenated words are not misread.
+		if dumpTags, ok := parseDumpFlagBracket(tag); ok {
+			return dumpTags
+		}
+		// Structural qualifiers (set/edition/hack/crack/classics) can appear in brackets too.
+		if res, classified := classifyUnmappedParen(normalized, tag); classified && len(res) > 0 {
+			return res
+		}
+		// Unrecognized bracket token: traditional bracket semantics treat it as dump info.
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagValue(normalized), Source: TagSourceBracketed}}
 	}
+}
+
+// classifyLooseParenToken classifies a paren/comma token that matched no keyword mapping,
+// using the shared No-Intro/TOSEC heuristics: structural/edition/hack/crack/set/translation
+// classification (classifyUnmappedParen), then the TOSEC year-position publisher rule, then a
+// company-name credit, else unknown. norm is the normalized token, raw the original text.
+// index and yearExtracted come from the paren's position context; comma-parts pass index 1
+// and false, since a comma-part is never at the TOSEC year position.
+func classifyLooseParenToken(norm, raw string, index int, yearExtracted bool) []CanonicalTag {
+	if result, classified := classifyUnmappedParen(norm, raw); classified {
+		return result
+	}
+	if index == 0 && yearExtracted {
+		return []CanonicalTag{{Type: TagTypePublisher, Value: NormalizeCompanyName(raw), Source: TagSourceBracketed}}
+	}
+	if looksLikeCompanyName(norm) {
+		return []CanonicalTag{{Type: TagTypeCredit, Value: NormalizeCompanyName(raw), Source: TagSourceBracketed}}
+	}
+	return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(norm), Source: TagSourceBracketed}}
 }
 
 // mapParenthesisTag maps tags from parentheses ().
@@ -1428,31 +1690,7 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 	// Try default mapping
 	mapped := mapFilenameTagToCanonical(tag)
 	if len(mapped) == 0 {
-		// Classify the unmatched group first: may produce edition:, release:, credit:,
-		// or nothing (nil means "drop silently").
-		result, classified := classifyUnmappedParen(tag, ctx.CurrentTag)
-		if classified {
-			return result
-		}
-		// TOSEC positional rule: Title (year)(publisher)[flags]
-		// extractSpecialPatterns removes the year paren before extractTags runs, so the
-		// TOSEC publisher lands at paren position 0. YearExtractedFromFile is set only by
-		// extractSpecialPatterns, so this check cannot fire from year tags from other sources.
-		if ctx.CurrentIndex == 0 && ctx.YearExtractedFromFile {
-			return []CanonicalTag{{
-				Type:   TagTypePublisher,
-				Value:  NormalizeCompanyName(ctx.CurrentTag),
-				Source: TagSourceBracketed,
-			}}
-		}
-		if looksLikeCompanyName(tag) {
-			return []CanonicalTag{{
-				Type:   TagTypeCredit,
-				Value:  NormalizeCompanyName(ctx.CurrentTag),
-				Source: TagSourceBracketed,
-			}}
-		}
-		return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(tag), Source: TagSourceBracketed}}
+		return classifyLooseParenToken(tag, ctx.CurrentTag, ctx.CurrentIndex, ctx.YearExtractedFromFile)
 	}
 
 	// If multiple mappings, check if they're complementary (like region+language)

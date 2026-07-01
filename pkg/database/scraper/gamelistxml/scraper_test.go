@@ -2606,6 +2606,103 @@ func TestProcessCompanionEntries_DuplicateSlugChildConsumesTitleMedia(t *testing
 	})
 }
 
+func TestProcessCompanionEntries_ConflictingChildSlugPrefersConsistentParent(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// The same "phantasystar4" slug is listed under two parents. The WRONG parent
+	// (Phantasy Star 3) is listed first to prove file order does not decide the winner;
+	// name consistency must route the slug to the Phantasy Star 4 parent (id 30).
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="30" source="ZaparooCompanion">
+    <name>Phantasy Star 4 - The End Of The Millennium</name>
+    <developer>Sega</developer>
+  </game>
+  <game id="77" source="ZaparooCompanion">
+    <name>Phantasy Star 3 - Generations Of Doom</name>
+    <developer>Sega</developer>
+  </game>
+  <game parentid="77" source="ZaparooCompanion"><path>./phantasystar4.slug</path></game>
+  <game parentid="30" source="ZaparooCompanion"><path>./phantasystar4.slug</path></game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(500),
+		companionWriteMatcher(
+			nil,
+			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "sega", Label: "Sega"}},
+			companionXMLGameIDProps("30"),
+		)).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "Genesis", ROMPaths: []string{root}, DBID: 5}
+	indexes := mediaByPath(database.Media{
+		DBID: 40, MediaTitleDBID: 500, Path: filepath.Join(root, "Phantasy Star IV (USA).md"),
+	})
+	indexes.AllTitlesBySlug["phantasystar4"] = database.MediaTitle{DBID: 500, SystemDBID: 5, Slug: "phantasystar4"}
+
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB, indexes, nil)
+
+	assert.Equal(t, 1, stats.ConflictingChildSlugs)
+	assertCompanionCounts(t, &stats, 1, 1, 0)
+	mockDB.AssertExpectations(t)
+}
+
+func TestResolveCompanionSlugConflicts(t *testing.T) {
+	t.Parallel()
+	parents := []companionParent{
+		{GameID: "30", Game: esapi.Game{Name: "Phantasy Star 4 - The End Of The Millennium"}},
+		{GameID: "77", Game: esapi.Game{Name: "Phantasy Star 3 - Generations Of Doom"}},
+		{GameID: "1", Game: esapi.Game{Name: "Double Dragon"}},
+		{GameID: "2", Game: esapi.Game{Name: "Double Dragon"}},
+		{GameID: "8", Game: esapi.Game{Name: "Some Unrelated Game"}},
+		{GameID: "9", Game: esapi.Game{Name: "Another Unrelated Game"}},
+		{GameID: "50", Game: esapi.Game{Name: "Mega"}},      // prefix of "megaman" -> score 1
+		{GameID: "51", Game: esapi.Game{Name: "Megaman X"}}, // "megaman" prefix of it -> score 1
+	}
+	child := func(stem, parent string) companionChild {
+		return companionChild{ResolvedPath: filepath.Join(t.TempDir(), stem+".slug"), ParentGameID: parent}
+	}
+	children := []companionChild{
+		child("phantasystar4", "77"), // wrong parent first
+		child("phantasystar4", "30"), // consistent parent
+		child("phantasystar3", "77"), // single parent, untouched
+		child("doubledragon", "1"),   // tie: both parents equally named -> unmanaged
+		child("doubledragon", "2"),
+		child("mystery", "8"), // no parent name relates -> drop all
+		child("mystery", "9"),
+		child("megaman", "50"), // prefix-only tie between differently-named parents -> drop all
+		child("megaman", "51"),
+		{ResolvedPath: filepath.Join(t.TempDir(), "real.md"), ParentGameID: "30"}, // non-slug, untouched
+	}
+
+	var stats companionStats
+	got := resolveCompanionSlugConflicts("Genesis", parents, children, &stats)
+
+	parentFor := func(stem string) []string {
+		var ids []string
+		for _, c := range got {
+			if s, ok := companionSlugStem(c.ResolvedPath); ok && s == stem {
+				ids = append(ids, c.ParentGameID)
+			}
+		}
+		return ids
+	}
+	assert.Equal(t, []string{"30"}, parentFor("phantasystar4"), "consistent parent wins regardless of order")
+	assert.Equal(t, []string{"77"}, parentFor("phantasystar3"), "single-parent slug untouched")
+	assert.ElementsMatch(t, []string{"1", "2"}, parentFor("doubledragon"), "equal-name tie left unmanaged")
+	assert.Empty(t, parentFor("mystery"), "no consistent parent -> all dropped")
+	assert.Empty(t, parentFor("megaman"), "prefix-only tie -> all dropped")
+	assert.Equal(t, 5, stats.ConflictingChildSlugs, "1 phantasystar4 + 2 mystery + 2 megaman dropped")
+
+	var nonSlug int
+	for _, c := range got {
+		if _, ok := companionSlugStem(c.ResolvedPath); !ok {
+			nonSlug++
+		}
+	}
+	assert.Equal(t, 1, nonSlug, "non-slug child untouched")
+}
+
 func TestProcessCompanionEntries_RewritesAlreadyScraped(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

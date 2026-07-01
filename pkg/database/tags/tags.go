@@ -97,6 +97,8 @@ const (
 	TagTypeEmbedded      TagType = "embedded"      // Embedded chips and internal hardware
 	TagTypeSave          TagType = "save"          // Save mechanism
 	TagTypeArcadeBoard   TagType = "arcadeboard"   // Arcade board types
+	TagTypeCabinet       TagType = "cabinet"       // Arcade cabinet orientation
+	TagTypeProtection    TagType = "protection"    // Arcade copy-protection state
 	TagTypeCompatibility TagType = "compatibility" // System compatibility tags
 	TagTypeSupplement    TagType = "supplement"    // Supplementary content (dlc, update, expansion, theme, avatar)
 	TagTypeDistribution  TagType = "distribution"  // Digital distribution platform (virtual-console, wiiware, xblig)
@@ -439,6 +441,17 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSavePassword, // Password-based progression (no save memory)
 	},
 
+	TagTypeCabinet: {
+		// Arcade cabinet orientation
+		TagCabinetUpright, TagCabinetCocktail, TagCabinetCabaret, TagCabinetSitdown,
+	},
+
+	TagTypeProtection: {
+		// Arcade copy-protection state (chip family only)
+		TagProtectionNone, TagProtectionFD1094, TagProtectionFD1089, TagProtection8751,
+		TagProtectionMC8123, TagProtectionEncrypted, TagProtectionDecrypted,
+	},
+
 	TagTypeArcadeBoard: {
 		// Arcade system boards - specific hardware platforms for arcade games
 		// CAPCOM
@@ -544,7 +557,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Apple II
 		TagCompatibilityApple2Plus, TagCompatibilityApple2E,
 		// Memory requirements
-		TagCompatibilityMemory16K, TagCompatibilityMemory128K, TagCompatibilityMemory48K128K,
+		TagCompatibilityMemory3K, TagCompatibilityMemory4K, TagCompatibilityMemory8K,
+		TagCompatibilityMemory16K, TagCompatibilityMemory19K, TagCompatibilityMemory64K,
+		TagCompatibilityMemory128K, TagCompatibilityMemory48K128K,
+		TagCompatibilityLoadA000, TagCompatibilityBasic, TagCompatibilityPascal,
+		TagCompatibilityCPM, TagCompatibilityRDOS, TagCompatibilityOSB, TagCompatibilitySedoric,
 		// Other
 		TagCompatibilityIBMPCDoctorPCJr, TagCompatibilityOsbourneOsbourne1,
 		TagCompatibilityMiscOrch80, TagCompatibilityMiscPiano90,
@@ -562,7 +579,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagDistributionGameCube, TagDistributionSwitchOnline, TagDistributionDiskWriter, TagDistributionSteam,
 		TagDistributionSegaChannel, TagDistributionGenesisMini, TagDistributionSegaAges, TagDistributionSegaSmashPack,
 		TagDistributionWii, TagDistributionClubNintendo, TagDistributionGBAEReader,
-		TagDistributionCompilation,
+		TagDistributionCompilation, TagDistributionTypeIn,
 	},
 	TagTypeDisc: {
 		// Disc number for multi-disc games (which disc this file is)
@@ -852,7 +869,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagDumpVerified,   // Verified good dump
 		// Dump variants
 		TagDumpPending, TagDumpChecksumBad, TagDumpChecksumUnknown, TagDumpBIOS,
-		TagDumpHackedFFE, TagDumpHackedIntroRemov,
+		TagDumpHackedFFE, TagDumpHackedIntroRemov, TagDumpNoBoot,
 	},
 
 	TagTypeMedia: {
@@ -869,6 +886,12 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagMediaTape,  // Cassette tape
 		// Additional media types
 		TagMediaCart, TagMediaN64DD, TagMediaFDS, TagMediaEReader, TagMediaMultiboot,
+		TagMediaKFile, TagMediaLNX,
+	},
+
+	TagTypeTrack: {
+		// Music track numbers — values are open-ended (track:1, track:2, …) and created
+		// dynamically at index time, so no fixed values are enumerated here.
 	},
 
 	TagTypeExtension: {

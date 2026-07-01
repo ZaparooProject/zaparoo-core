@@ -159,6 +159,15 @@ func parseBuildDate(s string) (string, bool) {
 			return "", false
 		}
 		return s, true
+	case len(s) == 7 && s[4] == '-':
+		// Year-month only, e.g. "1988-01" (common in NSF/SPC music build dates).
+		if !allDigits(s[0:4]) || !allDigits(s[5:7]) {
+			return "", false
+		}
+		if m := atoi2(s[5:7]); m < 1 || m > 12 {
+			return "", false
+		}
+		return s, true
 	case len(s) == 8 && allDigits(s):
 		if !validMonthDay(atoi2(s[4:6]), atoi2(s[6:8])) {
 			return "", false

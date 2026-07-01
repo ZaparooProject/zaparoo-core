@@ -438,6 +438,13 @@ func GenerateMediaDB(
 				}
 			}
 
+			// Once cancellation is requested the scanner may fire one more status
+			// update before it observes the cancelled context. Skip it so the
+			// running flag isn't resurrected after cancel() cleared it.
+			if indexCtx.Err() != nil {
+				return
+			}
+
 			// Always update in-memory status for polling clients.
 			statusInstance.set(indexingStatusVals{
 				indexing:    true,

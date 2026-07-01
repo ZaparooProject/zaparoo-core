@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -100,6 +101,7 @@ type companionStats struct {
 	UniqueTitleWrites      int
 	DuplicateTitles        int
 	ConflictingTitleWrites int
+	ConflictingChildSlugs  int
 }
 
 type scrapeWriteStats struct {
@@ -1746,6 +1748,149 @@ func companionEntriesFromParsed(
 	return parents, children
 }
 
+// companionSlugStem returns the lowercased slug stem of a companion child whose path is a
+// "<slug>.slug" reference, matching the lookup key used by matchCompanionChildMedia. The
+// second return is false for children matched by a real path/filename instead.
+func companionSlugStem(resolvedPath string) (string, bool) {
+	base := filepath.Base(resolvedPath)
+	if !strings.EqualFold(filepath.Ext(base), ".slug") {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSuffix(base, filepath.Ext(base))), true
+}
+
+func companionSlugMediaType(systemID string) slugs.MediaType {
+	if system, err := systemdefs.GetSystem(systemID); err == nil {
+		return system.GetMediaType()
+	}
+	return slugs.MediaTypeGame
+}
+
+func isASCIIDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+// companionParentNameScore rates how consistent a parent's display name is with a child
+// slug stem. A ZaparooCompanion gamelist can erroneously list one slug under multiple
+// parents (e.g. "phantasystar4" under both "Phantasy Star 4" and "Phantasy Star 3"); the
+// score picks the parent whose name actually matches the slug. 2 = exact slug match, 1 =
+// one slug extends the other at a non-digit boundary (a subtitle or hack suffix), 0 = no
+// relation. The non-digit boundary stops "phantasystar1" from matching "phantasystar12".
+func companionParentNameScore(mediaType slugs.MediaType, childSlug, parentName string) int {
+	parentSlug := slugs.Slugify(mediaType, parentName)
+	switch {
+	case parentSlug == "" || childSlug == "":
+		return 0
+	case parentSlug == childSlug:
+		return 2
+	case strings.HasPrefix(parentSlug, childSlug) && !isASCIIDigit(parentSlug[len(childSlug)]):
+		return 1
+	case strings.HasPrefix(childSlug, parentSlug) && !isASCIIDigit(childSlug[len(parentSlug)]):
+		return 1
+	default:
+		return 0
+	}
+}
+
+// resolveCompanionSlugConflicts drops companion child records whose ".slug" stem is claimed
+// by more than one parent ID. The correct parent is chosen by name consistency
+// (companionParentNameScore); when no parent's name relates to the slug, every conflicting
+// child for that slug is dropped rather than risk writing the wrong parent's metadata onto a
+// title. Children matched by real path/filename, slugs claimed by a single parent, and
+// ties between exactly-named parents are left untouched (the latter preserves the prior
+// first-wins behavior, since equally-named parents carry equivalent metadata). Ties among
+// prefix-only matches are dropped, because differently-named parents do not share metadata.
+func resolveCompanionSlugConflicts(
+	systemID string,
+	parents []companionParent,
+	children []companionChild,
+	stats *companionStats,
+) []companionChild {
+	parentIDsByStem := make(map[string]map[string]struct{})
+	for i := range children {
+		stem, ok := companionSlugStem(children[i].ResolvedPath)
+		if !ok {
+			continue
+		}
+		pids := parentIDsByStem[stem]
+		if pids == nil {
+			pids = make(map[string]struct{})
+			parentIDsByStem[stem] = pids
+		}
+		pids[children[i].ParentGameID] = struct{}{}
+	}
+
+	parentNameByID := make(map[string]string, len(parents))
+	for i := range parents {
+		parentNameByID[parents[i].GameID] = parents[i].Game.Name
+	}
+	mediaType := companionSlugMediaType(systemID)
+
+	type resolution struct {
+		winner string
+		drop   bool
+	}
+	conflicts := make(map[string]resolution)
+	for stem, pids := range parentIDsByStem {
+		if len(pids) < 2 {
+			continue
+		}
+		bestScore := -1
+		scores := make(map[string]int, len(pids))
+		for id := range pids {
+			s := companionParentNameScore(mediaType, stem, parentNameByID[id])
+			scores[id] = s
+			if s > bestScore {
+				bestScore = s
+			}
+		}
+		if bestScore <= 0 {
+			conflicts[stem] = resolution{drop: true}
+			continue
+		}
+		winner, winnerCount := "", 0
+		for id, s := range scores {
+			if s == bestScore {
+				winner, winnerCount = id, winnerCount+1
+			}
+		}
+		switch {
+		case winnerCount == 1:
+			conflicts[stem] = resolution{winner: winner}
+		case bestScore == 1:
+			// Tie among prefix-only matches: the parents are differently named (e.g.
+			// "Mega" vs "Megaman X" both weakly matching "megaman"), so their metadata is
+			// not equivalent. Drop rather than risk writing the wrong parent's metadata.
+			conflicts[stem] = resolution{drop: true}
+		}
+		// winnerCount > 1 && bestScore == 2: tie among exact-name matches; leave unmanaged
+		// (equally-named parents carry equivalent metadata, preserving first-wins behavior).
+	}
+	if len(conflicts) == 0 {
+		return children
+	}
+
+	filtered := children[:0]
+	for i := range children {
+		if stem, ok := companionSlugStem(children[i].ResolvedPath); ok {
+			if res, conflicted := conflicts[stem]; conflicted &&
+				(res.drop || children[i].ParentGameID != res.winner) {
+				if stats != nil {
+					stats.ConflictingChildSlugs++
+				}
+				log.Warn().
+					Str("system", systemID).
+					Str("slug", stem).
+					Str("parentGameID", children[i].ParentGameID).
+					Str("chosenParentGameID", res.winner).
+					Bool("dropped", res.drop).
+					Msg("gamelistxml: companion: conflicting child slug, skipping ambiguous parent mapping")
+				continue
+			}
+		}
+		filtered = append(filtered, children[i])
+	}
+	return filtered
+}
+
 // mapCompanionParentToResult builds the tag and property writes for a companion parent
 // record. Parent records carry no ROM path, so the filesystem artwork fallback is
 // skipped cleanly (the stem becomes "." and no fallback names are produced); media
@@ -1818,6 +1963,7 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 
 	sentinel := scraper.SentinelTagInfo("gamelist.xml")
 	stats := companionStats{WriteStats: scrapeWriteStats{UniqueTitleDBIDs: make(map[int64]struct{})}}
+	children = resolveCompanionSlugConflicts(system.ID, parents, children, &stats)
 	lastProgress := time.Now().Add(-scrapeProgressInterval)
 	emitProgress := func(force bool) bool {
 		if ch == nil {
@@ -1858,6 +2004,7 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 			Int("unique_title_writes", stats.UniqueTitleWrites).
 			Int("duplicate_title_writes", stats.DuplicateTitles).
 			Int("conflicting_title_writes", stats.ConflictingTitleWrites).
+			Int("conflicting_child_slugs", stats.ConflictingChildSlugs).
 			Bool("force", opts.Force).
 			Msg("gamelistxml: companion: finished entries")
 		logScrapeWriteStats("gamelistxml: companion write stats", system.ID, &stats.WriteStats)

@@ -545,6 +545,54 @@ func TestAddMediaPath_ArcadeBuildDateTagPersisted(t *testing.T) {
 	assert.Contains(t, got, "region:world")
 }
 
+func TestAddMediaPath_TrackTagPersisted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	state := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, state))
+
+	// A music library track number ([01]) becomes a track: tag whose type is created
+	// dynamically by the indexing pipeline (track is not a seeded canonical type).
+	path := filepath.Join("SNESMusic", "Star Fox [01].spc")
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, mediaID, err := AddMediaPath(mediaDB, state, "SNESMusic", path, "", false, false, nil, slugs.MediaTypeMusic)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	rows, err := sqlDB.QueryContext(ctx, `
+		SELECT TagTypes.Type, Tags.Tag
+		FROM MediaTags
+		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+		JOIN TagTypes ON TagTypes.DBID = Tags.TypeDBID
+		WHERE MediaTags.MediaDBID = ?`, mediaID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var got []string
+	for rows.Next() {
+		var typ, val string
+		require.NoError(t, rows.Scan(&typ, &val))
+		got = append(got, typ+":"+tags.UnpadTagValue(val))
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Contains(t, got, "track:1", "track tag should persist through indexing")
+}
+
 func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testing.T) {
 	t.Parallel()
 
