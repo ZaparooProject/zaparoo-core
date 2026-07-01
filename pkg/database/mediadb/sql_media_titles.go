@@ -347,13 +347,14 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 }
 
 // sqlRecomputeTitleDisambiguation recomputes MediaTitles.DisambiguationTypes for
-// the given titles. A tag type is disambiguating for a title when the title's
-// present (non-missing) media hold more than one distinct per-media value-set for
-// that type, restricted to database.ZapScriptTagTypes. Comparing per-media sets
-// (not values pooled across media) means a multi-valued type that is identical on
-// every sibling — e.g. every disc tagged (USA, Europe) — does not falsely
-// disambiguate. The result is stored as a sorted, comma-separated list of type
-// names (empty when nothing disambiguates).
+// the given titles. A tag type disambiguates a title when the title's present
+// (non-missing) sibling media disagree on it: either they hold more than one
+// distinct per-media value-set, or some media carry the type and others lack it
+// entirely. Only tag types in database.ZapScriptTagTypes (the eligibility allowlist)
+// are considered. Comparing per-media sets (not values pooled across media) means a
+// multi-valued type that is identical on every sibling — e.g. every disc tagged
+// (USA, Europe) — does not falsely disambiguate. The result is stored as a sorted,
+// comma-separated list of type names (empty when nothing disambiguates).
 //
 // This is the single source of truth for sibling disambiguation: read paths
 // filter each result's tags by the stored types instead of re-deriving across a
@@ -372,18 +373,27 @@ func sqlRecomputeDisambiguationForSystems(ctx context.Context, db sqlQueryable, 
 // sqlRecomputeDisambiguation runs the disambiguation UPDATE filtered by either
 // MediaTitles.DBID (title-scoped) or MediaTitles.SystemDBID (system-scoped).
 // filterCol is a trusted constant, never user input.
+//
+// Each chunk executes as two statements (reset the in-scope titles to ”, then set the
+// qualifying ones). These are only atomic when db is a transaction; on a non-tx handle a
+// failure of the set statement after the reset committed leaves those titles blank until
+// the next recompute. That is a benign, self-healing display-hint degradation (callers
+// log-and-continue, MediaDB is rebuilt on reindex), and callers hold db.sqlMu exclusively
+// so no reader ever observes the intermediate reset-only state.
 func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol string, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
 
-	typeHolders := prepareVariadic("?", ",", len(database.ZapScriptTagTypes))
+	// Allowlist of tag types eligible for disambiguation, rendered as an IN clause.
 	typeArgs := make([]any, len(database.ZapScriptTagTypes))
 	for i, t := range database.ZapScriptTagTypes {
 		typeArgs[i] = t
 	}
+	typeClause := " AND tt.Type IN (" + prepareVariadic("?", ",", len(database.ZapScriptTagTypes)) + ")"
 
-	// Chunk IDs so total bound parameters stay under SQLite's limit.
+	// Chunk IDs so bound parameters stay under SQLite's limit; leave room for the
+	// type params the set statement appends.
 	chunkSize := sqliteMaxParams - len(database.ZapScriptTagTypes)
 	for start := 0; start < len(ids); start += chunkSize {
 		end := start + chunkSize
@@ -391,56 +401,80 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			end = len(ids)
 		}
 		chunk := ids[start:end]
-
-		args := make([]any, 0, len(typeArgs)+len(chunk))
-		args = append(args, typeArgs...)
-		for _, id := range chunk {
-			args = append(args, id)
+		holders := prepareVariadic("?", ",", len(chunk))
+		chunkArgs := make([]any, len(chunk))
+		for i, id := range chunk {
+			chunkArgs[i] = id
 		}
 
-		//nolint:gosec // filterCol is a trusted constant; placeholders are parameterized
-		query := fmt.Sprintf(`
-			UPDATE MediaTitles
-			SET DisambiguationTypes = COALESCE((
-				SELECT group_concat(Type, ',')
-				FROM (
-					SELECT Type
-					FROM (
-						SELECT Type, MediaDBID, group_concat(Tag) AS ValueSet
-						FROM (
-							SELECT DISTINCT tt.Type AS Type, m.DBID AS MediaDBID, t.Tag AS Tag
-							FROM Media m
-							JOIN MediaTags mt ON mt.MediaDBID = m.DBID
-							JOIN Tags t ON t.DBID = mt.TagDBID
-							JOIN TagTypes tt ON tt.DBID = t.TypeDBID
-							WHERE m.MediaTitleDBID = MediaTitles.DBID
-							  AND m.IsMissing = 0
-							  AND tt.Type IN (%s)
-							ORDER BY tt.Type, m.DBID, t.Tag
-						)
-						GROUP BY Type, MediaDBID
-					)
-					GROUP BY Type
-					HAVING COUNT(DISTINCT ValueSet) > 1
-					ORDER BY Type
-				)
-			), '')
-			WHERE MediaTitles.%s IN (%s)
-			  -- Skip the per-title subquery for single-media titles that are already
-			  -- blank: a title with <=1 non-missing media can never have variant
-			  -- disambiguation, so its value is necessarily ''. Still process any
-			  -- title that currently has a value (so a title that dropped from
-			  -- multi-media to single-media is reset to '').
-			  AND (
-				MediaTitles.DisambiguationTypes != ''
-				OR (
-					SELECT COUNT(*) FROM Media
-					WHERE Media.MediaTitleDBID = MediaTitles.DBID AND Media.IsMissing = 0
-				) > 1
-			  )
-		`, typeHolders, filterCol, prepareVariadic("?", ",", len(chunk)))
+		// 1) Clear every in-scope title that currently carries a value, so titles
+		// that lost their last variant (or dropped below two media) are reset. The
+		// != '' guard skips the common already-blank rows.
+		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
+		resetQuery := fmt.Sprintf(
+			`UPDATE MediaTitles SET DisambiguationTypes = '' WHERE %s IN (%s) AND DisambiguationTypes != ''`,
+			filterCol, holders)
+		if _, err := db.ExecContext(ctx, resetQuery, chunkArgs...); err != nil {
+			return fmt.Errorf("failed to reset disambiguation: %w", err)
+		}
 
-		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+		// 2) Compute disambiguating types for the in-scope multi-media titles in one
+		// set-based pass (a single global sort + aggregate, no per-title correlated
+		// subquery) and write them. A type disambiguates when its sibling media
+		// disagree: either two media carry different per-media value-sets
+		// (COUNT(DISTINCT vs) > 1), or some media carry the type and others lack it
+		// (mtc < the title's total non-missing media count) — the latter tells
+		// "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored comma-joined in
+		// alphabetical order; read paths reorder them by display rank.
+		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
+		setQuery := fmt.Sprintf(`
+			WITH scope AS (
+				SELECT DBID AS tid FROM MediaTitles WHERE %s IN (%s)
+			),
+			tot AS (
+				SELECT m.MediaTitleDBID AS tid, COUNT(*) AS tm
+				FROM Media m
+				JOIN scope ON scope.tid = m.MediaTitleDBID
+				WHERE m.IsMissing = 0
+				GROUP BY m.MediaTitleDBID
+				HAVING COUNT(*) > 1
+			),
+			mvs AS (
+				SELECT tid, typ, mid, group_concat(tag) AS vs
+				FROM (
+					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag
+					FROM tot
+					JOIN Media m ON m.MediaTitleDBID = tot.tid
+					JOIN MediaTags x ON x.MediaDBID = m.DBID
+					JOIN Tags t ON t.DBID = x.TagDBID
+					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+					WHERE m.IsMissing = 0%s
+					ORDER BY m.MediaTitleDBID, tt.Type, m.DBID, t.Tag
+				)
+				GROUP BY tid, typ, mid
+			),
+			agg AS (
+				SELECT tid, typ, COUNT(DISTINCT vs) AS dv, COUNT(*) AS mtc
+				FROM mvs GROUP BY tid, typ
+			),
+			qual AS (
+				SELECT agg.tid AS tid, agg.typ AS typ
+				FROM agg JOIN tot ON tot.tid = agg.tid
+				WHERE agg.dv > 1 OR agg.mtc < tot.tm
+			),
+			result AS (
+				SELECT tid, group_concat(typ, ',') AS types
+				FROM (SELECT tid, typ FROM qual ORDER BY tid, typ)
+				GROUP BY tid
+			)
+			UPDATE MediaTitles SET DisambiguationTypes = result.types
+			FROM result WHERE MediaTitles.DBID = result.tid
+		`, filterCol, holders, typeClause)
+
+		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs))
+		setArgs = append(setArgs, chunkArgs...)
+		setArgs = append(setArgs, typeArgs...)
+		if _, err := db.ExecContext(ctx, setQuery, setArgs...); err != nil {
 			return fmt.Errorf("failed to recompute disambiguation: %w", err)
 		}
 	}

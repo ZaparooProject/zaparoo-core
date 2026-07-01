@@ -341,6 +341,8 @@ func AddMediaPathWithPrefixPolicy(
 				dynType = string(tags.TagTypeCredit)
 			case strings.HasPrefix(tagStr, string(tags.TagTypeBuildDate)+":"):
 				dynType = string(tags.TagTypeBuildDate)
+			case strings.HasPrefix(tagStr, string(tags.TagTypeTrack)+":"):
+				dynType = string(tags.TagTypeTrack)
 			}
 			if dynType != "" {
 				tagValue := strings.TrimPrefix(tagStr, dynType+":")

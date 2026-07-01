@@ -762,6 +762,25 @@ const (
 	TagEmbeddedPocketsonar TagValue = "pocketsonar"
 )
 
+// Cabinet orientation tag values (arcade)
+const (
+	TagCabinetUpright  TagValue = "upright"
+	TagCabinetCocktail TagValue = "cocktail"
+	TagCabinetCabaret  TagValue = "cabaret"
+	TagCabinetSitdown  TagValue = "sitdown"
+)
+
+// Protection tag values (arcade copy-protection state; chip family only, no serial)
+const (
+	TagProtectionNone      TagValue = "no-protection"
+	TagProtectionFD1094    TagValue = "fd1094"
+	TagProtectionFD1089    TagValue = "fd1089"
+	TagProtection8751      TagValue = "8751"
+	TagProtectionMC8123    TagValue = "mc-8123"
+	TagProtectionEncrypted TagValue = "encrypted"
+	TagProtectionDecrypted TagValue = "decrypted"
+)
+
 // Arcade board tag values
 const (
 	// CAPCOM
@@ -1254,6 +1273,7 @@ const (
 	TagDumpBIOS             TagValue = "bios"                 // BIOS dump
 	TagDumpHackedFFE        TagValue = "hacked:ffe"           // Far East Copier hack
 	TagDumpHackedIntroRemov TagValue = "hacked:intro-removed" // Hacked intro removed
+	TagDumpNoBoot           TagValue = "no-boot"              // Dump does not boot
 )
 
 // Amiga compatibility combination tag values
@@ -1308,6 +1328,8 @@ const (
 	TagMediaFDS       TagValue = "fds"
 	TagMediaEReader   TagValue = "ereader"
 	TagMediaMultiboot TagValue = "multiboot"
+	TagMediaKFile     TagValue = "k-file" // Atari 8-bit K-File disk image
+	TagMediaLNX       TagValue = "lnx"    // C64 Lynx archive
 )
 
 // Multigame tag values (volume numbers and menu)
@@ -1490,6 +1512,7 @@ const (
 	TagDistributionClubNintendo   TagValue = "club-nintendo"
 	TagDistributionGBAEReader     TagValue = "gba-e-reader"
 	TagDistributionCompilation    TagValue = "compilation"
+	TagDistributionTypeIn         TagValue = "type-in" // Magazine type-in listing
 )
 
 // Apple II compatibility tag values
@@ -1500,9 +1523,21 @@ const (
 
 // Memory compatibility tag values
 const (
+	TagCompatibilityMemory3K      TagValue = "memory:3k"
+	TagCompatibilityMemory4K      TagValue = "memory:4k"
+	TagCompatibilityMemory8K      TagValue = "memory:8k"
 	TagCompatibilityMemory16K     TagValue = "memory:16k"
+	TagCompatibilityMemory19K     TagValue = "memory:19k"
+	TagCompatibilityMemory64K     TagValue = "memory:64k"
 	TagCompatibilityMemory128K    TagValue = "memory:128k"
 	TagCompatibilityMemory48K128K TagValue = "memory:48k-128k"
+	TagCompatibilityLoadA000      TagValue = "load:a000"  // VIC-20 8K block at $A000
+	TagCompatibilityBasic         TagValue = "basic"      // Requires a BASIC interpreter
+	TagCompatibilityPascal        TagValue = "pascal"     // Requires UCSD/Apple Pascal
+	TagCompatibilityCPM           TagValue = "os:cpm"     // Requires CP/M
+	TagCompatibilityRDOS          TagValue = "os:rdos"    // Atari RDOS
+	TagCompatibilityOSB           TagValue = "os:os-b"    // Atari OS-B
+	TagCompatibilitySedoric       TagValue = "os:sedoric" // Oric Sedoric DOS
 )
 
 // Property tag values — referenced by scrapers for static content properties.
