@@ -1795,8 +1795,9 @@ func companionParentNameScore(mediaType slugs.MediaType, childSlug, parentName s
 // (companionParentNameScore); when no parent's name relates to the slug, every conflicting
 // child for that slug is dropped rather than risk writing the wrong parent's metadata onto a
 // title. Children matched by real path/filename, slugs claimed by a single parent, and
-// ambiguous ties between equally-named parents are left untouched (the latter preserves the
-// prior first-wins behavior, since equally-named parents carry equivalent metadata).
+// ties between exactly-named parents are left untouched (the latter preserves the prior
+// first-wins behavior, since equally-named parents carry equivalent metadata). Ties among
+// prefix-only matches are dropped, because differently-named parents do not share metadata.
 func resolveCompanionSlugConflicts(
 	systemID string,
 	parents []companionParent,
@@ -1851,10 +1852,17 @@ func resolveCompanionSlugConflicts(
 				winner, winnerCount = id, winnerCount+1
 			}
 		}
-		if winnerCount == 1 {
+		switch {
+		case winnerCount == 1:
 			conflicts[stem] = resolution{winner: winner}
+		case bestScore == 1:
+			// Tie among prefix-only matches: the parents are differently named (e.g.
+			// "Mega" vs "Megaman X" both weakly matching "megaman"), so their metadata is
+			// not equivalent. Drop rather than risk writing the wrong parent's metadata.
+			conflicts[stem] = resolution{drop: true}
 		}
-		// winnerCount > 1: ambiguous tie among equally-named parents; leave unmanaged.
+		// winnerCount > 1 && bestScore == 2: tie among exact-name matches; leave unmanaged
+		// (equally-named parents carry equivalent metadata, preserving first-wins behavior).
 	}
 	if len(conflicts) == 0 {
 		return children

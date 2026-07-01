@@ -2656,6 +2656,8 @@ func TestResolveCompanionSlugConflicts(t *testing.T) {
 		{GameID: "2", Game: esapi.Game{Name: "Double Dragon"}},
 		{GameID: "8", Game: esapi.Game{Name: "Some Unrelated Game"}},
 		{GameID: "9", Game: esapi.Game{Name: "Another Unrelated Game"}},
+		{GameID: "50", Game: esapi.Game{Name: "Mega"}},      // prefix of "megaman" -> score 1
+		{GameID: "51", Game: esapi.Game{Name: "Megaman X"}}, // "megaman" prefix of it -> score 1
 	}
 	child := func(stem, parent string) companionChild {
 		return companionChild{ResolvedPath: filepath.Join(t.TempDir(), stem+".slug"), ParentGameID: parent}
@@ -2668,6 +2670,8 @@ func TestResolveCompanionSlugConflicts(t *testing.T) {
 		child("doubledragon", "2"),
 		child("mystery", "8"), // no parent name relates -> drop all
 		child("mystery", "9"),
+		child("megaman", "50"), // prefix-only tie between differently-named parents -> drop all
+		child("megaman", "51"),
 		{ResolvedPath: filepath.Join(t.TempDir(), "real.md"), ParentGameID: "30"}, // non-slug, untouched
 	}
 
@@ -2687,7 +2691,8 @@ func TestResolveCompanionSlugConflicts(t *testing.T) {
 	assert.Equal(t, []string{"77"}, parentFor("phantasystar3"), "single-parent slug untouched")
 	assert.ElementsMatch(t, []string{"1", "2"}, parentFor("doubledragon"), "equal-name tie left unmanaged")
 	assert.Empty(t, parentFor("mystery"), "no consistent parent -> all dropped")
-	assert.Equal(t, 3, stats.ConflictingChildSlugs, "1 phantasystar4 + 2 mystery dropped")
+	assert.Empty(t, parentFor("megaman"), "prefix-only tie -> all dropped")
+	assert.Equal(t, 5, stats.ConflictingChildSlugs, "1 phantasystar4 + 2 mystery + 2 megaman dropped")
 
 	var nonSlug int
 	for _, c := range got {

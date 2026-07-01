@@ -374,12 +374,14 @@ func sqlRecomputeDisambiguationForSystems(ctx context.Context, db sqlQueryable, 
 // MediaTitles.DBID (title-scoped) or MediaTitles.SystemDBID (system-scoped).
 // filterCol is a trusted constant, never user input.
 //
-// Each chunk executes as two statements (reset the in-scope titles to ”, then set the
-// qualifying ones). These are only atomic when db is a transaction; on a non-tx handle a
-// failure of the set statement after the reset committed leaves those titles blank until
-// the next recompute. That is a benign, self-healing display-hint degradation (callers
-// log-and-continue, MediaDB is rebuilt on reindex), and callers hold db.sqlMu exclusively
-// so no reader ever observes the intermediate reset-only state.
+// Each chunk executes as a single atomic UPDATE: a LEFT JOIN over the in-scope titles
+// COALESCEs a computed type list (or ” when a title no longer qualifies) so the reset and
+// set happen together. This matters because GetZapScriptTagsBySystemAndPath reads
+// DisambiguationTypes without holding db.sqlMu, and MediaDB caps the pool at one connection;
+// a two-statement reset-then-set would release the connection between them and let that
+// reader observe the transient blank state, writing a ZapScript tag with no disambiguation
+// suffix. One statement never releases the connection mid-update, so no reader sees a
+// partial result.
 func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol string, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
@@ -407,25 +409,16 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			chunkArgs[i] = id
 		}
 
-		// 1) Clear every in-scope title that currently carries a value, so titles
-		// that lost their last variant (or dropped below two media) are reset. The
-		// != '' guard skips the common already-blank rows.
-		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
-		resetQuery := fmt.Sprintf(
-			`UPDATE MediaTitles SET DisambiguationTypes = '' WHERE %s IN (%s) AND DisambiguationTypes != ''`,
-			filterCol, holders)
-		if _, err := db.ExecContext(ctx, resetQuery, chunkArgs...); err != nil {
-			return fmt.Errorf("failed to reset disambiguation: %w", err)
-		}
-
-		// 2) Compute disambiguating types for the in-scope multi-media titles in one
+		// Compute disambiguating types for the in-scope multi-media titles in one
 		// set-based pass (a single global sort + aggregate, no per-title correlated
-		// subquery) and write them. A type disambiguates when its sibling media
-		// disagree: either two media carry different per-media value-sets
-		// (COUNT(DISTINCT vs) > 1), or some media carry the type and others lack it
-		// (mtc < the title's total non-missing media count) — the latter tells
-		// "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored comma-joined in
-		// alphabetical order; read paths reorder them by display rank.
+		// subquery), then LEFT JOIN the full in-scope set back so titles that no longer
+		// qualify COALESCE to '' — the reset and the set land in one atomic UPDATE. A
+		// type disambiguates when its sibling media disagree: either two media carry
+		// different per-media value-sets (COUNT(DISTINCT vs) > 1), or some media carry
+		// the type and others lack it (mtc < the title's total non-missing media count)
+		// — the latter tells "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored
+		// comma-joined in alphabetical order; read paths reorder them by display rank.
+		// The IS NOT guard skips rows already holding the computed value.
 		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
 		setQuery := fmt.Sprintf(`
 			WITH scope AS (
@@ -462,13 +455,19 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				FROM agg JOIN tot ON tot.tid = agg.tid
 				WHERE agg.dv > 1 OR agg.mtc < tot.tm
 			),
-			result AS (
+			grp AS (
 				SELECT tid, group_concat(typ, ',') AS types
 				FROM (SELECT tid, typ FROM qual ORDER BY tid, typ)
 				GROUP BY tid
+			),
+			result AS (
+				SELECT scope.tid AS tid, COALESCE(grp.types, '') AS types
+				FROM scope LEFT JOIN grp ON grp.tid = scope.tid
 			)
 			UPDATE MediaTitles SET DisambiguationTypes = result.types
-			FROM result WHERE MediaTitles.DBID = result.tid
+			FROM result
+			WHERE MediaTitles.DBID = result.tid
+			  AND MediaTitles.DisambiguationTypes IS NOT result.types
 		`, filterCol, holders, typeClause)
 
 		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs))

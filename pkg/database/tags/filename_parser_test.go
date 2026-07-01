@@ -1474,10 +1474,14 @@ func TestParseFilenameToCanonicalTagsForMedia_CabinetAndProtection(t *testing.T)
 		wantTag  string
 	}{
 		{"Game (Cocktail).mra", "cabinet:cocktail"},
+		{"Game (Cabaret).mra", "cabinet:cabaret"},
 		{"Game (World, Upright).mra", "cabinet:upright"},
 		{"Cabinet (sitdown - upright).mra", "cabinet:sitdown"},
 		{"Cabinet (sitdown - upright).mra", "cabinet:upright"},
 		{"Alex Kidd (World, S16A) [No Protection].mra", "protection:no-protection"},
+		{"Game (Encrypted).mra", "protection:encrypted"},
+		{"Game (Decrypted).mra", "protection:decrypted"},
+		{"Game (MC-8123).mra", "protection:mc-8123"},
 		{"Ace Attacker (Japan, S16A) [FD1094 317-0060].mra", "protection:fd1094"},
 		{"Alien (World) (FD1094 317-0154).mra", "protection:fd1094"},
 		{"Altered Beast (set 8) (8751 317-0078).mra", "protection:8751"},
@@ -1547,6 +1551,7 @@ func TestParseFilenameToCanonicalTagsForMedia_FormatAndStructureTokens(t *testin
 		{"180 (1986)(Mastertronic)[cr XOR].atr", "dump:cracked"},
 		{"180 (1986)(Mastertronic)[cr XOR].atr", "credit:xor"},
 		{"007 (1987)(Domark)[k-file].atr", "media:k-file"},
+		{"Boulder Dash (1984)(First Star)[lnx].atr", "media:lnx"},
 		{"Prog (19xx)(-)[basic].rkr", "compatibility:basic"},
 		{"Game (8K).prg", "compatibility:memory:8k"},
 		{"Game (4K).prg", "compatibility:memory:4k"},
