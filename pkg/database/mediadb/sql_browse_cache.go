@@ -37,10 +37,13 @@ const browseCacheSchemaVersion = "2"
 // browseCacheInvalidatedVersion is the sentinel written to
 // DBConfig.BrowseIndexVersion when the cache is marked stale (e.g. media changed
 // during indexing). The BrowseDirs/BrowseDirCounts rows remain in the current
-// schema; only their counts may be out of date. It is deliberately distinct from
-// any real schema version so a stale-but-present cache can still be served while a
-// refresh is scheduled, rather than falling back to a full media scan.
-const browseCacheInvalidatedVersion = "0"
+// schema; only their counts may be out of date, so a stale-but-present cache can
+// still be served while a refresh is scheduled, rather than falling back to a
+// full media scan. The sentinel embeds the schema version it invalidates: after
+// a schema bump, a cache invalidated under the previous schema no longer matches
+// this value and reads as absent, so old-schema rows are never served as
+// "stale-but-serveable" by newer code.
+const browseCacheInvalidatedVersion = browseCacheSchemaVersion + "-stale"
 
 type browseCacheDir struct {
 	parentID  *int64

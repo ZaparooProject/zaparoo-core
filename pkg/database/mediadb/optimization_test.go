@@ -365,10 +365,10 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError) // all retries exhausted
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
+		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "").
+		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mediaDB.RunBackgroundOptimization(nil, nil)
@@ -403,10 +403,10 @@ func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) 
 	mock.ExpectQuery("^SELECT COUNT\\(\\*\\) FROM Tags$").
 		WillReturnError(context.Canceled)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
+		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "").
+		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mediaDB.RunBackgroundOptimization(nil, nil)
@@ -601,6 +601,9 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
 		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
 
+		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+			WithArgs(DBConfigOptimizationStep, "").
+			WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "failed").
 			WillReturnResult(sqlmock.NewResult(1, 1))

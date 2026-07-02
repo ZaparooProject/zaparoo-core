@@ -81,3 +81,61 @@ func TestDetectBrowsePrefixPolicy_SamplesLargeFlatDir(t *testing.T) {
 	assert.True(t, policy.Enabled, "rank policy should be detected from the sample")
 	assert.Equal(t, browseprefix.KindRank, policy.Kind)
 }
+
+// TestDetectBrowsePrefixPolicy_FrontClusteredDirIsNotMisdetected covers the
+// sampling-bias case: insertion (DBID) order tracks the filesystem walk, and
+// numbered files sort to the front of a directory, so a forward-only sample of a
+// large mixed directory would see 100% rank prefixes and wrongly enable the
+// policy for a directory that is mostly unnumbered. The two-ended sample blends
+// in the back of the partition, where the fraction (here 25% overall) cannot
+// clear the threshold.
+func TestDetectBrowsePrefixPolicy_FrontClusteredDirIsNotMisdetected(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	parentDir := browseTestDir("roms", "nes")
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Mixed"),
+		Name:       "Mixed",
+	})
+	require.NoError(t, err)
+
+	insert := func(name string) {
+		t.Helper()
+		_, insErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     sys.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           browseTestPath("roms", "nes", name),
+			ParentDir:      parentDir,
+			SortName:       name,
+		})
+		require.NoError(t, insErr)
+	}
+
+	// A full sample-limit's worth of rank-prefixed files inserted first (the
+	// walk order for names that sort ahead of letters)...
+	for i := range browseprefix.DefaultSampleLimit {
+		insert(fmt.Sprintf("%03d. Track %d.nes", i%1000, i))
+	}
+	// ...followed by three times as many unnumbered files: 25% overall, well
+	// under the enable threshold.
+	for i := range 3 * browseprefix.DefaultSampleLimit {
+		insert(fmt.Sprintf("Plain Game %d.nes", i))
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	policy, err := detectBrowsePrefixPolicy(ctx, mediaDB.sql.Load(), parentDir, nil)
+	require.NoError(t, err)
+	assert.False(t, policy.Enabled,
+		"a mostly-unnumbered directory must not enable a prefix policy from its front cluster")
+}

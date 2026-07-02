@@ -3047,7 +3047,7 @@ func TestMediaDB_SystemBrowseFallsBackWhenBrowseCacheNotReady_Integration(t *tes
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
-	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+	assert.Equal(t, browseCacheInvalidatedVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 
 	_, err = mediaDB.sql.Load().ExecContext(ctx, "DELETE FROM BrowseDirs")
 	require.NoError(t, err)
@@ -3147,7 +3147,7 @@ func TestSqlInvalidateBrowseCache_MarksBrowseCacheStale_Integration(t *testing.T
 
 	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
 
-	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+	assert.Equal(t, browseCacheInvalidatedVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 }
 
 func TestMediaDB_UnfilteredBrowseReadsFromMediaWhenBrowseCacheEmpty_Integration(t *testing.T) {
@@ -3334,6 +3334,8 @@ func TestMediaDB_BrowseRouteCountsDegradeOnSubTimeout_Integration(t *testing.T) 
 	require.Contains(t, routeCounts, sharedRoot, "route with media must still be served when its count times out")
 	assert.True(t, routeCounts[sharedRoot].CountUnknown, "degraded route reports an unknown count")
 	assert.Equal(t, 0, routeCounts[sharedRoot].FileCount)
+	assert.Equal(t, []string{snesSystem.ID}, routeCounts[sharedRoot].SystemIDs,
+		"a single-system filter pins the degraded route's system membership without a query")
 }
 
 // Not parallel: it mutates package-level sub-timeout vars (see above).

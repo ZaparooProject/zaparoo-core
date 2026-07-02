@@ -3360,12 +3360,16 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 					log.Error().Err(setErr).Msg("failed to mark media database as corrupt after optimization failure")
 				}
 			}
-			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
-				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
-			}
-			// Clear optimization step on failure
+			// Clear the step before writing the failed status: a crash between the
+			// two writes must not leave a Failed status with a stale step, or the
+			// next boot's failure-resume would start mid-list and skip the steps
+			// before it. The reverse gap (step cleared, status still running) just
+			// re-runs everything from the first step.
 			if setErr := db.SetOptimizationStep(""); setErr != nil {
 				log.Error().Err(setErr).Msg("failed to clear optimization step on failure")
+			}
+			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
 			}
 
 			// Notify that optimization has failed
