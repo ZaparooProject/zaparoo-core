@@ -164,14 +164,14 @@ jobs:
 
       - name: Save Go cache (Unix)
         if: matrix.os != 'windows' && steps.restore-go-cache-unix.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
 
       - name: Save Go cache (Windows)
         if: matrix.os == 'windows' && steps.restore-go-cache-windows.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
