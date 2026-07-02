@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -824,6 +825,14 @@ func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
 	defer cleanup()
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
+	// Wire an inbox so the resume-limit branch can surface a user-facing message.
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(m *database.InboxMessage) bool {
+		return m.Category == inboxservice.CategoryMediaIndexResumeLimit &&
+			m.Severity == inboxservice.SeverityWarning
+	})).Return(&database.InboxMessage{}, nil)
+	st.SetInbox(inboxservice.NewService(mockUserDB, st.Notifications))
+
 	// Simulate a reindex that keeps getting interrupted: status wedged at
 	// "running" with the resume-attempt counter already at the limit.
 	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning))
@@ -840,6 +849,9 @@ func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, mediadb.IndexingStatusCancelled, status)
 	assert.False(t, methods.IsIndexing(), "indexing must not be relaunched past the resume limit")
+
+	// The user must be told why indexing stopped, via a resume-limit inbox message.
+	mockUserDB.AssertCalled(t, "AddInboxMessage", mock.Anything)
 }
 
 func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
