@@ -27,12 +27,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -3176,6 +3178,192 @@ func TestMediaDB_UnfilteredBrowseReadsFromMediaWhenBrowseCacheEmpty_Integration(
 	require.Len(t, schemes, 1)
 	assert.Equal(t, "steam://", schemes[0].Scheme)
 	assert.Equal(t, 1, schemes[0].FileCount)
+}
+
+func TestMediaDB_StaleButPopulatedBrowseCacheIsServed_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	rpgA := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG", "a.sfc"))
+	rpgB := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG", "b.sfc"))
+	rpgC := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG", "c.sfc"))
+	snesDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes")) + "/"
+
+	snes := insertSystemWithMedia(t, mediaDB, "SNES", "Game A", rpgA)
+	insertSystemMedia(t, mediaDB, snes, "Game B", rpgB)
+
+	// Build a fresh cache snapshot (RPG holds 2 files).
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+	require.Equal(t, browseCacheSchemaVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+
+	// Add a third file to Media without rebuilding the cache, then mark the
+	// cache stale exactly as a media change would. The cache rows now lag the
+	// Media table (2 cached vs 3 real).
+	insertSystemMedia(t, mediaDB, snes, "Game C", rpgC)
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
+
+	state, err := sqlBrowseCacheStatus(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	require.Equal(t, browseCacheStale, state, "cache with rows and sentinel version must be stale, not absent")
+
+	// Directory listings and their counts are served from the browse cache. A
+	// stale-but-present cache is served (not rebuilt from Media), so the RPG
+	// directory count reflects the frozen snapshot of 2, not the live 3.
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{PathPrefix: snesDir})
+	require.NoError(t, err)
+	require.Len(t, dirs, 1)
+	assert.Equal(t, "RPG", dirs[0].Name)
+	assert.Equal(t, 2, dirs[0].FileCount,
+		"directory count should come from the stale cache snapshot, not a live media scan")
+}
+
+func TestRunBackgroundOptimization_ResumesFromPersistedStep_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	insertSystemWithMedia(t, mediaDB, "SNES", "Game A",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG", "a.sfc")))
+
+	// Build a fresh cache, then invalidate it so it is stale-but-present.
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
+	needs, err := mediaDB.BrowseCacheNeedsRebuild(ctx)
+	require.NoError(t, err)
+	require.True(t, needs, "cache should be stale before the run")
+
+	// Pretend a previous optimization was interrupted at the last step. Resume
+	// must skip the earlier steps, including browse_cache, so the stale cache is
+	// left untouched rather than rebuilt.
+	require.NoError(t, mediaDB.SetOptimizationStep("wal_checkpoint"))
+
+	mediaDB.RunBackgroundOptimization(nil, syncutil.NewPauser())
+
+	// browse_cache was skipped, so the cache is still stale (a full run from the
+	// first step would have rebuilt it and cleared the stale flag).
+	needs, err = mediaDB.BrowseCacheNeedsRebuild(ctx)
+	require.NoError(t, err)
+	assert.True(t, needs, "browse_cache step should have been skipped by resume, leaving the cache stale")
+
+	status, err := mediaDB.GetOptimizationStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusCompleted, status)
+}
+
+func TestMediaDB_BrowseCacheNeedsRebuild_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Absent: no cache rows and no version yet.
+	needs, err := mediaDB.BrowseCacheNeedsRebuild(ctx)
+	require.NoError(t, err)
+	assert.True(t, needs, "absent cache needs a rebuild")
+
+	snes := insertSystemWithMedia(t, mediaDB, "SNES", "Game A",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG", "a.sfc")))
+	insertSystemMedia(t, mediaDB, snes, "Game B",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "Action", "b.sfc")))
+
+	// Fresh: after a rebuild the version matches the current schema.
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+	needs, err = mediaDB.BrowseCacheNeedsRebuild(ctx)
+	require.NoError(t, err)
+	assert.False(t, needs, "freshly populated cache does not need a rebuild")
+
+	// Stale: a media change invalidates the version but leaves the rows in place.
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
+	needs, err = mediaDB.BrowseCacheNeedsRebuild(ctx)
+	require.NoError(t, err)
+	assert.True(t, needs, "stale cache needs a rebuild")
+}
+
+// Not parallel: it mutates package-level sub-timeout vars. Sequential tests run
+// while parallel tests are paused, so the mutation cannot race their reads.
+func TestMediaDB_BrowseRouteCountsDegradeOnSubTimeout_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	sharedRoot := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "shared"))
+	insertSystemWithMedia(t, mediaDB, "SNES", "Degrade Game",
+		filepath.ToSlash(filepath.Join(sharedRoot, "RPG", "game.sfc")))
+
+	// Force the cache-absent media-scan fallback.
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
+	_, err = mediaDB.sql.Load().ExecContext(ctx, "DELETE FROM BrowseDirs")
+	require.NoError(t, err)
+
+	// Force the per-route COUNT to blow its sub-timeout while leaving the cheap
+	// presence probe a real budget, so the route degrades to "present, unknown
+	// count" instead of erroring the whole browse.
+	origCount, origProbe := browseRouteCountSubTimeout, browseRouteProbeSubTimeout
+	browseRouteCountSubTimeout = time.Nanosecond
+	browseRouteProbeSubTimeout = 5 * time.Second
+	defer func() {
+		browseRouteCountSubTimeout = origCount
+		browseRouteProbeSubTimeout = origProbe
+	}()
+
+	routeCounts, err := mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes:  []string{sharedRoot},
+		Systems: []systemdefs.System{*snesSystem},
+	})
+	require.NoError(t, err, "a per-route sub-timeout must degrade, not fail the browse")
+	require.Contains(t, routeCounts, sharedRoot, "route with media must still be served when its count times out")
+	assert.True(t, routeCounts[sharedRoot].CountUnknown, "degraded route reports an unknown count")
+	assert.Equal(t, 0, routeCounts[sharedRoot].FileCount)
+}
+
+// Not parallel: it mutates package-level sub-timeout vars (see above).
+func TestMediaDB_BrowseRouteHasMediaProbe_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	populatedRoot := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes"))
+	insertSystemWithMedia(t, mediaDB, "SNES", "Probe Game",
+		filepath.ToSlash(filepath.Join(populatedRoot, "RPG", "game.sfc")))
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", []systemdefs.System{*snesSystem})
+
+	has, err := sqlBrowseRouteHasMedia(ctx, mediaDB.sql.Load(),
+		browseRouteCacheKey(populatedRoot), systemClause, systemArgs)
+	require.NoError(t, err)
+	assert.True(t, has, "probe finds media under a populated root")
+
+	emptyRoot := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "empty"))
+	has, err = sqlBrowseRouteHasMedia(ctx, mediaDB.sql.Load(),
+		browseRouteCacheKey(emptyRoot), systemClause, systemArgs)
+	require.NoError(t, err)
+	assert.False(t, has, "probe reports no media under an empty root")
 }
 
 func TestMediaDB_SearchMediaWithFilters_SelectiveIndexingKeepsUnchangedSystemsCacheEligible_Integration(t *testing.T) {

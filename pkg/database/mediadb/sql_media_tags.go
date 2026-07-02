@@ -165,17 +165,34 @@ func sqlGetMediaTagsBySystemID(ctx context.Context, db *sql.DB, systemID string)
 	return sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID)
 }
 
-// sqlGetTagDBIDsByType returns the DBIDs of all tags belonging to the given tag type.
-func sqlGetTagDBIDsByType(ctx context.Context, db *sql.DB, tagType string) (map[int64]struct{}, error) {
+// sqlGetNonScannerTagDBIDs returns the DBIDs of every tag the filename scanner
+// does NOT own: user tags, cover/scrape "property" tags, the scraper-exclusive
+// metadata types the filename parser never emits ("rating", "genre", "gamefamily"),
+// and scraper sentinel/run markers (dynamic "scraper.<id>" / "scraper-run.<id>"
+// types). Reconcile diffs a media's stored tags against the tags re-derived from
+// its filename; without this exclusion any tag written by a scraper or cover
+// resolution would look "stale" and be deleted on every re-index, silently wiping
+// scraped data (and marking the title touched, forcing a full tags-cache rebuild).
+func sqlGetNonScannerTagDBIDs(ctx context.Context, db *sql.DB) (map[int64]struct{}, error) {
 	query := `
 		SELECT t.DBID
 		FROM Tags t
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE tt.Type = ?
+		WHERE tt.Type IN (?, ?, ?, ?, ?)
+		   OR tt.Type LIKE ?
+		   OR tt.Type LIKE ?
 	`
-	rows, err := db.QueryContext(ctx, query, tagType)
+	rows, err := db.QueryContext(ctx, query,
+		string(tags.TagTypeUser),
+		string(tags.TagTypeProperty),
+		string(tags.TagTypeRating),
+		string(tags.TagTypeGenre),
+		string(tags.TagTypeGameFamily),
+		string(tags.ScraperType(""))+"%",
+		string(tags.ScraperRunType(""))+"%",
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query tag DBIDs for type %s: %w", tagType, err)
+		return nil, fmt.Errorf("failed to query non-scanner tag DBIDs: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -187,21 +204,23 @@ func sqlGetTagDBIDsByType(ctx context.Context, db *sql.DB, tagType string) (map[
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("failed to scan tag DBID for type %s: %w", tagType, err)
+			return nil, fmt.Errorf("failed to scan non-scanner tag DBID: %w", err)
 		}
 		ids[id] = struct{}{}
 	}
 	return ids, rows.Err()
 }
 
-// sqlGetScannerMediaTagsBySystemID returns media-tag links excluding user-owned tags.
-// User tags are filtered in Go against a pre-fetched DBID set rather than joining
-// Tags/TagTypes in SQL: the link query is the hottest scanner read (it walks every
-// MediaTags row for the system), and the extra per-row B-tree probes dominated its cost.
+// sqlGetScannerMediaTagsBySystemID returns media-tag links for the scanner-owned
+// tags only, excluding non-scanner tags (user, cover/scrape property, scraper
+// markers). The exclusion set is filtered in Go against a pre-fetched DBID set
+// rather than joining Tags/TagTypes in SQL: the link query is the hottest scanner
+// read (it walks every MediaTags row for the system), and the extra per-row B-tree
+// probes dominated its cost.
 func sqlGetScannerMediaTagsBySystemID(
 	ctx context.Context, db *sql.DB, systemID string,
 ) ([]database.MediaTagLink, error) {
-	userTagIDs, err := sqlGetTagDBIDsByType(ctx, db, string(tags.TagTypeUser))
+	nonScannerTagIDs, err := sqlGetNonScannerTagDBIDs(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -217,13 +236,13 @@ func sqlGetScannerMediaTagsBySystemID(
 	if err != nil {
 		return nil, err
 	}
-	if len(userTagIDs) == 0 {
+	if len(nonScannerTagIDs) == 0 {
 		return links, nil
 	}
 
 	filtered := links[:0]
 	for _, link := range links {
-		if _, isUserTag := userTagIDs[link.TagDBID]; isUserTag {
+		if _, isNonScanner := nonScannerTagIDs[link.TagDBID]; isNonScanner {
 			continue
 		}
 		filtered = append(filtered, link)

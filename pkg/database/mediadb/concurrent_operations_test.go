@@ -53,7 +53,9 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -276,7 +278,9 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -328,11 +332,14 @@ func TestOptimizationInterruption(t *testing.T) {
 	}
 	mediaDB.sql.Store(db)
 
-	// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
+	// temporary repair and browse_cache run first; pragma_optimize failure aborts
+	// before page_prefetch/wal_checkpoint.
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))

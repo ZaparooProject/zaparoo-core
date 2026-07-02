@@ -46,6 +46,7 @@ const (
 const (
 	CategoryNone                      = "" // No deduplication
 	CategoryMediaDBCorruptionRecovery = "mediadb_corruption_recovery"
+	CategoryMediaIndexResumeLimit     = "media_index_resume_limit"
 	CategoryUpdateAvailable           = "update_available"
 )
 

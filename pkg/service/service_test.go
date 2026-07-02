@@ -584,6 +584,8 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 
 	// Mock database to return "completed" status (no interruption)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	// A clean state resets the resume-attempt counter.
+	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
@@ -797,6 +799,8 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 
 	// Mock database to return "failed" status (should not resume)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil)
+	// A non-interrupted state resets the resume-attempt counter.
+	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
@@ -805,6 +809,61 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 
 	// Verify that no indexing was triggered for failed status
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
+}
+
+func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// Simulate a reindex that keeps getting interrupted: status wedged at
+	// "running" with the resume-attempt counter already at the limit.
+	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning))
+	for range maxIndexResumeAttempts {
+		_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+		require.NoError(t, incErr)
+	}
+
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+
+	// The wedged index must be cancelled, not relaunched, so the library stays
+	// browsable rather than looping the reindex on every boot.
+	status, err := db.MediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, mediadb.IndexingStatusCancelled, status)
+	assert.False(t, methods.IsIndexing(), "indexing must not be relaunched past the resume limit")
+}
+
+func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCompleted))
+	_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+	require.NoError(t, incErr)
+
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+
+	attempts, err := db.MediaDB.GetIndexResumeAttempts()
+	require.NoError(t, err)
+	assert.Equal(t, 0, attempts, "a clean indexing state must reset the resume-attempt counter")
 }
 
 func TestCheckAndResumeScraping_StatusErrorDoesNothing(t *testing.T) {

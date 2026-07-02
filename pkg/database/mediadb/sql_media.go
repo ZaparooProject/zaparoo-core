@@ -28,7 +28,6 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -301,7 +300,7 @@ func sqlGetMediaWithFullPathExcluding(
 // and then building a temp sort by DBID for large systems.
 func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
 	query := `
-		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName
+		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
 		FROM Media m INDEXED BY media_system_path_idx
 		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 		ORDER BY m.Path
@@ -320,7 +319,7 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 	for rows.Next() {
 		var m database.MediaWithFullPath
 		if err := rows.Scan(
-			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName,
+			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &m.IsMissing,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan media for system %s: %w", systemID, err)
 		}
@@ -344,13 +343,13 @@ func sqlGetMediaWithTagsBySystemID(
 		return sqlGetMediaBySystemID(ctx, db, systemID)
 	}
 
-	userTagIDs, err := sqlGetTagDBIDsByType(ctx, db, string(dbtags.TagTypeUser))
+	nonScannerTagIDs, err := sqlGetNonScannerTagDBIDs(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 
 	query := `
-		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName,
+		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing,
 			(SELECT GROUP_CONCAT(mt.TagDBID) FROM MediaTags mt WHERE mt.MediaDBID = m.DBID) AS TagIDs
 		FROM Media m INDEXED BY media_system_path_idx
 		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
@@ -373,12 +372,12 @@ func sqlGetMediaWithTagsBySystemID(
 			tagIDs sql.NullString
 		)
 		if scanErr := rows.Scan(
-			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &tagIDs,
+			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &m.IsMissing, &tagIDs,
 		); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan media with tags for system %s: %w", systemID, scanErr)
 		}
 		m.SystemID = systemID
-		parsed, parseErr := parseScannerTagIDs(tagIDs, userTagIDs)
+		parsed, parseErr := parseScannerTagIDs(tagIDs, nonScannerTagIDs)
 		if parseErr != nil {
 			return nil, fmt.Errorf("failed to parse tag IDs for media %d in system %s: %w", m.DBID, systemID, parseErr)
 		}
@@ -389,9 +388,10 @@ func sqlGetMediaWithTagsBySystemID(
 }
 
 // parseScannerTagIDs parses a GROUP_CONCAT(TagDBID) string into a slice of tag DBIDs,
-// excluding user-owned tags. Returns nil for a NULL/empty input or when every tag was
-// user-owned, so media without scanner tags carry no slice allocation.
-func parseScannerTagIDs(tagIDs sql.NullString, userTagIDs map[int64]struct{}) ([]int, error) {
+// excluding non-scanner tags (user, cover/scrape property, scraper markers). Returns
+// nil for a NULL/empty input or when every tag was non-scanner, so media without
+// scanner tags carry no slice allocation.
+func parseScannerTagIDs(tagIDs sql.NullString, nonScannerTagIDs map[int64]struct{}) ([]int, error) {
 	if !tagIDs.Valid || tagIDs.String == "" {
 		return nil, nil
 	}
@@ -404,7 +404,7 @@ func parseScannerTagIDs(tagIDs sql.NullString, userTagIDs map[int64]struct{}) ([
 		if err != nil {
 			return nil, fmt.Errorf("invalid tag DBID %q: %w", part, err)
 		}
-		if _, isUserTag := userTagIDs[int64(id)]; isUserTag {
+		if _, isNonScanner := nonScannerTagIDs[int64(id)]; isNonScanner {
 			continue
 		}
 		result = append(result, id)

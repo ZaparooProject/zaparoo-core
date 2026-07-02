@@ -34,6 +34,14 @@ import (
 
 const browseCacheSchemaVersion = "2"
 
+// browseCacheInvalidatedVersion is the sentinel written to
+// DBConfig.BrowseIndexVersion when the cache is marked stale (e.g. media changed
+// during indexing). The BrowseDirs/BrowseDirCounts rows remain in the current
+// schema; only their counts may be out of date. It is deliberately distinct from
+// any real schema version so a stale-but-present cache can still be served while a
+// refresh is scheduled, rather than falling back to a full media scan.
+const browseCacheInvalidatedVersion = "0"
+
 type browseCacheDir struct {
 	parentID  *int64
 	path      string
@@ -368,7 +376,7 @@ func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigBrowseIndexVersion,
-		"0",
+		browseCacheInvalidatedVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to mark browse cache stale: %w", err)

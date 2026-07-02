@@ -269,6 +269,11 @@ func ClearIndexingStatus() {
 	statusInstance.clear()
 }
 
+// SetIndexingForTest marks indexing as in progress - used for testing.
+func SetIndexingForTest() {
+	statusInstance.startIfNotRunning()
+}
+
 // IsIndexing reports whether media indexing is currently in progress.
 func IsIndexing() bool {
 	return statusInstance.get().indexing
@@ -501,6 +506,13 @@ func GenerateMediaDB(
 			return
 		}
 		log.Info().Msg("finished generating media db successfully")
+		// A completed index (whether a fresh run or a resumed one) clears the
+		// consecutive resume-attempt counter immediately, rather than waiting for
+		// the next boot to observe a clean status. Otherwise interruptions from an
+		// earlier effort keep counting and could trip the resume cap prematurely.
+		if resetErr := db.MediaDB.ResetIndexResumeAttempts(); resetErr != nil {
+			log.Warn().Err(resetErr).Msg("failed to reset index resume attempts after successful index")
+		}
 		mediaImageNoImages.clear()
 		WipeMediaThumbCache()
 		notifications.MediaIndexing(ns, models.IndexingStatusResponse{

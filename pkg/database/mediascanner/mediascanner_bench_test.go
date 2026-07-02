@@ -492,7 +492,8 @@ func seedPersistentState(b *testing.B, db *mediadb.MediaDB, systemID string, n, 
 	if err := db.BeginTransaction(true); err != nil {
 		b.Fatal(err)
 	}
-	for _, m := range media {
+	for i := range media {
+		m := &media[i]
 		for _, tagDBID := range tagDBIDs {
 			if _, mtErr := db.InsertMediaTag(database.MediaTag{MediaDBID: m.DBID, TagDBID: tagDBID}); mtErr != nil {
 				b.Fatal(mtErr)

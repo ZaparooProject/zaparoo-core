@@ -820,6 +820,8 @@ func NewNamesIndex(
 		TagsIndex:          0,
 		TagIDs:             make(map[string]int),
 		MissingMedia:       make(map[int]struct{}),
+		PreviouslyMissing:  make(map[int]struct{}),
+		TouchedTitles:      make(map[int]struct{}),
 	}
 
 	// 3. Set up scan state — persistent mode is always active
@@ -923,6 +925,9 @@ func NewNamesIndex(
 	filesInBatch := 0
 	batchStarted := false
 	pendingSystems := make([]string, 0)
+	// Systems whose media/tags/missing-state actually changed this run. Only these
+	// need their SystemTagsCache rebuilt; unchanged systems keep their existing cache.
+	dirtySystems := make(map[string]struct{})
 
 	// Sub-phase wall-time accumulators across the systems loop, logged once after
 	// it so the monolithic "systems" phase can be attributed to its parts:
@@ -981,6 +986,7 @@ func NewNamesIndex(
 		}
 
 		scanState.MissingMedia = make(map[int]struct{})
+		scanState.PreviouslyMissing = make(map[int]struct{})
 
 		// Load existing data for this system — always persistent.
 		stateLoadStart := time.Now()
@@ -1270,11 +1276,18 @@ func NewNamesIndex(
 				}
 			}
 			// Refresh stored sibling disambiguation now the system's media, tags, and
-			// missing flags are final and flushed into the transaction. Non-fatal:
-			// stale disambiguation only affects display/ZapScript hints and is
-			// corrected on the next index.
-			if disErr := db.RecomputeSystemDisambiguation(ctx, []int64{int64(systemDBID)}); disErr != nil {
-				log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
+			// missing flags are final and flushed into the transaction. Only titles
+			// whose inputs changed this run are recomputed (new/reassigned media,
+			// tag changes, or a member's missing-state flip) instead of every title in
+			// the system — an unchanged re-index recomputes nothing. Non-fatal: stale
+			// disambiguation only affects display/ZapScript hints and self-corrects
+			// when the title is next touched.
+			touchedTitleDBIDs := collectTouchedTitleDBIDs(&scanState)
+			if len(touchedTitleDBIDs) > 0 {
+				if disErr := db.RecomputeTitleDisambiguation(ctx, touchedTitleDBIDs); disErr != nil {
+					log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
+				}
+				dirtySystems[systemID] = struct{}{}
 			}
 			pendingSystems = append(pendingSystems, systemID)
 		} else {
@@ -1427,14 +1440,18 @@ func NewNamesIndex(
 	sort.Strings(indexedSystems)
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
-	indexedSystemDefs := make([]systemdefs.System, 0, len(indexedSystems))
+	// Only systems that actually changed this run need their SystemTagsCache
+	// rebuilt; unchanged systems keep their existing cache rows.
+	dirtySystemDefs := make([]systemdefs.System, 0, len(dirtySystems))
 	for _, systemID := range indexedSystems {
 		system, getSystemErr := systemdefs.GetSystem(systemID)
 		if getSystemErr != nil {
 			log.Warn().Err(getSystemErr).Str("system", systemID).Msg("skipping scoped cache rebuild for unknown system")
 			continue
 		}
-		indexedSystemDefs = append(indexedSystemDefs, *system)
+		if _, ok := dirtySystems[systemID]; ok {
+			dirtySystemDefs = append(dirtySystemDefs, *system)
+		}
 	}
 
 	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
@@ -1457,12 +1474,14 @@ func NewNamesIndex(
 	// touched systems stay warm too.
 	t0 = time.Now()
 	if selectiveRun {
-		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {
+		// Only dirty systems are passed; PopulateSystemTagsCacheForSystems no-ops on an
+		// empty slice, so an unchanged re-index skips the rebuild without a special case.
+		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, dirtySystemDefs); cacheErr != nil {
 			logMaintenanceError(cacheErr, "failed to populate system tags cache for indexed systems")
 		}
 		log.Info().
 			Dur("elapsed", time.Since(t0)).
-			Int("systems", len(indexedSystemDefs)).
+			Int("systems", len(dirtySystemDefs)).
 			Msg("PopulateSystemTagsCacheForSystems complete")
 		logPhaseMetrics("populate_system_tags_cache")
 
