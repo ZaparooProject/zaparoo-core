@@ -43,6 +43,7 @@ const (
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
+	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
 
 	temporaryRepairParentDirVersion = "1"
 )
@@ -133,6 +134,36 @@ func sqlGetOptimizationStep(ctx context.Context, db *sql.DB) (string, error) {
 		return "", fmt.Errorf("failed to get optimization step: %w", err)
 	}
 	return step, nil
+}
+
+func sqlSetIndexResumeAttempts(ctx context.Context, db sqlQueryable, attempts int) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexResumeAttempts,
+		strconv.Itoa(attempts),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set index resume attempts: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexResumeAttempts(ctx context.Context, db sqlQueryable) (int, error) {
+	var raw string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexResumeAttempts,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get index resume attempts: %w", err)
+	}
+	attempts, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse index resume attempts: %w", err)
+	}
+	return attempts, nil
 }
 
 func sqlSetIndexingStatus(ctx context.Context, db sqlQueryable, status string) error {

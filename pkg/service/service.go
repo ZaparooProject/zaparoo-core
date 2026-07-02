@@ -393,7 +393,18 @@ func Start(
 				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 			}
 
+			// Rebuild the slug search cache (synchronous) before kicking off the
+			// browse-cache self-heal. Both are heavy DB readers; running them
+			// concurrently on a large library saturates the 2-connection pool and
+			// starves foreground browse (observed as 30 s browse timeouts on wake).
+			// Serializing them keeps a connection free for browsing throughout.
 			rebuildStartupSlugSearchCache(db.MediaDB, slugCacheLoaded)
+
+			// Recover a stale/absent browse cache so large libraries stay browsable
+			// without waiting for a full reindex to finish. Runs after the resume
+			// checks so it can see whether indexing was actually (re)started, and
+			// after the slug rebuild so the two don't contend for the connection pool.
+			checkAndHealBrowseCache(st.GetContext(), db, st.Notifications, indexPauser)
 		},
 	)
 

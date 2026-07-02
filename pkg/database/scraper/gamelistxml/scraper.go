@@ -708,7 +708,8 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			MediaByTitleDBID: make(map[int64][]database.Media, len(allMedia)),
 			MediaByFilename:  make(map[string][]database.Media, len(allMedia)),
 		}
-		for _, m := range allMedia {
+		for i := range allMedia {
+			m := &allMedia[i]
 			media := database.Media{
 				DBID:           m.DBID,
 				MediaTitleDBID: m.MediaTitleDBID,

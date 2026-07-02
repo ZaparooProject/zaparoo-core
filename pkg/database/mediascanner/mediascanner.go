@@ -820,6 +820,8 @@ func NewNamesIndex(
 		TagsIndex:          0,
 		TagIDs:             make(map[string]int),
 		MissingMedia:       make(map[int]struct{}),
+		PreviouslyMissing:  make(map[int]struct{}),
+		TouchedTitles:      make(map[int]struct{}),
 	}
 
 	// 3. Set up scan state — persistent mode is always active
@@ -981,6 +983,7 @@ func NewNamesIndex(
 		}
 
 		scanState.MissingMedia = make(map[int]struct{})
+		scanState.PreviouslyMissing = make(map[int]struct{})
 
 		// Load existing data for this system — always persistent.
 		stateLoadStart := time.Now()
@@ -1270,11 +1273,17 @@ func NewNamesIndex(
 				}
 			}
 			// Refresh stored sibling disambiguation now the system's media, tags, and
-			// missing flags are final and flushed into the transaction. Non-fatal:
-			// stale disambiguation only affects display/ZapScript hints and is
-			// corrected on the next index.
-			if disErr := db.RecomputeSystemDisambiguation(ctx, []int64{int64(systemDBID)}); disErr != nil {
-				log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
+			// missing flags are final and flushed into the transaction. Only titles
+			// whose inputs changed this run are recomputed (new/reassigned media,
+			// tag changes, or a member's missing-state flip) instead of every title in
+			// the system — an unchanged re-index recomputes nothing. Non-fatal: stale
+			// disambiguation only affects display/ZapScript hints and self-corrects
+			// when the title is next touched.
+			touchedTitleDBIDs := collectTouchedTitleDBIDs(&scanState)
+			if len(touchedTitleDBIDs) > 0 {
+				if disErr := db.RecomputeTitleDisambiguation(ctx, touchedTitleDBIDs); disErr != nil {
+					log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
+				}
 			}
 			pendingSystems = append(pendingSystems, systemID)
 		} else {
@@ -1381,6 +1390,8 @@ func NewNamesIndex(
 	scanState.TagIDs = nil
 
 	scanState.MissingMedia = nil
+	scanState.PreviouslyMissing = nil
+	scanState.TouchedTitles = nil
 	status.Phase = PhaseCreatingIndexes
 	update(status)
 
@@ -1427,6 +1438,11 @@ func NewNamesIndex(
 	sort.Strings(indexedSystems)
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
+	// UpdateLastGenerated (above) invalidated the SystemTagsCache rows for every
+	// indexed system, so all of them must be repopulated here. Restricting this to
+	// only the systems that changed would leave the preserved systems with no cache
+	// rows, and GetSystemTagsCached — which checks the in-memory cache first and
+	// never self-heals on a hit — would then return empty tags for them.
 	indexedSystemDefs := make([]systemdefs.System, 0, len(indexedSystems))
 	for _, systemID := range indexedSystems {
 		system, getSystemErr := systemdefs.GetSystem(systemID)
@@ -1450,11 +1466,10 @@ func NewNamesIndex(
 	log.Info().Dur("elapsed", time.Since(t0)).Msg("PragmaOptimize complete")
 	logPhaseMetrics("pragma_optimize")
 
-	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
-	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
-	// indexed systems, and rebuild the in-memory tag cache from the mixed
-	// preserved+refreshed SystemTagsCache table so first-entry requests for the
-	// touched systems stay warm too.
+	// Populate caches after UpdateLastGenerated. For selective scans we rebuild the
+	// persisted per-system SQL cache for the indexed systems, refresh in-memory slug
+	// coverage for them, and rebuild the in-memory tag cache from the SystemTagsCache
+	// table so first-entry requests for those systems stay warm too.
 	t0 = time.Now()
 	if selectiveRun {
 		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {

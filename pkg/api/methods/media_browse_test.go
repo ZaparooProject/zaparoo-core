@@ -255,6 +255,67 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+// TestHandleMediaBrowse_SystemRootRoutesDegradedCountUnknown covers the degrade
+// path of the route-count fallback: a route whose exact count timed out is
+// returned with CountUnknown set and must still be listed (with no file count),
+// while a route with a known zero count is empty and must be skipped.
+func TestHandleMediaBrowse_SystemRootRoutesDegradedCountUnknown(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	snesPath := filepath.Join(romsRoot, "SNES")
+	sharedPath := filepath.Join(romsRoot, "shared")
+	snesAPIPath := filepath.ToSlash(snesPath)
+	sharedAPIPath := filepath.ToSlash(sharedPath)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{
+			{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
+			{ID: "SharedSNES", SystemID: "SNES", Folders: []string{"shared"}},
+		})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockSystemRootCandidatesNotReady(mockMediaDB)
+	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
+		Return(0, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "SNES")).
+		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
+				assert.ElementsMatch(t, []string{snesAPIPath, sharedAPIPath}, opts.Routes)
+		}),
+	).Return(map[string]database.BrowseRouteCount{
+		// Exact count timed out but the route is known to contain media.
+		snesAPIPath: {Path: snesAPIPath, CountUnknown: true, SystemIDs: []string{"SNES"}},
+		// Known-empty route: must be skipped entirely.
+		sharedAPIPath: {Path: sharedAPIPath, FileCount: 0, SystemIDs: []string{"SNES"}},
+	}, nil)
+
+	systems := []string{"SNES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Systems: &systems})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "root", entry.Type)
+	assert.Equal(t, snesAPIPath, entry.Path)
+	assert.Equal(t, []string{"SNES"}, entry.SystemIDs)
+	// Degraded route: listed but with no file count.
+	assert.Nil(t, entry.FileCount)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaBrowse_SystemRootRoutesIncludesIndexedDirectories(t *testing.T) {
 	t.Parallel()
 

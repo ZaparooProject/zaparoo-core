@@ -338,17 +338,25 @@ func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (a
 	schemeGroups := buildSchemeGroupMap(env)
 	for _, route := range routes {
 		count, ok := counts[route]
-		if !ok || count.FileCount == 0 {
+		if !ok {
+			continue
+		}
+		// A route with a known zero count is empty and skipped. A degraded route
+		// (CountUnknown) is known to contain media but its exact count timed out;
+		// show it with no file count rather than hiding it.
+		if count.FileCount == 0 && !count.CountUnknown {
 			continue
 		}
 
-		fileCount := count.FileCount
 		entry := models.BrowseEntry{
 			Name:      browseRouteDisplayName(route),
 			Path:      route,
 			Type:      "root",
-			FileCount: &fileCount,
 			SystemIDs: count.SystemIDs,
+		}
+		if !count.CountUnknown {
+			fileCount := count.FileCount
+			entry.FileCount = &fileCount
 		}
 		if len(count.SystemIDs) == 1 {
 			entry.SystemID = &count.SystemIDs[0]

@@ -102,6 +102,63 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	for mediaID := range ss.MediaParentDirs {
 		delete(ss.MediaParentDirs, mediaID)
 	}
+	// TouchedTitles and PreviouslyMissing are per-system: cleared here so the next
+	// system starts empty. (PreviouslyMissing is also remade at each system load.)
+	for k := range ss.TouchedTitles {
+		delete(ss.TouchedTitles, k)
+	}
+	for k := range ss.PreviouslyMissing {
+		delete(ss.PreviouslyMissing, k)
+	}
+}
+
+// markTitleTouched records that a title's disambiguation inputs changed this run so
+// finalize recomputes only the affected titles instead of the whole system.
+func markTitleTouched(ss *database.ScanState, titleIndex int) {
+	if ss.TouchedTitles == nil || titleIndex <= 0 {
+		return
+	}
+	ss.TouchedTitles[titleIndex] = struct{}{}
+}
+
+// collectTouchedTitleDBIDs returns the DBIDs of titles whose disambiguation inputs
+// changed for the current system this run: titles marked touched during the scan
+// (new/reassigned media, tag changes) plus titles owning a media whose missing-state
+// flipped (newly missing, or previously missing and re-found). Must be called before
+// FlushScanStateMaps clears the per-system maps. Returns nil when nothing changed.
+func collectTouchedTitleDBIDs(ss *database.ScanState) []int64 {
+	set := make(map[int]struct{}, len(ss.TouchedTitles))
+	for titleIndex := range ss.TouchedTitles {
+		set[titleIndex] = struct{}{}
+	}
+	// Newly missing: still unfound at finalize but not persisted missing at load.
+	for mediaIndex := range ss.MissingMedia {
+		if _, wasMissing := ss.PreviouslyMissing[mediaIndex]; wasMissing {
+			continue
+		}
+		if titleIndex, ok := ss.MediaTitleIDs[mediaIndex]; ok {
+			set[titleIndex] = struct{}{}
+		}
+	}
+	// Re-found: persisted missing at load but present again this run.
+	for mediaIndex := range ss.PreviouslyMissing {
+		if _, stillMissing := ss.MissingMedia[mediaIndex]; stillMissing {
+			continue
+		}
+		if titleIndex, ok := ss.MediaTitleIDs[mediaIndex]; ok {
+			set[titleIndex] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]int64, 0, len(set))
+	for titleIndex := range set {
+		if titleIndex > 0 {
+			out = append(out, int64(titleIndex))
+		}
+	}
+	return out
 }
 
 func AddMediaPath(
@@ -233,6 +290,8 @@ func AddMediaPathWithPrefixPolicy(
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[mediaIndex] = parentDir
 		}
+		// New media adds a sibling to this title, changing its disambiguation.
+		markTitleTouched(ss, titleIndex)
 	} else {
 		existingMedia = true
 		mediaIndex = foundMediaIndex
@@ -257,6 +316,14 @@ func AddMediaPathWithPrefixPolicy(
 		if !titleKnown || existingTitleIndex != titleIndex || needsSortName || sortNameChanged {
 			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), displayTitleName); err != nil {
 				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
+			}
+			// Only a title reassignment (not a sort-name-only touch) alters
+			// disambiguation: the old title loses this media and the new gains it.
+			if titleKnown && existingTitleIndex != titleIndex {
+				markTitleTouched(ss, existingTitleIndex)
+				markTitleTouched(ss, titleIndex)
+			} else if !titleKnown {
+				markTitleTouched(ss, titleIndex)
 			}
 			if ss.MediaTitleIDs != nil {
 				ss.MediaTitleIDs[mediaIndex] = titleIndex
@@ -318,7 +385,16 @@ func AddMediaPathWithPrefixPolicy(
 		}
 	}
 
-	for _, tagStr := range pf.Tags {
+	for _, rawTagStr := range pf.Tags {
+		// Canonicalize the value so the lookup key matches the stored form. Tag
+		// values are zero-padded on write and unpadded on read (PadTagValue /
+		// UnpadTagValue), so ss.TagIDs is keyed by the natural (unpadded) value.
+		// A filename may spell a numeric segment with or without leading zeros
+		// ("rev:2" vs "rev:02"); both collapse to the same stored tag, so they
+		// must resolve to the same key here. Without this, the raw value misses
+		// the cache, the tag is re-inserted every re-index, and the title is
+		// marked touched — forcing a full tags-cache rebuild for the system.
+		tagStr := tags.UnpadTagValue(rawTagStr)
 		tagIndex := 0
 
 		if foundTagIndex, ok := ss.TagIDs[tagStr]; ok {
@@ -384,8 +460,13 @@ func AddMediaPathWithPrefixPolicy(
 
 	if existingMedia {
 		if ss.MediaTagIDs != nil {
-			if err := reconcileExistingMediaTags(db, ss, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
+			tagsChanged, err := reconcileExistingMediaTags(db, ss, mediaIndex, desiredTagIDs, extensionTagIndex)
+			if err != nil {
 				return 0, 0, fmt.Errorf("error reconciling media tags %s: %w", pf.Path, err)
+			}
+			// A tag add/remove on an existing media changes its title's disambiguation.
+			if tagsChanged {
+				markTitleTouched(ss, titleIndex)
 			}
 		} else {
 			if err := insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
@@ -406,13 +487,16 @@ func AddMediaPathWithPrefixPolicy(
 	return titleIndex, mediaIndex, nil
 }
 
+// reconcileExistingMediaTags brings an existing media's tag links in line with the
+// desired set. It returns true when any link was deleted or inserted, so the caller
+// can mark the owning title for disambiguation recompute.
 func reconcileExistingMediaTags(
 	db database.MediaDBI,
 	ss *database.ScanState,
 	mediaIndex int,
 	desiredTagIDs map[int]struct{},
 	extensionTagIndex int,
-) error {
+) (changed bool, err error) {
 	existingTagIDs := ss.MediaTagIDs[mediaIndex]
 	if existingTagIDs == nil {
 		existingTagIDs = make(map[int]struct{})
@@ -430,23 +514,26 @@ func reconcileExistingMediaTags(
 		staleTagIDs = append(staleTagIDs, tagIndex)
 	}
 	if len(staleTagIDs) > 0 {
-		if err := db.DeleteMediaTagsByTagIDs(int64(mediaIndex), staleTagIDs); err != nil {
-			return fmt.Errorf("failed to delete stale media tags: %w", err)
+		if delErr := db.DeleteMediaTagsByTagIDs(int64(mediaIndex), staleTagIDs); delErr != nil {
+			return false, fmt.Errorf("failed to delete stale media tags: %w", delErr)
 		}
+		changed = true
 	}
 
 	for tagIndex := range desiredTagIDs {
 		if _, ok := existingTagIDs[tagIndex]; ok {
 			continue
 		}
-		if err := insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex)); err != nil {
-			return err
+		label := tagLogLabel(tagIndex, extensionTagIndex)
+		if insErr := insertMediaTagLink(db, mediaIndex, tagIndex, label); insErr != nil {
+			return false, insErr
 		}
+		changed = true
 	}
 
 	ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
 
-	return nil
+	return changed, nil
 }
 
 func isUserOwnedTagID(ss *database.ScanState, tagIndex int) bool {
@@ -857,7 +944,8 @@ func PopulateScanStateForSystem(
 		}
 	}
 
-	for _, m := range stateData.media {
+	for i := range stateData.media {
+		m := &stateData.media[i]
 		mediaKey := database.MediaKey(m.SystemID, m.Path)
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
@@ -944,10 +1032,12 @@ func applyMediaTagIDs(ss *database.ScanState, mediaDBID int, tagIDs []int) {
 	}
 }
 
-// PopulatePersistentScanStateForSystem loads existing Media DBIDs for a system into
-// ss.MissingMedia. As AddMediaPath processes files, found entries are removed.
-// After the system is fully scanned, remaining entries represent missing media.
-// This also populates MediaIDs and TitleIDs via PopulateScanStateForSystem.
+// PopulatePersistentScanStateForSystem loads a system's existing titles and media
+// into the scan state via loadSystemStateData, filling MediaIDs, TitleIDs and the
+// related per-media maps (the same data PopulateScanStateForSystem loads). It also
+// seeds ss.MissingMedia with every existing media DBID; as AddMediaPath processes
+// files, found entries are removed, so the remaining entries after a full scan
+// represent media that has gone missing.
 func PopulatePersistentScanStateForSystem(
 	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
 ) error {
@@ -969,7 +1059,8 @@ func PopulatePersistentScanStateForSystem(
 		}
 	}
 
-	for _, m := range stateData.media {
+	for i := range stateData.media {
+		m := &stateData.media[i]
 		mediaKey := database.MediaKey(m.SystemID, m.Path)
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
@@ -986,6 +1077,9 @@ func PopulatePersistentScanStateForSystem(
 		}
 		applyMediaTagIDs(ss, int(m.DBID), m.TagIDs)
 		ss.MissingMedia[int(m.DBID)] = struct{}{}
+		if m.IsMissing && ss.PreviouslyMissing != nil {
+			ss.PreviouslyMissing[int(m.DBID)] = struct{}{}
+		}
 	}
 
 	log.Debug().

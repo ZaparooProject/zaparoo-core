@@ -457,10 +457,15 @@ type BrowseRouteCountsOptions struct {
 }
 
 // BrowseRouteCount represents a populated browse route and its media count.
+// CountUnknown is set when the route is known to contain media but the exact
+// FileCount could not be computed within the deadline (degraded fallback);
+// callers should treat such routes as present with an unknown count rather than
+// as empty.
 type BrowseRouteCount struct {
-	Path      string
-	SystemIDs []string
-	FileCount int
+	Path         string
+	SystemIDs    []string
+	FileCount    int
+	CountUnknown bool
 }
 
 // BrowseSystemRootCandidatesOptions parameterises the batched lookup used
@@ -618,6 +623,7 @@ type MediaWithFullPath struct {
 	TagIDs         []int
 	DBID           int64
 	MediaTitleDBID int64
+	IsMissing      bool
 }
 
 // ScrapeWrite is the database-level write payload produced by a scraper for a
@@ -684,11 +690,19 @@ type ScanState struct {
 	TagIDs          map[string]int
 	UserOwnedTagIDs map[int]bool
 	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex    int
-	TitlesIndex     int
-	MediaIndex      int
-	TagTypesIndex   int
-	TagsIndex       int
+	// PreviouslyMissing holds media DBIDs persisted as IsMissing=1 when the current
+	// system was loaded, so a media whose missing-state flips this run (newly missing
+	// or re-found) can be detected and its title's disambiguation recomputed.
+	PreviouslyMissing map[int]struct{}
+	// TouchedTitles holds title DBIDs whose disambiguation inputs changed this run
+	// (media added/reassigned, tags changed, or a member's missing-state flipped).
+	// Only these titles are recomputed at finalize instead of the whole system.
+	TouchedTitles map[int]struct{}
+	SystemsIndex  int
+	TitlesIndex   int
+	MediaIndex    int
+	TagTypesIndex int
+	TagsIndex     int
 }
 
 // JournalMode represents SQLite journal mode
@@ -832,6 +846,9 @@ type MediaDBI interface {
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
+	GetIndexResumeAttempts() (int, error)
+	IncrementIndexResumeAttempts() (int, error)
+	ResetIndexResumeAttempts() error
 	SetScrapingStatus(status string) error
 	GetScrapingStatus() (string, error)
 	SetScrapingOperation(operation ScrapingOperation) error
@@ -884,6 +901,7 @@ type MediaDBI interface {
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
 	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
+	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system *systemdefs.System) bool

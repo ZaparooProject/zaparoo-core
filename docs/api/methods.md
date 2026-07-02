@@ -581,7 +581,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
-| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
+| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries, except a `root` entry whose exact count could not be computed in time (known non-empty, count omitted). |
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |

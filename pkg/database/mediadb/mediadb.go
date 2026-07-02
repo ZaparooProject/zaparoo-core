@@ -624,6 +624,49 @@ func (db *MediaDB) GetOptimizationStep() (string, error) {
 	return sqlGetOptimizationStep(db.ctx, db.sql.Load())
 }
 
+// GetIndexResumeAttempts returns the number of consecutive automatic resume
+// attempts recorded for an interrupted media index. It resets to zero once
+// indexing reaches a clean (non-interrupted) state.
+func (db *MediaDB) GetIndexResumeAttempts() (int, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlGetIndexResumeAttempts(db.ctx, db.sql.Load())
+}
+
+// IncrementIndexResumeAttempts bumps the consecutive resume-attempt counter and
+// returns the new value. It bounds how many times an interrupted index is
+// auto-resumed so a reindex that keeps getting interrupted cannot loop forever.
+func (db *MediaDB) IncrementIndexResumeAttempts() (int, error) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	current, err := sqlGetIndexResumeAttempts(db.ctx, db.sql.Load())
+	if err != nil {
+		return 0, err
+	}
+	next := current + 1
+	if err := sqlSetIndexResumeAttempts(db.ctx, db.conn(), next); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+// ResetIndexResumeAttempts clears the consecutive resume-attempt counter,
+// giving a future interruption a fresh budget of automatic resumes.
+func (db *MediaDB) ResetIndexResumeAttempts() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexResumeAttempts(db.ctx, db.conn(), 0)
+}
+
 func (db *MediaDB) SetIndexingStatus(status string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
@@ -1767,11 +1810,33 @@ func (db *MediaDB) BrowseSystemRootCandidates(
 }
 
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
+//
+// Uses a non-cancellable context: the rebuild reads every non-missing Media row
+// (~1M on large libraries), and with a cancellable context mattn/go-sqlite3
+// spawns a goroutine + channel per rows.Next(), which turned this scan into a
+// 7.6-minute operation on device. Cancellation before the DB work is still
+// honoured by the caller's pauser.Wait; see checkAndHealBrowseCache.
 func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlPopulateBrowseCache(ctx, db.sql.Load())
+	return sqlPopulateBrowseCache(context.WithoutCancel(ctx), db.sql.Load())
+}
+
+// BrowseCacheNeedsRebuild reports whether the browse cache is stale or absent and
+// should be rebuilt. It returns false only when the cache is fresh (matches the
+// current schema version). A stale-but-present cache is served (see the browse
+// dispatch in sql_browse.go) but still needs a background rebuild to correct any
+// drift, so it counts as needing a rebuild here.
+func (db *MediaDB) BrowseCacheNeedsRebuild(ctx context.Context) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
+	state, err := sqlBrowseCacheStatus(ctx, db.sql.Load())
+	if err != nil {
+		return false, err
+	}
+	return state != browseCacheFresh, nil
 }
 
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
@@ -3156,17 +3221,25 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// indexing completes. Background optimization improves query performance
 	// after the database is already open for searches.
 	//
-	// Step order matters: temporary repair jobs run before cache rebuilds so
-	// upgraded databases are corrected without blocking startup. PRAGMA optimize
-	// refreshes planner statistics only where SQLite decides it is useful, the
-	// page-prefetch warms the OS buffer cache for the tables the search path
-	// joins, and BrowseCache/WAL checkpoint follow as non-critical housekeeping.
+	// Step order matters: the temporary parent-dir repair runs first because it
+	// can change paths the browse cache is built from (and it invalidates the
+	// cache when it does), so browse_cache follows immediately to rebuild from the
+	// repaired data. browse_cache is placed ahead of pragma_optimize and
+	// page_prefetch so the user-visible browse fix lands before the expensive
+	// planner/buffer housekeeping and survives interruption of those later steps.
+	// WAL checkpoint follows as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
 		optimizationStep{
 			name: "temporary_repair_parent_dirs", fn: func() error {
 				return db.runTemporaryParentDirRepair(db.ctx, pauser)
+			},
+			maxRetries: 0, retryDelay: rd,
+		},
+		optimizationStep{
+			name: "browse_cache", fn: func() error {
+				return db.PopulateBrowseCache(db.ctx)
 			},
 			maxRetries: 0, retryDelay: rd,
 		},
@@ -3188,12 +3261,6 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			maxRetries: 0, retryDelay: rd,
 		},
 		optimizationStep{
-			name: "browse_cache", fn: func() error {
-				return db.PopulateBrowseCache(db.ctx)
-			},
-			maxRetries: 0, retryDelay: rd,
-		},
-		optimizationStep{
 			name: "wal_checkpoint", fn: db.WALCheckpoint,
 			maxRetries: 1, retryDelay: rd,
 		},
@@ -3203,13 +3270,35 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		// reuses free pages on the next INSERT, so disk reclamation is not needed.
 	)
 
+	// Resume from the persisted step rather than always restarting at step 1.
+	// SetOptimizationStep records the step that was running when the process was
+	// interrupted; on resume we skip the steps that already completed and re-run
+	// that step (it may not have finished). An empty or unrecognised value starts
+	// from the beginning. This stops every restart from redoing the expensive
+	// pragma_optimize/page_prefetch work already done on a previous boot.
+	startStep := 0
+	if persisted, stepErr := db.GetOptimizationStep(); stepErr != nil {
+		log.Warn().Err(stepErr).Msg("failed to read persisted optimization step; starting from the first step")
+	} else if persisted != "" {
+		for i := range steps {
+			if steps[i].name == persisted {
+				startStep = i
+				break
+			}
+		}
+		if startStep > 0 {
+			log.Info().Str("step", persisted).Msgf("resuming background optimization from step %d/%d",
+				startStep+1, len(steps))
+		}
+	}
+
 	// Per-step resource metrics so post-index/startup housekeeping (browse cache
 	// rebuild, pragma optimize, page prefetch) shows real wall time and write cost
 	// in logs, not just start/complete markers.
 	stepRecorder := perfmetrics.NewRecorderForDB(db)
 
 	// Execute each step with retry logic
-	for _, step := range steps {
+	for _, step := range steps[startStep:] {
 		// Wait if paused (e.g. game is running)
 		if err := pauser.Wait(db.ctx); err != nil {
 			log.Info().Msg("background optimization cancelled while paused")

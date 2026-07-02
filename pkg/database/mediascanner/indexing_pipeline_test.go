@@ -170,16 +170,19 @@ func TestFlushScanStateMaps_ClearsPerSystemMetadataCaches(t *testing.T) {
 
 func newIndexingPipelineScanState() *database.ScanState {
 	return &database.ScanState{
-		SystemIDs:       make(map[string]int),
-		TitleIDs:        make(map[string]int),
-		TitleNames:      make(map[int]string),
-		MediaIDs:        make(map[string]int),
-		MediaTitleIDs:   make(map[int]int),
-		MediaSortNames:  make(map[int]string),
-		MediaParentDirs: make(map[int]string),
-		MediaTagIDs:     make(map[int]map[int]struct{}),
-		TagTypeIDs:      make(map[string]int),
-		TagIDs:          make(map[string]int),
+		SystemIDs:         make(map[string]int),
+		TitleIDs:          make(map[string]int),
+		TitleNames:        make(map[int]string),
+		MediaIDs:          make(map[string]int),
+		MediaTitleIDs:     make(map[int]int),
+		MediaSortNames:    make(map[int]string),
+		MediaParentDirs:   make(map[int]string),
+		MediaTagIDs:       make(map[int]map[int]struct{}),
+		TagTypeIDs:        make(map[string]int),
+		TagIDs:            make(map[string]int),
+		MissingMedia:      make(map[int]struct{}),
+		PreviouslyMissing: make(map[int]struct{}),
+		TouchedTitles:     make(map[int]struct{}),
 	}
 }
 

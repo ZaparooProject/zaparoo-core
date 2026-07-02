@@ -1587,6 +1587,30 @@ func (m *MockMediaDBI) GetIndexingStatus() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockMediaDBI) GetIndexResumeAttempts() (int, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Int(0), nil
+}
+
+func (m *MockMediaDBI) IncrementIndexResumeAttempts() (int, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Int(0), nil
+}
+
+func (m *MockMediaDBI) ResetIndexResumeAttempts() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) hasExpectation(method string) bool {
 	for _, call := range m.ExpectedCalls {
 		if call.Method == method {
@@ -2453,6 +2477,9 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("LoadCachedSlugSearchCache").Return(false, nil).Maybe()
 	mockMediaDB.On("IndexGeneration").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("BumpIndexGeneration").Return(int64(1), nil).Maybe()
+	mockMediaDB.On("GetIndexResumeAttempts").Return(0, nil).Maybe()
+	mockMediaDB.On("IncrementIndexResumeAttempts").Return(1, nil).Maybe()
+	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
@@ -2708,6 +2735,16 @@ func (m *MockMediaDBI) PopulateBrowseCache(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) BrowseCacheNeedsRebuild(
+	ctx context.Context,
+) (bool, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
 }
 
 // --- Scraper support methods ---
