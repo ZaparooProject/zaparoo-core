@@ -925,9 +925,6 @@ func NewNamesIndex(
 	filesInBatch := 0
 	batchStarted := false
 	pendingSystems := make([]string, 0)
-	// Systems whose media/tags/missing-state actually changed this run. Only these
-	// need their SystemTagsCache rebuilt; unchanged systems keep their existing cache.
-	dirtySystems := make(map[string]struct{})
 
 	// Sub-phase wall-time accumulators across the systems loop, logged once after
 	// it so the monolithic "systems" phase can be attributed to its parts:
@@ -1287,7 +1284,6 @@ func NewNamesIndex(
 				if disErr := db.RecomputeTitleDisambiguation(ctx, touchedTitleDBIDs); disErr != nil {
 					log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
 				}
-				dirtySystems[systemID] = struct{}{}
 			}
 			pendingSystems = append(pendingSystems, systemID)
 		} else {
@@ -1394,6 +1390,8 @@ func NewNamesIndex(
 	scanState.TagIDs = nil
 
 	scanState.MissingMedia = nil
+	scanState.PreviouslyMissing = nil
+	scanState.TouchedTitles = nil
 	status.Phase = PhaseCreatingIndexes
 	update(status)
 
@@ -1440,18 +1438,19 @@ func NewNamesIndex(
 	sort.Strings(indexedSystems)
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
-	// Only systems that actually changed this run need their SystemTagsCache
-	// rebuilt; unchanged systems keep their existing cache rows.
-	dirtySystemDefs := make([]systemdefs.System, 0, len(dirtySystems))
+	// UpdateLastGenerated (above) invalidated the SystemTagsCache rows for every
+	// indexed system, so all of them must be repopulated here. Restricting this to
+	// only the systems that changed would leave the preserved systems with no cache
+	// rows, and GetSystemTagsCached — which checks the in-memory cache first and
+	// never self-heals on a hit — would then return empty tags for them.
+	indexedSystemDefs := make([]systemdefs.System, 0, len(indexedSystems))
 	for _, systemID := range indexedSystems {
 		system, getSystemErr := systemdefs.GetSystem(systemID)
 		if getSystemErr != nil {
 			log.Warn().Err(getSystemErr).Str("system", systemID).Msg("skipping scoped cache rebuild for unknown system")
 			continue
 		}
-		if _, ok := dirtySystems[systemID]; ok {
-			dirtySystemDefs = append(dirtySystemDefs, *system)
-		}
+		indexedSystemDefs = append(indexedSystemDefs, *system)
 	}
 
 	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
@@ -1467,21 +1466,18 @@ func NewNamesIndex(
 	log.Info().Dur("elapsed", time.Since(t0)).Msg("PragmaOptimize complete")
 	logPhaseMetrics("pragma_optimize")
 
-	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
-	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
-	// indexed systems, and rebuild the in-memory tag cache from the mixed
-	// preserved+refreshed SystemTagsCache table so first-entry requests for the
-	// touched systems stay warm too.
+	// Populate caches after UpdateLastGenerated. For selective scans we rebuild the
+	// persisted per-system SQL cache for the indexed systems, refresh in-memory slug
+	// coverage for them, and rebuild the in-memory tag cache from the SystemTagsCache
+	// table so first-entry requests for those systems stay warm too.
 	t0 = time.Now()
 	if selectiveRun {
-		// Only dirty systems are passed; PopulateSystemTagsCacheForSystems no-ops on an
-		// empty slice, so an unchanged re-index skips the rebuild without a special case.
-		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, dirtySystemDefs); cacheErr != nil {
+		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {
 			logMaintenanceError(cacheErr, "failed to populate system tags cache for indexed systems")
 		}
 		log.Info().
 			Dur("elapsed", time.Since(t0)).
-			Int("systems", len(dirtySystemDefs)).
+			Int("systems", len(indexedSystemDefs)).
 			Msg("PopulateSystemTagsCacheForSystems complete")
 		logPhaseMetrics("populate_system_tags_cache")
 

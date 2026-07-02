@@ -148,7 +148,7 @@ func sqlSetIndexResumeAttempts(ctx context.Context, db sqlQueryable, attempts in
 	return nil
 }
 
-func sqlGetIndexResumeAttempts(ctx context.Context, db *sql.DB) (int, error) {
+func sqlGetIndexResumeAttempts(ctx context.Context, db sqlQueryable) (int, error) {
 	var raw string
 	err := db.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",

@@ -85,8 +85,12 @@ func checkAndResumeIndexing(
 	// index cancelled so the library stays browsable from the (stale) cache instead.
 	attempts, err := db.MediaDB.GetIndexResumeAttempts()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to read index resume attempt counter; assuming zero")
-		attempts = 0
+		// The persisted counter is the only thing bounding automatic resumes. If it
+		// can't be read we cannot prove we're under the limit, so fail closed and skip
+		// resuming rather than risk an unbounded reboot-resume loop; the library stays
+		// browsable from the (stale) cache.
+		log.Warn().Err(err).Msg("failed to read index resume attempt counter; skipping auto-resume")
+		return
 	}
 	if attempts >= maxIndexResumeAttempts {
 		log.Warn().Int("attempts", attempts).
@@ -107,11 +111,14 @@ func checkAndResumeIndexing(
 		}
 		return
 	}
-	if newAttempts, incErr := db.MediaDB.IncrementIndexResumeAttempts(); incErr != nil {
-		log.Warn().Err(incErr).Msg("failed to record index resume attempt")
-	} else {
-		attempts = newAttempts
+	newAttempts, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+	if incErr != nil {
+		// A failed increment means the next boot reads the same count and resumes
+		// again — a persistent write failure would loop forever. Fail closed.
+		log.Warn().Err(incErr).Msg("failed to record index resume attempt; skipping auto-resume")
+		return
 	}
+	attempts = newAttempts
 
 	log.Info().Int("attempt", attempts).Int("limit", maxIndexResumeAttempts).
 		Msg("detected interrupted media indexing, automatically resuming")
@@ -331,6 +338,18 @@ func checkAndHealBrowseCache(
 		defer db.MediaDB.BackgroundOperationDone()
 		if waitErr := pauser.Wait(ctx); waitErr != nil {
 			log.Debug().Err(waitErr).Msg("browse cache self-heal cancelled while paused")
+			return
+		}
+		// State can change while paused: a reindex or optimization may have started
+		// and now owns the cache. Re-check the same guards as above before rebuilding
+		// so the self-heal never runs concurrently with — and clobbers — a fresh
+		// index or optimization that began during the wait.
+		if methods.IsIndexing() {
+			log.Debug().Msg("skipping browse cache self-heal; indexing started while paused")
+			return
+		}
+		if status, err := db.MediaDB.GetOptimizationStatus(); err == nil && status == mediadb.IndexingStatusRunning {
+			log.Debug().Msg("skipping browse cache self-heal; optimization started while paused")
 			return
 		}
 		// Surface the rebuild as an optimizing operation so the client can show a

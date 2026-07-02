@@ -35,7 +35,14 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-func TestCheckAndHealBrowseCache_RebuildsWhenStale(t *testing.T) {
+// runBrowseCacheHealOptimizingCycle drives checkAndHealBrowseCache through a
+// needed rebuild whose PopulateBrowseCache returns populateErr, then asserts the
+// rebuild is attempted and that the optimizing indicator is both set (true) and
+// cleared (false). The clear must be emitted even when the rebuild fails so the
+// client never shows a permanent "preparing library" spinner.
+func runBrowseCacheHealOptimizingCycle(t *testing.T, populateErr error) {
+	t.Helper()
+
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil)
 	mockDB.On("GetTotalMediaCount").Return(1000, nil)
@@ -43,18 +50,18 @@ func TestCheckAndHealBrowseCache_RebuildsWhenStale(t *testing.T) {
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 
-	rebuilt := make(chan struct{}, 1)
-	mockDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Run(func(_ mock.Arguments) {
-		rebuilt <- struct{}{}
+	attempted := make(chan struct{}, 1)
+	mockDB.On("PopulateBrowseCache", mock.Anything).Return(populateErr).Run(func(_ mock.Arguments) {
+		attempted <- struct{}{}
 	})
 
 	ns := make(chan models.Notification, 8)
 	checkAndHealBrowseCache(context.Background(), &database.Database{MediaDB: mockDB}, ns, syncutil.NewPauser())
 
 	select {
-	case <-rebuilt:
+	case <-attempted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected browse cache to be rebuilt in the background")
+		t.Fatal("expected the browse cache rebuild to be attempted in the background")
 	}
 	mockDB.AssertCalled(t, "PopulateBrowseCache", mock.Anything)
 
@@ -77,47 +84,12 @@ func TestCheckAndHealBrowseCache_RebuildsWhenStale(t *testing.T) {
 	}
 }
 
+func TestCheckAndHealBrowseCache_RebuildsWhenStale(t *testing.T) {
+	runBrowseCacheHealOptimizingCycle(t, nil)
+}
+
 func TestCheckAndHealBrowseCache_ClearsOptimizingOnRebuildFailure(t *testing.T) {
-	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil)
-	mockDB.On("GetTotalMediaCount").Return(1000, nil)
-	mockDB.On("BrowseCacheNeedsRebuild", mock.Anything).Return(true, nil)
-	mockDB.On("TrackBackgroundOperation").Return()
-	mockDB.On("BackgroundOperationDone").Return()
-
-	// The rebuild fails, but the optimizing indicator must still be cleared so the
-	// client doesn't show a permanent "preparing library" spinner.
-	failed := make(chan struct{}, 1)
-	mockDB.On("PopulateBrowseCache", mock.Anything).
-		Return(errors.New("rebuild boom")).Run(func(_ mock.Arguments) {
-		failed <- struct{}{}
-	})
-
-	ns := make(chan models.Notification, 8)
-	checkAndHealBrowseCache(context.Background(), &database.Database{MediaDB: mockDB}, ns, syncutil.NewPauser())
-
-	select {
-	case <-failed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected the browse cache rebuild to be attempted")
-	}
-
-	// Both the start (optimizing:true) and the deferred clear (optimizing:false)
-	// must still be emitted despite the failure.
-	sawOptimizing, sawCleared := false, false
-	for !sawOptimizing || !sawCleared {
-		select {
-		case n := <-ns:
-			switch {
-			case strings.Contains(string(n.Params), `"optimizing":true`):
-				sawOptimizing = true
-			case strings.Contains(string(n.Params), `"optimizing":false`):
-				sawCleared = true
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatalf("expected optimizing start+clear even on failure (start=%v clear=%v)", sawOptimizing, sawCleared)
-		}
-	}
+	runBrowseCacheHealOptimizingCycle(t, errors.New("rebuild boom"))
 }
 
 func TestCheckAndHealBrowseCache_SkipsWhenFresh(t *testing.T) {

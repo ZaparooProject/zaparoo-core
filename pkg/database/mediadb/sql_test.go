@@ -1651,7 +1651,7 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	rows := sqlmock.NewRows(cols).
 		AddRow(int64(1), marioPath, gamesDir, int64(10), "Super Mario Bros.", false).
 		AddRow(int64(2), zeldaPath, gamesDir, int64(11), "The Legend of Zelda", false).
-		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", false)
+		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", true)
 
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
@@ -1667,14 +1667,17 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
 	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
 	assert.Equal(t, "nes", results[0].SystemID)
+	assert.False(t, results[0].IsMissing)
 
 	// Check second result
 	assert.Equal(t, int64(2), results[1].DBID)
 	assert.Equal(t, zeldaPath, results[1].Path)
+	assert.False(t, results[1].IsMissing)
 
-	// Check third result
+	// Check third result — a missing entry must round-trip IsMissing=true.
 	assert.Equal(t, int64(3), results[2].DBID)
 	assert.Equal(t, metroidPath, results[2].Path)
+	assert.True(t, results[2].IsMissing)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
