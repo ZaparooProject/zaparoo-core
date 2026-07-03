@@ -127,6 +127,67 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 	assert.Equal(t, database.TagInfo{Type: "release", Tag: "Europe"}, results[1].ZapScriptTags[0])
 }
 
+// TestDisambiguationBackfill_RecomputesStaleTitlesAndStamps covers the one-time
+// algorithm-version backfill: indexing only recomputes DisambiguationTypes for
+// titles whose data changed, so values written by an older algorithm are never
+// revisited by reindexing alone. A missing/outdated stamp with titles present
+// must report pending, recompute every title, and stamp the current version.
+func TestDisambiguationBackfill_RecomputesStaleTitlesAndStamps(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, titleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+	})
+	// No recompute has run: the stored value stands in for one computed by an
+	// older algorithm that would now disagree with the current one.
+	require.Empty(t, titleDisambiguationTypes(t, mediaDB, titleDBID))
+
+	pending, err := mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.True(t, pending, "titles without a current stamp must be pending backfill")
+
+	require.NoError(t, mediaDB.runDisambiguationBackfill(ctx, nil))
+
+	assert.Equal(t, "release", titleDisambiguationTypes(t, mediaDB, titleDBID),
+		"backfill must recompute stored disambiguation with the current algorithm")
+
+	pending, err = mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending, "a completed backfill must stamp the current version")
+
+	repairPending, err := mediaDB.TemporaryRepairJobsPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, repairPending)
+}
+
+// TestDisambiguationBackfill_EmptyDatabaseStampsWithoutWork verifies a fresh
+// database is stamped current immediately: the first index computes
+// disambiguation with the current algorithm, so a boot-time backfill pass would
+// be pure waste.
+func TestDisambiguationBackfill_EmptyDatabaseStampsWithoutWork(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	pending, err := mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending, "an empty database has nothing to backfill")
+
+	var version string
+	err = mediaDB.sql.Load().QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigDisambiguationVersion,
+	).Scan(&version)
+	require.NoError(t, err)
+	assert.Equal(t, disambiguationAlgoVersion, version,
+		"the empty-database check must stamp so later titles indexed under the current algorithm stay stamped")
+}
+
 func TestRecomputeSystemDisambiguation_IdenticalTagsDoNotDisambiguate(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)

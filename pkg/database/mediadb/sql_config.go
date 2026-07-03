@@ -44,8 +44,18 @@ const (
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
 	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
+	DBConfigDisambiguationVersion           = "DisambiguationVersion"
 
 	temporaryRepairParentDirVersion = "1"
+
+	// disambiguationAlgoVersion identifies the current title-disambiguation
+	// algorithm (the recompute query plus the ZapScriptTagTypes mapping feeding
+	// it). Indexing only recomputes DisambiguationTypes for titles whose media or
+	// tags changed, so values stored by an older algorithm are never revisited by
+	// reindexing alone; a stamp mismatch triggers a one-time background backfill
+	// instead (see runDisambiguationBackfill). Bump this whenever the recompute
+	// query or the ZapScriptTagTypes mapping changes.
+	disambiguationAlgoVersion = "1"
 )
 
 func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {

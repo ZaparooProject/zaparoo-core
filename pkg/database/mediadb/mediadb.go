@@ -2791,6 +2791,14 @@ func (db *MediaDB) TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 	if db.sql.Load() == nil {
 		return false, ErrNullSQL
 	}
+	pending, err := db.parentDirRepairPending(ctx)
+	if err != nil || pending {
+		return pending, err
+	}
+	return db.disambiguationBackfillPending(ctx)
+}
+
+func (db *MediaDB) parentDirRepairPending(ctx context.Context) (bool, error) {
 	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql.Load())
 	if err != nil {
 		return false, err
@@ -3227,7 +3235,10 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// repaired data. browse_cache is placed ahead of pragma_optimize and
 	// page_prefetch so the user-visible browse fix lands before the expensive
 	// planner/buffer housekeeping and survives interruption of those later steps.
-	// WAL checkpoint follows as non-critical housekeeping.
+	// disambiguation_backfill is a one-time stamp-gated repair (a no-op once
+	// current) and only affects display/ZapScript hints, so it yields to the
+	// browse fix but still lands before the housekeeping steps. WAL checkpoint
+	// follows as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
@@ -3240,6 +3251,12 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		optimizationStep{
 			name: "browse_cache", fn: func() error {
 				return db.PopulateBrowseCache(db.ctx)
+			},
+			maxRetries: 0, retryDelay: rd,
+		},
+		optimizationStep{
+			name: "disambiguation_backfill", fn: func() error {
+				return db.runDisambiguationBackfill(db.ctx, pauser)
 			},
 			maxRetries: 0, retryDelay: rd,
 		},

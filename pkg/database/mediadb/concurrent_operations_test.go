@@ -56,6 +56,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
 	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -281,6 +282,7 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
 	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -340,6 +342,7 @@ func TestOptimizationInterruption(t *testing.T) {
 	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
 	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -440,6 +443,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
 	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 

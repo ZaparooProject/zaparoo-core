@@ -2912,6 +2912,10 @@ func TestMediaDB_TemporaryParentDirRepair_RestoresDirectBrowse_Integration(t *te
 	gameDir := filepath.ToSlash(filepath.Join("roms", "PSX", "USA")) + "/"
 	gamePath := gameDir + "Example Game.chd"
 
+	// Stamp the disambiguation backfill current so the aggregate pending check
+	// below reflects only the parent-dir repair under test.
+	require.NoError(t, sqlMarkDisambiguationVersionCurrent(ctx, mediaDB.sql.Load()))
+
 	repairedSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "PSX", Name: "PSX"})
 	require.NoError(t, err)
 	repairedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
@@ -2962,6 +2966,10 @@ func TestMediaDB_TemporaryParentDirRepair_MarksCurrentWhenNoEmptyRows_Integratio
 	ctx := context.Background()
 	gameDir := filepath.ToSlash(filepath.Join("roms", "NES")) + "/"
 	gamePath := gameDir + "Example Game.nes"
+
+	// Stamp the disambiguation backfill current so the aggregate pending check
+	// below reflects only the parent-dir repair under test.
+	require.NoError(t, sqlMarkDisambiguationVersionCurrent(ctx, mediaDB.sql.Load()))
 
 	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
 	require.NoError(t, err)
