@@ -894,8 +894,8 @@ func (m *MockMediaDBI) NoteCorruption(err error) bool {
 	return args.Bool(0)
 }
 
-func (m *MockMediaDBI) RecreateAfterCorruption(keepBackup bool) error {
-	if !m.hasExpectation("RecreateAfterCorruption") {
+func (m *MockMediaDBI) Recreate(keepBackup bool) error {
+	if !m.hasExpectation("Recreate") {
 		return nil
 	}
 	args := m.Called(keepBackup)

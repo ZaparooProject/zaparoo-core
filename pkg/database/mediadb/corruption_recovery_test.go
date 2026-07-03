@@ -94,7 +94,7 @@ func TestMediaDB_IntegrityReport_HealthyReturnsOK(t *testing.T) {
 	assert.Equal(t, []string{"ok"}, report)
 }
 
-func TestMediaDB_RecreateAfterCorruption_KeepBackup(t *testing.T) {
+func TestMediaDB_Recreate_KeepBackup(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -102,7 +102,7 @@ func TestMediaDB_RecreateAfterCorruption_KeepBackup(t *testing.T) {
 	mediaDB.MarkCorrupt("test")
 	path := mediaDB.GetDBPath()
 
-	require.NoError(t, mediaDB.RecreateAfterCorruption(true))
+	require.NoError(t, mediaDB.Recreate(true))
 
 	// Forensic backup kept, marker cleared. (The reopened WAL database creates fresh
 	// -wal/-shm sidecars; the point is the stale corrupt ones don't survive into it,
@@ -167,7 +167,7 @@ func TestMediaDB_ZeroedPages_DetectedAndRecovered(t *testing.T) {
 	assert.NotEqual(t, []string{"ok"}, report, "integrity report should show the damage")
 
 	// Recovery rebuilds to a clean, passing database.
-	require.NoError(t, mediaDB.RecreateAfterCorruption(false))
+	require.NoError(t, mediaDB.Recreate(false))
 	ok, err := mediaDB.QuickCheck()
 	require.NoError(t, err)
 	assert.True(t, ok, "database should pass quick_check after recovery")
@@ -193,7 +193,7 @@ func TestMediaDB_BrowseFiles_RoutesCorruptionToMarker(t *testing.T) {
 	assert.True(t, mediaDB.IsMarkedCorrupt(), "a malformed browse read must keep the DB marked corrupt")
 }
 
-func TestMediaDB_RecreateAfterCorruption_DeleteWhenNoBackup(t *testing.T) {
+func TestMediaDB_Recreate_DeleteWhenNoBackup(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -201,7 +201,7 @@ func TestMediaDB_RecreateAfterCorruption_DeleteWhenNoBackup(t *testing.T) {
 	mediaDB.MarkCorrupt("test")
 	path := mediaDB.GetDBPath()
 
-	require.NoError(t, mediaDB.RecreateAfterCorruption(false))
+	require.NoError(t, mediaDB.Recreate(false))
 
 	_, backupErr := os.Stat(path + database.CorruptMarkerSuffix + ".bak")
 	assert.True(t, os.IsNotExist(backupErr), "no backup should be kept when keepBackup=false")

@@ -216,7 +216,7 @@ func checkAndRecoverCorruptMediaDB(
 		Indexing: true,
 	})
 
-	if err := db.MediaDB.RecreateAfterCorruption(config.IsDevelopmentVersion()); err != nil {
+	if err := db.MediaDB.Recreate(config.IsDevelopmentVersion()); err != nil {
 		log.Error().Err(err).Msg("failed to recreate media database after corruption")
 		return
 	}

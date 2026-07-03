@@ -164,6 +164,26 @@ func TestDisambiguationBackfill_RecomputesStaleTitlesAndStamps(t *testing.T) {
 	assert.False(t, repairPending)
 }
 
+// TestRecreate_StampsDisambiguationVersion verifies a recreated database is
+// stamped current immediately: everything indexed into it is computed by the
+// current algorithm, so the first optimization pass after a rebuild must not
+// re-run a full backfill over freshly computed values.
+func TestRecreate_StampsDisambiguationVersion(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	require.NoError(t, mediaDB.Recreate(false))
+
+	var version string
+	err := mediaDB.sql.Load().QueryRowContext(context.Background(),
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigDisambiguationVersion,
+	).Scan(&version)
+	require.NoError(t, err)
+	assert.Equal(t, disambiguationAlgoVersion, version)
+}
+
 // TestDisambiguationBackfill_EmptyDatabaseStampsWithoutWork verifies a fresh
 // database is stamped current immediately: the first index computes
 // disambiguation with the current algorithm, so a boot-time backfill pass would

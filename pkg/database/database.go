@@ -812,7 +812,7 @@ type MediaDBI interface {
 	IsMarkedCorrupt() bool
 	ClearCorruptMarker() error
 	NoteCorruption(err error) bool
-	RecreateAfterCorruption(keepBackup bool) error
+	Recreate(keepBackup bool) error
 
 	// On-disk persistence for the rebuilt caches. Persist* writes the
 	// current in-memory cache atomically; LoadCached* reads it back at

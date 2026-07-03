@@ -367,6 +367,35 @@ func GenerateMediaDB(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false)
+}
+
+// GenerateMediaDBRebuild is GenerateMediaDB with a fresh start: the media
+// database file is discarded and recreated before indexing, so everything —
+// including scraped metadata — is rebuilt from scratch. User data (favourites,
+// launcher overrides) lives in UserDB and is re-applied after indexing.
+func GenerateMediaDBRebuild(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	systems []systemdefs.System,
+	db *database.Database,
+	pauser *syncutil.Pauser,
+) error {
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, true)
+}
+
+func startMediaDBGeneration(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	systems []systemdefs.System,
+	db *database.Database,
+	pauser *syncutil.Pauser,
+	rebuild bool,
+) error {
 	if err := startIndexingIfNoScrape(); err != nil {
 		return err
 	}
@@ -412,6 +441,27 @@ func GenerateMediaDB(
 	go func() {
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
+
+		if rebuild {
+			// Recreate closes the database, and Close waits for all tracked
+			// background operations — including this goroutine — so step out of
+			// the tracked set for the recreate and re-register before indexing.
+			// The indexing slot claimed above keeps competing index/scrape
+			// requests out during the untracked window.
+			db.MediaDB.BackgroundOperationDone()
+			recreateErr := db.MediaDB.Recreate(false)
+			db.MediaDB.TrackBackgroundOperation()
+			if recreateErr != nil {
+				log.Error().Err(recreateErr).Msg("failed to recreate media database for rebuild")
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:   false,
+					Indexing: false,
+				})
+				statusInstance.clear()
+				return
+			}
+			log.Info().Msg("media database recreated for full rebuild; starting reindex")
+		}
 
 		notifState := indexingNotificationState{}
 		const notifThrottleInterval = 250 * time.Millisecond
@@ -560,6 +610,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 
 	var systems []systemdefs.System
 	var isSelectiveIndexing bool
+	var rebuild bool
 
 	if len(env.Params) > 0 {
 		var params models.MediaIndexParams
@@ -571,6 +622,13 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		if validateErr := validation.DefaultValidator.Validate(&params); validateErr != nil {
 			log.Warn().Err(validateErr).Msg("invalid params")
 			return nil, models.ClientErrf("invalid params: %w", validateErr)
+		}
+
+		rebuild = params.Rebuild != nil && *params.Rebuild
+		if rebuild && params.Systems != nil {
+			// A rebuild discards the whole database; indexing only a subset
+			// afterwards would silently drop every other system's media.
+			return nil, models.ClientErrf("rebuild cannot be combined with a systems filter")
 		}
 
 		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
@@ -619,7 +677,11 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	// Use app-scoped context — indexing outlives the API request
-	err := GenerateMediaDB(
+	generate := GenerateMediaDB
+	if rebuild {
+		generate = GenerateMediaDBRebuild
+	}
+	err := generate(
 		env.State.GetContext(),
 		env.Platform,
 		env.Config,

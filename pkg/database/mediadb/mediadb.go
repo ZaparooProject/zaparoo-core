@@ -122,6 +122,7 @@ type MediaDB struct {
 	sqlMu                 syncutil.RWMutex
 	isOptimizing          atomic.Bool
 	needsIndexRebuild     atomic.Bool
+	recreating            atomic.Bool
 	inTransaction         bool
 	browseCacheDirty      bool
 	utilityTagCacheDirty  bool
@@ -764,15 +765,23 @@ func (db *MediaDB) IntegrityReport() []string {
 	return database.IntegrityReport(db.ctx, db.sql.Load(), database.DefaultIntegrityReportRows)
 }
 
-// RecreateAfterCorruption discards a corrupt database and reopens a fresh one. The
-// connection is closed; the main file is either preserved as a <db>.corrupt.bak forensic
-// copy (keepBackup — development builds only) or deleted; the -wal/-shm sidecars and the
+// Recreate discards the database file and reopens a fresh one. The connection is
+// closed; the main file is either preserved as a <db>.corrupt.bak forensic copy
+// (keepBackup — development builds only) or deleted; the -wal/-shm sidecars and any
 // corrupt marker are removed (a stale WAL would re-corrupt the new file); and Open()
-// allocates a fresh schema. MediaDB is a rebuildable cache, so nothing is salvaged — the
-// caller triggers a reindex afterwards.
-func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
+// allocates a fresh schema. MediaDB is a rebuildable cache, so nothing is salvaged —
+// the caller triggers a reindex afterwards. Callers: corruption recovery and the
+// user-requested fresh-start rebuild (media.index with rebuild:true).
+func (db *MediaDB) Recreate(keepBackup bool) error {
+	// Serialize recreates: a user-triggered rebuild must never interleave its
+	// close/delete/reopen with corruption recovery's (or another rebuild's).
+	if !db.recreating.CompareAndSwap(false, true) {
+		return errors.New("media database recreate already in progress")
+	}
+	defer db.recreating.Store(false)
+
 	if err := db.Close(); err != nil {
-		log.Warn().Err(err).Msg("error closing corrupt media database before recreate")
+		log.Warn().Err(err).Msg("error closing media database before recreate")
 	}
 	// Deliberately do not Store(nil) here: leaving the closed handle in place until
 	// Open() swaps in the fresh one means a racing reader that loaded the handle
@@ -803,6 +812,14 @@ func (db *MediaDB) RecreateAfterCorruption(keepBackup bool) error {
 
 	if err := db.Open(); err != nil {
 		return fmt.Errorf("failed to reopen media database after recreate: %w", err)
+	}
+
+	// A fresh database only ever receives titles computed by the current
+	// disambiguation algorithm, so stamp it now; otherwise the first
+	// optimization pass after the rebuild would re-run a full backfill over
+	// freshly computed values. Non-fatal: the worst case is that redundant pass.
+	if err := sqlMarkDisambiguationVersionCurrent(db.ctx, db.sql.Load()); err != nil {
+		log.Warn().Err(err).Msg("failed to stamp disambiguation version on recreated media database")
 	}
 
 	// Clear the marker only after the fresh database opens, so a failed reopen leaves

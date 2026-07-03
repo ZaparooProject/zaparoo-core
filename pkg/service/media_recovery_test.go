@@ -36,7 +36,7 @@ import (
 )
 
 // The recovery happy path runs a real reindex via methods.GenerateMediaDB and is covered
-// by the mediadb RecreateAfterCorruption tests plus manual verification. These tests cover
+// by the mediadb Recreate tests plus manual verification. These tests cover
 // the guard/early-return branches, where recovery must NOT touch the database.
 
 func TestCheckAndRecoverCorruptMediaDB_NoMarkerIsNoOp(t *testing.T) {
@@ -46,8 +46,8 @@ func TestCheckAndRecoverCorruptMediaDB_NoMarkerIsNoOp(t *testing.T) {
 
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
 
-	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", true)
-	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", false)
+	mockDB.AssertNotCalled(t, "Recreate", true)
+	mockDB.AssertNotCalled(t, "Recreate", false)
 }
 
 func TestCheckAndRecoverCorruptMediaDB_DefersWhenIndexingInFlight(t *testing.T) {
@@ -57,8 +57,8 @@ func TestCheckAndRecoverCorruptMediaDB_DefersWhenIndexingInFlight(t *testing.T) 
 
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
 
-	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", true)
-	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", false)
+	mockDB.AssertNotCalled(t, "Recreate", true)
+	mockDB.AssertNotCalled(t, "Recreate", false)
 }
 
 func TestCheckAndRecoverCorruptMediaDB_NilDatabaseIsNoOp(_ *testing.T) {
@@ -125,7 +125,7 @@ func TestCheckAndRecoverCorruptMediaDB_DefersWhenScrapingInFlight(t *testing.T) 
 
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
 
-	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", mock.Anything)
+	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)
 }
 
 // TestCheckAndRecoverCorruptMediaDB_StatusBackstopWithoutMarker covers the backstop that
@@ -141,7 +141,7 @@ func TestCheckAndRecoverCorruptMediaDB_StatusBackstopWithoutMarker(t *testing.T)
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
 
 	mockDB.AssertCalled(t, "GetScrapingStatus")
-	mockDB.AssertNotCalled(t, "RecreateAfterCorruption", mock.Anything)
+	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)
 }
 
 // TestWatchForCorruptMediaDBRecovery verifies the watcher runs a recovery check when a

@@ -924,6 +924,7 @@ Optionally, an object:
 | :------ | :------- | :------- | :---------------------------------------------------------------------------------- |
 | systems     | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| rebuild     | boolean  | No       | Discard the media database entirely and index from scratch ("fresh start"). Scraped metadata is lost and must be re-scraped; favourites and launcher overrides are preserved (they live in the user database and are re-applied after indexing). Cannot be combined with `systems`. |
 
 An omitted or `null` value parameters key is also valid and will index every system.
 
