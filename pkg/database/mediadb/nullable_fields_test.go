@@ -118,12 +118,7 @@ func TestNullableFields_SecondarySlug(t *testing.T) {
 	assert.True(t, nonNullTitle.SecondarySlug.Valid, "non-NULL SecondarySlug should have Valid=true")
 	assert.Equal(t, "thesubtitle", nonNullTitle.SecondarySlug.String)
 
-	// Test 4: GetAllMediaTitles (another path that scans SecondarySlug)
-	allTitles, err := db.GetAllMediaTitles()
-	require.NoError(t, err, "GetAllMediaTitles should handle NULL SecondarySlug")
-	assert.GreaterOrEqual(t, len(allTitles), 2)
-
-	// Test 5: FindMediaTitle by DBID (another scan path)
+	// Test 4: FindMediaTitle by DBID (another scan path)
 	found, err := db.FindMediaTitle(&database.MediaTitle{DBID: inserted.DBID})
 	require.NoError(t, err, "FindMediaTitle should handle NULL SecondarySlug")
 	assert.False(t, found.SecondarySlug.Valid)

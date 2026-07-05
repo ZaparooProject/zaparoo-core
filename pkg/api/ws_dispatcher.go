@@ -248,6 +248,11 @@ func lockMediaDBForAPIMethod(method string) func() {
 		wsMediaDBMu.Lock()
 		return wsMediaDBMu.Unlock
 	}
+	// media.image already has its own tiny concurrency gate; do not let slow
+	// image reads/resizes hold the API DB read lane and starve tag/meta writes.
+	if isImageAPIMethod(method) {
+		return func() {}
+	}
 	wsMediaDBMu.RLock()
 	return wsMediaDBMu.RUnlock
 }

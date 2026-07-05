@@ -51,10 +51,15 @@ import (
 
 // Batch configuration for transaction optimization
 const (
-	maxFilesPerTransaction      = 10000
+	maxFilesPerTransaction      = 5000
 	mediaDatabaseCorruptMessage = "media database is corrupt; manual repair or rebuild required; " +
 		"original database left untouched"
 )
+
+// maxReconcileRowsPerTransaction is kept for tests that exercise historical
+// reconcile-volume commits. Production now commits at every system boundary;
+// only the file-limit path can still commit mid-system.
+var maxReconcileRowsPerTransaction int64 = 50000
 
 func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, minFiles int) browseprefix.Policy {
 	paths := make([]string, 0, len(files))
@@ -801,52 +806,26 @@ func NewNamesIndex(
 		}
 	}
 
-	// Initialize scan state
-	scanState := database.ScanState{
-		SystemsIndex:       0,
-		SystemIDs:          make(map[string]int),
-		TitlesIndex:        0,
-		TitleIDs:           make(map[string]int),
-		TitleNames:         make(map[int]string),
-		MediaIndex:         0,
-		MediaIDs:           make(map[string]int),
-		MediaTitleIDs:      make(map[int]int),
-		MediaNeedsSortName: make(map[int]struct{}),
-		MediaSortNames:     make(map[int]string),
-		MediaParentDirs:    make(map[int]string),
-		MediaTagIDs:        make(map[int]map[int]struct{}),
-		TagTypesIndex:      0,
-		TagTypeIDs:         make(map[string]int),
-		TagsIndex:          0,
-		TagIDs:             make(map[string]int),
-		MissingMedia:       make(map[int]struct{}),
-		PreviouslyMissing:  make(map[int]struct{}),
-		TouchedTitles:      make(map[int]struct{}),
-	}
-
-	// 3. Set up scan state — persistent mode is always active
+	// 3. Record the requested system set for resume validation.
 	if setErr := db.SetIndexingSystems(requestedSystemIDs); setErr != nil {
 		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
 	}
 	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
 
-	// Populate scan state from existing DB (max IDs, system map, tag maps).
-	// TODO: Design a salvage-safe update-index path that does not require a
-	// full existing Tags scan before any rebuild can start. A corrupt Tags table
-	// currently blocks all update-index attempts, even when the caller would be
-	// willing to regenerate scanner-owned data.
-	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
+	// Ensure the canonical tag vocabulary exists before any system reconciles
+	// against it. Set-based: no existing rows are read into memory.
+	if err = SeedCanonicalTags(ctx, db); err != nil {
 		if errors.Is(err, context.Canceled) {
-			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
+			return handleCancellation(ctx, db, "Media indexing cancelled during canonical tag seeding")
 		}
 		if isSQLiteDatabaseCorrupt(err) {
-			noteIndexingCorruption(db, fmt.Sprintf("scan state population: %v", err))
+			noteIndexingCorruption(db, fmt.Sprintf("canonical tag seeding: %v", err))
 			return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, err)
 		}
-		return 0, fmt.Errorf("failed to populate scan state: %w", err)
+		return 0, fmt.Errorf("failed to seed canonical tags: %w", err)
 	}
 
-	logPhaseMetrics("initial_state_population")
+	logPhaseMetrics("seed_canonical_tags")
 
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
 		logMaintenanceError(setErr, "failed to set indexing status to running")
@@ -896,9 +875,6 @@ func NewNamesIndex(
 		Step:  0,
 	}
 
-	// Track UNIQUE constraint failures across all systems
-	var uniqueConstraintFailures int
-
 	// Track which launchers have already been scanned to prevent double-execution
 	scannedLaunchers := make(map[string]bool)
 	// This map tracks systems that have been fully processed and committed
@@ -917,25 +893,25 @@ func NewNamesIndex(
 	}
 
 	// Batch tracking variables for adaptive transaction management. One
-	// transaction can span multiple systems to amortise the fixed per-commit
-	// fsync + WAL-checkpoint cost on slow storage (each commit costs ~0.2-2.5s
-	// regardless of row count). pendingSystems holds systems whose inserts and
-	// missing-state are buffered in the open transaction but not yet committed,
-	// and therefore not yet durable for crash-resume.
+	// A transaction is committed at each system boundary. Earlier builds batched
+	// multiple small systems into one transaction, but crash logs repeatedly ended
+	// at the next system's status update while that cross-system transaction was
+	// still open. Keep the mid-system file-limit commit for memory safety, then
+	// finalize each system before moving on.
 	filesInBatch := 0
+	rowsInBatch := int64(0)
 	batchStarted := false
 	pendingSystems := make([]string, 0)
 
 	// Sub-phase wall-time accumulators across the systems loop, logged once after
 	// it so the monolithic "systems" phase can be attributed to its parts:
-	// per-system state load, file collection (filesystem scan + scanners), media
-	// row inserts, per-system finalize (flush + missing flags + disambiguation),
+	// file collection (filesystem scan + scanners), staging row inserts,
+	// per-system reconcile (set-based merge + missing flags + disambiguation),
 	// and transaction commits (the fsync + checkpoint cost).
 	var (
-		stateLoadDur time.Duration
 		collectDur   time.Duration
 		insertDur    time.Duration
-		finalizeDur  time.Duration
+		reconcileDur time.Duration
 		commitDur    time.Duration
 	)
 
@@ -950,7 +926,7 @@ func NewNamesIndex(
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
 	// are called for every system, fixing the stale-state gaps that existed in
 	// the previous loop 2 and loop 3.
-	for sysIdx, sys := range sortedSystems {
+	for _, sys := range sortedSystems {
 		// Check for cancellation or pause
 		select {
 		case <-ctx.Done():
@@ -982,26 +958,23 @@ func NewNamesIndex(
 			dropper.DropSlugSearchCacheForSystems([]string{systemID})
 		}
 
-		scanState.MissingMedia = make(map[int]struct{})
-		scanState.PreviouslyMissing = make(map[int]struct{})
-
-		// Load existing data for this system — always persistent.
-		stateLoadStart := time.Now()
-		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
-			if errors.Is(loadErr, context.Canceled) {
-				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+		// Drop any staged rows a crashed run left behind (a mid-system commit
+		// makes staged rows durable); this system re-stages from scratch.
+		if clearErr := db.ClearScanStage(); clearErr != nil {
+			if isSQLiteDatabaseCorrupt(clearErr) {
+				noteIndexingCorruption(db, fmt.Sprintf("scan stage clear for %s: %v", systemID, clearErr))
+				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, clearErr)
 			}
-			if isSQLiteDatabaseCorrupt(loadErr) {
-				noteIndexingCorruption(db, fmt.Sprintf("persistent scan state load for %s: %v", systemID, loadErr))
-				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, loadErr)
-			}
-			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
+			return 0, fmt.Errorf("failed to clear scan staging tables for %s: %w", systemID, clearErr)
 		}
-		stateLoadDur += time.Since(stateLoadStart)
 
 		files := make([]platforms.ScanResult, 0)
 		systemStartTime := time.Now()
 		collectStart := time.Now()
+		// Set when any file source for this system errors. The staged set is
+		// then a subset of the library, so the reconcile must not treat
+		// absence from it as evidence media is missing.
+		scanIncomplete := false
 
 		log.Info().
 			Str("system", systemID).
@@ -1018,6 +991,7 @@ func NewNamesIndex(
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
 				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
+				scanIncomplete = true
 				continue
 			}
 			for _, f := range pathFiles {
@@ -1055,10 +1029,17 @@ func NewNamesIndex(
 					files = append(files, independent...)
 				}
 			} else {
-				// Pipeline: scanner filters/enriches existing files
-				files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				// Pipeline: scanner filters/enriches existing files. Replace the
+				// collected list only on success — a failing scanner must not
+				// clobber it, or every file already collected would go missing.
+				var piped []platforms.ScanResult
+				piped, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				if scanErr == nil {
+					files = piped
+				}
 			}
 			if scanErr != nil {
+				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 				}
@@ -1080,6 +1061,7 @@ func NewNamesIndex(
 			log.Debug().Msgf("running %s 'any' scanner for system: %s", anyScanners[i].ID, systemID)
 			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
+				scanIncomplete = true
 				if errors.Is(scanErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
 				}
@@ -1170,23 +1152,16 @@ func NewNamesIndex(
 			prefixPolicy := prefixPolicyByDir[dir]
 
 			insertStart := time.Now()
-			_, _, addErr := AddMediaPathWithPrefixPolicy(
-				db, &scanState, systemID, file.Path, file.Name, file.NoExt, prefixPolicy, cfg, mediaType,
+			addErr := StageMediaPath(
+				db, systemID, file.Path, file.Name, file.NoExt, prefixPolicy, cfg, mediaType,
 			)
 			insertDur += time.Since(insertStart)
 			if addErr != nil {
-				var sqliteErr sqlite3.Error
-				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
-					!errors.Is(addErr, mediadb.ErrDependencyFlush) {
-					uniqueConstraintFailures++
-					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
-					continue
-				}
 				if isSQLiteDatabaseCorrupt(addErr) {
-					noteIndexingCorruption(db, fmt.Sprintf("media insert for %s: %v", systemID, addErr))
+					noteIndexingCorruption(db, fmt.Sprintf("media staging for %s: %v", systemID, addErr))
 					return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, addErr)
 				}
-				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
+				return 0, fmt.Errorf("unrecoverable error staging media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
 			if len(files) >= 1000 && (fileIdx+1)%1000 == 0 {
@@ -1236,75 +1211,79 @@ func NewNamesIndex(
 					completedSystems[s] = true
 				}
 				pendingSystems = pendingSystems[:0]
-				// NOTE: Do not flush TitleIDs/MediaIDs here — we are still
-				// mid-system. Clearing them would break dedup for remaining
-				// files in this system (multi-disc titles, persistent-mode
-				// existing-media tracking). Flush only happens between systems.
+				// Staged rows for this system are now durable; the reconcile at
+				// system end still sees them (staging is a real table, not
+				// transaction-local state), so a mid-system commit is safe.
 				filesInBatch = 0
+				rowsInBatch = 0
 				batchStarted = false
 			}
 		}
 
-		// Finalize this system's missing-state and disambiguation inside the
-		// currently open transaction, which is shared across batched systems. The
-		// rows just inserted for this system are flushed (not committed) so the
-		// disambiguation query observes them; the commit itself is deferred to a
-		// batch boundary below so the fsync + checkpoint cost is amortised.
-		finalizeStart := time.Now()
-		systemDBID, found := scanState.SystemIDs[systemID]
-		if found {
-			// A mid-system file-limit commit may have closed the transaction on the
-			// final file; reopen one so the missing-state writes have a home.
-			if !batchStarted {
-				if beginErr := db.BeginTransaction(true); beginErr != nil {
-					return 0, fmt.Errorf("failed to begin transaction to finalize system %s: %w", systemID, beginErr)
-				}
-				batchStarted = true
+		// Reconcile this system's staged rows into the media tables inside the
+		// currently open transaction, which is shared across batched systems.
+		// The set-based merge computes new/changed/missing rows, tag links, and
+		// the touched-title disambiguation recompute entirely in SQL; the commit
+		// itself is deferred to a batch boundary below so the fsync + checkpoint
+		// cost is amortised.
+		reconcileStart := time.Now()
+		// A mid-system file-limit commit may have closed the transaction on the
+		// final file; reopen one so the reconcile writes have a home.
+		if !batchStarted {
+			if beginErr := db.BeginTransaction(true); beginErr != nil {
+				return 0, fmt.Errorf("failed to begin transaction to reconcile system %s: %w", systemID, beginErr)
 			}
-			if flushErr := db.FlushBatchInserters(); flushErr != nil {
-				return 0, fmt.Errorf("failed to flush batch inserts for system %s: %w", systemID, flushErr)
+			batchStarted = true
+		}
+		if scanIncomplete {
+			log.Warn().
+				Str("system", systemID).
+				Msg("file collection hit errors; keeping existing missing-media state for this system")
+		}
+		reconcileStats, reconcileErr := db.ReconcileStagedSystem(
+			ctx, systemID, database.ScanReconcileOpts{IncompleteScan: scanIncomplete},
+		)
+		if reconcileErr != nil {
+			if errors.Is(reconcileErr, context.Canceled) {
+				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during system reconcile")
 			}
-			if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
-				return 0, fmt.Errorf("failed to reset missing flags for system %s: %w", systemID, resetErr)
+			if isSQLiteDatabaseCorrupt(reconcileErr) {
+				noteIndexingCorruption(db, fmt.Sprintf("staged reconcile for %s: %v", systemID, reconcileErr))
+				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, reconcileErr)
 			}
-			if len(scanState.MissingMedia) > 0 {
-				if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
-					return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
-				}
-			}
-			// Refresh stored sibling disambiguation now the system's media, tags, and
-			// missing flags are final and flushed into the transaction. Only titles
-			// whose inputs changed this run are recomputed (new/reassigned media,
-			// tag changes, or a member's missing-state flip) instead of every title in
-			// the system — an unchanged re-index recomputes nothing. Non-fatal: stale
-			// disambiguation only affects display/ZapScript hints and self-corrects
-			// when the title is next touched.
-			touchedTitleDBIDs := collectTouchedTitleDBIDs(&scanState)
-			if len(touchedTitleDBIDs) > 0 {
-				if disErr := db.RecomputeTitleDisambiguation(ctx, touchedTitleDBIDs); disErr != nil {
-					log.Warn().Err(disErr).Str("system", systemID).Msg("failed to recompute title disambiguation")
-				}
-			}
+			return 0, fmt.Errorf("failed to reconcile staged system %s: %w", systemID, reconcileErr)
+		}
+		if reconcileStats.SystemKnown {
+			log.Debug().
+				Str("system", systemID).
+				Int64("titlesInserted", reconcileStats.TitlesInserted).
+				Int64("titlesRenamed", reconcileStats.TitlesRenamed).
+				Int64("mediaUpserted", reconcileStats.MediaUpserted).
+				Int64("mediaMissing", reconcileStats.MediaMissing).
+				Int64("tagsInserted", reconcileStats.TagsInserted).
+				Int64("tagLinksAdded", reconcileStats.TagLinksAdded).
+				Int64("tagLinksDeleted", reconcileStats.TagLinksDeleted).
+				Int64("touchedTitles", reconcileStats.TouchedTitles).
+				Msg("reconciled staged system")
 			pendingSystems = append(pendingSystems, systemID)
+			// Track reconcile write volume so a run of low-file/high-reconcile
+			// systems still commits regularly, bounding WAL growth.
+			rowsInBatch += reconcileStats.MediaMissing + reconcileStats.MediaUpserted +
+				reconcileStats.TitlesInserted + reconcileStats.TouchedTitles
 		} else {
-			// System produced no rows — nothing to commit for it.
+			// System has no DB row and produced no files — nothing to commit.
 			completedSystems[systemID] = true
 		}
+		reconcileDur += time.Since(reconcileStart)
 
-		// Always flush between systems — TitleIDs/MediaIDs are system-scoped and
-		// Populate* re-loads them for the next system. In-memory only; safe to do
-		// with the transaction still open.
-		FlushScanStateMaps(&scanState)
-		finalizeDur += time.Since(finalizeStart)
-
-		// Commit at a batch boundary: when accumulated files reach the limit or
-		// this is the last system. This is the only place the fsync + checkpoint is
-		// paid, so a run of small systems shares a single commit.
-		isLastSystem := sysIdx == len(sortedSystems)-1
-		if batchStarted && (filesInBatch >= maxFilesPerTransaction || isLastSystem) {
+		// Commit at every system boundary so no transaction spans the next
+		// system's staging clear or filesystem scan. This keeps the resume cursor
+		// current and avoids carrying uncommitted WAL across many small systems.
+		if batchStarted {
 			log.Debug().
 				Str("system", systemID).
 				Int("files", filesInBatch).
+				Int64("reconcileRows", rowsInBatch).
 				Int("batchedSystems", len(pendingSystems)).
 				Msg("committing media indexing batch")
 			commitStart := time.Now()
@@ -1338,6 +1317,7 @@ func NewNamesIndex(
 				pendingSystems = pendingSystems[:0]
 			}
 			filesInBatch = 0
+			rowsInBatch = 0
 			batchStarted = false
 		}
 
@@ -1362,10 +1342,9 @@ func NewNamesIndex(
 	}
 
 	log.Info().
-		Dur("stateLoad", stateLoadDur).
 		Dur("collect", collectDur).
 		Dur("insert", insertDur).
-		Dur("finalize", finalizeDur).
+		Dur("reconcile", reconcileDur).
 		Dur("commit", commitDur).
 		Msg("media indexing systems sub-phase breakdown")
 	logPhaseMetrics("systems")
@@ -1374,24 +1353,6 @@ func NewNamesIndex(
 	status.SystemID = ""
 	update(status)
 
-	// Nil out all ScanState maps to release backing memory. Go maps retain
-	// their allocated bucket array even after all keys are deleted, so the
-	// only way to reclaim that memory is to drop all references and let GC
-	// collect the backing arrays. With 250k titles this can be 20-40MB.
-	scanState.SystemIDs = nil
-	scanState.TitleIDs = nil
-	scanState.MediaIDs = nil
-	scanState.MediaTitleIDs = nil
-	scanState.MediaNeedsSortName = nil
-	scanState.MediaSortNames = nil
-	scanState.MediaParentDirs = nil
-	scanState.MediaTagIDs = nil
-	scanState.TagTypeIDs = nil
-	scanState.TagIDs = nil
-
-	scanState.MissingMedia = nil
-	scanState.PreviouslyMissing = nil
-	scanState.TouchedTitles = nil
 	status.Phase = PhaseCreatingIndexes
 	update(status)
 
@@ -1567,11 +1528,6 @@ func NewNamesIndex(
 	if err != nil {
 		err = fmt.Errorf("failed to set optimization status to pending: %w", err)
 		log.Error().Err(err).Msg("failed to set optimization status to pending")
-	}
-
-	if uniqueConstraintFailures > 0 {
-		log.Warn().Int("count", uniqueConstraintFailures).
-			Msg("UNIQUE constraint failures during indexing (possible duplicate paths)")
 	}
 
 	indexedFiles = status.Files

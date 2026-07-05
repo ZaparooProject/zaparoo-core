@@ -24,7 +24,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -172,6 +171,16 @@ func sqlSystemIndexed(ctx context.Context, db *sql.DB, system *systemdefs.System
 }
 
 func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	if state, err := sqlBrowseCacheStatus(ctx, db); err == nil && sqlBrowseCacheServeable(state) {
+		list, cacheErr := sqlIndexedSystemsFromBrowseCache(ctx, db)
+		if cacheErr == nil {
+			return list, nil
+		}
+		log.Debug().Err(cacheErr).Msg("failed to read indexed systems from browse cache")
+	} else if err != nil {
+		log.Debug().Err(err).Msg("failed to check browse cache for indexed systems")
+	}
+
 	list := make([]string, 0)
 
 	q, err := db.PrepareContext(ctx, `
@@ -212,6 +221,37 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	}
 	err = rows.Err()
 	return list, err
+}
+
+func sqlIndexedSystemsFromBrowseCache(ctx context.Context, db sqlQueryable) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT s.SystemID
+		FROM Systems s
+		WHERE EXISTS (
+			SELECT 1 FROM BrowseDirCounts c WHERE c.SystemDBID = s.DBID
+		)
+		ORDER BY s.SystemID`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query browse cache indexed systems: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close browse cache indexed systems rows")
+		}
+	}()
+
+	list := make([]string, 0)
+	for rows.Next() {
+		row := ""
+		if scanErr := rows.Scan(&row); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan browse cache indexed systems result: %w", scanErr)
+		}
+		list = append(list, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return list, nil
 }
 
 // sqlFilterIndexedSystems returns only those systemIDs that exist in the Systems
@@ -267,47 +307,6 @@ func sqlGetAllSystems(ctx context.Context, db *sql.DB) ([]database.System, error
 	rows, err := db.QueryContext(ctx, "SELECT DBID, SystemID, Name FROM Systems ORDER BY DBID")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query systems: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	systems := make([]database.System, 0)
-	for rows.Next() {
-		var system database.System
-		if err := rows.Scan(&system.DBID, &system.SystemID, &system.Name); err != nil {
-			return nil, fmt.Errorf("failed to scan system: %w", err)
-		}
-		systems = append(systems, system)
-	}
-	return systems, rows.Err()
-}
-
-// sqlGetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list
-func sqlGetSystemsExcluding(ctx context.Context, db *sql.DB, excludeSystemIDs []string) ([]database.System, error) {
-	if len(excludeSystemIDs) == 0 {
-		return sqlGetAllSystems(ctx, db)
-	}
-
-	// Build placeholders for the IN clause
-	placeholders := make([]string, len(excludeSystemIDs))
-	args := make([]any, len(excludeSystemIDs))
-	for i, systemID := range excludeSystemIDs {
-		placeholders[i] = "?"
-		args[i] = systemID
-	}
-
-	//nolint:gosec // using parameterized placeholders, not user input
-	query := fmt.Sprintf(
-		"SELECT DBID, SystemID, Name FROM Systems WHERE SystemID NOT IN (%s) ORDER BY DBID",
-		strings.Join(placeholders, ","),
-	)
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query systems excluding %v: %w", excludeSystemIDs, err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {

@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"runtime"
 	"testing"
 	"time"
 
@@ -133,15 +132,21 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 			`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":%d}`,
 			mutationID,
 		))))
-	waitForMediaDBWriterPending(t)
-	close(releaseImages)
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(int64(mutationID)), resp.ID,
+		"mutation should bypass active and queued image work")
+
+	close(releaseImages)
 	seen := make([]models.RPCID, 0, totalResponses)
-	for range totalResponses {
-		_, msg, err := conn.ReadMessage()
+	seen = append(seen, resp.ID)
+	for range totalResponses - 1 {
+		_, msg, err = conn.ReadMessage()
 		require.NoError(t, err)
-		var resp models.ResponseObject
 		require.NoError(t, json.Unmarshal(msg, &resp))
 		seen = append(seen, resp.ID)
 	}
@@ -151,25 +156,6 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	require.NotEqual(t, -1, favoriteIndex)
 	require.NotEqual(t, -1, queuedImageIndex)
 	assert.Less(t, favoriteIndex, queuedImageIndex, "mutation should bypass queued image work")
-}
-
-func waitForMediaDBWriterPending(t *testing.T) {
-	t.Helper()
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if !wsMediaDBMu.TryRLock() {
-			return
-		}
-		wsMediaDBMu.RUnlock()
-
-		select {
-		case <-deadline:
-			t.Fatal("media.tags.update did not wait for the media DB write lock")
-		default:
-			runtime.Gosched()
-		}
-	}
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {

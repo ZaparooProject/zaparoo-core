@@ -40,7 +40,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	fakeClock := clockwork.NewFakeClock()
+	fakeClock := clockwork.NewRealClock()
 	mediaDB := &MediaDB{
 		ctx:               ctx,
 		clock:             fakeClock,

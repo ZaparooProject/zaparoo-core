@@ -186,51 +186,6 @@ func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
-func TestMediaTagBatchDeleteByTagIDs(t *testing.T) {
-	t.Parallel()
-
-	mediaDB, cleanup := setupTempMediaDB(t)
-	t.Cleanup(cleanup)
-
-	tagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "extension"})
-	require.NoError(t, err)
-	tagOne, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: "nes"})
-	require.NoError(t, err)
-	tagTwo, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: "sfc"})
-	require.NoError(t, err)
-	tagThree, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: "gen"})
-	require.NoError(t, err)
-
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	system, err := mediaDB.InsertSystem(database.System{SystemID: "nes", Name: "NES"})
-	require.NoError(t, err)
-	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
-		SystemDBID: system.DBID,
-		Slug:       "batchdeletegame",
-		Name:       "Batch Delete Game",
-	})
-	require.NoError(t, err)
-	media, err := mediaDB.InsertMedia(database.Media{
-		SystemDBID:     system.DBID,
-		MediaTitleDBID: title.DBID,
-		Path:           filepath.Join("roms", "nes", "batch.nes"),
-	})
-	require.NoError(t, err)
-	for _, tag := range []database.Tag{tagOne, tagTwo, tagThree} {
-		_, insertErr := mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: media.DBID, TagDBID: tag.DBID})
-		require.NoError(t, insertErr)
-	}
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	require.NoError(t, mediaDB.DeleteMediaTagsByTagIDs(media.DBID, nil))
-	require.NoError(t, mediaDB.DeleteMediaTagsByTagIDs(media.DBID, []int{int(tagOne.DBID), int(tagThree.DBID)}))
-
-	remaining, err := mediaDB.GetMediaTagsBySystemID("nes")
-	require.NoError(t, err)
-	require.Len(t, remaining, 1)
-	assert.Equal(t, tagTwo.DBID, remaining[0].TagDBID)
-}
-
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-mediadb-*")
@@ -1000,7 +955,8 @@ func TestMediaDB_IndexedSystemsExcludesMissingAndEmptySystems(t *testing.T) {
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
-	err = mediaDB.BulkSetMediaMissing(map[int]struct{}{int(inserted3DOMedia.DBID): {}})
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(context.Background(),
+		"UPDATE Media SET IsMissing = 1 WHERE DBID = ?", inserted3DOMedia.DBID)
 	require.NoError(t, err)
 
 	systems, err := mediaDB.IndexedSystems()
@@ -2856,50 +2812,6 @@ func TestMediaDB_CommitTransaction_ReturnsBatchFlushError_Integration(t *testing
 	assert.ErrorContains(t, err, "failed to flush batch inserts")
 }
 
-func TestMediaDB_UpdateMediaTitle_FlushesPendingTitleBatch_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	t.Parallel()
-	mediaDB, cleanup := setupTempMediaDB(t)
-	defer cleanup()
-
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
-	require.NoError(t, err)
-	oldTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
-		SystemDBID: insertedSystem.DBID,
-		Slug:       "oldtitle",
-		Name:       "Old Title",
-	})
-	require.NoError(t, err)
-	insertedMedia, err := mediaDB.InsertMedia(database.Media{
-		MediaTitleDBID: oldTitle.DBID,
-		SystemDBID:     insertedSystem.DBID,
-		Path:           filepath.Join("games", "Amiga", "listings", "games.txt", "Old Title"),
-	})
-	require.NoError(t, err)
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	newTitleDBID := oldTitle.DBID + 1
-	require.NoError(t, mediaDB.BeginTransaction(true))
-	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
-		DBID:       newTitleDBID,
-		SystemDBID: insertedSystem.DBID,
-		Slug:       "newtitle",
-		Name:       "New Title",
-	})
-	require.NoError(t, err)
-	expectedSortName := "New Title"
-	require.NoError(t, mediaDB.UpdateMediaTitle(insertedMedia.DBID, newTitleDBID, expectedSortName))
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	updatedMedia, err := mediaDB.FindMedia(database.Media{DBID: insertedMedia.DBID})
-	require.NoError(t, err)
-	assert.Equal(t, newTitleDBID, updatedMedia.MediaTitleDBID)
-	assert.Equal(t, expectedSortName, updatedMedia.SortName)
-}
-
 func TestMediaDB_TemporaryParentDirRepair_RestoresDirectBrowse_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -4182,124 +4094,4 @@ func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing
 	require.NoError(t, err)
 	require.Len(t, nextPage, 1)
 	assert.Equal(t, "Contra", nextPage[0].Name)
-}
-
-// TestMediaDB_UpdateMediaTitle_FlushesBufferedTitle_Integration is a regression
-// test for the FOREIGN KEY constraint failure seen when re-pointing an existing
-// media row to a MediaTitle that is still buffered in the batch inserter (e.g. an
-// arcade .mra scanned once by filename and again by its arcade-database name).
-// UpdateMediaTitle must flush the pending MediaTitle batch before the UPDATE so
-// the referenced title exists.
-func TestMediaDB_UpdateMediaTitle_FlushesBufferedTitle_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	t.Parallel()
-	mediaDB, cleanup := setupTempMediaDB(t)
-	defer cleanup()
-
-	// Tx 1: persist a system, a title, and a media row referencing that title.
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	_, err := mediaDB.InsertSystem(database.System{DBID: 1, SystemID: "Arcade", Name: "Arcade"})
-	require.NoError(t, err)
-	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{DBID: 1, SystemDBID: 1, Slug: "imsorry", Name: "I'm Sorry"})
-	require.NoError(t, err)
-	mediaPath := filepath.Join("media", "fat", "_Arcade", "I'm Sorry (US, 315-5110).mra")
-	_, err = mediaDB.InsertMedia(database.Media{DBID: 1, SystemDBID: 1, MediaTitleDBID: 1, Path: mediaPath})
-	require.NoError(t, err)
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	// Tx 2: buffer a second title, then immediately re-point the existing media at
-	// it. Before the flush fix this failed with "FOREIGN KEY constraint failed".
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
-		DBID: 2, SystemDBID: 1, Slug: "imsorryus3155110", Name: "I'm Sorry (US, 315-5110)",
-	})
-	require.NoError(t, err)
-	err = mediaDB.UpdateMediaTitle(1, 2, "I'm Sorry (US, 315-5110)")
-	require.NoError(t, err, "update must flush the buffered title to satisfy the foreign key")
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	// The media row now references the second title.
-	found, err := mediaDB.FindMedia(database.Media{DBID: 1})
-	require.NoError(t, err)
-	assert.Equal(t, mediaPath, found.Path)
-	assert.Equal(t, int64(2), found.MediaTitleDBID)
-}
-
-func TestMediaDB_UpdateMediaTitleName_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	t.Parallel()
-	mediaDB, cleanup := setupTempMediaDB(t)
-	defer cleanup()
-
-	// Insert a system and a title with the raw AmigaVision listing line as Name.
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
-	require.NoError(t, err)
-	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
-		SystemDBID: insertedSystem.DBID,
-		Slug:       "1001stolenideas",
-		Name:       "1001 Stolen Ideas (Airwalk)(AGA)",
-	})
-	require.NoError(t, err)
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	// UpdateMediaTitleName must update MediaTitles.Name in place.
-	err = mediaDB.UpdateMediaTitleName(title.DBID, "1001 Stolen Ideas")
-	require.NoError(t, err)
-
-	titles, err := mediaDB.GetAllMediaTitles()
-	require.NoError(t, err)
-	require.Len(t, titles, 1)
-	assert.Equal(t, "1001 Stolen Ideas", titles[0].Name)
-	assert.Equal(t, "1001stolenideas", titles[0].Slug, "slug must not change when name is updated")
-}
-
-func TestMediaDB_UpdateMediaTitleName_FlushesPendingTitleBatch_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	t.Parallel()
-	mediaDB, cleanup := setupTempMediaDB(t)
-	defer cleanup()
-
-	// Insert the initial title outside a batch transaction.
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
-	require.NoError(t, err)
-	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
-		SystemDBID: insertedSystem.DBID,
-		Slug:       "1869",
-		Name:       "1869 (AGA)[en]",
-	})
-	require.NoError(t, err)
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	// Buffer a second title inside an open batch transaction, then call
-	// UpdateMediaTitleName. The method must flush the batch before executing
-	// the UPDATE so the second title is persisted correctly.
-	require.NoError(t, mediaDB.BeginTransaction(true))
-	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
-		SystemDBID: insertedSystem.DBID,
-		Slug:       "3dpool",
-		Name:       "3D Pool (OCS)[en]",
-	})
-	require.NoError(t, err)
-	err = mediaDB.UpdateMediaTitleName(title.DBID, "1869")
-	require.NoError(t, err, "update must flush the buffered title before executing")
-	require.NoError(t, mediaDB.CommitTransaction())
-
-	titles, err := mediaDB.GetAllMediaTitles()
-	require.NoError(t, err)
-	require.Len(t, titles, 2, "buffered title must have been flushed and persisted")
-
-	bySlug := make(map[string]string, len(titles))
-	for _, tt := range titles {
-		bySlug[tt.Slug] = tt.Name
-	}
-	assert.Equal(t, "1869", bySlug["1869"], "name must be updated to the cleaned title")
-	assert.Equal(t, "3D Pool (OCS)[en]", bySlug["3dpool"], "buffered title must be present")
 }

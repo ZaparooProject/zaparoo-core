@@ -217,10 +217,13 @@ type IndexingStatusResponse struct {
 	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
 	TotalMedia         *int    `json:"totalMedia,omitempty"`
-	Exists             bool    `json:"exists"`
-	Indexing           bool    `json:"indexing"`
-	Optimizing         bool    `json:"optimizing"`
-	Paused             bool    `json:"paused"`
+	// MissingMedia is the count of indexed media flagged missing on disk —
+	// what media.clean.orphans would remove.
+	MissingMedia *int `json:"missingMedia,omitempty"`
+	Exists       bool `json:"exists"`
+	Indexing     bool `json:"indexing"`
+	Optimizing   bool `json:"optimizing"`
+	Paused       bool `json:"paused"`
 }
 
 type ReaderResponse struct {

@@ -55,19 +55,6 @@ func ParentDirForMediaPath(path string) string {
 	return ""
 }
 
-func sqlUpdateMediaParentDir(ctx context.Context, db sqlQueryable, mediaDBID int64, parentDir string) error {
-	if _, err := db.ExecContext(
-		ctx,
-		`UPDATE Media SET ParentDir = ? WHERE DBID = ?`,
-		parentDir,
-		mediaDBID,
-	); err != nil {
-		return fmt.Errorf("failed to update media parent dir: %w", err)
-	}
-
-	return nil
-}
-
 func sqlTemporaryParentDirRepairVersionCurrent(ctx context.Context, db sqlQueryable) (bool, error) {
 	var version string
 	err := db.QueryRowContext(ctx,

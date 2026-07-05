@@ -32,19 +32,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func reapplyScanState() *database.ScanState {
-	return &database.ScanState{
-		SystemIDs:     make(map[string]int),
-		TitleIDs:      make(map[string]int),
-		MediaIDs:      make(map[string]int),
-		MediaTitleIDs: make(map[int]int),
-		MediaTagIDs:   make(map[int]map[int]struct{}),
-		TagTypeIDs:    make(map[string]int),
-		TagIDs:        make(map[string]int),
-		MissingMedia:  make(map[int]struct{}),
-	}
-}
-
 func TestReapplyMediaUserData(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -60,14 +47,7 @@ func TestReapplyMediaUserData(t *testing.T) {
 	plainPath := filepath.Join("roms", "NES", "Plain.nes")
 
 	// Build a freshly indexed media.db with no user data yet.
-	state := reapplyScanState()
-	require.NoError(t, SeedCanonicalTags(mediaDB, state))
-	require.NoError(t, mediaDB.BeginTransaction(false))
-	for _, p := range []string{favPath, overridePath, bothPath, plainPath} {
-		_, _, err := AddMediaPath(mediaDB, state, "NES", p, "", false, false, nil, "")
-		require.NoError(t, err)
-	}
-	require.NoError(t, mediaDB.CommitTransaction())
+	indexMediaPaths(t, mediaDB, "NES", favPath, overridePath, bothPath, plainPath)
 
 	// Seed UserDB truth, including orphans whose path/system is not indexed.
 	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{

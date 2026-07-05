@@ -24,7 +24,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -193,123 +192,6 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row *database.MediaTit
 
 	row.DBID = lastID
 	return *row, nil
-}
-
-func sqlUpdateMediaTitleName(ctx context.Context, db sqlQueryable, titleDBID int64, name string) error {
-	_, err := db.ExecContext(ctx,
-		`UPDATE MediaTitles SET Name = ? WHERE DBID = ?`,
-		name, titleDBID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update media title name: %w", err)
-	}
-	return nil
-}
-
-func sqlGetAllMediaTitles(ctx context.Context, db *sql.DB) ([]database.MediaTitle, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT DBID, Slug, Name, SystemDBID, SlugLength, SlugWordCount, SecondarySlug
-		 FROM MediaTitles ORDER BY DBID`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query media titles: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	titles := make([]database.MediaTitle, 0)
-	for rows.Next() {
-		var title database.MediaTitle
-		if err := rows.Scan(
-			&title.DBID, &title.Slug, &title.Name,
-			&title.SystemDBID, &title.SlugLength, &title.SlugWordCount, &title.SecondarySlug,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan media title: %w", err)
-		}
-		titles = append(titles, title)
-	}
-	return titles, rows.Err()
-}
-
-// sqlGetTitlesWithSystems retrieves all media titles with their associated system IDs using a JOIN query.
-func sqlGetTitlesWithSystems(ctx context.Context, db *sql.DB) ([]database.TitleWithSystem, error) {
-	query := `
-		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
-		FROM MediaTitles t
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		ORDER BY t.DBID
-	`
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query titles with systems: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	titles := make([]database.TitleWithSystem, 0)
-	for rows.Next() {
-		var title database.TitleWithSystem
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
-			return nil, fmt.Errorf("failed to scan title with system: %w", err)
-		}
-		titles = append(titles, title)
-	}
-	return titles, rows.Err()
-}
-
-// sqlGetTitlesWithSystemsExcluding retrieves all media titles with their
-// associated system IDs, excluding those belonging to systems in the
-// excludeSystemIDs list
-func sqlGetTitlesWithSystemsExcluding(
-	ctx context.Context,
-	db *sql.DB,
-	excludeSystemIDs []string,
-) ([]database.TitleWithSystem, error) {
-	if len(excludeSystemIDs) == 0 {
-		return sqlGetTitlesWithSystems(ctx, db)
-	}
-
-	// Build placeholders for the IN clause
-	placeholders := make([]string, len(excludeSystemIDs))
-	args := make([]any, len(excludeSystemIDs))
-	for i, systemID := range excludeSystemIDs {
-		placeholders[i] = "?"
-		args[i] = systemID
-	}
-
-	//nolint:gosec // using parameterized placeholders, not user input
-	query := fmt.Sprintf(`
-		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
-		FROM MediaTitles t
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID NOT IN (%s)
-		ORDER BY t.DBID
-	`, strings.Join(placeholders, ","))
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query titles with systems excluding %v: %w", excludeSystemIDs, err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	titles := make([]database.TitleWithSystem, 0)
-	for rows.Next() {
-		var title database.TitleWithSystem
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
-			return nil, fmt.Errorf("failed to scan title with system: %w", err)
-		}
-		titles = append(titles, title)
-	}
-	return titles, rows.Err()
 }
 
 // sqlGetTitlesBySystemID retrieves all media titles for a specific system.

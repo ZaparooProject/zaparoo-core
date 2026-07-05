@@ -259,6 +259,10 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 			var payload models.ScrapingStatusResponse
 			require.NoError(t, json.Unmarshal(n.Params, &payload))
 			assert.Equal(t, "test-scraper", payload.ScraperID)
+			if payload.CurrentStepDisplay != nil && *payload.CurrentStepDisplay == preparingMediaScrapeDisplay {
+				gotStart = true
+				continue
+			}
 			assert.Equal(t, 5, payload.TotalScraped)
 			if payload.Scraping && !payload.Done {
 				gotStart = true
@@ -308,6 +312,55 @@ func doneUpdatePlatformScraper(id, name string) platforms.Scraper {
 			return nil
 		},
 	}
+}
+
+func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing.T) {
+	ClearScrapingStatus()
+	statusInstance.clear()
+	t.Cleanup(ClearScrapingStatus)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "test-scraper"}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": {
+			ID:   "test-scraper",
+			Name: "Test Scraper",
+			Scrape: func(
+				_ context.Context, _ *config.Instance, _ platforms.Platform,
+				_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+				_ platforms.ScraperCustomOptions, _ chan<- scraper.ScrapeUpdate,
+			) error {
+				return errors.New("boom")
+			},
+		},
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
+	}
+
+	_, err := HandleMediaScrape(env)
+	require.Error(t, err)
+
+	first := <-ns
+	require.Equal(t, models.NotificationMediaScraping, first.Method)
+	var payload models.ScrapingStatusResponse
+	require.NoError(t, json.Unmarshal(first.Params, &payload))
+	assert.True(t, payload.Scraping)
+	require.NotNil(t, payload.CurrentStepDisplay)
+	assert.Equal(t, preparingMediaScrapeDisplay, *payload.CurrentStepDisplay)
+	mockDB.AssertExpectations(t)
 }
 
 // TestHandleMediaScrape_WipesThumbCacheOnCompletion verifies that finishing a

@@ -100,8 +100,8 @@ func expectWALCheckpointStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "wal_checkpoint").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("(?i)PRAGMA wal_checkpoint").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("(?i)^PRAGMA wal_checkpoint\\(TRUNCATE\\);?$").
+		WillReturnRows(sqlmock.NewRows([]string{"busy", "log", "checkpointed"}).AddRow(0, 0, 0))
 }
 
 // expectOptimizationResumeRead mocks the read of the persisted optimization step

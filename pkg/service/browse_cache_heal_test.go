@@ -51,7 +51,11 @@ func runBrowseCacheHealOptimizingCycle(t *testing.T, populateErr error) {
 	mockDB.On("BackgroundOperationDone").Return()
 
 	attempted := make(chan struct{}, 1)
+	optimizingDuringRebuild := false
 	mockDB.On("PopulateBrowseCache", mock.Anything).Return(populateErr).Run(func(_ mock.Arguments) {
+		// IsOptimizing must already report true while the rebuild runs so a client
+		// polling the media status mid-rebuild sees the optimizing indicator.
+		optimizingDuringRebuild = mockDB.IsOptimizing()
 		attempted <- struct{}{}
 	})
 
@@ -81,6 +85,15 @@ func runBrowseCacheHealOptimizingCycle(t *testing.T, populateErr error) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("expected optimizing start+clear notifications (start=%v clear=%v)", sawOptimizing, sawCleared)
 		}
+	}
+
+	if !optimizingDuringRebuild {
+		t.Error("expected IsOptimizing() to report true while the rebuild was running")
+	}
+	// The clear notification is emitted after the flag is reset, so once we have seen
+	// it IsOptimizing() must be back to false.
+	if mockDB.IsOptimizing() {
+		t.Error("expected IsOptimizing() to be cleared after the rebuild finished")
 	}
 }
 

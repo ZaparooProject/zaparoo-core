@@ -335,10 +335,21 @@ func runMediaDBStartupMaintenance(
 		return
 	}
 
+	indexingStatus, indexingStatusErr := db.GetIndexingStatus()
+	if indexingStatusErr != nil {
+		log.Warn().Err(indexingStatusErr).Msg("failed to check indexing status before tag cache warmup")
+	}
+	interruptedIndexing := indexingStatusErr == nil &&
+		(indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending)
+
 	// Only rebuild the tag cache if LoadCachedTagCache didn't populate it
 	// from disk. Skipping the rebuild on a warm boot is the whole point of
-	// persisting the cache.
-	if !tagCacheLoaded {
+	// persisting the cache. Also skip when an interrupted index is waiting to
+	// resume; routine cache work must not delay visible media-update progress.
+	if interruptedIndexing {
+		log.Debug().Str("status", indexingStatus).Msg("skipping startup media maintenance before index resume")
+		return
+	} else if !tagCacheLoaded {
 		if err := db.RebuildTagCache(); err != nil {
 			log.Warn().Err(err).Msg("failed to warm tag cache on startup")
 		} else if persistErr := db.PersistTagCache(); persistErr != nil {
@@ -362,7 +373,7 @@ func runMediaDBStartupMaintenance(
 		return
 	}
 
-	indexingStatus, err := db.GetIndexingStatus()
+	indexingStatus, err = db.GetIndexingStatus()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to check indexing status before temporary media repair jobs")
 		return

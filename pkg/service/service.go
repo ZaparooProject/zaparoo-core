@@ -386,8 +386,8 @@ func Start(
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-			checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-			if checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+			indexResumeStarted := checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+			if !indexResumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
 				// A failed optimization revealed a corrupt database; rebuild it now
 				// rather than waiting for the next startup.
 				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)

@@ -589,7 +589,8 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	started := checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	assert.False(t, started)
 
 	mockMediaDB.AssertExpectations(t)
 
@@ -630,7 +631,8 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	started := checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
+	assert.True(t, started)
 
 	// Wait for async operation to start and complete
 	// With minimal system list (just NES), this should complete quickly
@@ -1090,7 +1092,7 @@ func TestRunMediaDBStartupMaintenance_PassesPauserToTemporaryRepairOptimization(
 	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
 	mockMediaDB.On("PersistTagCache").Return(nil).Once()
 	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
-	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Once()
 	mockMediaDB.On("BackgroundOperationDone").Once()
@@ -1113,6 +1115,22 @@ func TestRunMediaDBStartupMaintenance_SkipsRebuildWhenCachePersisted(t *testing.
 
 	mockMediaDB.AssertExpectations(t)
 	mockMediaDB.AssertNotCalled(t, "RebuildTagCache")
+}
+
+func TestRunMediaDBStartupMaintenance_SkipsMaintenanceBeforeIndexResume(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	ctx := context.Background()
+	mockMediaDB.On("TrackBackgroundOperation").Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Once()
+
+	runMediaDBStartupMaintenance(ctx, mockMediaDB, nil, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RebuildTagCache")
+	mockMediaDB.AssertNotCalled(t, "TemporaryRepairJobsPending", mock.Anything)
 }
 
 func TestStartPublishers_DisabledPublisher(t *testing.T) {

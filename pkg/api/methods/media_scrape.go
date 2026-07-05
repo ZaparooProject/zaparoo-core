@@ -463,6 +463,17 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		return nil, err
 	}
 
+	ns := env.State.Notifications
+	db := env.Database
+	preparingStatus := models.ScrapingStatusResponse{
+		ScraperID:          params.ScraperID,
+		State:              scrapeStateRunning,
+		Scraping:           true,
+		Force:              params.Force,
+		CurrentStepDisplay: ptrIfNotEmpty(preparingMediaScrapeDisplay),
+	}
+	publishScrapingStatus(ns, &preparingStatus)
+
 	if params.Force && runID == "" {
 		runID = uuid.NewString()
 	}
@@ -474,10 +485,22 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 	}
 	if err := env.Database.MediaDB.SetScrapingOperation(operation); err != nil {
 		scrapingStatusInstance.clearIfOwner(params.ScraperID)
+		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			ScraperID: params.ScraperID,
+			State:     scrapeStateFailed,
+			Force:     params.Force,
+			Error:     "failed to start media scrape",
+		})
 		return nil, fmt.Errorf("failed to persist scraping operation: %w", err)
 	}
 	if err := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusRunning); err != nil {
 		scrapingStatusInstance.clearIfOwner(params.ScraperID)
+		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			ScraperID: params.ScraperID,
+			State:     scrapeStateFailed,
+			Force:     params.Force,
+			Error:     "failed to start media scrape",
+		})
 		return nil, fmt.Errorf("failed to persist scraping status: %w", err)
 	}
 
@@ -498,11 +521,14 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		if statusErr := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); statusErr != nil {
 			log.Warn().Err(statusErr).Msg("failed to persist scraping failure status")
 		}
+		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			ScraperID: params.ScraperID,
+			State:     scrapeStateFailed,
+			Force:     params.Force,
+			Error:     "failed to start media scrape",
+		})
 		return nil, fmt.Errorf("failed to start scraper: %w", err)
 	}
-
-	ns := env.State.Notifications
-	db := env.Database
 
 	initialState := scrapeStateRunning
 	if paused {

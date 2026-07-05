@@ -41,6 +41,8 @@ const (
 	DBConfigLastIndexedSystem               = "LastIndexedSystem"
 	DBConfigIndexingSystems                 = "IndexingSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
+	DBConfigMediaTotalCount                 = "MediaTotalCount"
+	DBConfigMediaMissingCount               = "MediaMissingCount"
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
 	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
@@ -68,6 +70,31 @@ func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to set last generated timestamp: %w", err)
+	}
+	return nil
+}
+
+func sqlRefreshMediaCounts(ctx context.Context, db sqlQueryable) error {
+	var total, missing int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN IsMissing != 0 THEN 1 ELSE 0 END), 0)
+		FROM Media`,
+	).Scan(&total, &missing); err != nil {
+		return fmt.Errorf("failed to count media rows: %w", err)
+	}
+	for _, count := range []struct {
+		name  string
+		value int
+	}{
+		{name: DBConfigMediaTotalCount, value: total},
+		{name: DBConfigMediaMissingCount, value: missing},
+	} {
+		if _, err := db.ExecContext(ctx,
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+			count.name, strconv.Itoa(count.value),
+		); err != nil {
+			return fmt.Errorf("failed to set %s: %w", count.name, err)
+		}
 	}
 	return nil
 }
