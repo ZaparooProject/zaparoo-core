@@ -23,7 +23,6 @@ package bgpriority
 
 import (
 	"runtime"
-	"unsafe"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
@@ -35,14 +34,14 @@ const (
 	ioprioClassShift = 13
 	ioprioWhoProcess = 1
 
-	// SCHED_IDLE policy from linux/sched.h.
-	schedIdle = 5
-
 	niceLowest = 19
 )
 
-type schedParam struct {
-	priority int32
+// ioprioIdleValue packs IOPRIO_CLASS_IDLE into the IOPRIO_PRIO_VALUE(class,
+// data) layout expected by ioprio_set, per linux/ioprio.h. Data is left at 0:
+// IOPRIO_CLASS_IDLE has no priority levels within the class.
+func ioprioIdleValue() uintptr {
+	return uintptr(ioprioClassIdle << ioprioClassShift)
 }
 
 // Apply locks the calling goroutine to its OS thread and drops that thread
@@ -64,17 +63,13 @@ func Apply() {
 		log.Warn().Err(err).Msg("bgpriority: failed to set nice level")
 	}
 
-	param := schedParam{}
-	//nolint:gosec // sched_setscheduler requires a raw pointer argument
-	if _, _, errno := unix.Syscall(
-		unix.SYS_SCHED_SETSCHEDULER, 0, schedIdle, uintptr(unsafe.Pointer(&param)),
-	); errno != 0 {
-		log.Warn().Err(errno).Msg("bgpriority: failed to set SCHED_IDLE")
+	// pid 0 means the calling thread, matching the tid we just locked to.
+	if err := unix.SchedSetAttr(0, &unix.SchedAttr{Policy: unix.SCHED_IDLE}, 0); err != nil {
+		log.Warn().Err(err).Msg("bgpriority: failed to set SCHED_IDLE")
 	}
 
-	ioprio := uintptr(ioprioClassIdle << ioprioClassShift)
 	if _, _, errno := unix.Syscall(
-		unix.SYS_IOPRIO_SET, ioprioWhoProcess, uintptr(tid), ioprio,
+		unix.SYS_IOPRIO_SET, ioprioWhoProcess, uintptr(tid), ioprioIdleValue(),
 	); errno != 0 {
 		log.Warn().Err(errno).Msg("bgpriority: failed to set idle io priority")
 	}

@@ -337,20 +337,36 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, err
 	}
 
-	// Refresh canonical names on existing titles when the scan derives a
-	// different one (filename cleanup, parser changes).
+	// Refresh canonical names and secondary slugs on existing titles when the
+	// scan derives different ones (filename cleanup, parser changes). Triggers
+	// on either column changing, since SearchMediaBySecondarySlug would
+	// otherwise keep matching against a stale secondary slug for rows that
+	// only get here via the Name branch.
 	stats.TitlesRenamed, err = scanReconcileExec(ctx, db, systemID, "rename titles", `
-		UPDATE MediaTitles SET Name = (
-			SELECT s.TitleName FROM ScanStage s
-			WHERE s.Slug = MediaTitles.Slug
-			  AND s.Path = (SELECT MIN(s2.Path) FROM ScanStage s2 WHERE s2.Slug = MediaTitles.Slug)
-		)
+		UPDATE MediaTitles SET
+			Name = (
+				SELECT s.TitleName FROM ScanStage s
+				WHERE s.Slug = MediaTitles.Slug
+				  AND s.Path = (SELECT MIN(s2.Path) FROM ScanStage s2 WHERE s2.Slug = MediaTitles.Slug)
+			),
+			SecondarySlug = (
+				SELECT NULLIF(s.SecondarySlug, '') FROM ScanStage s
+				WHERE s.Slug = MediaTitles.Slug
+				  AND s.Path = (SELECT MIN(s2.Path) FROM ScanStage s2 WHERE s2.Slug = MediaTitles.Slug)
+			)
 		WHERE SystemDBID = ?
 		  AND Slug IN (SELECT Slug FROM ScanStage)
-		  AND Name <> (
-			SELECT s.TitleName FROM ScanStage s
-			WHERE s.Slug = MediaTitles.Slug
-			  AND s.Path = (SELECT MIN(s2.Path) FROM ScanStage s2 WHERE s2.Slug = MediaTitles.Slug)
+		  AND (
+			Name <> (
+				SELECT s.TitleName FROM ScanStage s
+				WHERE s.Slug = MediaTitles.Slug
+				  AND s.Path = (SELECT MIN(s2.Path) FROM ScanStage s2 WHERE s2.Slug = MediaTitles.Slug)
+			)
+			OR SecondarySlug IS NOT (
+				SELECT NULLIF(s.SecondarySlug, '') FROM ScanStage s
+				WHERE s.Slug = MediaTitles.Slug
+				  AND s.Path = (SELECT MIN(s2.Path) FROM ScanStage s2 WHERE s2.Slug = MediaTitles.Slug)
+			)
 		  )`, systemDBID)
 	if err != nil {
 		return stats, err
@@ -534,29 +550,39 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, err
 	}
 
-	readTouchedStart := time.Now()
-	touched, err := sqlReadScanTouchedTitles(ctx, db)
-	readTouchedElapsed := time.Since(readTouchedStart)
+	countTouchedStart := time.Now()
+	touchedCount, err := sqlCountScanTouchedTitles(ctx, db)
+	countTouchedElapsed := time.Since(countTouchedStart)
 	if err != nil {
 		return stats, err
 	}
-	stats.TouchedTitles = int64(len(touched))
+	stats.TouchedTitles = touchedCount
 	log.Debug().
 		Str("system", systemID).
-		Int("titleCount", len(touched)).
-		Dur("elapsed", readTouchedElapsed).
-		Msg("scan reconcile touched titles loaded")
-	if len(touched) > 0 {
+		Int64("titleCount", touchedCount).
+		Dur("elapsed", countTouchedElapsed).
+		Msg("scan reconcile touched titles counted")
+	if touchedCount > 0 {
 		if err = ctx.Err(); err != nil {
 			return stats, fmt.Errorf("scan reconcile cancelled before disambiguation recompute: %w", err)
 		}
 		disambiguationStart := time.Now()
 		recomputeScope := "titles"
-		if len(touched) > scanSystemDisambiguationThreshold {
+		if touchedCount > scanSystemDisambiguationThreshold {
 			recomputeScope = "system"
 			err = sqlRecomputeDisambiguationForSystems(ctx, db, []int64{systemDBID})
 		} else {
-			err = sqlRecomputeTitleDisambiguation(ctx, db, touched)
+			// Only the title-scoped path needs the actual IDs; the system-wide
+			// path above recomputes by systemDBID and never touches this slice.
+			// With scanSystemDisambiguationThreshold this small, large scans
+			// almost always take the system-wide branch, so deferring this
+			// load until here avoids allocating every touched title ID for
+			// scans that never use them.
+			var touched []int64
+			touched, err = sqlReadScanTouchedTitles(ctx, db)
+			if err == nil {
+				err = sqlRecomputeTitleDisambiguation(ctx, db, touched)
+			}
 		}
 		if err != nil {
 			return stats, fmt.Errorf("scan reconcile disambiguation recompute failed: %w", err)
@@ -568,7 +594,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		}
 		logEvent.Str("system", systemID).
 			Str("scope", recomputeScope).
-			Int("titleCount", len(touched)).
+			Int64("titleCount", touchedCount).
 			Dur("elapsed", disambiguationElapsed).
 			Msg("scan reconcile disambiguation recompute completed")
 	}
@@ -577,6 +603,18 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, clearErr
 	}
 	return stats, nil
+}
+
+// sqlCountScanTouchedTitles returns the number of titles touched by the
+// current reconcile without loading their IDs, so the disambiguation-scope
+// decision (title-scoped vs system-wide) doesn't require allocating a slice
+// that the system-wide path never uses.
+func sqlCountScanTouchedTitles(ctx context.Context, db sqlQueryable) (int64, error) {
+	var count int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM ScanTouchedTitles").Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to count touched titles: %w", err)
+	}
+	return count, nil
 }
 
 func sqlReadScanTouchedTitles(ctx context.Context, db sqlQueryable) ([]int64, error) {

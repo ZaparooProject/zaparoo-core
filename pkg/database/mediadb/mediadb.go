@@ -65,6 +65,10 @@ var ErrOptimizationInProgress = errors.New("background optimisation is in progre
 // transaction is currently open.
 var ErrTransactionActive = errors.New("a transaction is currently active")
 
+// ErrTransactionRequired is returned by ReconcileStagedSystem when called
+// outside the scanner's open batch transaction.
+var ErrTransactionRequired = errors.New("reconciling staged media requires an open transaction")
+
 // Indexing status constants
 const (
 	IndexingStatusRunning   = "running"
@@ -1174,8 +1178,11 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	}
 
 	// Guard: refuse to run while background optimisation is active, since it
-	// may be building indexes over the same tables.
-	if db.isOptimizing.Load() {
+	// may be building indexes over the same tables. Uses the unified signal so
+	// a standalone browse-cache rebuild also blocks cleanup — otherwise cleanup
+	// could delete orphans mid-rebuild and leave the freshly rebuilt browse rows
+	// stale.
+	if db.IsOptimizing() {
 		return 0, ErrOptimizationInProgress
 	}
 
@@ -1457,6 +1464,9 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 func (db *MediaDB) ReconcileStagedSystem(
 	ctx context.Context, systemID string, opts database.ScanReconcileOpts,
 ) (database.ScanReconcileStats, error) {
+	if db.tx == nil || !db.inTransaction {
+		return database.ScanReconcileStats{}, ErrTransactionRequired
+	}
 	if err := db.FlushBatchInserters(); err != nil {
 		return database.ScanReconcileStats{}, fmt.Errorf(
 			"failed to flush batch inserters before reconciling %s: %w", systemID, err)
@@ -3097,9 +3107,14 @@ func (db *MediaDB) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 		return ErrNullSQL
 	}
 
-	err := sqlDeleteMediaTag(db.ctx, db.sql.Load(), mediaDBID, tagDBID)
-	if err == nil && !db.inTransaction {
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+	err := sqlDeleteMediaTag(db.ctx, db.conn(), mediaDBID, tagDBID)
+	if err == nil {
+		if db.inTransaction {
+			db.markBrowseCacheDirty()
+			db.markUtilityTagCacheDirty()
+		} else {
+			db.invalidateCaches(invalidationScope{AllSystems: true})
+		}
 	}
 
 	return err

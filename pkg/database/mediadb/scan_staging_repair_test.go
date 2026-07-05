@@ -51,19 +51,24 @@ func TestFlagMissingMedia_ChunksLargeMissingSet(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
+	romsRoot := filepath.Join(t.TempDir(), "roms")
+	c64Root := filepath.Join(romsRoot, "c64")
+	keepPath := filepath.Join(c64Root, "keep.d64")
+	otherPath := filepath.Join(romsRoot, "other", "other.d64")
+
 	for i := range scanFlagMissingBatchSize + 1 {
 		_, err = sqlDB.ExecContext(ctx,
 			"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, ?, 0)",
-			fmt.Sprintf("/old/%05d.d64", i))
+			filepath.Join(c64Root, "old", fmt.Sprintf("%05d.d64", i)))
 		require.NoError(t, err)
 	}
 	_, err = sqlDB.ExecContext(ctx,
-		"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, '/keep.d64', 0)")
+		"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, ?, 0)", keepPath)
 	require.NoError(t, err)
 	_, err = sqlDB.ExecContext(ctx,
-		"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 2, '/other.d64', 0)")
+		"INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 2, ?, 0)", otherPath)
 	require.NoError(t, err)
-	_, err = sqlDB.ExecContext(ctx, "INSERT INTO ScanStage (Path) VALUES ('/keep.d64')")
+	_, err = sqlDB.ExecContext(ctx, "INSERT INTO ScanStage (Path) VALUES (?)", keepPath)
 	require.NoError(t, err)
 
 	affected, err := sqlFlagMissingMedia(ctx, sqlDB, "C64", 1)

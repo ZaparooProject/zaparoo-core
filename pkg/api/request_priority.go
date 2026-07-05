@@ -103,6 +103,9 @@ func isMediaDBTransactionAPIMethod(method string) bool {
 // only enqueue a token, stop only signals the platform launcher, and
 // media.control only drives launcher controls (its script path is validated
 // to disallow media-launching commands, so it never queries MediaDB either).
+// TestIsControlAllowed_BlocksMediaDBReadingCommands in pkg/zapscript guards
+// this invariant — it fails if a future MediaDB-reading command is ever added
+// without being rejected by isControlAllowed.
 func isMediaDBFreeInstantMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodRun) ||
 		strings.EqualFold(method, models.MethodLaunch) ||
