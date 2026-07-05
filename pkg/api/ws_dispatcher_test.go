@@ -348,15 +348,31 @@ func TestLockMediaDBForAPIMethod(t *testing.T) {
 			unlock := lockMediaDBForAPIMethod(tt.method)
 			// If the method took no lock, wsMediaDBMu must still be exclusively
 			// lockable right now; if it took a lock (Lock or RLock), a TryLock
-			// must fail until unlock() runs.
-			gotLocked := !wsMediaDBMu.TryLock()
-			if !gotLocked {
-				wsMediaDBMu.Unlock()
-			}
+			// must fail until unlock() runs. Probed from a separate goroutine:
+			// the deadlock-tagged build (pkg/helpers/syncutil) tracks lock
+			// holders per goroutine and flags a same-goroutine TryLock as
+			// recursive locking even though TryLock never blocks, which trips
+			// its default potential-deadlock handler (os.Exit(2)).
+			gotLocked := !tryLockWsMediaDBMu()
 			assert.Equal(t, tt.wantLocked, gotLocked, "method %q", tt.method)
 			unlock()
 		})
 	}
+}
+
+// tryLockWsMediaDBMu probes wsMediaDBMu from a dedicated goroutine so the
+// deadlock-tagged build's per-goroutine lock tracking doesn't see it as the
+// same goroutine relocking. Unlocks before returning if the lock was acquired.
+func tryLockWsMediaDBMu() bool {
+	result := make(chan bool, 1)
+	go func() {
+		locked := wsMediaDBMu.TryLock()
+		if locked {
+			wsMediaDBMu.Unlock()
+		}
+		result <- locked
+	}()
+	return <-result
 }
 
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
