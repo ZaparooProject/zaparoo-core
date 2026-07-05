@@ -435,15 +435,16 @@ func startMediaDBGeneration(
 	// previous optimization was interrupted before this boot; don't let that stale
 	// state block resuming an interrupted index.
 	optimizationStatus, err := db.MediaDB.GetOptimizationStatus()
-	if err != nil {
+	switch {
+	case err != nil:
 		statusInstance.clear()
 		notifyMediaIndexingStopped(ns)
 		return fmt.Errorf("failed to get optimization status during indexing check: %w", err)
-	} else if db.MediaDB.IsOptimizing() {
+	case db.MediaDB.IsOptimizing():
 		statusInstance.clear()
 		notifyMediaIndexingStopped(ns)
 		return models.ClientErrf("database optimization in progress")
-	} else if optimizationStatus == mediadb.IndexingStatusRunning {
+	case optimizationStatus == mediadb.IndexingStatusRunning:
 		log.Info().Msg("persisted optimization was interrupted; allowing media indexing to start")
 	}
 
@@ -1093,11 +1094,12 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		resp.Database.Paused = paused
 		// If optimizing, show the current optimization step
 		optimizationStep, stepErr := env.Database.MediaDB.GetOptimizationStep()
-		if stepErr != nil {
+		switch {
+		case stepErr != nil:
 			log.Warn().Err(stepErr).Msg("failed to get optimization step")
-		} else if optimizationStep != "" {
+		case optimizationStep != "":
 			resp.Database.CurrentStepDisplay = &optimizationStep
-		} else if optimizationStatus == mediadb.IndexingStatusPending {
+		case optimizationStatus == mediadb.IndexingStatusPending:
 			resp.Database.CurrentStepDisplay = ptrString(preparingDatabaseOptimizationDisplay)
 		}
 
