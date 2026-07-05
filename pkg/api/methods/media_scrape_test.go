@@ -360,6 +360,17 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 	assert.True(t, payload.Scraping)
 	require.NotNil(t, payload.CurrentStepDisplay)
 	assert.Equal(t, preparingMediaScrapeDisplay, *payload.CurrentStepDisplay)
+
+	second := <-ns
+	require.Equal(t, models.NotificationMediaScraping, second.Method)
+	var failedPayload models.ScrapingStatusResponse
+	require.NoError(t, json.Unmarshal(second.Params, &failedPayload))
+	assert.Equal(t, "test-scraper", failedPayload.ScraperID)
+	assert.Equal(t, scrapeStateFailed, failedPayload.State)
+	assert.False(t, failedPayload.Scraping)
+	assert.True(t, failedPayload.Done)
+	assert.False(t, failedPayload.Paused)
+	assert.Equal(t, "failed to start media scrape", failedPayload.Error)
 	mockDB.AssertExpectations(t)
 }
 

@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -279,7 +280,18 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 	// Chunk IDs so bound parameters stay under SQLite's limit; leave room for the
 	// type params the set statement appends.
 	chunkSize := sqliteMaxParams - len(database.ZapScriptTagTypes)
+	chunkCount := (len(ids) + chunkSize - 1) / chunkSize
+	log.Debug().
+		Str("filter", filterCol).
+		Int("idCount", len(ids)).
+		Int("chunkSize", chunkSize).
+		Int("chunkCount", chunkCount).
+		Msg("starting disambiguation recompute")
 	for start := 0; start < len(ids); start += chunkSize {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("disambiguation recompute cancelled: %w", err)
+		}
+		chunkStart := time.Now()
 		end := start + chunkSize
 		if end > len(ids) {
 			end = len(ids)
@@ -303,10 +315,10 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 		// The IS NOT guard skips rows already holding the computed value.
 		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
 		setQuery := fmt.Sprintf(`
-			WITH scope AS (
+			WITH scope AS MATERIALIZED (
 				SELECT DBID AS tid FROM MediaTitles WHERE %s IN (%s)
 			),
-			tot AS (
+			tot AS MATERIALIZED (
 				SELECT m.MediaTitleDBID AS tid, COUNT(*) AS tm
 				FROM Media m
 				JOIN scope ON scope.tid = m.MediaTitleDBID
@@ -314,7 +326,7 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				GROUP BY m.MediaTitleDBID
 				HAVING COUNT(*) > 1
 			),
-			mvs AS (
+			mvs AS MATERIALIZED (
 				SELECT tid, typ, mid, group_concat(tag ORDER BY tag) AS vs
 				FROM (
 					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag
@@ -327,21 +339,21 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				)
 				GROUP BY tid, typ, mid
 			),
-			agg AS (
+			agg AS MATERIALIZED (
 				SELECT tid, typ, COUNT(DISTINCT vs) AS dv, COUNT(*) AS mtc
 				FROM mvs GROUP BY tid, typ
 			),
-			qual AS (
+			qual AS MATERIALIZED (
 				SELECT agg.tid AS tid, agg.typ AS typ
 				FROM agg JOIN tot ON tot.tid = agg.tid
 				WHERE agg.dv > 1 OR agg.mtc < tot.tm
 			),
-			grp AS (
+			grp AS MATERIALIZED (
 				SELECT tid, group_concat(typ, ',' ORDER BY typ) AS types
 				FROM qual
 				GROUP BY tid
 			),
-			result AS (
+			result AS MATERIALIZED (
 				SELECT scope.tid AS tid, COALESCE(grp.types, '') AS types
 				FROM scope LEFT JOIN grp ON grp.tid = scope.tid
 			)
@@ -354,9 +366,27 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs))
 		setArgs = append(setArgs, chunkArgs...)
 		setArgs = append(setArgs, typeArgs...)
-		if _, err := db.ExecContext(ctx, setQuery, setArgs...); err != nil {
+		res, err := db.ExecContext(ctx, setQuery, setArgs...)
+		if err != nil {
 			return fmt.Errorf("failed to recompute disambiguation: %w", err)
 		}
+		rowsAffected, rowsErr := res.RowsAffected()
+		if rowsErr != nil {
+			log.Debug().Err(rowsErr).Msg("failed to read disambiguation recompute affected rows")
+		}
+		elapsed := time.Since(chunkStart)
+		logEvent := log.Debug()
+		if elapsed > 5*time.Second {
+			logEvent = log.Warn()
+		}
+		logEvent.
+			Str("filter", filterCol).
+			Int("chunk", start/chunkSize+1).
+			Int("chunkCount", chunkCount).
+			Int("idCount", len(chunk)).
+			Int64("rowsAffected", rowsAffected).
+			Dur("elapsed", elapsed).
+			Msg("disambiguation recompute chunk completed")
 	}
 	return nil
 }

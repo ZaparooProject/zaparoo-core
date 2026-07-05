@@ -281,7 +281,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "disc metadata stripped",
 			systemID:            "PS1",
-			path:                "/roms/ps1/Final Fantasy VII (USA) (Disc 1).bin",
+			path:                filepath.Join("roms", "ps1", "Final Fantasy VII (USA) (Disc 1).bin"),
 			stripLeadingNumbers: false,
 			expectedTitle:       "Final Fantasy VII",
 			expectedSlug:        "finalfantasy7",
@@ -289,7 +289,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "trailing article format - preserved in title, stripped from slug",
 			systemID:            "NES",
-			path:                "/roms/nes/Legend of Zelda, The (USA).nes",
+			path:                filepath.Join("roms", "nes", "Legend of Zelda, The (USA).nes"),
 			stripLeadingNumbers: false,
 			expectedTitle:       "Legend of Zelda, The",
 			expectedSlug:        "legendofzelda",
@@ -297,7 +297,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "subtitle with colon",
 			systemID:            "NES",
-			path:                "/roms/nes/Zelda: Link's Awakening (USA).nes",
+			path:                filepath.Join("roms", "nes", "Zelda: Link's Awakening (USA).nes"),
 			stripLeadingNumbers: false,
 			expectedTitle:       "Zelda: Link's Awakening",
 			expectedSlug:        "zeldalinksawakening",
@@ -305,7 +305,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "subtitle with dash - preserved as-is",
 			systemID:            "NES",
-			path:                "/roms/nes/Zelda - Link's Awakening (USA).nes",
+			path:                filepath.Join("roms", "nes", "Zelda - Link's Awakening (USA).nes"),
 			stripLeadingNumbers: false,
 			expectedTitle:       "Zelda - Link's Awakening",
 			expectedSlug:        "zeldalinksawakening",
@@ -313,7 +313,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "multiple digit prefix stripped",
 			systemID:            "NES",
-			path:                "/roms/nes/123. Game Title (USA).nes",
+			path:                filepath.Join("roms", "nes", "123. Game Title (USA).nes"),
 			stripLeadingNumbers: true,
 			expectedTitle:       "Game Title",
 			expectedSlug:        "gametitle",
@@ -321,7 +321,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "zero-padded number stripped",
 			systemID:            "SNES",
-			path:                "/roms/snes/003 - Chrono Trigger (USA).snes",
+			path:                filepath.Join("roms", "snes", "003 - Chrono Trigger (USA).snes"),
 			stripLeadingNumbers: true,
 			expectedTitle:       "Chrono Trigger",
 			expectedSlug:        "chronotrigger",
@@ -342,7 +342,12 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
 			require.NoError(t, mediaDB.BeginTransaction(true))
 			require.NoError(t, mediaDB.ClearScanStage())
-			require.NoError(t, StageMediaPath(mediaDB, tt.systemID, tt.path, "", false, policy, nil, ""))
+			require.NoError(t, StageMediaPath(&StageMediaPathParams{
+				DB:           mediaDB,
+				SystemID:     tt.systemID,
+				Path:         tt.path,
+				PrefixPolicy: policy,
+			}))
 			_, err := mediaDB.ReconcileStagedSystem(ctx, tt.systemID, database.ScanReconcileOpts{})
 			require.NoError(t, err)
 			require.NoError(t, mediaDB.CommitTransaction())

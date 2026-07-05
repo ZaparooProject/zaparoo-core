@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
@@ -35,14 +36,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// watchGameForIndexPause subscribes to the notification broker and pauses the
-// given Pauser when a game starts (media.started), resuming it when the game
-// stops (media.stopped). This keeps resource-intensive media indexing from
-// interfering with game performance.
+// watchGameForIndexPause subscribes to the notification broker and throttles
+// (or, per config, pauses) the given Pauser when a game starts
+// (media.started), resuming it when the game stops (media.stopped). This
+// keeps resource-intensive media indexing from interfering with game
+// performance while still making progress by default.
 func watchGameForIndexPause(
 	ctx context.Context,
 	b *broker.Broker,
 	st *state.State,
+	cfg *config.Instance,
 	ns chan<- models.Notification,
 	pauser *syncutil.Pauser,
 ) {
@@ -50,7 +53,10 @@ func watchGameForIndexPause(
 	defer b.Unsubscribe(subID)
 
 	primaryActive := func() bool { return activeMediaPausesMediaWork(st.ActiveMedia()) }
-	handleIndexPauseNotifications(ctx, notifChan, ns, pauser, primaryActive(), methods.IsIndexing, primaryActive)
+	resolvePolicy := func() config.MediaPausePolicy { return cfg.ResolveMediaPausePolicy(activeSystemID(st)) }
+	handleIndexPauseNotifications(
+		ctx, notifChan, ns, pauser, primaryActive(), methods.IsIndexing, resolvePolicy, primaryActive,
+	)
 }
 
 // watchGameForScrapePause mirrors media indexing pause behavior for metadata
@@ -59,6 +65,7 @@ func watchGameForScrapePause(
 	ctx context.Context,
 	b *broker.Broker,
 	st *state.State,
+	cfg *config.Instance,
 	ns chan<- models.Notification,
 	pauser *syncutil.Pauser,
 ) {
@@ -66,9 +73,21 @@ func watchGameForScrapePause(
 	defer b.Unsubscribe(subID)
 
 	primaryActive := func() bool { return activeMediaPausesMediaWork(st.ActiveMedia()) }
+	resolvePolicy := func() config.MediaPausePolicy { return cfg.ResolveMediaPausePolicy(activeSystemID(st)) }
 	handleScrapePauseNotifications(
-		ctx, notifChan, ns, pauser, primaryActive(), methods.IsScrapingRunning, primaryActive,
+		ctx, notifChan, ns, pauser, primaryActive(), methods.IsScrapingRunning, resolvePolicy, primaryActive,
 	)
+}
+
+// activeSystemID returns the SystemID of the currently active media, or an
+// empty string if there is none. An empty SystemID resolves to a
+// non-streaming (Light throttle) policy.
+func activeSystemID(st *state.State) string {
+	media := st.ActiveMedia()
+	if media == nil {
+		return ""
+	}
+	return media.SystemID
 }
 
 // handleIndexPauseNotifications is the core loop that pauses/resumes the
@@ -85,13 +104,14 @@ func handleIndexPauseNotifications(
 	pauser *syncutil.Pauser,
 	gameAlreadyActive bool,
 	isActive func() bool,
+	resolvePolicy func() config.MediaPausePolicy,
 	primaryActive ...func() bool,
 ) {
 	handleMediaPauseNotifications(
 		ctx, notifChan, pauser, gameAlreadyActive, isActive, "media indexing",
-		func(paused bool) {
-			sendIndexPauseNotification(ns, paused)
-		}, primaryActive...,
+		func(paused, throttled bool) {
+			sendIndexPauseNotification(ns, paused, throttled)
+		}, resolvePolicy, primaryActive...,
 	)
 }
 
@@ -102,13 +122,14 @@ func handleScrapePauseNotifications(
 	pauser *syncutil.Pauser,
 	gameAlreadyActive bool,
 	isActive func() bool,
+	resolvePolicy func() config.MediaPausePolicy,
 	primaryActive ...func() bool,
 ) {
 	handleMediaPauseNotifications(
 		ctx, notifChan, pauser, gameAlreadyActive, isActive, "media scraping",
-		func(paused bool) {
-			sendScrapePauseNotification(ns, paused)
-		}, primaryActive...,
+		func(paused, throttled bool) {
+			sendScrapePauseNotification(ns, paused, throttled)
+		}, resolvePolicy, primaryActive...,
 	)
 }
 
@@ -174,17 +195,35 @@ func handleMediaPauseNotifications(
 	gameAlreadyActive bool,
 	isActive func() bool,
 	label string,
-	sendPauseNotification func(bool),
+	sendRestrictNotification func(paused, throttled bool),
+	resolvePolicy func() config.MediaPausePolicy,
 	primaryActive ...func() bool,
 ) {
 	defer pauser.Resume()
 
-	if gameAlreadyActive {
-		pauser.Pause()
-		log.Info().Msg(label + " paused: game already active")
-		if isActive() {
-			sendPauseNotification(true)
+	// restrict slows or stops background work per the configured policy. The
+	// policy is resolved at event time (against the active media's SystemID)
+	// so a settings change or system switch applies to the next game start
+	// without a restart.
+	restrict := func(reason string) {
+		policy := config.MediaPausePolicy{Mode: config.IndexDuringMediaThrottle, Level: syncutil.ThrottleLight}
+		if resolvePolicy != nil {
+			policy = resolvePolicy()
 		}
+		if policy.Mode == config.IndexDuringMediaPause {
+			pauser.Pause()
+			log.Info().Msg(label + " paused: " + reason)
+		} else {
+			pauser.Throttle(policy.Level)
+			log.Info().Msg(label + " throttled: " + reason)
+		}
+		if isActive() {
+			sendRestrictNotification(pauser.IsPaused(), pauser.IsThrottled())
+		}
+	}
+
+	if gameAlreadyActive {
+		restrict("game already active")
 	}
 
 	for {
@@ -198,19 +237,16 @@ func handleMediaPauseNotifications(
 				if !shouldPauseForMediaStarted(notif, primaryActive...) {
 					continue
 				}
-				pauser.Pause()
-				log.Info().Msg(label + " paused: game started")
-				if isActive() {
-					sendPauseNotification(true)
-				}
+				restrict("game started")
 			case models.NotificationStopped:
-				if !shouldResumeForMediaStopped(notif, primaryActive...) || !pauser.IsPaused() {
+				if !shouldResumeForMediaStopped(notif, primaryActive...) ||
+					(!pauser.IsPaused() && !pauser.IsThrottled()) {
 					continue
 				}
 				pauser.Resume()
 				log.Info().Msg(label + " resumed: game stopped")
 				if isActive() {
-					sendPauseNotification(false)
+					sendRestrictNotification(false, false)
 				}
 			}
 		case <-ctx.Done():
@@ -222,16 +258,19 @@ func handleMediaPauseNotifications(
 func sendIndexPauseNotification(
 	ns chan<- models.Notification,
 	paused bool,
+	throttled bool,
 ) {
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-		Indexing: true,
-		Paused:   paused,
+		Indexing:  true,
+		Paused:    paused,
+		Throttled: throttled,
 	})
 }
 
 func sendScrapePauseNotification(
 	ns chan<- models.Notification,
 	paused bool,
+	throttled bool,
 ) {
-	methods.PublishScrapePauseStatus(ns, paused)
+	methods.PublishScrapePauseStatus(ns, paused, throttled)
 }

@@ -1575,6 +1575,10 @@ func (m *MockMediaDBI) TrackBackgroundOperation() {
 	m.Called()
 }
 
+func (m *MockMediaDBI) SetIndexingConnBoost(active bool) {
+	m.Called(active)
+}
+
 func (m *MockMediaDBI) BackgroundOperationDone() {
 	m.Called()
 }
@@ -1871,6 +1875,20 @@ func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 		return 0, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return 0, nil
+}
+
+func (m *MockMediaDBI) HasAnyMedia() (bool, error) {
+	args := m.Called()
+	if has, ok := args.Get(0).(bool); ok {
+		if err := args.Error(1); err != nil {
+			return has, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return has, nil
+	}
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return false, nil
 }
 
 func (m *MockMediaDBI) GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error) {
@@ -2191,6 +2209,10 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	// Planner-statistics refresh before cache builds; succeeds by default
 	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
+	// Per-system browse cache refresh after each system commit during indexing
+	mockMediaDB.On("PopulateBrowseCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	// Connection pool widening around an index run
+	mockMediaDB.On("SetIndexingConnBoost", mock.Anything).Maybe()
 	// Set default expectation for InvalidateSystemTagsCache to return success
 	// This is called during media inserts and should succeed by default
 	mockMediaDB.On("InvalidateSystemTagsCache", mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -2209,6 +2231,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("IncrementIndexResumeAttempts").Return(1, nil).Maybe()
 	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
@@ -2459,6 +2482,14 @@ func (m *MockMediaDBI) PopulateBrowseCache(
 	ctx context.Context,
 ) error {
 	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) PopulateBrowseCacheForSystems(ctx context.Context, systemIDs []string) error {
+	args := m.Called(ctx, systemIDs)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}

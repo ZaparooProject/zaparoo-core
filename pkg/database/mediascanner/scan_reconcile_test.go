@@ -25,7 +25,6 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -88,7 +87,7 @@ func TestReconcile_NewSystemInsertsTitlesMediaAndTags(t *testing.T) {
 	assert.Equal(t, int64(1), stats.TitlesInserted)
 	assert.Equal(t, int64(1), stats.MediaUpserted)
 	assert.Equal(t, int64(0), stats.MediaMissing)
-	assert.Equal(t, int64(1), stats.TouchedTitles, "a new media must touch its title")
+	assert.Equal(t, int64(0), stats.TouchedTitles, "new singleton titles do not need disambiguation")
 
 	byPath := mediaBySystem(t, mediaDB, "SNES")
 	require.Len(t, byPath, 1)
@@ -121,11 +120,11 @@ func TestReconcile_MultiDiscSharesOneTitleAcrossMidScanCommit(t *testing.T) {
 	require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	require.NoError(t, StageMediaPath(mediaDB, "PSX", disc1, "", false, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "PSX", Path: disc1}))
 	// Mid-system file-limit commit: staged rows become durable, scan continues.
 	require.NoError(t, mediaDB.CommitTransaction())
 	require.NoError(t, mediaDB.BeginTransaction(true))
-	require.NoError(t, StageMediaPath(mediaDB, "PSX", disc2, "", false, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "PSX", Path: disc2}))
 	stats, err := mediaDB.ReconcileStagedSystem(ctx, "PSX", database.ScanReconcileOpts{})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -135,6 +134,21 @@ func TestReconcile_MultiDiscSharesOneTitleAcrossMidScanCommit(t *testing.T) {
 	require.Len(t, byPath, 2)
 	assert.Equal(t, byPath[disc1].MediaTitleDBID, byPath[disc2].MediaTitleDBID,
 		"both discs must reference the same MediaTitle row")
+}
+
+func TestReconcile_NewMultiMediaTitleComputesDisambiguation(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	usaPath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Super Game (USA).sfc")
+	eurPath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Super Game (Europe).sfc")
+	stats := indexMediaPaths(t, mediaDB, "SNES", usaPath, eurPath)
+
+	assert.Equal(t, int64(1), stats.TouchedTitles, "new sibling media title needs disambiguation")
+	byPath := mediaBySystem(t, mediaDB, "SNES")
+	require.Equal(t, byPath[usaPath].MediaTitleDBID, byPath[eurPath].MediaTitleDBID)
+	assert.Contains(t, titleDisambiguation(t, mediaDB, byPath[usaPath].MediaTitleDBID), "region")
 }
 
 func TestReconcile_UnchangedReindexIsNoOp(t *testing.T) {
@@ -204,12 +218,14 @@ func TestReconcile_DynamicTagTypesPersisted(t *testing.T) {
 
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	require.NoError(t, StageMediaPath(
-		mediaDB, "Arcade", arcadePath, "", false, browseprefix.Policy{}, nil, slugs.MediaTypeGame))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{
+		DB: mediaDB, SystemID: "Arcade", Path: arcadePath, MediaType: slugs.MediaTypeGame,
+	}))
 	_, err := mediaDB.ReconcileStagedSystem(ctx, "Arcade", database.ScanReconcileOpts{})
 	require.NoError(t, err)
-	require.NoError(t, StageMediaPath(
-		mediaDB, "SNESMusic", trackPath, "", false, browseprefix.Policy{}, nil, slugs.MediaTypeMusic))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{
+		DB: mediaDB, SystemID: "SNESMusic", Path: trackPath, MediaType: slugs.MediaTypeMusic,
+	}))
 	_, err = mediaDB.ReconcileStagedSystem(ctx, "SNESMusic", database.ScanReconcileOpts{})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -254,7 +270,7 @@ func TestReconcile_NonScannerTagsSurviveStaleScannerTagDeleted(t *testing.T) {
 	assert.Contains(t, got, "region:us")
 	assert.NotContains(t, got, "region:eu", "stale scanner-owned tag must be deleted")
 	assert.Equal(t, int64(1), stats.TagLinksDeleted)
-	assert.Equal(t, int64(1), stats.TouchedTitles, "a tag change touches the owning title")
+	assert.Equal(t, int64(0), stats.TouchedTitles, "singleton tag changes do not need disambiguation")
 }
 
 func TestReconcile_MissingFlagLifecycle(t *testing.T) {
@@ -314,7 +330,7 @@ func TestReconcile_IncompleteScanKeepsMissingState(t *testing.T) {
 	// present state, gonePath must keep its missing state.
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	require.NoError(t, StageMediaPath(mediaDB, "SNES", keptPath, "", false, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "SNES", Path: keptPath}))
 	stats, err := mediaDB.ReconcileStagedSystem(ctx, "SNES", database.ScanReconcileOpts{IncompleteScan: true})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -330,7 +346,7 @@ func TestReconcile_IncompleteScanKeepsMissingState(t *testing.T) {
 	// of presence: its flag clears.
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	require.NoError(t, StageMediaPath(mediaDB, "SNES", gonePath, "", false, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "SNES", Path: gonePath}))
 	_, err = mediaDB.ReconcileStagedSystem(ctx, "SNES", database.ScanReconcileOpts{IncompleteScan: true})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -350,6 +366,23 @@ func TestReconcile_EmptyScanMarksSystemMissing(t *testing.T) {
 	assert.True(t, stats.SystemKnown, "existing system reconciles even with nothing staged")
 	assert.Equal(t, int64(1), stats.MediaMissing)
 	assert.True(t, mediaBySystem(t, mediaDB, "SNES")[gamePath].IsMissing)
+}
+
+func TestReconcile_InvalidatesCachedMissingCount(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	gamePath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Solo (USA).sfc")
+	indexMediaPaths(t, mediaDB, "SNES", gamePath)
+	_, err := mediaDB.UnsafeGetSQLDb().ExecContext(context.Background(),
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, '0')", mediadb.DBConfigMediaMissingCount)
+	require.NoError(t, err)
+
+	indexMediaPaths(t, mediaDB, "SNES")
+	missing, err := mediaDB.GetMissingMediaCount()
+	require.NoError(t, err)
+	assert.Equal(t, 1, missing)
 }
 
 func TestReconcile_UnknownSystemWithNoFilesIsNoop(t *testing.T) {
@@ -462,8 +495,9 @@ func TestReconcile_ProvidedNameUsedAsTitle(t *testing.T) {
 	virtualPath := "steam://12345/Custom%20Game"
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	require.NoError(t, StageMediaPath(
-		mediaDB, "PC", virtualPath, "My Custom Game", true, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{
+		DB: mediaDB, SystemID: "PC", Path: virtualPath, ProvidedName: "My Custom Game", NoExt: true,
+	}))
 	_, err := mediaDB.ReconcileStagedSystem(ctx, "PC", database.ScanReconcileOpts{})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -489,8 +523,8 @@ func TestReconcile_DuplicatePathStagedOnceKeepsSingleRow(t *testing.T) {
 	gamePath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Twice (USA).sfc")
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	require.NoError(t, mediaDB.ClearScanStage())
-	require.NoError(t, StageMediaPath(mediaDB, "SNES", gamePath, "", false, browseprefix.Policy{}, nil, ""))
-	require.NoError(t, StageMediaPath(mediaDB, "SNES", gamePath, "", false, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "SNES", Path: gamePath}))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "SNES", Path: gamePath}))
 	stats, err := mediaDB.ReconcileStagedSystem(ctx, "SNES", database.ScanReconcileOpts{})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -513,7 +547,7 @@ func TestReconcile_CrashLeftoverStagingIsIsolated(t *testing.T) {
 	// Simulate the crash: stage a file, commit, never reconcile.
 	stalePath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Stale (USA).sfc")
 	require.NoError(t, mediaDB.BeginTransaction(true))
-	require.NoError(t, StageMediaPath(mediaDB, "SNES", stalePath, "", false, browseprefix.Policy{}, nil, ""))
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{DB: mediaDB, SystemID: "SNES", Path: stalePath}))
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	// Next run scans a different system; the leftover row must not surface.

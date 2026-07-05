@@ -61,32 +61,35 @@ type MediaPathFragments struct {
 	Tags         []string
 }
 
+// StageMediaPathParams contains parameters for StageMediaPath.
+type StageMediaPathParams struct {
+	Config       *config.Instance
+	DB           database.MediaDBI
+	Path         string
+	SystemID     string
+	MediaType    slugs.MediaType
+	ProvidedName string
+	PrefixPolicy browseprefix.Policy
+	NoExt        bool
+}
+
 // StageMediaPath parses one scanned file into its media fragments and appends
 // them to the scanner staging tables. No database reads happen here: existence
 // checks, tag diffing, and missing-state all run set-based in
 // ReconcileStagedSystem once the system's files are staged, so scanner memory
 // does not grow with either library or database size.
-func StageMediaPath(
-	db database.MediaDBI,
-	systemID string,
-	path string,
-	providedName string,
-	noExt bool,
-	prefixPolicy browseprefix.Policy,
-	cfg *config.Instance,
-	mediaType slugs.MediaType,
-) error {
+func StageMediaPath(params *StageMediaPathParams) error {
 	pf := GetPathFragments(&PathFragmentParams{
-		Config:       cfg,
-		Path:         path,
-		NoExt:        noExt,
-		PrefixPolicy: prefixPolicy,
-		SystemID:     systemID,
-		MediaType:    mediaType,
-		ProvidedName: providedName,
+		Config:       params.Config,
+		Path:         params.Path,
+		NoExt:        params.NoExt,
+		PrefixPolicy: params.PrefixPolicy,
+		SystemID:     params.SystemID,
+		MediaType:    params.MediaType,
+		ProvidedName: params.ProvidedName,
 	})
 
-	metadata := mediadb.GenerateSlugMetadataFromTokens(mediaType, pf.Title, pf.Slug, pf.SlugTokens)
+	metadata := mediadb.GenerateSlugMetadataFromTokens(params.MediaType, pf.Title, pf.Slug, pf.SlugTokens)
 
 	staged := database.ScanStagedMedia{
 		Path:          pf.Path,
@@ -97,9 +100,9 @@ func StageMediaPath(
 		SecondarySlug: metadata.SecondarySlug,
 		SlugLength:    metadata.SlugLength,
 		SlugWordCount: metadata.SlugWordCount,
-		Tags:          stagedTagsFromFragments(&pf, cfg),
+		Tags:          stagedTagsFromFragments(&pf, params.Config),
 	}
-	if err := db.StageScannedMedia(&staged); err != nil {
+	if err := params.DB.StageScannedMedia(&staged); err != nil {
 		return fmt.Errorf("error staging media path %s: %w", pf.Path, err)
 	}
 	return nil

@@ -3049,6 +3049,60 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	assert.Equal(t, 1, fileCount)
 }
 
+func TestPopulateBrowseCacheForSystems_IncrementalRefresh_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	snesPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "super-rpg.sfc"))
+	nesPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "nes", "mario.nes"))
+	snesSystem := insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG", snesPath)
+	nesSystem := insertSystemWithMedia(t, mediaDB, "NES", "Super Mario Bros", nesPath)
+
+	// First per-system refresh on an empty cache builds dirs and only the
+	// target system's counts, and marks the cache serveable-but-stale.
+	require.NoError(t, mediaDB.PopulateBrowseCacheForSystems(ctx, []string{"SNES"}))
+	assert.Equal(t, browseCacheInvalidatedVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+
+	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms")) + "/"
+	assertBrowseCacheDir(t, mediaDB, "/", "/", false)
+	assertBrowseCacheDir(t, mediaDB, romsDir, "roms", false)
+	romsID := browseCacheDirID(t, mediaDB, romsDir)
+
+	assert.Positive(t, countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", snesSystem.DBID))
+	assert.Zero(t, countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", nesSystem.DBID),
+		"unrefreshed system must have no count rows yet")
+
+	state, err := sqlBrowseCacheStatus(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Equal(t, browseCacheStale, state, "per-system refresh must leave the cache serveable")
+
+	// Refreshing a second system reuses the shared dir rows and adds its
+	// counts without disturbing the first system's.
+	require.NoError(t, mediaDB.PopulateBrowseCacheForSystems(ctx, []string{"NES"}))
+	assert.Equal(t, romsID, browseCacheDirID(t, mediaDB, romsDir), "shared dirs must keep their DBIDs")
+	assert.Positive(t, countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", snesSystem.DBID))
+	assert.Positive(t, countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", nesSystem.DBID))
+
+	// Re-refreshing a system replaces its counts instead of duplicating them.
+	snesCounts := countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", snesSystem.DBID)
+	require.NoError(t, mediaDB.PopulateBrowseCacheForSystems(ctx, []string{"SNES"}))
+	assert.Equal(t, snesCounts,
+		countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", snesSystem.DBID),
+		"re-refresh must replace count rows, not duplicate them")
+
+	// The refreshed cache serves real browse queries.
+	rootDirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{PathPrefix: "/"})
+	require.NoError(t, err)
+	require.Len(t, rootDirs, 1)
+	assert.Equal(t, "roms", rootDirs[0].Name)
+	assert.Equal(t, 2, rootDirs[0].FileCount)
+}
+
 func TestSqlInvalidateBrowseCache_MarksBrowseCacheStale_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

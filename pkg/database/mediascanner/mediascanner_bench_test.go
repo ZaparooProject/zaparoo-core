@@ -27,7 +27,6 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 )
 
@@ -154,9 +153,9 @@ func BenchmarkMediaScanner_StageAndReconcile_FreshDB(b *testing.B) {
 				if err := db.BeginTransaction(true); err != nil {
 					b.Fatal(err)
 				}
-				for i, fn := range filenames {
-					err := StageMediaPath(db, "nes", fn, "", false, browseprefix.Policy{}, nil, "")
-					if i == 0 && err != nil {
+				for _, fn := range filenames {
+					err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn})
+					if err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -209,7 +208,7 @@ func BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB(b *testing.B) {
 					b.Fatal(err)
 				}
 				for _, fn := range files {
-					if err := StageMediaPath(db, "nes", fn, "", false, browseprefix.Policy{}, nil, ""); err != nil {
+					if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn}); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -260,7 +259,7 @@ func BenchmarkMediaScanner_Reconcile_ExistingRows(b *testing.B) {
 					b.Fatal(err)
 				}
 				for _, fn := range filenames {
-					if err := StageMediaPath(db, "nes", fn, "", false, browseprefix.Policy{}, nil, ""); err != nil {
+					if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: "nes", Path: fn}); err != nil {
 						b.Fatal(err)
 					}
 				}

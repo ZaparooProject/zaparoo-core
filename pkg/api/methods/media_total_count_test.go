@@ -96,9 +96,11 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 				mockMediaDB.On("GetTotalMediaCount").Return(tt.totalMediaCount, tt.getTotalMediaCountError)
 			} else if !tt.indexing {
 				// Database exists and not indexing or optimizing
-				mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
 				mockMediaDB.On("GetTotalMediaCount").Return(tt.totalMediaCount, tt.getTotalMediaCountError)
 			}
+			// Existence checks read lastGenerated in every branch, including
+			// mid-index.
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
 
 			db := &database.Database{
 				MediaDB: mockMediaDB,
@@ -170,10 +172,12 @@ func TestHandleMedia_MissingMediaCount(t *testing.T) {
 			statusInstance.setRunning(tt.indexing)
 
 			if !tt.indexing {
-				mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
 				mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
 				mockMediaDB.On("GetMissingMediaCount").Return(tt.missingCount, tt.getMissingCountError)
 			}
+			// Existence checks read lastGenerated in every branch, including
+			// mid-index.
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
 
 			db := &database.Database{
 				MediaDB: mockMediaDB,

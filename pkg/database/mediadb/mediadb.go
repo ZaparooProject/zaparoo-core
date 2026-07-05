@@ -94,11 +94,29 @@ const mediaStatsCacheWriteTimeout = 100 * time.Millisecond
 // lower it; production never mutates it.
 var mediaWALCheckpointThreshold int64 = 96 * 1024 * 1024
 
-// getSqliteConnParams constructs the SQLite connection string. MediaDB stores
-// user-owned metadata as well as rebuildable index rows, so use synchronous=FULL
-// even in WAL mode; power loss during MiSTer indexing must not corrupt committed data.
+// Connection pool sizing. Two connections (one writer, one reader) is the
+// steady-state balance for low-memory devices, but while indexing runs the
+// writer effectively owns a connection full-time, so the pool widens by one
+// to keep a search and a browse from queueing behind each other.
+const (
+	baseMaxOpenConns     = 2
+	indexingMaxOpenConns = 3
+)
+
+// getSqliteConnParams constructs the SQLite connection string. MediaDB uses
+// synchronous=NORMAL in WAL mode: SQLite documents this pairing as durable
+// against application crashes and normal power loss (only a torn/interrupted
+// write to the WAL during an OS crash or hardware fault can lose the most
+// recent transactions). synchronous=FULL was tried first to guard against
+// that, but a confirmed corrupt MediaDB from the field turned out to be
+// zeroed pages from storage ignoring fsync entirely (a torn write) - a mode
+// FULL does not protect against - so it bought nothing while its per-commit
+// fsync produced multi-second stalls during indexing. Recovery is now a
+// rebuild, and MediaDB rows are rebuildable, so NORMAL's small window of
+// last-transaction loss on power loss is an acceptable trade. UserDB keeps
+// synchronous=FULL since it holds non-rebuildable user data.
 func getSqliteConnParams() string {
-	return "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
+	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
 		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
 		"&_page_size=8192&_foreign_keys=ON&_txlock=immediate"
 }
@@ -319,7 +337,7 @@ func (db *MediaDB) Open() error {
 	if err != nil {
 		return fmt.Errorf("failed to open media database: %w", err)
 	}
-	sqlInstance.SetMaxOpenConns(2)
+	sqlInstance.SetMaxOpenConns(baseMaxOpenConns)
 	db.sql.Store(sqlInstance)
 	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
 		if database.IsCorruptionError(err) {
@@ -1019,6 +1037,24 @@ func (db *MediaDB) GetIndexingSystems() ([]string, error) {
 	return sqlGetIndexingSystems(db.ctx, db.sql.Load())
 }
 
+func (db *MediaDB) SetIndexingPlanSystems(systemIDs []string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexingPlanSystems(db.ctx, db.conn(), systemIDs)
+}
+
+func (db *MediaDB) GetIndexingPlanSystems() ([]string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlGetIndexingPlanSystems(db.ctx, db.sql.Load())
+}
+
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
 	return db.sql.Load()
 }
@@ -1075,7 +1111,16 @@ func (db *MediaDB) MigrateUp() error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlMigrateUp(db.sql.Load(), db.dbPath)
+	if err := sqlMigrateUp(db.sql.Load(), db.dbPath); err != nil {
+		return err
+	}
+	// Best-effort: a database without real Media statistics gets the captured
+	// seed so mid-index queries have sane plans; the first system commit's
+	// approximate ANALYZE replaces it.
+	if err := sqlSeedPlannerStats(db.ctx, db.sql.Load()); err != nil {
+		log.Warn().Err(err).Msg("failed to seed planner statistics")
+	}
+	return nil
 }
 
 func (db *MediaDB) Vacuum() error {
@@ -1144,6 +1189,14 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	}
 
 	if deleted > 0 {
+		if countErr := sqlRefreshMediaCounts(ctx, db.sql.Load()); countErr != nil {
+			log.Warn().Err(countErr).Msg("failed to refresh cached media counts after orphan cleanup")
+			if cacheErr := sqlInvalidateMediaCountCache(
+				ctx, db.sql.Load(), DBConfigMediaTotalCount, DBConfigMediaMissingCount,
+			); cacheErr != nil {
+				log.Warn().Err(cacheErr).Msg("failed to invalidate cached media counts after orphan cleanup")
+			}
+		}
 		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
 		if err := sqlInvalidateBrowseCache(ctx, db.sql.Load()); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
@@ -1413,6 +1466,13 @@ func (db *MediaDB) ReconcileStagedSystem(
 		return stats, err
 	}
 	if stats.MediaUpserted > 0 || stats.MediaMissing > 0 {
+		countKeys := []string{DBConfigMediaMissingCount}
+		if stats.MediaUpserted > 0 {
+			countKeys = append(countKeys, DBConfigMediaTotalCount)
+		}
+		if cacheErr := sqlInvalidateMediaCountCache(ctx, db.conn(), countKeys...); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate cached media counts after scan reconcile")
+		}
 		db.markBrowseCacheDirty()
 	}
 	return stats, nil
@@ -2028,6 +2088,49 @@ func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
 	return sqlPopulateBrowseCache(context.WithoutCancel(ctx), db.sql.Load())
 }
 
+// PopulateBrowseCacheForSystems incrementally refreshes browse cache rows for
+// the given systems from committed media. Called after each system's commit
+// during indexing so browse serves fresh results mid-scan without waiting for
+// the end-of-run full rebuild. Systems without a DB row yet are skipped.
+// Uses a non-cancellable context for the same driver reason as
+// PopulateBrowseCache.
+func (db *MediaDB) PopulateBrowseCacheForSystems(ctx context.Context, systemIDs []string) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	if len(systemIDs) == 0 {
+		return nil
+	}
+
+	plainCtx := context.WithoutCancel(ctx)
+	placeholders := make([]string, len(systemIDs))
+	args := make([]any, len(systemIDs))
+	for i, id := range systemIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := db.sql.Load().QueryContext(plainCtx,
+		"SELECT DBID FROM Systems WHERE SystemID IN ("+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		return fmt.Errorf("browse cache: failed to resolve system DBIDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	systemDBIDs := make([]int64, 0, len(systemIDs))
+	for rows.Next() {
+		var dbid int64
+		if scanErr := rows.Scan(&dbid); scanErr != nil {
+			return fmt.Errorf("browse cache: failed to scan system DBID: %w", scanErr)
+		}
+		systemDBIDs = append(systemDBIDs, dbid)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("browse cache: system DBID iteration error: %w", rowsErr)
+	}
+
+	return sqlPopulateBrowseCacheForSystems(plainCtx, db.sql.Load(), systemDBIDs)
+}
+
 // BrowseCacheNeedsRebuild reports whether the browse cache is stale or absent and
 // should be rebuilt. It returns false only when the cache is fresh (matches the
 // current schema version). A stale-but-present cache is served (see the browse
@@ -2620,6 +2723,21 @@ func (db *MediaDB) GetTotalMediaCount() (int, error) {
 	return sqlGetTotalMediaCount(db.ctx, db.sql.Load())
 }
 
+// HasAnyMedia reports whether at least one media row exists. Cheap (EXISTS
+// with LIMIT semantics) so it is safe to call while an index is running;
+// used to report truthful database existence to clients mid-index.
+func (db *MediaDB) HasAnyMedia() (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
+	var exists bool
+	err := db.sql.Load().QueryRowContext(db.ctx, "SELECT EXISTS(SELECT 1 FROM Media)").Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check for media presence: %w", err)
+	}
+	return exists, nil
+}
+
 // GetMissingMediaCount returns the number of media entries flagged missing —
 // what a media.clean.orphans call would delete.
 func (db *MediaDB) GetMissingMediaCount() (int, error) {
@@ -2801,12 +2919,17 @@ func (*MediaDB) generateQueryHash(query *database.MediaQuery) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
+// Find* lookups below always use db.sql.Load() rather than db.conn(): callers
+// are external readers (API handlers, zapscript launch, scrapers) that can run
+// concurrently with an active indexing transaction, and borrowing the
+// indexer's own in-flight *sql.Tx from another goroutine risks "transaction
+// has already been committed or rolled back" if it commits mid-read.
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
-	return sqlFindSystem(db.ctx, db.conn(), row)
+	return sqlFindSystem(db.ctx, db.sql.Load(), row)
 }
 
 func (db *MediaDB) FindSystemBySystemID(systemID string) (database.System, error) {
-	return sqlFindSystemBySystemID(db.ctx, db.conn(), systemID)
+	return sqlFindSystemBySystemID(db.ctx, db.sql.Load(), systemID)
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
@@ -2847,7 +2970,7 @@ func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, err
 }
 
 func (db *MediaDB) FindMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
-	return sqlFindMediaTitle(db.ctx, db.conn(), row)
+	return sqlFindMediaTitle(db.ctx, db.sql.Load(), row)
 }
 
 func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
@@ -2892,7 +3015,7 @@ func (db *MediaDB) FindOrInsertMediaTitle(row *database.MediaTitle) (database.Me
 
 // FindMedia implements MediaDBI. Param is by value because the interface is.
 func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) { //nolint:gocritic
-	return sqlFindMedia(db.ctx, db.conn(), &row)
+	return sqlFindMedia(db.ctx, db.sql.Load(), &row)
 }
 
 // InsertMedia implements MediaDBI. Param is by value because the interface is.
@@ -2974,7 +3097,7 @@ func (db *MediaDB) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 		return ErrNullSQL
 	}
 
-	err := sqlDeleteMediaTag(db.ctx, db.conn(), mediaDBID, tagDBID)
+	err := sqlDeleteMediaTag(db.ctx, db.sql.Load(), mediaDBID, tagDBID)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
 	}
@@ -2992,7 +3115,7 @@ func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error)
 }
 
 func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
-	return sqlFindTagType(db.ctx, db.conn(), row)
+	return sqlFindTagType(db.ctx, db.sql.Load(), row)
 }
 
 // InsertTagType inserts a new TagType into the database.
@@ -3041,7 +3164,7 @@ func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, 
 }
 
 func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
-	return sqlFindTag(db.ctx, db.conn(), row)
+	return sqlFindTag(db.ctx, db.sql.Load(), row)
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
@@ -3085,7 +3208,7 @@ func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error) {
-	return sqlFindMediaTag(db.ctx, db.conn(), row)
+	return sqlFindMediaTag(db.ctx, db.sql.Load(), row)
 }
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
@@ -3413,6 +3536,23 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 // This should be called before closing the database to ensure clean shutdown.
 func (db *MediaDB) WaitForBackgroundOperations() {
 	db.backgroundOps.Wait()
+}
+
+// SetIndexingConnBoost widens the connection pool while an index runs (the
+// writer holds a connection near-continuously, which would otherwise leave a
+// single connection for all foreground reads) and restores the steady-state
+// size afterwards. Safe to call around a Recreate: it always acts on the
+// currently-loaded pool.
+func (db *MediaDB) SetIndexingConnBoost(active bool) {
+	sqlInstance := db.sql.Load()
+	if sqlInstance == nil {
+		return
+	}
+	if active {
+		sqlInstance.SetMaxOpenConns(indexingMaxOpenConns)
+	} else {
+		sqlInstance.SetMaxOpenConns(baseMaxOpenConns)
+	}
 }
 
 // TrackBackgroundOperation increments the background operations counter.

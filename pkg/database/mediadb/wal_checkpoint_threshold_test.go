@@ -99,7 +99,7 @@ func TestCommitBelowThresholdKeepsWAL(t *testing.T) {
 		media := database.Media{
 			MediaTitleDBID: h.title.DBID,
 			SystemDBID:     h.system.DBID,
-			Path:           fmt.Sprintf("/test/path/game%d.bin", i),
+			Path:           filepath.Join("test", "path", fmt.Sprintf("game%d.bin", i)),
 		}
 		_, err := h.db.InsertMedia(media)
 		require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestCommitAboveThresholdTruncatesWAL(t *testing.T) {
 		media := database.Media{
 			MediaTitleDBID: h.title.DBID,
 			SystemDBID:     h.system.DBID,
-			Path:           fmt.Sprintf("/test/path/game%d.bin", i),
+			Path:           filepath.Join("test", "path", fmt.Sprintf("game%d.bin", i)),
 		}
 		_, err := h.db.InsertMedia(media)
 		require.NoError(t, err)

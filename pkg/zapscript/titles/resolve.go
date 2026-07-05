@@ -59,6 +59,12 @@ type ResolveParams struct {
 	Launchers      []platforms.Launcher
 }
 
+// cacheSlugResolution writes the resolution result to the cache in the
+// background. SetCachedSlugResolution can block for seconds waiting on
+// SQLite's WAL writer lock while a long-running indexing transaction holds
+// it, and that wait is not reliably cut short by ctx cancellation - so this
+// must run detached from the caller to keep launch-critical title
+// resolution instant.
 func cacheSlugResolution(
 	ctx context.Context,
 	mediadb database.MediaDBI,
@@ -68,12 +74,14 @@ func cacheSlugResolution(
 	mediaID int64,
 	strategy string,
 ) {
-	cacheCtx, cancel := context.WithTimeout(ctx, slugResolutionCacheWriteTimeout)
-	defer cancel()
-	cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, mediaID, strategy)
-	if cacheErr != nil {
-		log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
-	}
+	go func() {
+		cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), slugResolutionCacheWriteTimeout)
+		defer cancel()
+		cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, mediaID, strategy)
+		if cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
+		}
+	}()
 }
 
 // ResolveTitle runs the full title resolution pipeline against the media database.

@@ -444,8 +444,8 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
-	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
-	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
+	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("starting publishers")

@@ -59,7 +59,14 @@ type scanReconcileStep struct {
 // metadata, scraper run markers) are never treated as stale — deleting them
 // here would silently wipe scraped data on every re-index. Must stay in sync
 // with sqlGetNonScannerTagDBIDs.
-const scanStaleLinkFilter = `
+const (
+	scanFlagMissingBatchSize = 5000
+	// Title-scoped disambiguation performs poorly on large media databases even
+	// for modest touched sets because SQLite repeatedly plans around a long ID
+	// scope. During scan reconcile, recomputing the current system in one pass is
+	// faster and still bounded; keep single-title updates scoped for tiny changes.
+	scanSystemDisambiguationThreshold = 1
+	scanStaleLinkFilter               = `
 	FROM Media m
 	JOIN ScanStage s ON s.Path = m.Path
 	JOIN MediaTags mt ON mt.MediaDBID = m.DBID
@@ -73,6 +80,7 @@ const scanStaleLinkFilter = `
 		SELECT 1 FROM ScanStageTags st
 		WHERE st.Path = m.Path AND st.TagType = tt.Type AND st.Tag = t.Tag
 	  )`
+)
 
 func scanNonScannerTypeArgs(systemDBID int64) []any {
 	return []any{
@@ -156,8 +164,6 @@ func sqlScanStageCount(ctx context.Context, db sqlQueryable) (int64, error) {
 	}
 	return count, nil
 }
-
-const scanFlagMissingBatchSize = 5000
 
 // scanReconcileExec runs one reconcile statement with a cancellation check first,
 // returning the affected row count.
@@ -359,10 +365,19 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		{
 			step: "capture new media titles",
 			query: `
+			WITH staged_titles AS (
+				SELECT Slug, COUNT(*) AS staged_count FROM ScanStage GROUP BY Slug
+			),
+			new_titles AS (
+				SELECT DISTINCT s.Slug FROM ScanStage s
+				WHERE NOT EXISTS (SELECT 1 FROM Media m WHERE m.SystemDBID = ? AND m.Path = s.Path)
+			)
 			INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
-			SELECT t.DBID FROM ScanStage s
-			JOIN MediaTitles t ON t.SystemDBID = ? AND t.Slug = s.Slug
-			WHERE NOT EXISTS (SELECT 1 FROM Media m WHERE m.SystemDBID = ? AND m.Path = s.Path)`,
+			SELECT t.DBID FROM new_titles nt
+			JOIN staged_titles st ON st.Slug = nt.Slug
+			JOIN MediaTitles t ON t.SystemDBID = ? AND t.Slug = nt.Slug
+			WHERE (SELECT COUNT(*) FROM Media m2 WHERE m2.MediaTitleDBID = t.DBID AND m2.IsMissing = 0)
+				+ st.staged_count > 1`,
 			args: []any{systemDBID, systemDBID},
 		},
 		{
@@ -470,15 +485,21 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// A tag added to an existing media changes its title's disambiguation.
 	// Runs after the media upsert so MediaTitleDBID reflects any reassignment.
 	if _, err = scanReconcileExec(ctx, db, systemID, "capture tag additions", `
+		WITH multi_titles AS (
+			SELECT MediaTitleDBID FROM Media
+			WHERE SystemDBID = ? AND IsMissing = 0
+			GROUP BY MediaTitleDBID HAVING COUNT(*) > 1
+		)
 		INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID)
 		SELECT m.MediaTitleDBID
 		FROM ScanStageTags st
 		JOIN Media m ON m.SystemDBID = ? AND m.Path = st.Path
+		JOIN multi_titles mtit ON mtit.MediaTitleDBID = m.MediaTitleDBID
 		JOIN TagTypes tt ON tt.Type = st.TagType
 		JOIN Tags t ON t.TypeDBID = tt.DBID AND t.Tag = st.Tag
 		WHERE NOT EXISTS (
 			SELECT 1 FROM MediaTags mt WHERE mt.MediaDBID = m.DBID AND mt.TagDBID = t.DBID
-		)`, systemDBID); err != nil {
+		)`, systemDBID, systemDBID); err != nil {
 		return stats, err
 	}
 
@@ -495,9 +516,14 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 
 	// Stale scanner-owned links on staged media: capture the owning titles,
 	// then delete the links.
+	staleTagTitleArgs := append([]any{systemDBID}, scanNonScannerTypeArgs(systemDBID)...)
 	if _, err = scanReconcileExec(ctx, db, systemID, "capture stale tag titles",
-		"INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID) SELECT m.MediaTitleDBID"+scanStaleLinkFilter,
-		scanNonScannerTypeArgs(systemDBID)...); err != nil {
+		"WITH multi_titles AS ("+
+			"SELECT MediaTitleDBID FROM Media WHERE SystemDBID = ? AND IsMissing = 0 "+
+			"GROUP BY MediaTitleDBID HAVING COUNT(*) > 1) "+
+			"INSERT OR IGNORE INTO ScanTouchedTitles (TitleDBID) SELECT m.MediaTitleDBID"+scanStaleLinkFilter+
+			" AND EXISTS (SELECT 1 FROM multi_titles mtit WHERE mtit.MediaTitleDBID = m.MediaTitleDBID)",
+		staleTagTitleArgs...); err != nil {
 		return stats, err
 	}
 	stats.TagLinksDeleted, err = scanReconcileExec(ctx, db, systemID, "delete stale tag links",
@@ -525,7 +551,14 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			return stats, fmt.Errorf("scan reconcile cancelled before disambiguation recompute: %w", err)
 		}
 		disambiguationStart := time.Now()
-		if err = sqlRecomputeTitleDisambiguation(ctx, db, touched); err != nil {
+		recomputeScope := "titles"
+		if len(touched) > scanSystemDisambiguationThreshold {
+			recomputeScope = "system"
+			err = sqlRecomputeDisambiguationForSystems(ctx, db, []int64{systemDBID})
+		} else {
+			err = sqlRecomputeTitleDisambiguation(ctx, db, touched)
+		}
+		if err != nil {
 			return stats, fmt.Errorf("scan reconcile disambiguation recompute failed: %w", err)
 		}
 		disambiguationElapsed := time.Since(disambiguationStart)
@@ -534,6 +567,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			logEvent = log.Warn()
 		}
 		logEvent.Str("system", systemID).
+			Str("scope", recomputeScope).
 			Int("titleCount", len(touched)).
 			Dur("elapsed", disambiguationElapsed).
 			Msg("scan reconcile disambiguation recompute completed")

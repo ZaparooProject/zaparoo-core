@@ -34,9 +34,11 @@ func TestClassifyAPIMethod(t *testing.T) {
 		method string
 		want   apiRequestPriority
 	}{
-		{"high media tags update", models.MethodMediaTagsUpdate, apiPriorityHigh},
+		{"normal media tags update", models.MethodMediaTagsUpdate, apiPriorityNormal},
+		{"normal media meta update", models.MethodMediaMetaUpdate, apiPriorityNormal},
 		{"high media history latest", models.MethodMediaHistoryLatest, apiPriorityHigh},
 		{"high run case insensitive", "RUN", apiPriorityHigh},
+		{"high media control", models.MethodMediaControl, apiPriorityHigh},
 		{"low media generate", models.MethodMediaGenerate, apiPriorityLow},
 		{"low media image", models.MethodMediaImage, apiPriorityLow},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},
@@ -116,6 +118,7 @@ func TestIsMediaDBTransactionAPIMethod(t *testing.T) {
 	}{
 		{"tags update exact", models.MethodMediaTagsUpdate, true},
 		{"tags update case insensitive", "MEDIA.TAGS.UPDATE", true},
+		{"meta update exact", models.MethodMediaMetaUpdate, true},
 		{"image false", models.MethodMediaImage, false},
 		{"empty", "", false},
 	}
@@ -124,6 +127,34 @@ func TestIsMediaDBTransactionAPIMethod(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, isMediaDBTransactionAPIMethod(tt.method))
+		})
+	}
+}
+
+func TestIsMediaDBFreeInstantMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		want   bool
+	}{
+		{"run exact", models.MethodRun, true},
+		{"run case insensitive", "RUN", true},
+		{"launch exact", models.MethodLaunch, true},
+		{"stop exact", models.MethodStop, true},
+		{"media control exact", models.MethodMediaControl, true},
+		{"media control case insensitive", "MEDIA.CONTROL", true},
+		{"run script false", models.MethodRunScript, false},
+		{"tags update false", models.MethodMediaTagsUpdate, false},
+		{"image false", models.MethodMediaImage, false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isMediaDBFreeInstantMethod(tt.method))
 		})
 	}
 }

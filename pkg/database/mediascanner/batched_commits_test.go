@@ -435,4 +435,14 @@ func TestNewNamesIndex_LargeSystemCommitsMidBatch(t *testing.T) {
 	fileLimitCommits := strings.Count(output, "committed batch (file limit)")
 	assert.GreaterOrEqual(t, fileLimitCommits, 1,
 		"a system larger than maxFilesPerTransaction must commit mid-system at least once")
+
+	// The mid-batch (file limit) commit path must refresh mid-scan caches for the
+	// systems it just finalized, same as a natural system-boundary commit. Without
+	// that, IndexedSystems() (backing the `systems` API) misses systems that are
+	// fully durable but happened to land on a file-limit flush.
+	indexed, iErr := db.MediaDB.IndexedSystems()
+	require.NoError(t, iErr)
+	assert.Contains(t, indexed, systemdefs.SystemGameboy,
+		"a system committed via the file-limit path must be visible via IndexedSystems() "+
+			"without waiting for the end-of-run browse cache rebuild")
 }

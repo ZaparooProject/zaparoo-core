@@ -375,6 +375,139 @@ func insertBrowseCacheCounts(ctx context.Context, tx *sql.Tx, counts map[browseC
 	return nil
 }
 
+// loadBrowseCacheDirs seeds the builder with the existing BrowseDirs rows so
+// dirs shared across systems keep their DBIDs (other systems' count rows
+// reference them). Returns the first DBID available for newly created dirs.
+func loadBrowseCacheDirs(ctx context.Context, tx *sql.Tx, builder *browseCacheBuilder) (int64, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT DBID, ParentDirDBID, Path, Name, IsVirtual FROM BrowseDirs")
+	if err != nil {
+		return 0, fmt.Errorf("browse cache: failed to load existing dirs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var dir browseCacheDir
+		if scanErr := rows.Scan(&dir.id, &dir.parentID, &dir.path, &dir.name, &dir.isVirtual); scanErr != nil {
+			return 0, fmt.Errorf("browse cache: failed to scan existing dir: %w", scanErr)
+		}
+		builder.dirs[dir.path] = &dir
+		if dir.id >= builder.nextDirID {
+			builder.nextDirID = dir.id + 1
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return 0, fmt.Errorf("browse cache: existing dirs iteration error: %w", rowsErr)
+	}
+	return builder.nextDirID, nil
+}
+
+// scanBrowseCacheMediaForSystems feeds the target systems' non-missing media
+// rows into the builder.
+func scanBrowseCacheMediaForSystems(
+	ctx context.Context, tx *sql.Tx, builder *browseCacheBuilder, inClause string, args []any,
+) error {
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	rows, err := tx.QueryContext(ctx,
+		"SELECT m.SystemDBID, m.Path FROM Media m WHERE m.IsMissing = 0 AND m.SystemDBID IN ("+
+			inClause+") ORDER BY m.DBID", args...)
+	if err != nil {
+		return fmt.Errorf("browse cache: failed to query system media: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var systemDBID int64
+		var mediaPath string
+		if scanErr := rows.Scan(&systemDBID, &mediaPath); scanErr != nil {
+			return fmt.Errorf("browse cache: failed to scan system media: %w", scanErr)
+		}
+		builder.addMedia(systemDBID, mediaPath)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("browse cache: system media iteration error: %w", rowsErr)
+	}
+	return nil
+}
+
+// sqlPopulateBrowseCacheForSystems incrementally refreshes the browse cache
+// for specific systems from committed media rows: existing dir rows are
+// reused, missing dirs are added, and only the target systems' count rows
+// are replaced. The cache version is left at the stale sentinel — serveable
+// immediately, with the end-of-optimization full rebuild still pending to
+// remove orphaned dirs and correct any drift. This is what makes browse
+// usable per-system while a long index is still running.
+func sqlPopulateBrowseCacheForSystems(ctx context.Context, db *sql.DB, systemDBIDs []int64) error {
+	if len(systemDBIDs) == 0 {
+		return nil
+	}
+	started := time.Now()
+	builder := newBrowseCacheBuilder()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("browse cache: failed to begin system refresh transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	firstNewID, err := loadBrowseCacheDirs(ctx, tx, builder)
+	if err != nil {
+		return err
+	}
+	builder.ensureDir("/")
+
+	args := make([]any, len(systemDBIDs))
+	for i, id := range systemDBIDs {
+		args[i] = id
+	}
+	inClause := prepareVariadic("?", ",", len(systemDBIDs))
+
+	if err := scanBrowseCacheMediaForSystems(ctx, tx, builder, inClause, args); err != nil {
+		return err
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, execErr := tx.ExecContext(ctx,
+		"DELETE FROM BrowseDirCounts WHERE SystemDBID IN ("+inClause+")", args...); execErr != nil {
+		return fmt.Errorf("browse cache: failed to clear system counts: %w", execErr)
+	}
+
+	newDirs := make(map[string]*browseCacheDir)
+	for dirPath, dir := range builder.dirs {
+		if dir.id >= firstNewID {
+			newDirs[dirPath] = dir
+		}
+	}
+	if err := insertBrowseCacheDirs(ctx, tx, newDirs); err != nil {
+		return err
+	}
+	if err := insertBrowseCacheCounts(ctx, tx, builder.counts); err != nil {
+		return err
+	}
+
+	// Mark the cache serveable but pending a full rebuild. Never downgrade
+	// visibility: the sentinel is only meaningful alongside present rows,
+	// which this refresh guarantees.
+	if _, cfgErr := tx.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigBrowseIndexVersion,
+		browseCacheInvalidatedVersion,
+	); cfgErr != nil {
+		return fmt.Errorf("browse cache: failed to mark system refresh: %w", cfgErr)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("browse cache: failed to commit system refresh: %w", err)
+	}
+
+	log.Info().
+		Int("systems", len(systemDBIDs)).
+		Int("newDirs", len(newDirs)).
+		Int("counts", len(builder.counts)).
+		Dur("duration", time.Since(started)).
+		Msg("browse cache refreshed for systems")
+	return nil
+}
+
 func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",

@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
@@ -554,6 +555,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	ch chan<- scraper.ScrapeUpdate,
 ) {
 	defer close(ch)
+
+	// Lowest CPU/IO priority for the whole scrape run; the locked thread
+	// dies with this goroutine so the change never leaks.
+	bgpriority.Apply()
 
 	const id = "gamelist.xml"
 	metrics := perfmetrics.NewRecorderForDB(mdb)
@@ -2030,6 +2035,9 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 		return emitProgress(force)
 	}
 	for _, c := range children {
+		if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
+			return stats
+		}
 		select {
 		case <-ctx.Done():
 			return stats

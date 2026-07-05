@@ -25,7 +25,6 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +57,7 @@ func indexMediaPathsErr(
 		return database.ScanReconcileStats{}, fmt.Errorf("clear scan stage: %w", err)
 	}
 	for _, path := range paths {
-		if err := StageMediaPath(db, systemID, path, "", false, browseprefix.Policy{}, nil, ""); err != nil {
+		if err := StageMediaPath(&StageMediaPathParams{DB: db, SystemID: systemID, Path: path}); err != nil {
 			return database.ScanReconcileStats{}, err
 		}
 	}

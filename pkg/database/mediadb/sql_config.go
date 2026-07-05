@@ -40,6 +40,7 @@ const (
 	DBConfigScrapingOperation               = "ScrapingOperation"
 	DBConfigLastIndexedSystem               = "LastIndexedSystem"
 	DBConfigIndexingSystems                 = "IndexingSystems"
+	DBConfigIndexingPlanSystems             = "IndexingPlanSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
 	DBConfigMediaTotalCount                 = "MediaTotalCount"
 	DBConfigMediaMissingCount               = "MediaMissingCount"
@@ -94,6 +95,15 @@ func sqlRefreshMediaCounts(ctx context.Context, db sqlQueryable) error {
 			count.name, strconv.Itoa(count.value),
 		); err != nil {
 			return fmt.Errorf("failed to set %s: %w", count.name, err)
+		}
+	}
+	return nil
+}
+
+func sqlInvalidateMediaCountCache(ctx context.Context, db sqlQueryable, names ...string) error {
+	for _, name := range names {
+		if _, err := db.ExecContext(ctx, "DELETE FROM DBConfig WHERE Name = ?", name); err != nil {
+			return fmt.Errorf("failed to invalidate %s: %w", name, err)
 		}
 	}
 	return nil
@@ -365,38 +375,54 @@ func sqlBumpIndexGeneration(ctx context.Context, db sqlQueryable) (int64, error)
 	return next, nil
 }
 
-func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+func sqlSetSystemListConfig(ctx context.Context, db sqlQueryable, name string, systemIDs []string) error {
 	systemsJSON, err := json.Marshal(systemIDs)
 	if err != nil {
-		return fmt.Errorf("failed to marshal systems to JSON: %w", err)
+		return fmt.Errorf("failed to marshal %s to JSON: %w", name, err)
 	}
 	_, err = db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
-		DBConfigIndexingSystems,
+		name,
 		string(systemsJSON),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to set indexing systems: %w", err)
+		return fmt.Errorf("failed to set %s: %w", name, err)
 	}
 	return nil
 }
 
-func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+func sqlGetSystemListConfig(ctx context.Context, db *sql.DB, name string) ([]string, error) {
 	var systemsJSON string
 	err := db.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",
-		DBConfigIndexingSystems,
+		name,
 	).Scan(&systemsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to get indexing systems: %w", err)
+		return nil, fmt.Errorf("failed to get %s: %w", name, err)
 	}
 
 	var systemIDs []string
 	err = json.Unmarshal([]byte(systemsJSON), &systemIDs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal indexing systems: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal %s: %w", name, err)
 	}
 	return systemIDs, nil
+}
+
+func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+	return sqlSetSystemListConfig(ctx, db, DBConfigIndexingSystems, systemIDs)
+}
+
+func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	return sqlGetSystemListConfig(ctx, db, DBConfigIndexingSystems)
+}
+
+func sqlSetIndexingPlanSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
+	return sqlSetSystemListConfig(ctx, db, DBConfigIndexingPlanSystems, systemIDs)
+}
+
+func sqlGetIndexingPlanSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	return sqlGetSystemListConfig(ctx, db, DBConfigIndexingPlanSystems)
 }

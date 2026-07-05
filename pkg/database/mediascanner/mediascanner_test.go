@@ -24,6 +24,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1314,7 +1315,7 @@ func TestGetFiles_CustomLauncherMatchesFiles(t *testing.T) {
 
 	// Call GetFiles with the custom launcher's directory
 	ctx := context.Background()
-	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir, nil)
 	require.NoError(t, err)
 
 	// Should find all matching files (.iso and .bin) but not .txt
@@ -1380,7 +1381,7 @@ func TestGetFiles_CustomLauncherNestedDirectories(t *testing.T) {
 
 	// Call GetFiles
 	ctx := context.Background()
-	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, files, 3, "Should find files in root and nested directories")
@@ -1863,7 +1864,7 @@ func TestZaparooignoreMarker(t *testing.T) {
 
 			// Call GetFiles using NES system ID
 			ctx := context.Background()
-			files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+			files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir, nil)
 			require.NoError(t, err, "GetFiles should not fail")
 
 			// Convert results to map for easier checking
@@ -2057,7 +2058,7 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	// Should find the 2 .nes files inside the zip, but not readme.txt
@@ -2118,7 +2119,7 @@ func TestGetFiles_RespectsLauncherScanExcludes(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, gamesDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, gamesDir, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{filepath.Join(gamesDir, "game.rom")}, files)
 }
@@ -2216,7 +2217,7 @@ func TestGetFiles_SkipsMacOSDirectories(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, files, 1, "should only find the real game file")
@@ -2268,7 +2269,7 @@ func TestGetFiles_SkipsDotDirectories(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	assert.Len(t, files, 1, "should only find the real game file, not files in hidden dirs")
@@ -2326,10 +2327,91 @@ func TestGetFiles_SkipsAppleDoubleFiles(t *testing.T) {
 		testLauncherCacheMutex.Unlock()
 	}()
 
-	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir, nil)
 	require.NoError(t, err)
 
 	// Should find only the game inside the real zip, not the ._games.zip
 	assert.Len(t, files, 1, "should find only the game inside the real zip")
 	assert.Contains(t, files[0], "game.nes")
+}
+
+// TestBatchCommitLimit_FullSpeedWhenNotThrottled verifies a nil or running
+// pauser leaves the batch commit size at its full-speed default.
+func TestBatchCommitLimit_FullSpeedWhenNotThrottled(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, maxFilesPerTransaction, batchCommitLimit(nil), "nil pauser")
+
+	pauser := syncutil.NewPauser()
+	assert.Equal(t, maxFilesPerTransaction, batchCommitLimit(pauser), "running pauser")
+}
+
+// TestBatchCommitLimit_ShrinksWhenThrottledOrPaused verifies throttled and
+// paused states use the smaller batch size, so each commit's fsync burst
+// stays short and interruptible instead of one large uninterrupted batch.
+func TestBatchCommitLimit_ShrinksWhenThrottledOrPaused(t *testing.T) {
+	t.Parallel()
+
+	throttled := syncutil.NewPauser()
+	throttled.Throttle(syncutil.ThrottleLight)
+	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(throttled), "throttled pauser")
+
+	paused := syncutil.NewPauser()
+	paused.Pause()
+	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(paused), "paused pauser")
+}
+
+// TestGetFiles_PausedPauserInterruptsWalk verifies GetFiles periodically
+// checks the pauser during the directory walk itself, not just per-file in
+// the caller's indexing loop. A paused walk over enough entries to cross the
+// wait interval must yield to the pauser and stop instead of racing through
+// the entire directory tree unthrottled.
+func TestGetFiles_PausedPauserInterruptsWalk(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+	// More than one wait interval's worth of entries so the periodic pauser
+	// check inside the walk callback is guaranteed to fire.
+	const fileCount = walkEntryWaitInterval*2 + 10
+	for i := range fileCount {
+		name := fmt.Sprintf("game%d.nes", i)
+		require.NoError(t, os.WriteFile(filepath.Join(rootDir, name), []byte("data"), 0o600))
+	}
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err = GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir, pauser)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }

@@ -220,10 +220,17 @@ type IndexingStatusResponse struct {
 	// MissingMedia is the count of indexed media flagged missing on disk —
 	// what media.clean.orphans would remove.
 	MissingMedia *int `json:"missingMedia,omitempty"`
-	Exists       bool `json:"exists"`
-	Indexing     bool `json:"indexing"`
-	Optimizing   bool `json:"optimizing"`
-	Paused       bool `json:"paused"`
+	// SystemsCompleted/SystemsTotal report per-system indexing coverage so
+	// clients can serve partial results while a scan is still running.
+	SystemsCompleted *int `json:"systemsCompleted,omitempty"`
+	SystemsTotal     *int `json:"systemsTotal,omitempty"`
+	Exists           bool `json:"exists"`
+	Indexing         bool `json:"indexing"`
+	Optimizing       bool `json:"optimizing"`
+	Paused           bool `json:"paused"`
+	// Throttled reports that indexing is running at reduced speed while
+	// media plays.
+	Throttled bool `json:"throttled,omitempty"`
 }
 
 type ReaderResponse struct {
@@ -372,7 +379,10 @@ type ScrapingStatusResponse struct {
 	Scraping           bool                          `json:"scraping"`
 	Done               bool                          `json:"done"`
 	Paused             bool                          `json:"paused"`
-	Force              bool                          `json:"force"`
+	// Throttled reports that scraping is running at reduced speed while
+	// media plays.
+	Throttled bool `json:"throttled,omitempty"`
+	Force     bool `json:"force"`
 }
 
 type MediaLookupMatch struct {

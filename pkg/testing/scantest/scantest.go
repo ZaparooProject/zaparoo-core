@@ -28,7 +28,6 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/stretchr/testify/require"
 )
@@ -36,9 +35,25 @@ import (
 // IndexMediaPaths runs the given paths through the production staging pipeline
 // for one system — canonical tag seeding, staging, set-based reconcile — and
 // commits the result. It is the test-suite replacement for hand-driving the
-// old AddMediaPath/ScanState flow.
+// old AddMediaPath/ScanState flow. This helper uses ReconcileStagedSystem with
+// default ScanReconcileOpts, so it is a full scan and marks unstaged media for
+// the same system missing. Use IndexMediaPathsWithOpts with IncompleteScan:
+// true for incremental updates.
 func IndexMediaPaths(
 	tb testing.TB, db database.MediaDBI, systemID string, paths ...string,
+) database.ScanReconcileStats {
+	tb.Helper()
+	return IndexMediaPathsWithOpts(tb, db, systemID, database.ScanReconcileOpts{}, paths...)
+}
+
+// IndexMediaPathsWithOpts runs IndexMediaPaths with explicit ReconcileStagedSystem
+// options, for callers that need incremental scans with IncompleteScan: true.
+func IndexMediaPathsWithOpts(
+	tb testing.TB,
+	db database.MediaDBI,
+	systemID string,
+	opts database.ScanReconcileOpts,
+	paths ...string,
 ) database.ScanReconcileStats {
 	tb.Helper()
 	ctx := context.Background()
@@ -47,11 +62,13 @@ func IndexMediaPaths(
 	require.NoError(tb, db.BeginTransaction(true))
 	require.NoError(tb, db.ClearScanStage())
 	for _, path := range paths {
-		require.NoError(tb, mediascanner.StageMediaPath(
-			db, systemID, path, "", false, browseprefix.Policy{}, nil, "",
-		))
+		require.NoError(tb, mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
+			DB:       db,
+			SystemID: systemID,
+			Path:     path,
+		}))
 	}
-	stats, err := db.ReconcileStagedSystem(ctx, systemID, database.ScanReconcileOpts{})
+	stats, err := db.ReconcileStagedSystem(ctx, systemID, opts)
 	require.NoError(tb, err)
 	require.NoError(tb, db.CommitTransaction())
 	return stats

@@ -820,6 +820,7 @@ type MediaDBI interface {
 	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
 	TrackBackgroundOperation()
+	SetIndexingConnBoost(active bool)
 	BackgroundOperationDone()
 
 	InvalidateCountCache() error
@@ -929,6 +930,7 @@ type MediaDBI interface {
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
 	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
+	PopulateBrowseCacheForSystems(ctx context.Context, systemIDs []string) error
 	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
@@ -936,6 +938,7 @@ type MediaDBI interface {
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
+	HasAnyMedia() (bool, error)
 	GetMissingMediaCount() (int, error)
 	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
 	GetTotalScrapedMediaCount(ctx context.Context) (int, error)

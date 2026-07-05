@@ -165,6 +165,7 @@ func TestHandleGenerateMedia_RebuildRecreateFailureAbortsIndexing(t *testing.T) 
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("Recreate", false).Return(errors.New("disk on fire")).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
 
 	env := newRebuildTestEnv(t, mockMediaDB, `{"rebuild":true}`)
 	_, err := HandleGenerateMedia(env)

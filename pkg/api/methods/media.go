@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -355,12 +356,24 @@ func activeMediaPausesMediaWork(media *models.ActiveMedia) bool {
 	return slot == mediaslot.Primary
 }
 
-func syncMediaWorkPauserWithActiveMedia(media *models.ActiveMedia, pauser *syncutil.Pauser) {
+func syncMediaWorkPauserWithActiveMedia(cfg *config.Instance, media *models.ActiveMedia, pauser *syncutil.Pauser) {
 	if pauser == nil {
 		return
 	}
 	if activeMediaPausesMediaWork(media) {
-		pauser.Pause()
+		policy := config.MediaPausePolicy{Mode: config.IndexDuringMediaThrottle, Level: syncutil.ThrottleLight}
+		if cfg != nil {
+			systemID := ""
+			if media != nil {
+				systemID = media.SystemID
+			}
+			policy = cfg.ResolveMediaPausePolicy(systemID)
+		}
+		if policy.Mode == config.IndexDuringMediaPause {
+			pauser.Pause()
+		} else {
+			pauser.Throttle(policy.Level)
+		}
 		return
 	}
 	pauser.Resume()
@@ -374,9 +387,24 @@ func isPersistentMediaWorkStatus(status string) bool {
 	return status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending
 }
 
-func notifyMediaIndexingStopped(ns chan<- models.Notification) {
+// mediaDBHasUsableData reports whether the media database holds queryable
+// data right now: a completed prior index, or at least one system committed
+// by an in-progress one. Drives the Exists field so clients can serve
+// partial results mid-index instead of treating the database as absent.
+func mediaDBHasUsableData(mediaDB database.MediaDBI) bool {
+	if mediaDB == nil {
+		return false
+	}
+	if lastGenerated, err := mediaDB.GetLastGenerated(); err == nil && !time.Unix(0, 0).Equal(lastGenerated) {
+		return true
+	}
+	hasMedia, err := mediaDB.HasAnyMedia()
+	return err == nil && hasMedia
+}
+
+func notifyMediaIndexingStopped(ns chan<- models.Notification, mediaDB database.MediaDBI) {
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-		Exists:   false,
+		Exists:   mediaDBHasUsableData(mediaDB),
 		Indexing: false,
 	})
 }
@@ -424,9 +452,10 @@ func startMediaDBGeneration(
 	}
 
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-		Exists:             false,
+		Exists:             mediaDBHasUsableData(db.MediaDB),
 		Indexing:           true,
 		Paused:             pauser != nil && pauser.IsPaused(),
+		Throttled:          pauser != nil && pauser.IsThrottled(),
 		CurrentStepDisplay: ptrString(preparingMediaDatabaseUpdateDisplay),
 	})
 
@@ -438,11 +467,11 @@ func startMediaDBGeneration(
 	switch {
 	case err != nil:
 		statusInstance.clear()
-		notifyMediaIndexingStopped(ns)
+		notifyMediaIndexingStopped(ns, db.MediaDB)
 		return fmt.Errorf("failed to get optimization status during indexing check: %w", err)
 	case db.MediaDB.IsOptimizing():
 		statusInstance.clear()
-		notifyMediaIndexingStopped(ns)
+		notifyMediaIndexingStopped(ns, db.MediaDB)
 		return models.ClientErrf("database optimization in progress")
 	case optimizationStatus == mediadb.IndexingStatusRunning:
 		log.Info().Msg("persisted optimization was interrupted; allowing media indexing to start")
@@ -455,7 +484,7 @@ func startMediaDBGeneration(
 		log.Warn().Err(err).Msg("unable to check free disk space before indexing")
 	} else if freeBytes < config.MinFreeDiskBytes {
 		statusInstance.clear()
-		notifyMediaIndexingStopped(ns)
+		notifyMediaIndexingStopped(ns, db.MediaDB)
 		freeMB := freeBytes / (1024 * 1024)
 		needMB := config.MinFreeDiskBytes / (1024 * 1024)
 		return models.ClientErrf(
@@ -476,6 +505,16 @@ func startMediaDBGeneration(
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
+		// Lowest CPU/IO priority for the whole index run; the locked thread
+		// dies with this goroutine so the change never leaks.
+		bgpriority.Apply()
+
+		// Widen the connection pool for the duration: the indexing writer
+		// holds a connection near-continuously, and foreground search +
+		// browse must not queue behind each other on the single remainder.
+		db.MediaDB.SetIndexingConnBoost(true)
+		defer db.MediaDB.SetIndexingConnBoost(false)
+
 		if rebuild {
 			// Recreate closes the database, and Close waits for all tracked
 			// background operations — including this goroutine — so step out of
@@ -487,18 +526,23 @@ func startMediaDBGeneration(
 			db.MediaDB.TrackBackgroundOperation()
 			if recreateErr != nil {
 				log.Error().Err(recreateErr).Msg("failed to recreate media database for rebuild")
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:   false,
-					Indexing: false,
-				})
+				notifyMediaIndexingStopped(ns, db.MediaDB)
 				statusInstance.clear()
 				return
 			}
+			// Recreate opened a fresh pool at the steady-state size; re-widen it.
+			db.MediaDB.SetIndexingConnBoost(true)
 			log.Info().Msg("media database recreated for full rebuild; starting reindex")
 		}
 
 		notifState := indexingNotificationState{}
 		const notifThrottleInterval = 250 * time.Millisecond
+
+		// Tracks whether the DB holds queryable data, so status notifications
+		// stay truthful mid-index (clients serve partial results against it).
+		// Sticky once true: media only accumulates during a run. Rechecked at
+		// most once per throttled notification until it flips.
+		dbHasData := mediaDBHasUsableData(db.MediaDB)
 
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
@@ -551,14 +595,24 @@ func startMediaDBGeneration(
 				return
 			}
 
+			if !dbHasData {
+				dbHasData = mediaDBHasUsableData(db.MediaDB)
+			}
+			// Step increments as each system starts, so Step-1 systems have
+			// committed; Total includes the final "Writing database" step.
+			systemsCompleted := max(status.Step-1, 0)
+			systemsTotal := max(status.Total-1, 0)
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:             false,
+				Exists:             dbHasData,
 				Indexing:           true,
 				Paused:             pauser != nil && pauser.IsPaused(),
+				Throttled:          pauser != nil && pauser.IsThrottled(),
 				TotalSteps:         &status.Total,
 				CurrentStep:        &status.Step,
 				CurrentStepDisplay: &desc,
 				TotalFiles:         &status.Files,
+				SystemsCompleted:   &systemsCompleted,
+				SystemsTotal:       &systemsTotal,
 			})
 
 			log.Debug().Msgf("indexing status: %v", indexingStatusVals{
@@ -570,10 +624,12 @@ func startMediaDBGeneration(
 			})
 		}, pauser)
 		if err != nil {
+			// A cancelled or failed run may still leave a usable database
+			// (a prior index, or systems committed before the interruption).
 			if errors.Is(err, context.Canceled) {
 				log.Info().Msg("media indexing was cancelled")
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:     false,
+					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
 				})
@@ -581,7 +637,7 @@ func startMediaDBGeneration(
 				log.Error().Err(err).Msg("error generating media db")
 				// TODO: error notification to client
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:     false,
+					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
 				})
@@ -707,7 +763,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	// Reconcile with current primary-media state before reporting initial
 	// paused status. This clears stale pauses left by non-primary media events.
 	if env.State != nil {
-		syncMediaWorkPauserWithActiveMedia(env.State.ActiveMedia(), env.IndexPauser)
+		syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.IndexPauser)
 	}
 
 	// Use app-scoped context — indexing outlives the API request
@@ -1069,22 +1125,29 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	}
 
 	paused := env.IndexPauser != nil && env.IndexPauser.IsPaused()
+	throttled := env.IndexPauser != nil && env.IndexPauser.IsThrottled()
 
 	switch {
 	case resp.Database.Indexing:
 		// During indexing, don't show optimizing even if optimization is running
 		resp.Database.Optimizing = false
 		resp.Database.Paused = paused
-		resp.Database.Exists = false
+		resp.Database.Throttled = throttled
+		resp.Database.Exists = mediaDBHasUsableData(env.Database.MediaDB)
 		resp.Database.TotalSteps = &status.totalSteps
 		resp.Database.CurrentStep = &status.currentStep
 		resp.Database.CurrentStepDisplay = &status.currentDesc
 		resp.Database.TotalFiles = &status.totalFiles
+		systemsCompleted := max(status.currentStep-1, 0)
+		systemsTotal := max(status.totalSteps-1, 0)
+		resp.Database.SystemsCompleted = &systemsCompleted
+		resp.Database.SystemsTotal = &systemsTotal
 	case isPersistentMediaWorkStatus(persistedIndexingStatus):
 		resp.Database.Indexing = true
 		resp.Database.Optimizing = false
 		resp.Database.Paused = paused
-		resp.Database.Exists = false
+		resp.Database.Throttled = throttled
+		resp.Database.Exists = mediaDBHasUsableData(env.Database.MediaDB)
 		resp.Database.CurrentStepDisplay = ptrString(preparingResumeMediaDatabaseUpdateDisplay)
 	// IsOptimizing also covers a standalone browse-cache rebuild (e.g. the startup
 	// self-heal) that runs outside a full RunBackgroundOptimization pass and so
@@ -1106,17 +1169,10 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		// Database exists but is being optimized
 		resp.Database.Exists = true
 	default:
-		// Not indexing and not optimizing
+		// Not indexing and not optimizing. Existence covers both a completed
+		// index and partial data left by an interrupted one.
 		resp.Database.Optimizing = false
-		// Try to get last generated time, but don't fail if database is locked
-		lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
-		if err != nil {
-			// Database might be locked during indexing transition - don't fail completely
-			log.Warn().Err(err).Msg("failed to get last generated time, assuming database doesn't exist")
-			resp.Database.Exists = false
-		} else {
-			resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
-		}
+		resp.Database.Exists = mediaDBHasUsableData(env.Database.MediaDB)
 	}
 
 	// Get media counts if database exists and is not indexing
