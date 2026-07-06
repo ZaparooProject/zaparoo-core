@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"runtime"
 	"testing"
 	"time"
 
@@ -133,15 +132,21 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 			`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":%d}`,
 			mutationID,
 		))))
-	waitForMediaDBWriterPending(t)
-	close(releaseImages)
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(msg, &resp))
+	assert.Equal(t, models.NewNumberID(int64(mutationID)), resp.ID,
+		"mutation should bypass active and queued image work")
+
+	close(releaseImages)
 	seen := make([]models.RPCID, 0, totalResponses)
-	for range totalResponses {
-		_, msg, err := conn.ReadMessage()
+	seen = append(seen, resp.ID)
+	for range totalResponses - 1 {
+		_, msg, err = conn.ReadMessage()
 		require.NoError(t, err)
-		var resp models.ResponseObject
 		require.NoError(t, json.Unmarshal(msg, &resp))
 		seen = append(seen, resp.ID)
 	}
@@ -151,25 +156,6 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	require.NotEqual(t, -1, favoriteIndex)
 	require.NotEqual(t, -1, queuedImageIndex)
 	assert.Less(t, favoriteIndex, queuedImageIndex, "mutation should bypass queued image work")
-}
-
-func waitForMediaDBWriterPending(t *testing.T) {
-	t.Helper()
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if !wsMediaDBMu.TryRLock() {
-			return
-		}
-		wsMediaDBMu.RUnlock()
-
-		select {
-		case <-deadline:
-			t.Fatal("media.tags.update did not wait for the media DB write lock")
-		default:
-			runtime.Gosched()
-		}
-	}
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
@@ -269,6 +255,124 @@ func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.
 	require.NoError(t, err)
 	_, _, err = conn.ReadMessage()
 	require.NoError(t, err)
+}
+
+func TestWebSocketInstantMethodsBypassMediaTransactionLock(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{"run", models.MethodRun},
+		{"launch", models.MethodLaunch},
+		{"stop", models.MethodStop},
+		{"media control", models.MethodMediaControl},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			txStarted := make(chan struct{})
+			releaseTx := make(chan struct{})
+			instantStarted := make(chan struct{}, 1)
+			var methodMap MethodMap
+			tagsUpdateHandler := func(env requests.RequestEnv) (any, error) {
+				close(txStarted)
+				select {
+				case <-releaseTx:
+					return map[string]string{"kind": "favorite"}, nil
+				case <-env.Context.Done():
+					return nil, env.Context.Err()
+				}
+			}
+			require.NoError(t, methodMap.AddMethod(models.MethodMediaTagsUpdate, tagsUpdateHandler))
+			require.NoError(t, methodMap.AddMethod(tt.method, func(requests.RequestEnv) (any, error) {
+				instantStarted <- struct{}{}
+				return map[string]string{"kind": "instant"}, nil
+			}))
+
+			wsURL, cleanup := startPriorityWSServer(t, &methodMap)
+			defer cleanup()
+
+			conn := dialWS(t, wsURL)
+			defer func() { _ = conn.Close() }()
+
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+				[]byte(`{"jsonrpc":"2.0","method":"media.tags.update","id":1}`)))
+			select {
+			case <-txStarted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("media.tags.update did not start")
+			}
+
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+				[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":%q,"id":2}`, tt.method))))
+
+			select {
+			case <-instantStarted:
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("%s did not start while media.tags.update was in flight; "+
+					"instant method incorrectly blocked on wsMediaDBMu", tt.method)
+			}
+
+			close(releaseTx)
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+			_, _, err := conn.ReadMessage()
+			require.NoError(t, err)
+			_, _, err = conn.ReadMessage()
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestLockMediaDBForAPIMethod(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		wantLocked bool // true if lockMediaDBForAPIMethod should hold wsMediaDBMu (any mode)
+	}{
+		{"run takes no lock", models.MethodRun, false},
+		{"launch takes no lock", models.MethodLaunch, false},
+		{"stop takes no lock", models.MethodStop, false},
+		{"media control takes no lock", models.MethodMediaControl, false},
+		{"tags update takes exclusive lock", models.MethodMediaTagsUpdate, true},
+		{"meta update takes exclusive lock", models.MethodMediaMetaUpdate, true},
+		{"image takes no lock", models.MethodMediaImage, false},
+		{"other method takes read lock", models.MethodMediaMeta, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unlock := lockMediaDBForAPIMethod(tt.method)
+			// If the method took no lock, wsMediaDBMu must still be exclusively
+			// lockable right now; if it took a lock (Lock or RLock), a TryLock
+			// must fail until unlock() runs. Probed from a separate goroutine:
+			// the deadlock-tagged build (pkg/helpers/syncutil) tracks lock
+			// holders per goroutine and flags a same-goroutine TryLock as
+			// recursive locking even though TryLock never blocks, which trips
+			// its default potential-deadlock handler (os.Exit(2)).
+			gotLocked := !tryLockWsMediaDBMu()
+			assert.Equal(t, tt.wantLocked, gotLocked, "method %q", tt.method)
+			unlock()
+		})
+	}
+}
+
+// tryLockWsMediaDBMu probes wsMediaDBMu from a dedicated goroutine so the
+// deadlock-tagged build's per-goroutine lock tracking doesn't see it as the
+// same goroutine relocking. Unlocks before returning if the lock was acquired.
+func tryLockWsMediaDBMu() bool {
+	result := make(chan bool, 1)
+	go func() {
+		locked := wsMediaDBMu.TryLock()
+		if locked {
+			wsMediaDBMu.Unlock()
+		}
+		result <- locked
+	}()
+	return <-result
 }
 
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {

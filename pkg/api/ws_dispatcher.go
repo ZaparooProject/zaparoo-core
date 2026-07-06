@@ -244,9 +244,20 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 }
 
 func lockMediaDBForAPIMethod(method string) func() {
+	// Instant control methods (run/launch, stop, media.control) never touch
+	// MediaDB, so they must not wait behind a slow tag/meta write or an
+	// in-flight indexing commit holding this lock.
+	if isMediaDBFreeInstantMethod(method) {
+		return func() {}
+	}
 	if isMediaDBTransactionAPIMethod(method) {
 		wsMediaDBMu.Lock()
 		return wsMediaDBMu.Unlock
+	}
+	// media.image already has its own tiny concurrency gate; do not let slow
+	// image reads/resizes hold the API DB read lane and starve tag/meta writes.
+	if isImageAPIMethod(method) {
+		return func() {}
 	}
 	wsMediaDBMu.RLock()
 	return wsMediaDBMu.RUnlock

@@ -164,13 +164,12 @@ func TestNewNamesIndex_BatchesCommitsAcrossSmallSystems(t *testing.T) {
 		assert.Lenf(t, media, len(files), "system %s should have all its media", systemID)
 	}
 
-	// All files fit well under maxFilesPerTransaction, so there must be exactly one
-	// batch-boundary commit and no mid-system (file-limit) commits — proving the six
-	// systems shared a single transaction rather than committing per system.
+	// Each small system should commit at its own boundary. Cross-system batching
+	// kept transactions open into the next system and matched MiSTer crash logs.
 	boundaryCommits := strings.Count(output, `"message":"committing media indexing batch"`)
 	fileLimitCommits := strings.Count(output, "committed batch (file limit)")
-	assert.Equal(t, 1, boundaryCommits,
-		"six small systems should share exactly one batch commit (got log:\n%s)", output)
+	assert.Equal(t, len(systemFiles), boundaryCommits,
+		"small systems should commit at each system boundary (got log:\n%s)", output)
 	assert.Equal(t, 0, fileLimitCommits, "no mid-system commits expected for small systems")
 }
 
@@ -262,6 +261,113 @@ func TestNewNamesIndex_BatchedMissingMediaMarkedOnReindex(t *testing.T) {
 	assert.False(t, missingByBase["keep.bin"], "the surviving file's media row should not be missing")
 }
 
+// TestNewNamesIndex_CommitsOnReconcileVolume verifies that a run of systems with no
+// files on disk but missing-media reconcile writes commits before completion rather
+// than carrying one unbounded transaction until the last system. This is the
+// stress-DB workload: a library that has shrunk drastically, flipping many rows
+// to missing per system.
+func TestNewNamesIndex_CommitsOnReconcileVolume(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache and log.Logger.
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Build several systems each with a handful of files in their own dir so we can
+	// remove the files before the second index.
+	systemIDs := []string{
+		systemdefs.SystemNES, systemdefs.SystemSNES, systemdefs.SystemGenesis,
+		systemdefs.SystemGameboy, systemdefs.SystemGameboyColor, systemdefs.SystemGBA,
+	}
+	const filesPerSystem = 4
+	dirs := make(map[string]string, len(systemIDs))
+	launchers := make([]platforms.Launcher, 0, len(systemIDs))
+	systems := make([]systemdefs.System, 0, len(systemIDs))
+	for _, systemID := range systemIDs {
+		dir := t.TempDir()
+		dirs[systemID] = dir
+		for _, name := range genFileNames("game", filesPerSystem) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
+		}
+		launchers = append(launchers, platforms.Launcher{
+			ID:         "custom-" + systemID,
+			SystemID:   systemID,
+			Folders:    []string{dir},
+			Extensions: []string{".bin"},
+		})
+		systems = append(systems, systemdefs.System{ID: systemID})
+	}
+
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// First index creates all the rows.
+	first, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, len(systemIDs)*filesPerSystem, first)
+
+	// Remove every file so the reindex flips all rows to missing with zero files on
+	// disk — filesInBatch never moves, so only the reconcile-volume trigger (or the
+	// final system) can force a commit.
+	for _, dir := range dirs {
+		for _, name := range genFileNames("game", filesPerSystem) {
+			require.NoError(t, os.Remove(filepath.Join(dir, name)))
+		}
+	}
+
+	// Lower the historical volume threshold; current production commits every
+	// system boundary, but this keeps the regression setup near the old stress path.
+	origThreshold := maxReconcileRowsPerTransaction
+	maxReconcileRowsPerTransaction = filesPerSystem + 1
+	defer func() { maxReconcileRowsPerTransaction = origThreshold }()
+
+	buf := &syncLogBuffer{}
+	prevLogger := log.Logger
+	prevGlobal := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = prevLogger; zerolog.SetGlobalLevel(prevGlobal) }()
+
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	log.Logger = prevLogger
+	zerolog.SetGlobalLevel(prevGlobal)
+	output := buf.String()
+
+	// With no files on disk, filesInBatch stays 0 the whole run. System-boundary
+	// commits must still produce more than one batch-boundary commit.
+	boundaryCommits := strings.Count(output, `"message":"committing media indexing batch"`)
+	fileLimitCommits := strings.Count(output, "committed batch (file limit)")
+	assert.Equal(t, 0, fileLimitCommits, "no file-limit commits expected when there are no files on disk")
+	assert.Greaterf(t, boundaryCommits, 1,
+		"system-boundary commits should prevent a single final commit (got log:\n%s)", output)
+
+	// Every row must still be present and flagged missing after the reindex. Query
+	// counts directly rather than via basename (filenames collide across systems).
+	sqlDB := db.MediaDB.UnsafeGetSQLDb()
+	require.NotNil(t, sqlDB)
+	var total, missing int
+	require.NoError(t, sqlDB.QueryRowContext(context.Background(),
+		"SELECT COUNT(*), COALESCE(SUM(IsMissing), 0) FROM Media").Scan(&total, &missing))
+	assert.Equal(t, len(systemIDs)*filesPerSystem, total, "all media rows should still be present")
+	assert.Equal(t, total, missing, "all media should be flagged missing after files removed")
+}
+
 // readMissingFlags returns IsMissing for every Media row keyed by path basename.
 func readMissingFlags(t *testing.T, db *database.Database) map[string]bool {
 	t.Helper()
@@ -329,4 +435,14 @@ func TestNewNamesIndex_LargeSystemCommitsMidBatch(t *testing.T) {
 	fileLimitCommits := strings.Count(output, "committed batch (file limit)")
 	assert.GreaterOrEqual(t, fileLimitCommits, 1,
 		"a system larger than maxFilesPerTransaction must commit mid-system at least once")
+
+	// The mid-batch (file limit) commit path must refresh mid-scan caches for the
+	// systems it just finalized, same as a natural system-boundary commit. Without
+	// that, IndexedSystems() (backing the `systems` API) misses systems that are
+	// fully durable but happened to land on a file-limit flush.
+	indexed, iErr := db.MediaDB.IndexedSystems()
+	require.NoError(t, iErr)
+	assert.Contains(t, indexed, systemdefs.SystemGameboy,
+		"a system committed via the file-limit path must be visible via IndexedSystems() "+
+			"without waiting for the end-of-run browse cache rebuild")
 }

@@ -39,9 +39,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 	method = strings.ToLower(method)
 
 	switch method {
-	case models.MethodMediaTagsUpdate,
-		models.MethodMediaMetaUpdate,
-		models.MethodMediaHistoryLatest,
+	case models.MethodMediaHistoryLatest,
 		models.MethodRun,
 		models.MethodRunScript,
 		models.MethodLaunch,
@@ -97,4 +95,20 @@ func isImageAPIMethod(method string) bool {
 func isMediaDBTransactionAPIMethod(method string) bool {
 	return strings.EqualFold(method, models.MethodMediaTagsUpdate) ||
 		strings.EqualFold(method, models.MethodMediaMetaUpdate)
+}
+
+// isMediaDBFreeInstantMethod reports whether method is an instant control
+// method that never touches MediaDB, so it must never wait on wsMediaDBMu
+// behind a slow tag/meta write or a long-running indexing commit. run/launch
+// only enqueue a token, stop only signals the platform launcher, and
+// media.control only drives launcher controls (its script path is validated
+// to disallow media-launching commands, so it never queries MediaDB either).
+// TestIsControlAllowed_BlocksMediaDBReadingCommands in pkg/zapscript guards
+// this invariant — it fails if a future MediaDB-reading command is ever added
+// without being rejected by isControlAllowed.
+func isMediaDBFreeInstantMethod(method string) bool {
+	return strings.EqualFold(method, models.MethodRun) ||
+		strings.EqualFold(method, models.MethodLaunch) ||
+		strings.EqualFold(method, models.MethodStop) ||
+		strings.EqualFold(method, models.MethodMediaControl)
 }

@@ -20,8 +20,6 @@
 package mediadb
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -121,33 +119,4 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 	}
 
 	return whereClause, args
-}
-
-// sqlGetMaxID returns the maximum ID from the specified table and column
-// This function uses hardcoded table/column names that are validated by callers
-func sqlGetMaxID(ctx context.Context, db *sql.DB, tableName, columnName string) (int64, error) {
-	var query string
-	switch tableName {
-	case "Systems":
-		query = "SELECT COALESCE(MAX(DBID), 0) FROM Systems"
-	case "MediaTitles":
-		query = "SELECT COALESCE(MAX(DBID), 0) FROM MediaTitles"
-	case "Media":
-		query = "SELECT COALESCE(MAX(DBID), 0) FROM Media"
-	case "TagTypes":
-		query = "SELECT COALESCE(MAX(DBID), 0) FROM TagTypes"
-	case "Tags":
-		query = "SELECT COALESCE(MAX(DBID), 0) FROM Tags"
-	case "MediaTags":
-		query = "SELECT COALESCE(MAX(DBID), 0) FROM MediaTags"
-	default:
-		return 0, fmt.Errorf("invalid table name: %s", tableName)
-	}
-
-	var maxID int64
-	err := db.QueryRowContext(ctx, query).Scan(&maxID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get max ID from %s.%s: %w", tableName, columnName, err)
-	}
-	return maxID, nil
 }

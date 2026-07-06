@@ -581,7 +581,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
-| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
+| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries, except a `root` entry whose exact count could not be computed in time (known non-empty, count omitted). |
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
@@ -924,6 +924,7 @@ Optionally, an object:
 | :------ | :------- | :------- | :---------------------------------------------------------------------------------- |
 | systems     | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| rebuild     | boolean  | No       | Discard the media database entirely and index from scratch ("fresh start"). Scraped metadata is lost and must be re-scraped; favourites and launcher overrides are preserved (they live in the user database and are re-applied after indexing). Cannot be combined with `systems`. |
 
 An omitted or `null` value parameters key is also valid and will index every system.
 

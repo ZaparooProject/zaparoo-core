@@ -709,6 +709,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 
 			// Mock total media count
 			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+			mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
 
 			// Mock optimized JOIN methods for PopulateScanStateFromDB
 			mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()

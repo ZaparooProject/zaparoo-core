@@ -26,7 +26,6 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -36,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/mock"
 )
@@ -67,40 +67,9 @@ func setupPipelineBench(b *testing.B, n int) *pipelineBenchEnv {
 	// Real MediaDB with production schema
 	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(b)
 
-	// Seed canonical tags and populate with titles
-	ss := &database.ScanState{
-		SystemIDs:  make(map[string]int),
-		TitleIDs:   make(map[string]int),
-		MediaIDs:   make(map[string]int),
-		TagTypeIDs: make(map[string]int),
-		TagIDs:     make(map[string]int),
-	}
-	if err := mediascanner.SeedCanonicalTags(mediaDB, ss); err != nil {
-		b.Fatal(err)
-	}
-
+	// Populate with titles through the production staging pipeline.
 	filenames := fixtures.BuildBenchFilenames(n)
-	if err := mediaDB.BeginTransaction(true); err != nil {
-		b.Fatal(err)
-	}
-	for i, fn := range filenames {
-		_, _, err := mediascanner.AddMediaPath(mediaDB, ss, "NES", fn, "", false, false, nil, "")
-		if i == 0 && err != nil {
-			b.Fatal(err)
-		}
-		if (i+1)%10_000 == 0 {
-			if err := mediaDB.CommitTransaction(); err != nil {
-				b.Fatal(err)
-			}
-			mediascanner.FlushScanStateMaps(ss)
-			if err := mediaDB.BeginTransaction(true); err != nil {
-				b.Fatal(err)
-			}
-		}
-	}
-	if err := mediaDB.CommitTransaction(); err != nil {
-		b.Fatal(err)
-	}
+	scantest.IndexMediaPaths(b, mediaDB, "NES", filenames...)
 	if err := mediaDB.RebuildSlugSearchCache(); err != nil {
 		b.Fatal(err)
 	}

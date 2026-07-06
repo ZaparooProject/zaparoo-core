@@ -49,6 +49,12 @@ type BrowseParams struct {
 type MediaIndexParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	// Rebuild discards the media database entirely and indexes from scratch.
+	// Scraped metadata is lost and must be re-scraped; user data (favourites,
+	// launcher overrides) lives in UserDB and is re-applied after indexing.
+	// Incompatible with a systems filter: a fresh database indexed selectively
+	// would silently drop every other system's media.
+	Rebuild *bool `json:"rebuild,omitempty"`
 }
 
 type RunParams struct {

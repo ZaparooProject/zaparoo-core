@@ -35,6 +35,11 @@ const (
 const (
 	DefaultThreshold = 0.5
 	DefaultMinFiles  = 5
+	// DefaultSampleLimit bounds how many paths are read to detect a directory's
+	// prefix policy. The policy is a fraction-vs-threshold heuristic, so a sample of
+	// this size estimates the ratio reliably without scanning directories that can
+	// hold ~1M files on large libraries.
+	DefaultSampleLimit = 2000
 )
 
 type Kind string

@@ -19,6 +19,8 @@ go.work
 .pi/
 
 *.db
+*.db-shm
+*.db-wal
 *.tar
 
 .env

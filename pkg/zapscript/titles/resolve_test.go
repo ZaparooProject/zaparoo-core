@@ -70,6 +70,20 @@ func setupCacheWrite(m *helpers.MockMediaDBI) {
 	).Return(nil)
 }
 
+// setupCacheWriteSync configures the mock to accept cache write calls and
+// returns a channel closed once the call happens. cacheSlugResolution runs
+// the write in a background goroutine, so tests must wait on this channel
+// before asserting on it instead of racing it.
+func setupCacheWriteSync(m *helpers.MockMediaDBI) <-chan struct{} {
+	done := make(chan struct{})
+	m.On("SetCachedSlugResolution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Run(func(mock.Arguments) {
+		close(done)
+	}).Return(nil)
+	return done
+}
+
 func TestResolveTitle_StopsWhenContextCancelled(t *testing.T) {
 	t.Parallel()
 
@@ -123,9 +137,11 @@ func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
 		Path:     fastPath,
 		MediaID:  1,
 	}}, nil)
+	done := make(chan struct{})
 	mockMediaDB.On("SetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(args mock.Arguments) {
+		defer close(done)
 		ctx, ok := args.Get(0).(context.Context)
 		require.True(t, ok)
 		<-ctx.Done()
@@ -144,6 +160,12 @@ func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, fastPath, result.Result.Path)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cache write goroutine did not complete in time")
+	}
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -910,7 +932,7 @@ func TestResolveTitle_BestCandidateCachedAndReturned(t *testing.T) {
 		},
 	}, nil)
 
-	setupCacheWrite(mockMediaDB)
+	done := setupCacheWriteSync(mockMediaDB)
 
 	result, err := ResolveTitle(context.Background(), &ResolveParams{
 		SystemID:  "NES",
@@ -929,6 +951,12 @@ func TestResolveTitle_BestCandidateCachedAndReturned(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, StrategyExactMatch, result.Strategy)
 	assert.GreaterOrEqual(t, result.Confidence, ConfidenceHigh)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cache write goroutine did not complete in time")
+	}
 	mockMediaDB.AssertCalled(t, "SetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, int64(1), StrategyExactMatch)
 }

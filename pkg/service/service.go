@@ -386,14 +386,25 @@ func Start(
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-			checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-			if checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+			indexResumeStarted := checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+			if !indexResumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
 				// A failed optimization revealed a corrupt database; rebuild it now
 				// rather than waiting for the next startup.
 				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 			}
 
+			// Rebuild the slug search cache (synchronous) before kicking off the
+			// browse-cache self-heal. Both are heavy DB readers; running them
+			// concurrently on a large library saturates the 2-connection pool and
+			// starves foreground browse (observed as 30 s browse timeouts on wake).
+			// Serializing them keeps a connection free for browsing throughout.
 			rebuildStartupSlugSearchCache(db.MediaDB, slugCacheLoaded)
+
+			// Recover a stale/absent browse cache so large libraries stay browsable
+			// without waiting for a full reindex to finish. Runs after the resume
+			// checks so it can see whether indexing was actually (re)started, and
+			// after the slug rebuild so the two don't contend for the connection pool.
+			checkAndHealBrowseCache(st.GetContext(), db, st.Notifications, indexPauser)
 		},
 	)
 
@@ -433,8 +444,8 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
-	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
-	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
+	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("starting publishers")

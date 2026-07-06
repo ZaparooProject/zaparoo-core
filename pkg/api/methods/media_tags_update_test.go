@@ -30,10 +30,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -230,41 +230,21 @@ func mediaTagsUpdateRow() database.MediaFullRow {
 func addTestMediaPaths(t *testing.T, mediaDB database.MediaDBI, paths ...string) []int64 {
 	t.Helper()
 
-	state := newTestScanState()
-	require.NoError(t, mediascanner.SeedCanonicalTags(mediaDB, state))
-	require.NoError(t, mediaDB.BeginTransaction(true))
+	scantest.IndexMediaPaths(t, mediaDB, "NES", paths...)
+
+	rows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	byPath := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		byPath[row.Path] = row.DBID
+	}
 	mediaIDs := make([]int64, 0, len(paths))
 	for _, path := range paths {
-		_, mediaID, err := mediascanner.AddMediaPath(
-			mediaDB,
-			state,
-			"NES",
-			path,
-			"",
-			false,
-			false,
-			nil,
-			slugs.MediaTypeGame,
-		)
-		require.NoError(t, err)
-		mediaIDs = append(mediaIDs, int64(mediaID))
+		dbid, ok := byPath[pathutil.CanonicalMediaPath(path)]
+		require.True(t, ok, "indexed media not found for path %s", path)
+		mediaIDs = append(mediaIDs, dbid)
 	}
-	require.NoError(t, mediaDB.CommitTransaction())
-
 	return mediaIDs
-}
-
-func newTestScanState() *database.ScanState {
-	return &database.ScanState{
-		SystemIDs:     make(map[string]int),
-		TitleIDs:      make(map[string]int),
-		MediaIDs:      make(map[string]int),
-		MediaTitleIDs: make(map[int]int),
-		MediaTagIDs:   make(map[int]map[int]struct{}),
-		TagTypeIDs:    make(map[string]int),
-		TagIDs:        make(map[string]int),
-		MissingMedia:  make(map[int]struct{}),
-	}
 }
 
 func withParams(env *requests.RequestEnv, params string) requests.RequestEnv {

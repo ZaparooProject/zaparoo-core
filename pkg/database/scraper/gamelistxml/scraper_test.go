@@ -3087,6 +3087,51 @@ func TestProcessCompanionEntries_ThrottlesBatchProgress(t *testing.T) {
 	})
 }
 
+func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="42" source="ZaparooCompanion"><name>Game</name></game>
+  <game parentid="42" source="ZaparooCompanion"><path>./child1.rom</path></game>
+  <game parentid="42" source="ZaparooCompanion"><path>./child2.rom</path></game>
+</gameList>`), 0o600))
+
+	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	indexes := mediaByPath(
+		database.Media{DBID: 10, MediaTitleDBID: 20, Path: filepath.Join(root, "child1.rom")},
+		database.Media{DBID: 11, MediaTitleDBID: 21, Path: filepath.Join(root, "child2.rom")},
+	)
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	done := make(chan companionStats, 1)
+	go func() {
+		done <- s.processCompanionEntries(
+			context.Background(), scraper.ScrapeOptions{Pauser: pauser}, system, mockDB, indexes, nil,
+		)
+	}()
+
+	select {
+	case <-done:
+		require.FailNow(t, "processCompanionEntries did not block on a paused pauser before processing children")
+	case <-time.After(150 * time.Millisecond):
+	}
+	require.Empty(t, mockDB.batches, "companion writes must not run while indexing is paused")
+
+	pauser.Resume()
+
+	select {
+	case stats := <-done:
+		assertCompanionCounts(t, &stats, 2, 2, 0)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "processCompanionEntries did not resume after pauser.Resume()")
+	}
+	require.Len(t, mockDB.batches, 1)
+}
+
 func TestProcessCompanionEntries_BatchFailureFallsBackToPerTargetWrites(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
 	"github.com/rs/zerolog/log"
@@ -166,6 +167,9 @@ func (s *scraperImpl) scrapeLoop(
 	ch chan<- scraper.ScrapeUpdate,
 ) {
 	defer close(ch)
+	// Lowest CPU/IO priority for the whole scrape run; the locked thread
+	// dies with this goroutine so the change never leaks.
+	bgpriority.Apply()
 	for systemIdx, system := range systems {
 		if err := waitForScrape(ctx, opts); err != nil {
 			ch <- scraper.ScrapeUpdate{FatalErr: err, Done: true}

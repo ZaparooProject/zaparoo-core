@@ -366,6 +366,7 @@ func scrapingStatusFromUpdate(
 	force bool,
 	update *scraper.ScrapeUpdate,
 	paused bool,
+	throttled bool,
 ) models.ScrapingStatusResponse {
 	display := systemProgressDisplay(update.SystemID)
 	status := models.ScrapingStatusResponse{
@@ -378,6 +379,7 @@ func scrapingStatusFromUpdate(
 		Scraping:           !update.Done,
 		Done:               update.Done,
 		Paused:             paused && !update.Done,
+		Throttled:          throttled && !update.Done,
 		State:              scrapeState(scrapeCtx, update, paused && !update.Done),
 		Force:              force,
 		TotalSteps:         ptrIfPositive(update.TotalSteps),
@@ -400,10 +402,11 @@ func scrapingStatusFromUpdate(
 	return status
 }
 
-func PublishScrapePauseStatus(ns chan<- models.Notification, paused bool) {
+func PublishScrapePauseStatus(ns chan<- models.Notification, paused, throttled bool) {
 	status := scrapingStatusInstance.getLatest()
 	status.Scraping = true
 	status.Paused = paused
+	status.Throttled = throttled
 	status.State = scrapeStateRunning
 	if paused {
 		status.State = scrapeStatePaused
@@ -463,6 +466,17 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		return nil, err
 	}
 
+	ns := env.State.Notifications
+	db := env.Database
+	preparingStatus := models.ScrapingStatusResponse{
+		ScraperID:          params.ScraperID,
+		State:              scrapeStateRunning,
+		Scraping:           true,
+		Force:              params.Force,
+		CurrentStepDisplay: ptrIfNotEmpty(preparingMediaScrapeDisplay),
+	}
+	publishScrapingStatus(ns, &preparingStatus)
+
 	if params.Force && runID == "" {
 		runID = uuid.NewString()
 	}
@@ -474,10 +488,24 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 	}
 	if err := env.Database.MediaDB.SetScrapingOperation(operation); err != nil {
 		scrapingStatusInstance.clearIfOwner(params.ScraperID)
+		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			ScraperID: params.ScraperID,
+			State:     scrapeStateFailed,
+			Force:     params.Force,
+			Done:      true,
+			Error:     "failed to start media scrape",
+		})
 		return nil, fmt.Errorf("failed to persist scraping operation: %w", err)
 	}
 	if err := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusRunning); err != nil {
 		scrapingStatusInstance.clearIfOwner(params.ScraperID)
+		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			ScraperID: params.ScraperID,
+			State:     scrapeStateFailed,
+			Force:     params.Force,
+			Done:      true,
+			Error:     "failed to start media scrape",
+		})
 		return nil, fmt.Errorf("failed to persist scraping status: %w", err)
 	}
 
@@ -487,9 +515,10 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 
 	// Reconcile with current primary-media state before reporting initial
 	// paused status. This clears stale pauses left by non-primary media events.
-	syncMediaWorkPauserWithActiveMedia(env.State.ActiveMedia(), env.ScrapePauser)
+	syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.ScrapePauser)
 
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
+	throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
 	opts := scraper.ScrapeOptions{Systems: params.Systems, RunID: runID, Force: params.Force, Pauser: env.ScrapePauser}
 	ch := make(chan scraper.ScrapeUpdate, 32)
 	if err := s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch); err != nil {
@@ -498,11 +527,15 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		if statusErr := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); statusErr != nil {
 			log.Warn().Err(statusErr).Msg("failed to persist scraping failure status")
 		}
+		publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			ScraperID: params.ScraperID,
+			State:     scrapeStateFailed,
+			Force:     params.Force,
+			Done:      true,
+			Error:     "failed to start media scrape",
+		})
 		return nil, fmt.Errorf("failed to start scraper: %w", err)
 	}
-
-	ns := env.State.Notifications
-	db := env.Database
 
 	initialState := scrapeStateRunning
 	if paused {
@@ -513,6 +546,7 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		State:     initialState,
 		Scraping:  true,
 		Paused:    paused,
+		Throttled: throttled,
 		Force:     params.Force,
 	}
 	populateScrapedMediaCountExact(env.State.GetContext(), db, &initialStatus)
@@ -532,7 +566,8 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 				receivedDone = true
 			}
 			paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
-			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused)
+			throttled := env.ScrapePauser != nil && env.ScrapePauser.IsThrottled()
+			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused, throttled)
 			if update.FatalErr != nil {
 				finalStatus = mediadb.IndexingStatusFailed
 			}
@@ -629,6 +664,7 @@ func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 	}
 	if status.Scraping && env.ScrapePauser != nil {
 		status.Paused = env.ScrapePauser.IsPaused()
+		status.Throttled = env.ScrapePauser.IsThrottled()
 		status.State = scrapeStateRunning
 		if status.Paused {
 			status.State = scrapeStatePaused
@@ -695,7 +731,7 @@ func HandleMediaScrapeResume(env requests.RequestEnv) (any, error) {
 
 	env.ScrapePauser.Resume()
 	if scrapingStatusInstance.isRunning() {
-		PublishScrapePauseStatus(env.State.Notifications, false)
+		PublishScrapePauseStatus(env.State.Notifications, false, false)
 	}
 	log.Info().Msg("media scraping manually resumed")
 

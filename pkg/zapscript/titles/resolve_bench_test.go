@@ -23,14 +23,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 )
 
 // benchLaunchers provides test launchers for the NES system.
@@ -51,43 +50,10 @@ func setupResolveBenchDB(b *testing.B, n int) (
 
 	db, cleanup = testhelpers.NewInMemoryMediaDB(b)
 
-	// Seed canonical tags (required before AddMediaPath)
-	ss := &database.ScanState{
-		SystemIDs:  make(map[string]int),
-		TitleIDs:   make(map[string]int),
-		MediaIDs:   make(map[string]int),
-		TagTypeIDs: make(map[string]int),
-		TagIDs:     make(map[string]int),
-	}
-	if err := mediascanner.SeedCanonicalTags(db, ss); err != nil {
-		b.Fatal(err)
-	}
-
-	// Generate deterministic filenames
+	// Generate deterministic filenames and populate the DB through the
+	// production staging pipeline.
 	filenames := fixtures.BuildBenchFilenames(n)
-
-	// Populate DB with titles via real production AddMediaPath
-	if err := db.BeginTransaction(true); err != nil {
-		b.Fatal(err)
-	}
-	for i, fn := range filenames {
-		_, _, err := mediascanner.AddMediaPath(db, ss, "nes", fn, "", false, false, nil, "")
-		if i == 0 && err != nil {
-			b.Fatal(err)
-		}
-		if (i+1)%10_000 == 0 {
-			if err := db.CommitTransaction(); err != nil {
-				b.Fatal(err)
-			}
-			mediascanner.FlushScanStateMaps(ss)
-			if err := db.BeginTransaction(true); err != nil {
-				b.Fatal(err)
-			}
-		}
-	}
-	if err := db.CommitTransaction(); err != nil {
-		b.Fatal(err)
-	}
+	scantest.IndexMediaPaths(b, db, "nes", filenames...)
 
 	// Build slug search cache (required for search operations)
 	if err := db.RebuildSlugSearchCache(); err != nil {

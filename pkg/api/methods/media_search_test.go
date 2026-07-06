@@ -385,8 +385,12 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 		{Type: "genre", Tag: "RPG"},
 	}
 
-	mockMediaDB.On("GetAllUsedTags",
-		mock.Anything, // context
+	mockMediaDB.On("IndexedSystems").Return([]string{"NES", "SNES"}, nil)
+	mockMediaDB.On("GetSystemTagsCached",
+		mock.Anything,
+		mock.MatchedBy(func(systems []systemdefs.System) bool {
+			return len(systems) == 2
+		}),
 	).Return(expectedTags, nil)
 
 	// Create state

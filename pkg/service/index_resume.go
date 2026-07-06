@@ -42,32 +42,88 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// maxIndexResumeAttempts bounds how many consecutive boots will auto-resume an
+// interrupted media index before giving up and leaving the library browsable
+// from cache. A large-library reindex can take hours; without this bound a device
+// that reboots mid-index would relaunch the reindex on every boot forever.
+const maxIndexResumeAttempts = 3
+
 // mediaDBRecovering serializes media database recovery so the startup check and the
 // runtime watcher can never run a close/reopen rebuild concurrently.
 var mediaDBRecovering atomic.Bool
 
-// checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it
+// checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it.
+// It returns true when an index resume was started so callers can defer lower-priority
+// media maintenance until indexing reaches a terminal state.
 func checkAndResumeIndexing(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	db *database.Database,
 	st *state.State,
 	pauser *syncutil.Pauser,
-) {
+) bool {
 	// Check if indexing was interrupted
 	indexingStatus, err := db.MediaDB.GetIndexingStatus()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get indexing status during startup check")
-		return
+		return false
 	}
 
 	// Only resume if indexing was interrupted (running or pending states)
 	if indexingStatus != mediadb.IndexingStatusRunning && indexingStatus != mediadb.IndexingStatusPending {
 		log.Debug().Msgf("indexing status is '%s', no auto-resume needed", indexingStatus)
-		return
+		// A clean state means the previous index either completed or was never
+		// interrupted; give any future interruption a fresh resume budget.
+		if resetErr := db.MediaDB.ResetIndexResumeAttempts(); resetErr != nil {
+			log.Warn().Err(resetErr).Msg("failed to reset index resume attempt counter")
+		}
+		return false
 	}
 
-	log.Info().Msg("detected interrupted media indexing, automatically resuming")
+	// Bound automatic resumes. A full reindex on a large library can take hours;
+	// if the device keeps rebooting mid-index we would otherwise relaunch it every
+	// boot forever, and while indexing is "running" the browse-cache self-heal is
+	// suppressed. After enough consecutive interruptions, stop looping and mark the
+	// index cancelled so the library stays browsable from the (stale) cache instead.
+	attempts, err := db.MediaDB.GetIndexResumeAttempts()
+	if err != nil {
+		// The persisted counter is the only thing bounding automatic resumes. If it
+		// can't be read we cannot prove we're under the limit, so fail closed and skip
+		// resuming rather than risk an unbounded reboot-resume loop; the library stays
+		// browsable from the (stale) cache.
+		log.Warn().Err(err).Msg("failed to read index resume attempt counter; skipping auto-resume")
+		return false
+	}
+	if attempts >= maxIndexResumeAttempts {
+		log.Warn().Int("attempts", attempts).
+			Msg("interrupted media indexing exceeded automatic resume limit; leaving library browsable")
+		if setErr := db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
+			log.Warn().Err(setErr).Msg("failed to mark wedged indexing as cancelled")
+		}
+		if inbox := st.Inbox(); inbox != nil {
+			if inboxErr := inbox.Add("Media indexing paused after repeated interruptions",
+				inboxservice.WithBody("Media indexing was interrupted several times before it could "+
+					"finish, so it has been paused to keep your library browsable. Start indexing again "+
+					"from Settings when your device can stay on long enough to complete it."),
+				inboxservice.WithSeverity(inboxservice.SeverityWarning),
+				inboxservice.WithCategory(inboxservice.CategoryMediaIndexResumeLimit),
+			); inboxErr != nil {
+				log.Warn().Err(inboxErr).Msg("failed to add inbox message about paused media indexing")
+			}
+		}
+		return false
+	}
+	newAttempts, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+	if incErr != nil {
+		// A failed increment means the next boot reads the same count and resumes
+		// again — a persistent write failure would loop forever. Fail closed.
+		log.Warn().Err(incErr).Msg("failed to record index resume attempt; skipping auto-resume")
+		return false
+	}
+	attempts = newAttempts
+
+	log.Info().Int("attempt", attempts).Int("limit", maxIndexResumeAttempts).
+		Msg("detected interrupted media indexing, automatically resuming")
 
 	// Get the systems that were being indexed from the database
 	// If not available, fall back to all systems
@@ -106,7 +162,9 @@ func checkAndResumeIndexing(
 		} else {
 			log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
 		}
+		return false
 	}
+	return true
 }
 
 // checkAndRecoverCorruptMediaDB rebuilds the media database from scratch when corruption
@@ -162,7 +220,7 @@ func checkAndRecoverCorruptMediaDB(
 		Indexing: true,
 	})
 
-	if err := db.MediaDB.RecreateAfterCorruption(config.IsDevelopmentVersion()); err != nil {
+	if err := db.MediaDB.Recreate(config.IsDevelopmentVersion()); err != nil {
 		log.Error().Err(err).Msg("failed to recreate media database after corruption")
 		return
 	}
@@ -223,6 +281,106 @@ func watchForCorruptMediaDBRecovery(
 			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
 		}
 	}
+}
+
+// checkAndHealBrowseCache rebuilds the browse cache in the background when it is
+// stale or absent but media is present, without waiting for a full media reindex.
+//
+// A stale/absent browse cache is what makes large libraries time out on
+// media.browse: the fallback scans up to ~1M media rows per system root on a cold
+// SD card and blows past the request timeout. The cache is normally only rebuilt
+// as a late step of a completed reindex, so an interrupted 4.5 h reindex leaves the
+// cache permanently stale and browse permanently broken. Rebuilding the cache is
+// cheap (a single ordered scan of Media, seconds to a couple of minutes) and does
+// not require the media index to finish, so we do it here directly.
+//
+// Skips while indexing is actually in flight this process (the reindex owns the
+// cache and rebuilds it on completion; a stale-but-present cache is served in the
+// meantime) and while optimization is running (its browse_cache step handles it).
+func checkAndHealBrowseCache(
+	ctx context.Context,
+	db *database.Database,
+	ns chan<- models.Notification,
+	pauser *syncutil.Pauser,
+) {
+	if db == nil || db.MediaDB == nil {
+		return
+	}
+
+	// An active reindex owns the cache. IsIndexing is the process-local truth set
+	// synchronously by GenerateMediaDB, unlike the persisted status which can be a
+	// wedged "running" left by an interrupted index.
+	if methods.IsIndexing() {
+		return
+	}
+	if status, err := db.MediaDB.GetOptimizationStatus(); err == nil && status == mediadb.IndexingStatusRunning {
+		return
+	}
+
+	mediaCount, err := db.MediaDB.GetTotalMediaCount()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check media count before browse cache self-heal")
+		return
+	}
+	if mediaCount == 0 {
+		// Nothing to browse yet; the first index builds the cache normally.
+		return
+	}
+
+	needsRebuild, err := db.MediaDB.BrowseCacheNeedsRebuild(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check browse cache status during startup self-heal")
+		return
+	}
+	if !needsRebuild {
+		return
+	}
+
+	log.Info().Int("mediaCount", mediaCount).Msg("browse cache stale or absent; rebuilding in background")
+	db.MediaDB.TrackBackgroundOperation()
+	go func() {
+		defer db.MediaDB.BackgroundOperationDone()
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			log.Debug().Err(waitErr).Msg("browse cache self-heal cancelled while paused")
+			return
+		}
+		// State can change while paused: a reindex or optimization may have started
+		// and now owns the cache. Re-check the same guards as above before rebuilding
+		// so the self-heal never runs concurrently with — and clobbers — a fresh
+		// index or optimization that began during the wait.
+		if methods.IsIndexing() {
+			log.Debug().Msg("skipping browse cache self-heal; indexing started while paused")
+			return
+		}
+		if status, err := db.MediaDB.GetOptimizationStatus(); err == nil && status == mediadb.IndexingStatusRunning {
+			log.Debug().Msg("skipping browse cache self-heal; optimization started while paused")
+			return
+		}
+		// Surface the rebuild as an optimizing operation so the client can show a
+		// "preparing library" indicator instead of the user staring at slow or
+		// empty browse results. The push updates clients already connected; the
+		// queryable IsOptimizing flag lets a client that connects mid-rebuild see it
+		// too via the media status query. Both cleared on completion or failure below.
+		db.MediaDB.BeginBrowseCacheRebuild()
+		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+			Exists:     true,
+			Indexing:   false,
+			Optimizing: true,
+		})
+		defer func() {
+			db.MediaDB.EndBrowseCacheRebuild()
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				Optimizing: false,
+			})
+		}()
+		if rebuildErr := db.MediaDB.PopulateBrowseCache(ctx); rebuildErr != nil {
+			log.Error().Err(rebuildErr).Msg("failed to rebuild browse cache during startup self-heal")
+			return
+		}
+		log.Info().Msg("browse cache self-heal completed")
+	}()
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it

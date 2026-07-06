@@ -96,9 +96,11 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 				mockMediaDB.On("GetTotalMediaCount").Return(tt.totalMediaCount, tt.getTotalMediaCountError)
 			} else if !tt.indexing {
 				// Database exists and not indexing or optimizing
-				mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
 				mockMediaDB.On("GetTotalMediaCount").Return(tt.totalMediaCount, tt.getTotalMediaCountError)
 			}
+			// Existence checks read lastGenerated in every branch, including
+			// mid-index.
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
 
 			db := &database.Database{
 				MediaDB: mockMediaDB,
@@ -121,6 +123,83 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 				assert.Equal(t, *tt.expectedTotalMedia, *response.Database.TotalMedia, "TotalMedia should match")
 			} else {
 				assert.Nil(t, response.Database.TotalMedia, "TotalMedia should be nil")
+			}
+
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHandleMedia_MissingMediaCount(t *testing.T) {
+	tests := []struct {
+		getMissingCountError error
+		expectedMissingMedia *int
+		name                 string
+		missingCount         int
+		indexing             bool
+	}{
+		{
+			name:                 "database exists and not indexing - includes missing count",
+			indexing:             false,
+			missingCount:         42,
+			getMissingCountError: nil,
+			expectedMissingMedia: intPtr(42),
+		},
+		{
+			name:                 "database indexing - no missing count",
+			indexing:             true,
+			missingCount:         42,
+			getMissingCountError: nil,
+			expectedMissingMedia: nil,
+		},
+		{
+			name:                 "GetMissingMediaCount error - no missing count",
+			indexing:             false,
+			missingCount:         0,
+			getMissingCountError: assert.AnError,
+			expectedMissingMedia: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockUserDB := &helpers.MockUserDBI{}
+			mockPlatform := mocks.NewMockPlatform()
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			statusInstance.setRunning(tt.indexing)
+
+			if !tt.indexing {
+				mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+				mockMediaDB.On("GetMissingMediaCount").Return(tt.missingCount, tt.getMissingCountError)
+			}
+			// Existence checks read lastGenerated in every branch, including
+			// mid-index.
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+
+			db := &database.Database{
+				MediaDB: mockMediaDB,
+				UserDB:  mockUserDB,
+			}
+			env := requests.RequestEnv{
+				Context:  context.Background(),
+				Database: db,
+				State:    testState,
+			}
+
+			result, err := HandleMedia(env)
+			require.NoError(t, err)
+
+			response, ok := result.(models.MediaResponse)
+			require.True(t, ok, "result should be MediaResponse")
+
+			if tt.expectedMissingMedia != nil {
+				require.NotNil(t, response.Database.MissingMedia, "MissingMedia should not be nil")
+				assert.Equal(t, *tt.expectedMissingMedia, *response.Database.MissingMedia)
+			} else {
+				assert.Nil(t, response.Database.MissingMedia, "MissingMedia should be nil")
 			}
 
 			mockMediaDB.AssertExpectations(t)

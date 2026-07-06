@@ -40,7 +40,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	fakeClock := clockwork.NewFakeClock()
+	fakeClock := clockwork.NewRealClock()
 	mediaDB := &MediaDB{
 		ctx:               ctx,
 		clock:             fakeClock,
@@ -53,7 +53,10 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -276,7 +279,10 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -328,11 +334,15 @@ func TestOptimizationInterruption(t *testing.T) {
 	}
 	mediaDB.sql.Store(db)
 
-	// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
+	// temporary repair and browse_cache run first; pragma_optimize failure aborts
+	// before page_prefetch/wal_checkpoint.
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectOptimizationResumeRead(mock)
 	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -343,10 +353,10 @@ func TestOptimizationInterruption(t *testing.T) {
 	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError) // Final failure
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStatus, "failed").
+		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "").
+		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Run optimization - should complete quickly with 1ms delays
@@ -426,6 +436,14 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	// Steps run in order: resume read → temporary_repair_parent_dirs → browse_cache
+	// → pragma_optimize → page_prefetch → wal_checkpoint. All must be mocked so the
+	// concurrent status reads race against the real workflow rather than steps that
+	// silently error on unmatched expectations.
+	expectOptimizationResumeRead(mock)
+	expectTemporaryParentDirRepairStepNoop(mock)
+	expectBrowseCacheStep(mock)
+	expectDisambiguationBackfillStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 

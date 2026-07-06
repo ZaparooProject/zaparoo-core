@@ -173,6 +173,32 @@ func TestSqlCleanMediaOrphans_DeletesMissingMediaAndChildren(t *testing.T) {
 	assert.Equal(t, 0, mediaPropCount, "MediaProperties for deleted media must be gone")
 }
 
+func TestCleanMediaOrphans_RefreshesCachedMediaCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	db, cleanup := setupCleanOrphansDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	_, err := db.sql.Load().ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, '3'), (?, '2')",
+		DBConfigMediaTotalCount, DBConfigMediaMissingCount)
+	require.NoError(t, err)
+
+	deleted, err := db.CleanMediaOrphans(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
+
+	total, err := db.GetTotalMediaCount()
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	missing, err := db.GetMissingMediaCount()
+	require.NoError(t, err)
+	assert.Equal(t, 0, missing)
+}
+
 // TestSqlCleanMediaOrphans_KeepsNonMissingMedia verifies that Media rows with
 // IsMissing=0 are untouched.
 func TestSqlCleanMediaOrphans_KeepsNonMissingMedia(t *testing.T) {

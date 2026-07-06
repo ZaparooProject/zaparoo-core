@@ -31,13 +31,13 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
+const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, ` +
+	`m\.SortName, m\.IsMissing ` +
 	`FROM Media m INDEXED BY media_system_path_idx.*` +
 	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
 	`ORDER BY m\.Path`
@@ -1642,15 +1642,15 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	systemID := "nes"
 
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName"}
+	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "IsMissing"}
 	gamesDir := filepath.Join(string(filepath.Separator), "games")
 	marioPath := filepath.Join(gamesDir, "mario.nes")
 	zeldaPath := filepath.Join(gamesDir, "zelda.nes")
 	metroidPath := filepath.Join(gamesDir, "metroid.nes")
 	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), marioPath, gamesDir, int64(10), "Super Mario Bros.").
-		AddRow(int64(2), zeldaPath, gamesDir, int64(11), "The Legend of Zelda").
-		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid")
+		AddRow(int64(1), marioPath, gamesDir, int64(10), "Super Mario Bros.", false).
+		AddRow(int64(2), zeldaPath, gamesDir, int64(11), "The Legend of Zelda", false).
+		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", true)
 
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
 
@@ -1666,14 +1666,17 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
 	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
 	assert.Equal(t, "nes", results[0].SystemID)
+	assert.False(t, results[0].IsMissing)
 
 	// Check second result
 	assert.Equal(t, int64(2), results[1].DBID)
 	assert.Equal(t, zeldaPath, results[1].Path)
+	assert.False(t, results[1].IsMissing)
 
-	// Check third result
+	// Check third result — a missing entry must round-trip IsMissing=true.
 	assert.Equal(t, int64(3), results[2].DBID)
 	assert.Equal(t, metroidPath, results[2].Path)
+	assert.True(t, results[2].IsMissing)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1686,7 +1689,7 @@ func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
 
 	systemID := "nonexistent"
 
-	emptyCols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName"}
+	emptyCols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "IsMissing"}
 	rows := sqlmock.NewRows(emptyCols)
 
 	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs(systemID).WillReturnRows(rows)
@@ -1735,171 +1738,6 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to scan media for system nes")
 	assert.Nil(t, results)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// mediaWithTagsBySystemIDQueryPattern matches the combined media + aggregated tag read.
-const mediaWithTagsBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName,.*` +
-	`GROUP_CONCAT\(mt\.TagDBID\).*FROM Media m INDEXED BY media_system_path_idx.*` +
-	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.Path`
-
-func TestSqlGetMediaWithTagsBySystemID_LoadTagsFalse(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	gamesDir := filepath.Join(string(filepath.Separator), "games")
-	marioPath := filepath.Join(gamesDir, "mario.nes")
-	rows := sqlmock.NewRows([]string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName"}).
-		AddRow(int64(1), marioPath, gamesDir, int64(10), "Super Mario Bros.")
-	// loadMediaTags=false must reuse the plain media query: no Tags lookup, no GROUP_CONCAT.
-	mock.ExpectQuery(mediaBySystemIDQueryPattern).WithArgs("nes").WillReturnRows(rows)
-
-	results, err := sqlGetMediaWithTagsBySystemID(context.Background(), db, "nes", false)
-
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, int64(1), results[0].DBID)
-	assert.Equal(t, "nes", results[0].SystemID)
-	assert.Nil(t, results[0].TagIDs)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithTagsBySystemID_AggregatesAndFiltersTags(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// User tag 99 must be excluded from every row's TagIDs.
-	mock.ExpectQuery(`SELECT t\.DBID.*FROM Tags t.*JOIN TagTypes tt.*WHERE tt\.Type = \?`).
-		WithArgs(string(dbtags.TagTypeUser)).
-		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(int64(99)))
-
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "TagIDs"}
-	gamesDir := filepath.Join(string(filepath.Separator), "games")
-	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), filepath.Join(gamesDir, "mario.nes"), gamesDir, int64(10), "Mario", "10,99").
-		AddRow(int64(2), filepath.Join(gamesDir, "zelda.nes"), gamesDir, int64(11), "Zelda", nil).
-		AddRow(int64(3), filepath.Join(gamesDir, "metroid.nes"), gamesDir, int64(12), "Metroid", "11,12").
-		AddRow(int64(4), filepath.Join(gamesDir, "kirby.nes"), gamesDir, int64(13), "Kirby", "99")
-	mock.ExpectQuery(mediaWithTagsBySystemIDQueryPattern).WithArgs("nes").WillReturnRows(rows)
-
-	results, err := sqlGetMediaWithTagsBySystemID(context.Background(), db, "nes", true)
-
-	require.NoError(t, err)
-	require.Len(t, results, 4)
-	assert.Equal(t, []int{10}, results[0].TagIDs)     // user tag 99 filtered out
-	assert.Nil(t, results[1].TagIDs)                  // NULL aggregate -> nil
-	assert.Equal(t, []int{11, 12}, results[2].TagIDs) // no user tags
-	assert.Nil(t, results[3].TagIDs)                  // all-user -> nil
-	assert.Equal(t, "nes", results[0].SystemID)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithTagsBySystemID_InvalidTagID(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectQuery(`SELECT t\.DBID.*FROM Tags t.*JOIN TagTypes tt.*WHERE tt\.Type = \?`).
-		WithArgs(string(dbtags.TagTypeUser)).
-		WillReturnRows(sqlmock.NewRows([]string{"DBID"}))
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "TagIDs"}
-	marioPath := filepath.Join(string(filepath.Separator), "games", "mario.nes")
-	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), marioPath, "", int64(10), "Mario", "not-an-int")
-	mock.ExpectQuery(mediaWithTagsBySystemIDQueryPattern).WithArgs("nes").WillReturnRows(rows)
-
-	results, err := sqlGetMediaWithTagsBySystemID(context.Background(), db, "nes", true)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse tag IDs")
-	assert.Nil(t, results)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaTagsBySystemID_UsesSystemMediaIndex(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	rows := sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).
-		AddRow(int64(1), int64(10)).
-		AddRow(int64(2), int64(11))
-
-	mediaTagsBySystemQuery := `SELECT mt\.MediaDBID, mt\.TagDBID.*` +
-		`FROM Media m INDEXED BY media_system_path_idx.*` +
-		`CROSS JOIN MediaTags mt.*` +
-		`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
-		`AND mt\.MediaDBID = m\.DBID`
-	mock.ExpectQuery(mediaTagsBySystemQuery).WithArgs("nes").WillReturnRows(rows)
-
-	links, err := sqlGetMediaTagsBySystemID(context.Background(), db, "nes")
-
-	require.NoError(t, err)
-	assert.Equal(t, []database.MediaTagLink{
-		{MediaDBID: 1, TagDBID: 10},
-		{MediaDBID: 2, TagDBID: 11},
-	}, links)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetScannerMediaTagsBySystemID_FiltersUserTags(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectQuery(`SELECT t\.DBID.*FROM Tags t.*JOIN TagTypes tt.*WHERE tt\.Type = \?`).
-		WithArgs(string(dbtags.TagTypeUser)).
-		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(int64(99)))
-	rows := sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).
-		AddRow(int64(1), int64(10)).
-		AddRow(int64(1), int64(99)).
-		AddRow(int64(2), int64(11))
-	mediaTagsBySystemQuery := `SELECT mt\.MediaDBID, mt\.TagDBID.*` +
-		`FROM Media m INDEXED BY media_system_path_idx.*` +
-		`CROSS JOIN MediaTags mt.*` +
-		`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
-		`AND mt\.MediaDBID = m\.DBID`
-	mock.ExpectQuery(mediaTagsBySystemQuery).WithArgs("nes").WillReturnRows(rows)
-
-	links, err := sqlGetScannerMediaTagsBySystemID(context.Background(), db, "nes")
-
-	require.NoError(t, err)
-	assert.Equal(t, []database.MediaTagLink{
-		{MediaDBID: 1, TagDBID: 10},
-		{MediaDBID: 2, TagDBID: 11},
-	}, links)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetScannerMediaTagsBySystemID_ReturnsLinksWhenNoUserTags(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectQuery(`SELECT t\.DBID.*FROM Tags t.*JOIN TagTypes tt.*WHERE tt\.Type = \?`).
-		WithArgs(string(dbtags.TagTypeUser)).
-		WillReturnRows(sqlmock.NewRows([]string{"DBID"}))
-	rows := sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).
-		AddRow(int64(1), int64(10))
-	mediaTagsBySystemQuery := `SELECT mt\.MediaDBID, mt\.TagDBID.*` +
-		`FROM Media m INDEXED BY media_system_path_idx.*` +
-		`CROSS JOIN MediaTags mt.*` +
-		`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
-		`AND mt\.MediaDBID = m\.DBID`
-	mock.ExpectQuery(mediaTagsBySystemQuery).WithArgs("nes").WillReturnRows(rows)
-
-	links, err := sqlGetScannerMediaTagsBySystemID(context.Background(), db, "nes")
-
-	require.NoError(t, err)
-	assert.Equal(t, []database.MediaTagLink{{MediaDBID: 1, TagDBID: 10}}, links)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -2111,191 +1949,5 @@ func TestSqlSearchMediaByTitleDBIDs_WithLetter(t *testing.T) {
 		context.Background(), db, []int64{10}, nil, &letter, nil, 100)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlUpdateMediaTitle_Success(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectExec(`UPDATE Media SET MediaTitleDBID = \?, SortName = \? WHERE DBID = \?`).
-		WithArgs(int64(10), "Super Mario Bros.", int64(1)).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err = sqlUpdateMediaTitle(context.Background(), db, 1, 10, "Super Mario Bros.")
-	require.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlUpdateMediaTitle_ExecError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectExec(`UPDATE Media SET MediaTitleDBID = \?, SortName = \? WHERE DBID = \?`).
-		WithArgs(int64(10), "Super Mario Bros.", int64(1)).
-		WillReturnError(sql.ErrConnDone)
-
-	err = sqlUpdateMediaTitle(context.Background(), db, 1, 10, "Super Mario Bros.")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to update media title")
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlUpdateMediaTitleName_Success(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectExec(`UPDATE MediaTitles SET Name = \? WHERE DBID = \?`).
-		WithArgs("1001 Stolen Ideas", int64(42)).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err = sqlUpdateMediaTitleName(context.Background(), db, 42, "1001 Stolen Ideas")
-	require.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlUpdateMediaTitleName_ExecError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectExec(`UPDATE MediaTitles SET Name = \? WHERE DBID = \?`).
-		WithArgs("1001 Stolen Ideas", int64(42)).
-		WillReturnError(sql.ErrConnDone)
-
-	err = sqlUpdateMediaTitleName(context.Background(), db, 42, "1001 Stolen Ideas")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to update media title name")
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithFullPath_Success(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
-	gamesDir := filepath.Join(string(filepath.Separator), "games")
-	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), filepath.Join(gamesDir, "mario.nes"), gamesDir, int64(10),
-			"Super Mario Bros.", int64(100), "supermariobros", "nes").
-		AddRow(int64(2), filepath.Join(gamesDir, "zelda.nes"), gamesDir, int64(11),
-			"Zelda", int64(100), "legendofzelda", "nes")
-
-	mock.ExpectQuery(`SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName`).
-		WillReturnRows(rows)
-
-	results, err := sqlGetMediaWithFullPath(context.Background(), db)
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	assert.Equal(t, int64(1), results[0].DBID)
-	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
-	assert.Equal(t, "supermariobros", results[0].TitleSlug)
-	assert.Equal(t, "nes", results[0].SystemID)
-	assert.Equal(t, int64(2), results[1].DBID)
-	assert.Equal(t, "Zelda", results[1].SortName)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithFullPath_QueryError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectQuery(`SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName`).
-		WillReturnError(sql.ErrConnDone)
-
-	results, err := sqlGetMediaWithFullPath(context.Background(), db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to query media with full path")
-	assert.Nil(t, results)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithFullPath_EmptyResult(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
-	mock.ExpectQuery(`SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName`).
-		WillReturnRows(sqlmock.NewRows(cols))
-
-	results, err := sqlGetMediaWithFullPath(context.Background(), db)
-	require.NoError(t, err)
-	assert.Empty(t, results)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithFullPathExcluding_EmptyExcludes(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
-	gamesDir := filepath.Join(string(filepath.Separator), "games")
-	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), filepath.Join(gamesDir, "mario.nes"), gamesDir, int64(10),
-			"Super Mario Bros.", int64(100), "supermariobros", "nes")
-
-	mock.ExpectQuery(`SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName`).
-		WillReturnRows(rows)
-
-	results, err := sqlGetMediaWithFullPathExcluding(context.Background(), db, []string{})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithFullPathExcluding_WithExcludes(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
-	gamesDir := filepath.Join(string(filepath.Separator), "games")
-	rows := sqlmock.NewRows(cols).
-		AddRow(int64(2), filepath.Join(gamesDir, "zelda.snes"), gamesDir, int64(11),
-			"Zelda", int64(101), "legendofzelda", "snes")
-
-	mock.ExpectQuery(`SELECT m\.DBID.*WHERE s\.SystemID NOT IN`).
-		WithArgs("nes").
-		WillReturnRows(rows)
-
-	results, err := sqlGetMediaWithFullPathExcluding(context.Background(), db, []string{"nes"})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "Zelda", results[0].SortName)
-	assert.Equal(t, "snes", results[0].SystemID)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlGetMediaWithFullPathExcluding_QueryError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectQuery(`SELECT m\.DBID.*WHERE s\.SystemID NOT IN`).
-		WithArgs("nes").
-		WillReturnError(sql.ErrConnDone)
-
-	results, err := sqlGetMediaWithFullPathExcluding(context.Background(), db, []string{"nes"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to query media with full path excluding")
-	assert.Nil(t, results)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

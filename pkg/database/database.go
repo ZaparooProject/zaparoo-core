@@ -457,10 +457,15 @@ type BrowseRouteCountsOptions struct {
 }
 
 // BrowseRouteCount represents a populated browse route and its media count.
+// CountUnknown is set when the route is known to contain media but the exact
+// FileCount could not be computed within the deadline (degraded fallback);
+// callers should treat such routes as present with an unknown count rather than
+// as empty.
 type BrowseRouteCount struct {
-	Path      string
-	SystemIDs []string
-	FileCount int
+	Path         string
+	SystemIDs    []string
+	FileCount    int
+	CountUnknown bool
 }
 
 // BrowseSystemRootCandidatesOptions parameterises the batched lookup used
@@ -606,18 +611,15 @@ type TitleWithSystem struct {
 }
 
 // MediaWithFullPath represents a Media item with its associated title and system information.
-// TagIDs is transient and not a stored column: it is populated only by
-// GetMediaWithTagsBySystemID (when loadMediaTags is set) with the scanner-managed tag
-// DBIDs for the row, carrying tag links on the media row to avoid a second read.
 type MediaWithFullPath struct {
 	Path           string
 	ParentDir      string
 	TitleSlug      string
 	SystemID       string
 	SortName       string
-	TagIDs         []int
 	DBID           int64
 	MediaTitleDBID int64
+	IsMissing      bool
 }
 
 // ScrapeWrite is the database-level write payload produced by a scraper for a
@@ -669,26 +671,55 @@ type SearchFilters struct {
 	Limit   int                   `json:"limit"`
 }
 
-type ScanState struct {
-	SystemIDs          map[string]int
-	TitleIDs           map[string]int
-	TitleNames         map[int]string
-	MediaIDs           map[string]int
-	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
-	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update
-	// Existing media DBID -> per-file display/sort title for persistent reconciliation.
-	MediaSortNames  map[int]string
-	MediaParentDirs map[int]string
-	MediaTagIDs     map[int]map[int]struct{}
-	TagTypeIDs      map[string]int
-	TagIDs          map[string]int
-	UserOwnedTagIDs map[int]bool
-	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex    int
-	TitlesIndex     int
-	MediaIndex      int
-	TagTypesIndex   int
-	TagsIndex       int
+// ScanStagedTag is one tag derived from a scanned file, staged for set-based
+// reconcile. Value is the natural (unpadded) form; the DB layer applies
+// tags.PadTagValue when writing the staging row.
+type ScanStagedTag struct {
+	Type  string
+	Value string
+}
+
+// ScanStagedMedia is one scanned file's parsed fragments, staged into the
+// ScanStage/ScanStageTags tables for set-based reconcile against the media
+// tables. SecondarySlug is empty when the title has none.
+type ScanStagedMedia struct {
+	Path          string
+	ParentDir     string
+	Slug          string
+	TitleName     string
+	SortName      string
+	SecondarySlug string
+	Tags          []ScanStagedTag
+	SlugLength    int
+	SlugWordCount int
+}
+
+// ScanReconcileOpts adjusts how a staged-system reconcile treats the staged
+// file set.
+type ScanReconcileOpts struct {
+	// IncompleteScan means file collection for this system hit errors (an
+	// unreadable path, a failed launcher scanner), so the staged set may be a
+	// subset of what actually exists. Staged files are still upserted and
+	// re-found rows still clear their missing flag, but media absent from the
+	// stage keep their current missing state instead of being flagged missing.
+	IncompleteScan bool
+}
+
+// ScanReconcileStats reports what a staged-system reconcile changed. Counts are
+// per-statement sqlite changes() values, for logging and tests.
+type ScanReconcileStats struct {
+	SystemDBID      int64
+	TitlesInserted  int64
+	TitlesRenamed   int64
+	MediaUpserted   int64
+	MediaMissing    int64
+	TagsInserted    int64
+	TagLinksAdded   int64
+	TagLinksDeleted int64
+	TouchedTitles   int64
+	// SystemKnown is false when the system has no DB row and nothing was staged,
+	// meaning the reconcile was a no-op and no Systems row was created.
+	SystemKnown bool
 }
 
 // JournalMode represents SQLite journal mode
@@ -783,9 +814,13 @@ type MediaDBI interface {
 	GetOptimizationStatus() (string, error)
 	SetOptimizationStep(step string) error
 	GetOptimizationStep() (string, error)
+	IsOptimizing() bool
+	BeginBrowseCacheRebuild()
+	EndBrowseCacheRebuild()
 	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
 	TrackBackgroundOperation()
+	SetIndexingConnBoost(active bool)
 	BackgroundOperationDone()
 
 	InvalidateCountCache() error
@@ -798,7 +833,7 @@ type MediaDBI interface {
 	IsMarkedCorrupt() bool
 	ClearCorruptMarker() error
 	NoteCorruption(err error) bool
-	RecreateAfterCorruption(keepBackup bool) error
+	Recreate(keepBackup bool) error
 
 	// On-disk persistence for the rebuilt caches. Persist* writes the
 	// current in-memory cache atomically; LoadCached* reads it back at
@@ -832,6 +867,9 @@ type MediaDBI interface {
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
+	GetIndexResumeAttempts() (int, error)
+	IncrementIndexResumeAttempts() (int, error)
+	ResetIndexResumeAttempts() error
 	SetScrapingStatus(status string) error
 	GetScrapingStatus() (string, error)
 	SetScrapingOperation(operation ScrapingOperation) error
@@ -842,6 +880,14 @@ type MediaDBI interface {
 	SetIndexingSystems(systemIDs []string) error
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
+
+	// Scanner staging: files are streamed into staging tables inside the open
+	// batch transaction, then folded into the media tables with set-based SQL
+	// so indexing memory does not scale with database size.
+	StageScannedMedia(media *ScanStagedMedia) error
+	ReconcileStagedSystem(ctx context.Context, systemID string, opts ScanReconcileOpts) (ScanReconcileStats, error)
+	ClearScanStage() error
+	SeedCanonicalTagDefinitions(ctx context.Context) error
 
 	SearchMediaPathExact(ctx context.Context, systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
@@ -884,12 +930,16 @@ type MediaDBI interface {
 		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
 	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
+	PopulateBrowseCacheForSystems(ctx context.Context, systemIDs []string) error
+	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
+	HasAnyMedia() (bool, error)
+	GetMissingMediaCount() (int, error)
 	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
 	GetTotalScrapedMediaCount(ctx context.Context) (int, error)
 
@@ -905,12 +955,7 @@ type MediaDBI interface {
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
-	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error
-	UpdateMediaTitleName(titleDBID int64, name string) error
-	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
-	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
-	DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) error
 	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)
@@ -925,10 +970,6 @@ type MediaDBI interface {
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
 
-	// Missing media methods for persistent indexing
-	BulkSetMediaMissing(dbids map[int]struct{}) error
-	ResetMissingFlags(systemDBIDs []int) error
-
 	// CleanMediaOrphans removes Media rows where IsMissing=1 together with
 	// their associated MediaTags and MediaProperties.  MediaTitles that are
 	// no longer referenced by any Media row are also removed (including their
@@ -940,39 +981,14 @@ type MediaDBI interface {
 	// cannot safely run.
 	CleanMediaOrphans(ctx context.Context) (int64, error)
 
-	// GetMax*ID methods for resume functionality
-	GetMaxSystemID() (int64, error)
-	GetMaxTitleID() (int64, error)
-	GetMaxMediaID() (int64, error)
-	GetMaxTagTypeID() (int64, error)
-	GetMaxTagID() (int64, error)
-	GetMaxMediaTagID() (int64, error)
-
-	// GetAll* methods for populating scan state maps
 	GetAllSystems() ([]System, error)
-	GetAllMediaTitles() ([]MediaTitle, error)
-	GetAllMedia() ([]Media, error)
-	GetAllTags() ([]Tag, error)
-	GetAllTagTypes() ([]TagType, error)
 	// GetExistingMediaUserData returns user-authored data (favourites, launcher
 	// overrides) already stored in media.db, for the one-time UserDB backfill.
 	GetExistingMediaUserData(ctx context.Context) ([]MediaUserData, error)
 
-	// Optimized JOIN query methods for populating scan state
-	GetTitlesWithSystems() ([]TitleWithSystem, error)
-	GetMediaWithFullPath() ([]MediaWithFullPath, error)
-
-	// Optimized JOIN query methods for selective indexing (excluding specified systems)
-	GetSystemsExcluding(excludeSystemIDs []string) ([]System, error)
-	GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]TitleWithSystem, error)
-	GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]MediaWithFullPath, error)
-
-	// Per-system query methods for lazy loading during resume
+	// Per-system query methods for scrapers
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
-	GetMediaWithTagsBySystemID(systemID string, loadMediaTags bool) ([]MediaWithFullPath, error)
-	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
-	GetScannerMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
 
 	// Scraper support methods
 

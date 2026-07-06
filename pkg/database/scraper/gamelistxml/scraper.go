@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
@@ -555,6 +556,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 ) {
 	defer close(ch)
 
+	// Lowest CPU/IO priority for the whole scrape run; the locked thread
+	// dies with this goroutine so the change never leaks.
+	bgpriority.Apply()
+
 	const id = "gamelist.xml"
 	metrics := perfmetrics.NewRecorderForDB(mdb)
 	var totalProcessed, totalMatched, totalSkipped int
@@ -708,7 +713,8 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			MediaByTitleDBID: make(map[int64][]database.Media, len(allMedia)),
 			MediaByFilename:  make(map[string][]database.Media, len(allMedia)),
 		}
-		for _, m := range allMedia {
+		for i := range allMedia {
+			m := &allMedia[i]
 			media := database.Media{
 				DBID:           m.DBID,
 				MediaTitleDBID: m.MediaTitleDBID,
@@ -2029,6 +2035,9 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 		return emitProgress(force)
 	}
 	for _, c := range children {
+		if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
+			return stats
+		}
 		select {
 		case <-ctx.Done():
 			return stats

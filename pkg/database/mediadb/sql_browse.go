@@ -54,6 +54,38 @@ const (
 	browseSlowFilesThreshold      = 5 * time.Second
 )
 
+// browseCacheState describes whether the browse cache can serve a query and, if
+// so, whether it is up to date. A populated cache is served even when stale (its
+// counts may lag behind the latest media changes) because that is far cheaper than
+// the full media scan the fallback performs on a large library, and a background
+// refresh corrects the drift. Only an absent cache forces the fallback.
+type browseCacheState int
+
+const (
+	// browseCacheAbsent means no cache rows exist (e.g. a brand-new DB mid first
+	// index, or an unexpected version that predates the current table schema).
+	// Callers must use the media-scan fallback.
+	browseCacheAbsent browseCacheState = iota
+	// browseCacheStale means cache rows exist but were invalidated by a media
+	// change. Callers serve from the cache and a refresh should be scheduled.
+	browseCacheStale
+	// browseCacheFresh means cache rows exist and match the current schema
+	// version. Callers serve from the cache with no refresh needed.
+	browseCacheFresh
+)
+
+// browseRouteCountSubTimeout bounds each per-route COUNT(*) in the cache-absent
+// media-scan fallback. A broad system root (e.g. one covering ~1M files) can
+// exceed the whole request budget on a cold SD card; capping each route keeps
+// one slow route from starving the rest or blowing the request deadline, and
+// lets the route degrade to a cheap presence probe instead of failing the entire
+// browse. browseRouteProbeSubTimeout bounds that presence probe. Both are vars
+// (not consts) so tests can shrink them to force the degrade path deterministically.
+var (
+	browseRouteCountSubTimeout = 4 * time.Second
+	browseRouteProbeSubTimeout = 2 * time.Second
+)
+
 // utilityTagCache memoises resolved utility tag DBIDs per DB connection so
 // fetchAndAttachUtilityTags avoids 2 PK-lookup queries per browse page.
 // Keyed by the db handle itself so closed handles cannot be confused with later
@@ -297,31 +329,56 @@ func browseSystemFilterClause(column string, systems []systemdefs.System) (claus
 	return column + " IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
+// sqlBrowseCacheServeable reports whether the browse cache should be used to
+// answer a query (either fresh or stale-but-present).
+func sqlBrowseCacheServeable(state browseCacheState) bool {
+	return state != browseCacheAbsent
+}
+
+// sqlBrowseCacheReady reports whether a browse query can be served from the cache.
+// It returns true for both fresh and stale-but-present caches; see
+// sqlBrowseCacheStatus for the finer-grained state used to trigger refreshes.
 func sqlBrowseCacheReady(ctx context.Context, db sqlQueryable) (bool, error) {
+	state, err := sqlBrowseCacheStatus(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	return sqlBrowseCacheServeable(state), nil
+}
+
+// sqlBrowseCacheStatus resolves the current browse cache state. A cache is
+// serveable only when its version is recognised (current schema version or the
+// invalidation sentinel, which shares the same table schema) AND rows exist. Any
+// other version value is treated as absent so the fallback rebuilds it rather than
+// serving rows from a schema that may not match.
+func sqlBrowseCacheStatus(ctx context.Context, db sqlQueryable) (browseCacheState, error) {
 	var version string
 	err := db.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",
 		DBConfigBrowseIndexVersion,
 	).Scan(&version)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return browseCacheAbsent, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("browse cache readiness query: %w", err)
+		return browseCacheAbsent, fmt.Errorf("browse cache readiness query: %w", err)
 	}
-	if version != browseCacheSchemaVersion {
-		return false, nil
+	if version != browseCacheSchemaVersion && version != browseCacheInvalidatedVersion {
+		return browseCacheAbsent, nil
 	}
 
 	var exists int
 	err = db.QueryRowContext(ctx, `SELECT 1 FROM BrowseDirs LIMIT 1`).Scan(&exists)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return browseCacheAbsent, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("browse cache table readiness query: %w", err)
+		return browseCacheAbsent, fmt.Errorf("browse cache table readiness query: %w", err)
 	}
-	return true, nil
+	if version == browseCacheSchemaVersion {
+		return browseCacheFresh, nil
+	}
+	return browseCacheStale, nil
 }
 
 func sqlBrowseDirID(ctx context.Context, db sqlQueryable, dirPath string) (id int64, ok bool, err error) {
@@ -734,28 +791,72 @@ func detectBrowsePrefixPolicy(
 		args = append(args, systemArgs...)
 	}
 
-	query := `SELECT m.Path
+	// Sample rather than scan: the policy is a fraction-vs-threshold heuristic, so a
+	// bounded sample estimates the ratio without reading every path under a directory
+	// that may hold ~1M files on large libraries. DBID is the rowid, so the ParentDir
+	// index yields either DBID direction without sorting the partition, and each scan
+	// stops at the limit.
+	base := `SELECT m.DBID, m.Path
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE ` + strings.Join(conditions, " AND ")
+	limit := fmt.Sprintf(" LIMIT %d", browseprefix.DefaultSampleLimit)
+
+	ids, paths, err := queryBrowsePrefixSample(ctx, db, base+" ORDER BY m.DBID ASC"+limit, args)
+	if err != nil {
+		return browseprefix.Policy{}, err
+	}
+	// A truncated forward sample is order-biased: DBID order is insertion
+	// (filesystem walk) order, and numbered-prefix files sort to the front of a
+	// directory, so the head of a large mixed directory over-represents exactly
+	// the pattern the heuristic looks for. Blend in an equally cheap sample from
+	// the other end of the partition to decorrelate the estimate.
+	if len(paths) == browseprefix.DefaultSampleLimit {
+		tailIDs, tailPaths, tailErr := queryBrowsePrefixSample(ctx, db, base+" ORDER BY m.DBID DESC"+limit, args)
+		if tailErr != nil {
+			return browseprefix.Policy{}, tailErr
+		}
+		seen := make(map[int64]struct{}, len(ids))
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+		for i, id := range tailIDs {
+			if _, ok := seen[id]; !ok {
+				paths = append(paths, tailPaths[i])
+			}
+		}
+	}
+	return browseprefix.DetectPolicyForPaths(paths, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles), nil
+}
+
+// queryBrowsePrefixSample runs one bounded sample scan for prefix-policy
+// detection, returning the sampled media DBIDs (for overlap dedup between the
+// forward and backward scans) alongside their paths.
+func queryBrowsePrefixSample(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+) (ids []int64, paths []string, err error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return browseprefix.Policy{}, fmt.Errorf("browse prefix detection query: %w", err)
+		return nil, nil, fmt.Errorf("browse prefix detection query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	paths := make([]string, 0)
 	for rows.Next() {
+		var id int64
 		var path string
-		if scanErr := rows.Scan(&path); scanErr != nil {
-			return browseprefix.Policy{}, fmt.Errorf("browse prefix detection scan: %w", scanErr)
+		if scanErr := rows.Scan(&id, &path); scanErr != nil {
+			return nil, nil, fmt.Errorf("browse prefix detection scan: %w", scanErr)
 		}
+		ids = append(ids, id)
 		paths = append(paths, path)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return browseprefix.Policy{}, fmt.Errorf("browse prefix detection rows: %w", rowsErr)
+		return nil, nil, fmt.Errorf("browse prefix detection rows: %w", rowsErr)
 	}
-	return browseprefix.DetectPolicyForPaths(paths, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles), nil
+	return ids, paths, nil
 }
 
 func sqlBrowseFiles(
@@ -1561,27 +1662,117 @@ func sqlBrowseRouteCountsFromMedia(
 	for _, route := range opts.Routes {
 		prefix := browseRouteCacheKey(route)
 		args := append([]any{prefix}, systemArgs...)
+
+		routeCtx, cancel := context.WithTimeout(ctx, browseRouteCountSubTimeout)
 		var count int
 		var systemIDs sql.NullString
-		if err := db.QueryRowContext(ctx,
+		err := db.QueryRowContext(routeCtx,
 			`SELECT COUNT(*), GROUP_CONCAT(DISTINCT s.SystemID)
 			 FROM Media m
 			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
 			 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause,
 			args...,
-		).Scan(&count, &systemIDs); err != nil {
-			return nil, fmt.Errorf("browse route counts media scan: %w", err)
-		}
-		if count == 0 {
+		).Scan(&count, &systemIDs)
+		// The driver may surface an expired sub-timeout as its own "interrupted"
+		// error rather than the context error, so remember the deadline state
+		// itself (before cancel() overwrites it) as the authoritative signal.
+		timedOut := errors.Is(routeCtx.Err(), context.DeadlineExceeded)
+		cancel()
+
+		if err == nil {
+			if count == 0 {
+				continue
+			}
+			counts[route] = database.BrowseRouteCount{
+				Path:      route,
+				FileCount: count,
+				SystemIDs: splitBrowseSystemIDs(systemIDs.String),
+			}
 			continue
 		}
-		counts[route] = database.BrowseRouteCount{
-			Path:      route,
-			FileCount: count,
-			SystemIDs: splitBrowseSystemIDs(systemIDs.String),
+
+		// The caller's context (the whole request) is done: stop, don't degrade.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("browse route counts media scan: %w", err)
 		}
+		// A real error (not our sub-timeout) should surface.
+		if !timedOut && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("browse route counts media scan: %w", err)
+		}
+
+		// The exact COUNT timed out for this route. Degrade, don't die: probe
+		// cheaply whether the route has any media. If it does, include it with
+		// an unknown count so the root still browses; if the probe finds nothing
+		// (or itself times out), drop the route and keep browsing the rest.
+		hasMedia, probeErr := sqlBrowseRouteHasMedia(ctx, db, prefix, systemClause, systemArgs)
+		if probeErr != nil {
+			log.Warn().Err(probeErr).Str("route", route).
+				Msg("browse route count timed out and presence probe failed; skipping route")
+			continue
+		}
+		if !hasMedia {
+			continue
+		}
+		log.Warn().Str("route", route).
+			Msg("browse route count timed out; serving route with unknown file count")
+		degraded := database.BrowseRouteCount{
+			Path:         route,
+			CountUnknown: true,
+		}
+		// The timed-out query was what resolved the route's system membership.
+		// With a single-system filter the membership is still exact — the probe
+		// only matched media for that system — so keep the API's systemId intact.
+		// With multiple filter systems the subset is unknowable here; leave it
+		// empty rather than claiming systems the route may not contain.
+		if len(opts.Systems) == 1 {
+			degraded.SystemIDs = []string{opts.Systems[0].ID}
+		}
+		counts[route] = degraded
 	}
 	return counts, nil
+}
+
+// sqlBrowseRouteHasMedia is the cheap presence probe used when an exact route
+// COUNT(*) exceeds its sub-timeout. It stops at the first matching row, so for a
+// non-empty route it returns almost immediately even though the case-insensitive
+// LIKE cannot use an index. It has its own short sub-timeout so an empty route
+// (which forces a full partition scan) degrades to "unknown" rather than
+// blocking the whole browse.
+func sqlBrowseRouteHasMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	prefix, systemClause string,
+	systemArgs []any,
+) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, browseRouteProbeSubTimeout)
+	defer cancel()
+
+	args := append([]any{prefix}, systemArgs...)
+	var one int
+	err := db.QueryRowContext(probeCtx,
+		`SELECT 1
+		 FROM Media m
+		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause+`
+		 LIMIT 1`,
+		args...,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		// A probe sub-timeout is not a hard failure: report "unknown" as absent
+		// so the caller drops just this route instead of failing the browse. The
+		// driver may report the expired sub-timeout as its own "interrupted"
+		// error, so check the probe context's deadline too, not just the error.
+		timedOut := errors.Is(probeCtx.Err(), context.DeadlineExceeded) ||
+			errors.Is(err, context.DeadlineExceeded)
+		if ctx.Err() == nil && timedOut {
+			return false, nil
+		}
+		return false, fmt.Errorf("browse route presence probe: %w", err)
+	}
+	return true, nil
 }
 
 // sqlBrowseSystemRootCandidates resolves a list of filesystem roots

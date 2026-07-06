@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -44,6 +46,7 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 		optimizationStatus    string
 		optimizationStep      string
 		indexing              bool
+		dbEmpty               bool
 		expectedOptimizing    bool
 		expectedExists        bool
 	}{
@@ -74,11 +77,20 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 			expectedStepDisplay: nil,
 		},
 		{
-			name:                "indexing in progress",
+			name:                "first index in progress on empty database",
+			optimizationStatus:  "",
+			indexing:            true,
+			dbEmpty:             true,
+			expectedOptimizing:  false,
+			expectedExists:      false,
+			expectedStepDisplay: nil,
+		},
+		{
+			name:                "reindex in progress keeps database available",
 			optimizationStatus:  "",
 			indexing:            true,
 			expectedOptimizing:  false,
-			expectedExists:      false,
+			expectedExists:      true,
 			expectedStepDisplay: nil,
 		},
 		{
@@ -123,15 +135,14 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 				totalFiles:  1000,
 			})
 
-			if !tt.indexing && (tt.optimizationStatus != "running" || tt.optimizationStatusErr != nil) {
-				// Mock GetLastGenerated for normal operation
-				mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-				// Mock GetTotalMediaCount for database that exists and is not indexing
-				mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
-			} else if !tt.indexing && tt.optimizationStatus == "running" && tt.optimizationStatusErr == nil {
-				// Mock GetTotalMediaCount for database that exists but is optimizing
-				mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+			// Existence is derived from lastGenerated (with a HasAnyMedia
+			// fallback) in every branch, including mid-index.
+			lastGenerated := time.Now()
+			if tt.dbEmpty {
+				lastGenerated = time.Unix(0, 0)
 			}
+			mockMediaDB.On("GetLastGenerated").Return(lastGenerated, nil).Maybe()
+			mockMediaDB.On("GetTotalMediaCount").Return(100, nil).Maybe()
 
 			db := &database.Database{
 				MediaDB: mockMediaDB,
@@ -174,6 +185,8 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 
 	// Both indexing and optimization are "running"
 	mockMediaDB.On("GetOptimizationStatus").Return("running", nil)
+	// Empty database: first index still running, nothing committed yet.
+	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
 
 	// Set indexing as active - use set() to avoid data race
 	statusInstance.set(indexingStatusVals{
@@ -202,7 +215,7 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 
 	// Indexing should take priority over optimization
 	assert.True(t, response.Database.Indexing)
-	assert.False(t, response.Database.Exists)     // During indexing, database is considered non-existent
+	assert.False(t, response.Database.Exists)     // Empty DB mid-first-index: nothing queryable yet
 	assert.False(t, response.Database.Optimizing) // Should not show optimizing during indexing
 
 	// Should show indexing details
@@ -214,6 +227,68 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+// TestHandleMedia_BrowseCacheRebuildShowsOptimizing covers a standalone browse-cache
+// rebuild (e.g. the startup self-heal), which runs outside a full RunBackgroundOptimization
+// pass and so does not set the persisted OptimizationStatus. A client polling the media
+// status mid-rebuild must still see Optimizing:true, via MediaDB.IsOptimizing(), so it can
+// show a "preparing library" indicator instead of silent slow browse.
+func TestHandleMedia_BrowseCacheRebuildShowsOptimizing(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB := &helpers.MockUserDBI{}
+	mockPlatform := mocks.NewMockPlatform()
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// Not indexing, no full optimization running, but a browse-cache rebuild is in flight.
+	mockMediaDB.On("GetOptimizationStatus").Return("completed", nil)
+	mockMediaDB.On("GetOptimizationStep").Return("", nil)
+	mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+	mockMediaDB.BeginBrowseCacheRebuild()
+
+	statusInstance.set(indexingStatusVals{indexing: false})
+
+	db := &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB}
+	env := requests.RequestEnv{Context: context.Background(), Database: db, State: testState}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok, "result should be MediaResponse")
+
+	assert.True(t, response.Database.Optimizing, "browse-cache rebuild should surface as optimizing")
+	assert.True(t, response.Database.Exists)
+	// A standalone rebuild has no persisted optimization step, so none is displayed.
+	assert.Nil(t, response.Database.CurrentStepDisplay)
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestHandleMedia_IndexingPriorityOverBrowseCacheRebuild confirms an active reindex
+// still wins over a browse-cache rebuild in progress: indexing shows, optimizing does not.
+func TestHandleMedia_IndexingPriorityOverBrowseCacheRebuild(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB := &helpers.MockUserDBI{}
+	mockPlatform := mocks.NewMockPlatform()
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	mockMediaDB.On("GetOptimizationStatus").Return("completed", nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+	mockMediaDB.BeginBrowseCacheRebuild()
+
+	statusInstance.set(indexingStatusVals{indexing: true, totalSteps: 10, currentStep: 5})
+
+	db := &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB}
+	env := requests.RequestEnv{Context: context.Background(), Database: db, State: testState}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok, "result should be MediaResponse")
+
+	assert.True(t, response.Database.Indexing)
+	assert.False(t, response.Database.Optimizing, "indexing must take priority over browse-cache rebuild")
+	assert.False(t, response.Database.Exists)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 	tests := []struct {
 		expectedResponse   func(response models.MediaResponse)
@@ -222,10 +297,12 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 	}{
 		{
 			name:               "pending optimization",
-			optimizationStatus: "pending",
+			optimizationStatus: mediadb.IndexingStatusPending,
 			expectedResponse: func(response models.MediaResponse) {
-				assert.False(t, response.Database.Optimizing)
+				assert.True(t, response.Database.Optimizing)
 				assert.True(t, response.Database.Exists)
+				require.NotNil(t, response.Database.CurrentStepDisplay)
+				assert.Equal(t, preparingDatabaseOptimizationDisplay, *response.Database.CurrentStepDisplay)
 			},
 		},
 		{
@@ -255,9 +332,14 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
+			if tt.optimizationStatus == mediadb.IndexingStatusPending {
+				mockMediaDB.On("GetOptimizationStep").Return("", nil)
+			}
 
 			ClearIndexingStatus()
-			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+			if tt.optimizationStatus != mediadb.IndexingStatusPending {
+				mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+			}
 			mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
 
 			db := &database.Database{
@@ -280,6 +362,64 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			mockMediaDB.AssertExpectations(t)
 		})
 	}
+}
+
+func TestHandleMedia_PersistedIndexingStatusShowsPreparingResume(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB := &helpers.MockUserDBI{}
+	mockPlatform := mocks.NewMockPlatform()
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	ClearIndexingStatus()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil)
+	// Interrupted first index on an empty database awaiting resume.
+	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+
+	db := &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB}
+	env := requests.RequestEnv{Context: context.Background(), Database: db, State: testState}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok, "result should be MediaResponse")
+
+	assert.True(t, response.Database.Indexing)
+	assert.False(t, response.Database.Optimizing)
+	assert.False(t, response.Database.Exists)
+	require.NotNil(t, response.Database.CurrentStepDisplay)
+	assert.Equal(t, preparingResumeMediaDatabaseUpdateDisplay, *response.Database.CurrentStepDisplay)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestGenerateMediaDB_NotifiesPreparingBeforeOptimizationPreflightFailure(t *testing.T) {
+	ClearIndexingStatus()
+	t.Cleanup(ClearIndexingStatus)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.Optimizing = true
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+	ns := make(chan models.Notification, 2)
+	db := &database.Database{MediaDB: mockMediaDB}
+
+	err := GenerateMediaDB(context.Background(), nil, nil, ns, nil, db, nil)
+	require.Error(t, err)
+
+	first := <-ns
+	require.Equal(t, models.NotificationMediaIndexing, first.Method)
+	var firstPayload models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(first.Params, &firstPayload))
+	assert.True(t, firstPayload.Indexing)
+	require.NotNil(t, firstPayload.CurrentStepDisplay)
+	assert.Equal(t, preparingMediaDatabaseUpdateDisplay, *firstPayload.CurrentStepDisplay)
+
+	second := <-ns
+	require.Equal(t, models.NotificationMediaIndexing, second.Method)
+	var secondPayload models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(second.Params, &secondPayload))
+	assert.False(t, secondPayload.Indexing)
+	mockMediaDB.AssertExpectations(t)
 }
 
 // Helper function to create string pointer
