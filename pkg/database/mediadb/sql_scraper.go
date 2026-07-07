@@ -1525,9 +1525,16 @@ func upsertMediaTitleProperty(
 // Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
 // p.TypeTag must be set to the full "type:value" string; TypeTagDBID is resolved
 // from the Tags table automatically.
+//
+// When called inside an open batch transaction, the write uses db.conn() instead
+// of opening a second transaction. SQLite WAL allows one writer, so a nested
+// BeginTx here would block behind the batch transaction until busy_timeout.
 func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []database.MediaProperty) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
+	}
+	if db.inTransaction {
+		return upsertMediaProperties(ctx, db.conn(), mediaDBID, props)
 	}
 	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
@@ -1548,6 +1555,79 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 	}
 	committed = true
 	return nil
+}
+
+// SearchMediaByProperty finds media whose stored property value matches value,
+// optionally scoped to systemID. Empty systemID matches any system.
+func (db *MediaDB) SearchMediaByProperty(
+	ctx context.Context, systemID, property, value string,
+) ([]database.SearchResult, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+	typeTagDBID, err := resolvePropertyTypeTag(ctx, db.sql.Load(), tags.PropertyTypeTag(tags.TagValue(property)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve property %q: %w", property, err)
+	}
+
+	query := `
+SELECT s.SystemID, mt.Name, m.Path, m.DBID
+FROM Media m
+JOIN Systems s ON s.DBID = m.SystemDBID
+JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+JOIN MediaProperties mp ON mp.MediaDBID = m.DBID
+WHERE mp.TypeTagDBID = ? AND mp.Text = ? AND m.IsMissing = 0`
+	args := []any{typeTagDBID, value}
+	if systemID != "" {
+		query += " AND s.SystemID = ?"
+		args = append(args, systemID)
+	}
+	query += " ORDER BY m.DBID"
+
+	rows, err := db.sql.Load().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query media by property: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.SearchResult
+	for rows.Next() {
+		var result database.SearchResult
+		if scanErr := rows.Scan(&result.SystemID, &result.Name, &result.Path, &result.MediaID); scanErr != nil {
+			return nil, fmt.Errorf("scan media by property: %w", scanErr)
+		}
+		results = append(results, result)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate media by property: %w", rowsErr)
+	}
+	return results, nil
+}
+
+// HasMediaPropertyForPath reports whether systemID/path already has property.
+func (db *MediaDB) HasMediaPropertyForPath(ctx context.Context, systemID, path, property string) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
+	typeTagDBID, err := resolvePropertyTypeTag(ctx, db.conn(), tags.PropertyTypeTag(tags.TagValue(property)))
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve property %q: %w", property, err)
+	}
+	var exists int
+	err = db.conn().QueryRowContext(ctx, `
+SELECT 1
+FROM Media m
+JOIN Systems s ON s.DBID = m.SystemDBID
+JOIN MediaProperties mp ON mp.MediaDBID = m.DBID
+WHERE s.SystemID = ? AND m.Path = ? AND mp.TypeTagDBID = ?
+LIMIT 1`, systemID, path, typeTagDBID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check media property %q: %w", property, err)
+	}
+	return true, nil
 }
 
 // ApplyScrapeResult writes all scraper metadata for a match in one transaction.

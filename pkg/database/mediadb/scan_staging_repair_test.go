@@ -161,6 +161,7 @@ func TestClearScanStage_RecreatesMissingScratchTables(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mediaDB.Close()) })
 
 	_, err = mediaDB.sql.Load().ExecContext(ctx, `
+		DROP TABLE IF EXISTS ScanStageProperties;
 		DROP TABLE ScanStageTags;
 		DROP INDEX IF EXISTS scanstage_slug_idx;
 		DROP TABLE ScanStage;
@@ -170,7 +171,7 @@ func TestClearScanStage_RecreatesMissingScratchTables(t *testing.T) {
 
 	require.NoError(t, mediaDB.ClearScanStage())
 
-	for _, table := range []string{"ScanStage", "ScanStageTags", "ScanTouchedTitles"} {
+	for _, table := range []string{"ScanStage", "ScanStageTags", "ScanStageProperties", "ScanTouchedTitles"} {
 		var name string
 		err = mediaDB.sql.Load().QueryRowContext(ctx,
 			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
@@ -180,6 +181,7 @@ func TestClearScanStage_RecreatesMissingScratchTables(t *testing.T) {
 	for _, index := range []string{
 		"scanstage_slug_idx",
 		"scanstagetags_type_tag_path_idx",
+		"scanstageproperties_property_idx",
 	} {
 		var name string
 		err = mediaDB.sql.Load().QueryRowContext(ctx,

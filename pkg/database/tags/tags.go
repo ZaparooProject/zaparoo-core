@@ -969,6 +969,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyVideo,
 		TagPropertyManual,
 		TagPropertyXMLGameID,
+		TagPropertyGameID,
 		TagPropertyLauncherOverride,
 	},
 

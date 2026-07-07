@@ -24,6 +24,7 @@ package opticaldrive
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func TestNewReader(t *testing.T) {
 func TestMetadata(t *testing.T) {
 	t.Parallel()
 
-	reader := &FileReader{}
+	reader := NewReader(&config.Instance{})
 	metadata := reader.Metadata()
 
 	assert.Equal(t, "opticaldrive", metadata.ID)
@@ -71,10 +72,34 @@ func TestIDs(t *testing.T) {
 func TestDetect(t *testing.T) {
 	t.Parallel()
 
-	reader := &FileReader{}
-	result := reader.Detect([]string{"any", "input"})
+	const devPath = "/fake/dev"
+	reader := &FileReader{
+		fsChecker: &mockFSChecker{
+			readDirFunc: func(path string) ([]os.DirEntry, error) {
+				require.Equal(t, "/fake/sys/block", path)
+				return []os.DirEntry{mockDirEntry{name: "sr0"}}, nil
+			},
+			statFunc: func(path string) (os.FileInfo, error) {
+				require.Equal(t, devPath+"/sr0", path)
+				return &mockFileInfo{}, nil
+			},
+		},
+		sysBlockPath: "/fake/sys/block",
+		devPath:      devPath,
+	}
 
-	assert.Empty(t, result, "optical drive does not support auto-detection")
+	path := devPath + "/sr0"
+	assert.Empty(t, reader.Detect([]string{path}))
+	assert.Equal(t, "opticaldrive:"+path, reader.Detect(nil))
+}
+
+func TestOpticalPathExcluded(t *testing.T) {
+	t.Parallel()
+
+	const path = "/dev/sr0"
+	assert.True(t, opticalPathExcluded(path, []string{path}))
+	assert.True(t, opticalPathExcluded(path, []string{"opticaldrive:" + path}))
+	assert.False(t, opticalPathExcluded(path, []string{"opticaldrive:/dev/sr1"}))
 }
 
 func TestWrite_NotSupported(t *testing.T) {
@@ -257,7 +282,8 @@ func TestConstants(t *testing.T) {
 }
 
 type mockFSChecker struct {
-	statFunc func(path string) (os.FileInfo, error)
+	statFunc    func(path string) (os.FileInfo, error)
+	readDirFunc func(path string) ([]os.DirEntry, error)
 }
 
 func (m *mockFSChecker) Stat(path string) (os.FileInfo, error) {
@@ -265,6 +291,25 @@ func (m *mockFSChecker) Stat(path string) (os.FileInfo, error) {
 		return m.statFunc(path)
 	}
 	// Default behavior for mock when no function is set - file exists
+	return &mockFileInfo{}, nil
+}
+
+func (m *mockFSChecker) ReadDir(path string) ([]os.DirEntry, error) {
+	if m.readDirFunc != nil {
+		return m.readDirFunc(path)
+	}
+	return nil, nil
+}
+
+type mockDirEntry struct {
+	name  string
+	isDir bool
+}
+
+func (m mockDirEntry) Name() string    { return m.name }
+func (m mockDirEntry) IsDir() bool     { return m.isDir }
+func (mockDirEntry) Type() os.FileMode { return 0 }
+func (mockDirEntry) Info() (os.FileInfo, error) {
 	return &mockFileInfo{}, nil
 }
 
@@ -287,6 +332,12 @@ func (m *mockCommandRunner) RunBlkid(ctx context.Context, valueType, devicePath 
 	}
 	// Default behavior for mock when no function is set
 	return []byte{}, nil
+}
+
+func newTestReader(cfg *config.Instance) *FileReader {
+	reader := NewReader(cfg)
+	reader.gameIDProbe = func(string) []readers.ScanProperty { return nil }
+	return reader
 }
 
 func TestOpen_InvalidPath_NotAbsolute(t *testing.T) {
@@ -349,7 +400,7 @@ func TestOpen_SuccessfulDiscDetection(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.commandRunner = mockCmd
 	scanQueue := testutils.CreateTestScanChannel(t)
@@ -403,7 +454,7 @@ func TestOpen_DeviceDisappearsWithActiveToken(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.commandRunner = mockCmd
 	scanQueue := testutils.CreateTestScanChannel(t)
@@ -460,7 +511,7 @@ func TestOpen_BlkidFailsNormalDiscRemoval(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.commandRunner = mockCmd
 	scanQueue := testutils.CreateTestScanChannel(t)
@@ -515,7 +566,7 @@ func TestOpen_EmptyUUIDAndLabel_RemovesToken(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.commandRunner = mockCmd
 	scanQueue := testutils.CreateTestScanChannel(t)
@@ -561,7 +612,7 @@ func TestOpen_IDSourceUUID(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.commandRunner = mockCmd
 	scanQueue := testutils.CreateTestScanChannel(t)
@@ -603,7 +654,7 @@ func TestOpen_IDSourceLabel(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	reader.commandRunner = mockCmd
 	scanQueue := testutils.CreateTestScanChannel(t)
@@ -671,7 +722,7 @@ func TestOpen_DeviceDisappearsWithoutToken_NoReaderError(t *testing.T) {
 		},
 	}
 
-	reader := NewReader(&config.Instance{})
+	reader := newTestReader(&config.Instance{})
 	reader.fsChecker = mockFS
 	scanQueue := testutils.CreateTestScanChannel(t)
 
@@ -688,6 +739,49 @@ func TestOpen_DeviceDisappearsWithoutToken_NoReaderError(t *testing.T) {
 	testutils.AssertNoScan(t, scanQueue, 500*time.Millisecond)
 
 	// Clean up
+	err = reader.Close()
+	require.NoError(t, err)
+}
+
+func TestOpen_NoRepeatedGameIDProbeForUnchangedUnidentifiedDisc(t *testing.T) {
+	t.Parallel()
+
+	mockFS := &mockFSChecker{
+		statFunc: func(_ string) (os.FileInfo, error) {
+			return &mockFileInfo{}, nil
+		},
+	}
+
+	mockCmd := &mockCommandRunner{
+		blkidFunc: func(_ context.Context, _ string, _ string) ([]byte, error) {
+			return []byte(""), nil
+		},
+	}
+
+	var probeCount atomic.Int32
+	reader := NewReader(&config.Instance{})
+	reader.fsChecker = mockFS
+	reader.commandRunner = mockCmd
+	reader.gameIDProbe = func(_ string) []readers.ScanProperty {
+		probeCount.Add(1)
+		return nil
+	}
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	device := config.ReadersConnect{
+		Driver: "optical_drive",
+		Path:   "/dev/sr0",
+	}
+
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+
+	time.Sleep(3500 * time.Millisecond)
+	testutils.AssertNoScan(t, scanQueue, 500*time.Millisecond)
+
+	assert.Equal(t, int32(1), probeCount.Load(),
+		"gameid probe should only run once for an unchanged, unidentified disc")
+
 	err = reader.Close()
 	require.NoError(t, err)
 }

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -74,10 +76,9 @@ type StageMediaPathParams struct {
 }
 
 // StageMediaPath parses one scanned file into its media fragments and appends
-// them to the scanner staging tables. No database reads happen here: existence
-// checks, tag diffing, and missing-state all run set-based in
-// ReconcileStagedSystem once the system's files are staged, so scanner memory
-// does not grow with either library or database size.
+// them to the scanner staging tables. Tags, missing state, and most existence
+// checks run set-based in ReconcileStagedSystem once the system's files are
+// staged, so scanner memory does not grow with library or database size.
 func StageMediaPath(params *StageMediaPathParams) error {
 	pf := GetPathFragments(&PathFragmentParams{
 		Config:       params.Config,
@@ -101,11 +102,54 @@ func StageMediaPath(params *StageMediaPathParams) error {
 		SlugLength:    metadata.SlugLength,
 		SlugWordCount: metadata.SlugWordCount,
 		Tags:          stagedTagsFromFragments(&pf, params.Config),
+		Properties:    stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path),
 	}
 	if err := params.DB.StageScannedMedia(&staged); err != nil {
 		return fmt.Errorf("error staging media path %s: %w", pf.Path, err)
 	}
 	return nil
+}
+
+func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []database.ScanStagedProperty {
+	if !gameid.IsCandidate(path, systemID) {
+		return nil
+	}
+
+	property := string(tags.TagPropertyGameID)
+	has, err := db.HasMediaPropertyForPath(context.Background(), systemID, path, property)
+	if err != nil {
+		log.Warn().Err(err).Str("system", systemID).Str("path", path).Msg("failed to check existing gameid property")
+	} else if has {
+		log.Debug().Str("system", systemID).Str("path", path).Msg("gameid property already indexed")
+		return nil
+	}
+
+	started := time.Now()
+	log.Debug().Str("system", systemID).Str("path", path).Msg("gameid identification started")
+	id, err := gameid.IdentifyPathForSystem(path, systemID)
+	duration := time.Since(started)
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Str("system", systemID).
+			Str("path", path).
+			Dur("duration", duration).
+			Msg("gameid identification skipped")
+		return nil
+	}
+	if id == "" {
+		log.Debug().Str("system", systemID).Str("path", path).Dur("duration", duration).Msg("gameid not found")
+		return nil
+	}
+
+	log.Debug().Str("system", systemID).Str("path", path).Str("gameid", id).Dur("duration", duration).
+		Msg("gameid identified")
+
+	return []database.ScanStagedProperty{{
+		Type: string(tags.TagTypeProperty),
+		Name: property,
+		Text: id,
+	}}
 }
 
 // stagedTagsFromFragments converts the parsed filename tags (and the extension

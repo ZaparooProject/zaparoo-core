@@ -1562,5 +1562,6 @@ const (
 	TagPropertyVideo            TagValue = "video"             // Video clip (filesystem path)
 	TagPropertyManual           TagValue = "manual"            // Game manual PDF (filesystem path)
 	TagPropertyXMLGameID        TagValue = "xml-game-id"       // game node ID (ScreenScraper Game ID for instance)
+	TagPropertyGameID           TagValue = "hash-gameid"       // go-gameid disc identity
 	TagPropertyLauncherOverride TagValue = "launcher-override" // Per-media launcher override (launcher ID)
 )

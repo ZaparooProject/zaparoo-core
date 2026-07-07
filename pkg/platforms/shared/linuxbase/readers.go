@@ -49,7 +49,7 @@ func SupportedReaders(cfg *config.Instance, p platforms.Platform) []readers.Read
 		libnfc.NewACR122Reader(cfg),
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
-		opticaldrive.NewReader(cfg),
+		opticaldrive.NewReaderWithDefaults(cfg, false, true),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
 	}

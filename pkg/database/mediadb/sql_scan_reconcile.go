@@ -123,6 +123,15 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 			PRIMARY KEY (Path, TagType, Tag)
 		) WITHOUT ROWID`,
 		`CREATE INDEX IF NOT EXISTS scanstagetags_type_tag_path_idx ON ScanStageTags(TagType, Tag, Path)`,
+		`CREATE TABLE IF NOT EXISTS ScanStageProperties (
+			Path         TEXT NOT NULL,
+			PropertyType TEXT NOT NULL,
+			Property     TEXT NOT NULL,
+			Text         TEXT NOT NULL,
+			PRIMARY KEY (Path, PropertyType, Property)
+		) WITHOUT ROWID`,
+		`CREATE INDEX IF NOT EXISTS scanstageproperties_property_idx
+			ON ScanStageProperties(PropertyType, Property, Text)`,
 		`CREATE TABLE IF NOT EXISTS ScanTouchedTitles (
 			TitleDBID INTEGER PRIMARY KEY
 		) WITHOUT ROWID`,
@@ -138,7 +147,7 @@ func sqlEnsureScanStagingTables(ctx context.Context, db sqlQueryable) error {
 // sqlClearScanStage empties all scanner staging tables. Called before staging a
 // system (clearing any rows a crashed run left behind) and after its reconcile.
 func sqlClearScanStage(ctx context.Context, db sqlQueryable) error {
-	for _, table := range []string{"ScanStageTags", "ScanStage", "ScanTouchedTitles"} {
+	for _, table := range []string{"ScanStageProperties", "ScanStageTags", "ScanStage", "ScanTouchedTitles"} {
 		start := time.Now()
 		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			if sqlErrorIsMissingScanStage(err) {
@@ -462,6 +471,20 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		   OR SortName <> excluded.SortName
 		   OR IsMissing <> 0`, systemDBID, systemDBID)
 	if err != nil {
+		return stats, err
+	}
+
+	if _, err = scanReconcileExec(ctx, db, systemID, "upsert media properties", `
+		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text)
+		SELECT m.DBID, t.DBID, sp.Text
+		FROM ScanStageProperties sp
+		JOIN Media m ON m.SystemDBID = ? AND m.Path = sp.Path
+		JOIN TagTypes tt ON tt.Type = sp.PropertyType
+		JOIN Tags t ON t.TypeDBID = tt.DBID AND t.Tag = sp.Property
+		WHERE sp.Text <> ''
+		ON CONFLICT(MediaDBID, TypeTagDBID) DO UPDATE SET
+			Text = excluded.Text
+		WHERE MediaProperties.Text IS NOT excluded.Text`, systemDBID); err != nil {
 		return stats, err
 	}
 
