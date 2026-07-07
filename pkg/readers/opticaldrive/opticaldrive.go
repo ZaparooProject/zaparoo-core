@@ -77,40 +77,32 @@ func (DefaultFSChecker) ReadDir(path string) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
+type contextReaderAtCloser interface {
+	contextReaderAt
+	Close() error
+}
+
 type defaultDiscIdentifier struct{}
 
+var openDiscDeviceReader = openDiscDevice
+
 func (defaultDiscIdentifier) Identify(ctx context.Context, devicePath string) (discIdentity, error) {
-	//nolint:gosec // Safe: devicePath is validated as an absolute /dev path before this call.
-	file, err := os.Open(devicePath)
+	reader, err := openDiscDeviceReader(devicePath)
 	if err != nil {
-		return discIdentity{}, fmt.Errorf("open optical device: %w", err)
+		return discIdentity{}, err
 	}
 	defer func() {
-		_ = file.Close()
+		_ = reader.Close()
 	}()
 
-	doneCh := make(chan struct{}, 1)
-	var identity discIdentity
-	var found bool
-	var readErr error
-	go func() {
-		identity, found, readErr = readISO9660Identity(file)
-		doneCh <- struct{}{}
-	}()
-
-	select {
-	case <-ctx.Done():
-		_ = file.Close()
-		return discIdentity{}, fmt.Errorf("identify optical media: %w", ctx.Err())
-	case <-doneCh:
-		if readErr != nil {
-			return discIdentity{}, readErr
-		}
-		if !found {
-			return discIdentity{}, errISO9660IdentityNotFound
-		}
-		return identity, nil
+	identity, found, err := readISO9660IdentityContext(ctx, reader)
+	if err != nil {
+		return discIdentity{}, err
 	}
+	if !found {
+		return discIdentity{}, errISO9660IdentityNotFound
+	}
+	return identity, nil
 }
 
 type FileReader struct {

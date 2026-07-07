@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -306,6 +307,16 @@ func TestReadISO9660Identity_NotFound(t *testing.T) {
 	assert.Empty(t, identity)
 }
 
+func TestReadISO9660Identity_ShortReadIsMiss(t *testing.T) {
+	t.Parallel()
+
+	identity, found, err := readISO9660Identity(bytes.NewReader(make([]byte, iso9660SuperblockOffset+1)))
+
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Empty(t, identity)
+}
+
 func newTestISO9660Image(label, modified, created string) []byte {
 	image := make([]byte, iso9660SuperblockOffset+iso9660SectorSize)
 	desc := image[iso9660SuperblockOffset:]
@@ -371,10 +382,50 @@ func (m *mockDiscIdentifier) Identify(ctx context.Context, devicePath string) (d
 	return discIdentity{}, nil
 }
 
+type blockingContextReader struct {
+	closed atomic.Bool
+	reads  atomic.Int32
+}
+
+func (r *blockingContextReader) ReadAtContext(ctx context.Context, _ []byte, _ int64) (int, error) {
+	r.reads.Add(1)
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func (r *blockingContextReader) Close() error {
+	r.closed.Store(true)
+	return nil
+}
+
 func newTestReader(cfg *config.Instance) *FileReader {
 	reader := NewReader(cfg)
 	reader.gameIDProbe = func(string) []readers.ScanProperty { return nil }
 	return reader
+}
+
+func TestDefaultDiscIdentifierIdentify_TimeoutDoesNotLeakGoroutine(t *testing.T) {
+	reader := &blockingContextReader{}
+	oldOpen := openDiscDeviceReader
+	openDiscDeviceReader = func(string) (contextReaderAtCloser, error) {
+		return reader, nil
+	}
+	t.Cleanup(func() {
+		openDiscDeviceReader = oldOpen
+	})
+
+	before := runtime.NumGoroutine()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := defaultDiscIdentifier{}.Identify(ctx, "/dev/sr0")
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, int32(1), reader.reads.Load())
+	assert.True(t, reader.closed.Load())
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= before+1
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestOpen_InvalidPath_NotAbsolute(t *testing.T) {
@@ -516,7 +567,7 @@ func TestOpen_DeviceDisappearsWithActiveToken(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestOpen_BlkidFailsNormalDiscRemoval(t *testing.T) {
+func TestOpen_DiscIdentificationFailsNormalDiscRemoval(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
@@ -556,7 +607,7 @@ func TestOpen_BlkidFailsNormalDiscRemoval(t *testing.T) {
 	assert.Equal(t, "test-uuid/test-label", scan1.Token.UID)
 	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
-	// Second scan: disc removed (blkid fails but device exists)
+	// Second scan: disc removed (identification fails but device exists)
 	// This should be a normal removal, NOT a ReaderError
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.Nil(t, scan2.Token, "token should be nil on disc removal")

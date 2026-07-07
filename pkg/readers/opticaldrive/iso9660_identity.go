@@ -20,6 +20,7 @@
 package opticaldrive
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -49,12 +50,44 @@ type discIdentity struct {
 	Label string
 }
 
+type contextReaderAt interface {
+	ReadAtContext(context.Context, []byte, int64) (int, error)
+}
+
+type readerAtContextAdapter struct {
+	reader io.ReaderAt
+}
+
+func (r readerAtContextAdapter) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+	n, err := r.reader.ReadAt(p, off)
+	if err != nil {
+		return n, fmt.Errorf("read at: %w", err)
+	}
+	return n, nil
+}
+
 func readISO9660Identity(r io.ReaderAt) (discIdentity, bool, error) {
+	return readISO9660IdentityContext(context.Background(), readerAtContextAdapter{reader: r})
+}
+
+func readISO9660IdentityContext(ctx context.Context, r contextReaderAt) (discIdentity, bool, error) {
 	buf := make([]byte, iso9660DescriptorSize)
 	for i := range iso9660MaxDescriptors {
 		offset := int64(iso9660SuperblockOffset + i*iso9660SectorSize)
-		if _, err := r.ReadAt(buf, offset); err != nil {
+		n, err := r.ReadAtContext(ctx, buf, offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return discIdentity{}, false, nil
+			}
 			return discIdentity{}, false, fmt.Errorf("read iso9660 descriptor: %w", err)
+		}
+		if n < len(buf) {
+			return discIdentity{}, false, nil
 		}
 
 		if string(buf[1:6]) != "CD001" {
