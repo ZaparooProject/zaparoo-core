@@ -126,40 +126,41 @@ func getSqliteConnParams() string {
 }
 
 type MediaDB struct {
-	clock                 clockwork.Clock
-	ctx                   context.Context
-	pl                    platforms.Platform
-	batchInsertMedia      *BatchInserter
-	batchInsertSystem     *BatchInserter
-	stmtInsertMedia       *sql.Stmt
-	tx                    *sql.Tx
-	stmtInsertSystem      *sql.Stmt
-	sql                   database.Conn
-	stmtInsertTag         *sql.Stmt
-	stmtInsertTagType     *sql.Stmt
-	batchInsertMediaTag   *BatchInserter
-	inMemoryTagCache      atomic.Pointer[tagCache]
-	batchInsertTag        *BatchInserter
-	batchInsertTagType    *BatchInserter
-	stmtInsertMediaTag    *sql.Stmt
-	batchInsertMediaTitle *BatchInserter
-	stmtInsertMediaTitle  *sql.Stmt
-	batchInsertScanStage  *BatchInserter
-	batchInsertScanTag    *BatchInserter
-	slugSearchCache       atomic.Pointer[SlugSearchCache]
-	dbPath                string
-	backgroundOps         sync.WaitGroup
-	vacuumRetryDelay      time.Duration
-	analyzeRetryDelay     time.Duration
-	batchSize             int
-	sqlMu                 syncutil.RWMutex
-	isOptimizing          atomic.Bool
-	browseCacheRebuilding atomic.Bool
-	needsIndexRebuild     atomic.Bool
-	recreating            atomic.Bool
-	inTransaction         bool
-	browseCacheDirty      bool
-	utilityTagCacheDirty  bool
+	clock                   clockwork.Clock
+	ctx                     context.Context
+	pl                      platforms.Platform
+	batchInsertMedia        *BatchInserter
+	batchInsertSystem       *BatchInserter
+	stmtInsertMedia         *sql.Stmt
+	tx                      *sql.Tx
+	stmtInsertSystem        *sql.Stmt
+	sql                     database.Conn
+	stmtInsertTag           *sql.Stmt
+	stmtInsertTagType       *sql.Stmt
+	batchInsertMediaTag     *BatchInserter
+	inMemoryTagCache        atomic.Pointer[tagCache]
+	batchInsertTag          *BatchInserter
+	batchInsertTagType      *BatchInserter
+	stmtInsertMediaTag      *sql.Stmt
+	batchInsertMediaTitle   *BatchInserter
+	stmtInsertMediaTitle    *sql.Stmt
+	batchInsertScanStage    *BatchInserter
+	batchInsertScanTag      *BatchInserter
+	batchInsertScanProperty *BatchInserter
+	slugSearchCache         atomic.Pointer[SlugSearchCache]
+	dbPath                  string
+	backgroundOps           sync.WaitGroup
+	vacuumRetryDelay        time.Duration
+	analyzeRetryDelay       time.Duration
+	batchSize               int
+	sqlMu                   syncutil.RWMutex
+	isOptimizing            atomic.Bool
+	browseCacheRebuilding   atomic.Bool
+	needsIndexRebuild       atomic.Bool
+	recreating              atomic.Bool
+	inTransaction           bool
+	browseCacheDirty        bool
+	utilityTagCacheDirty    bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
@@ -1394,6 +1395,13 @@ func (db *MediaDB) closeAllBatchInserters() error {
 		}
 		db.batchInsertScanTag = nil
 	}
+	if db.batchInsertScanProperty != nil {
+		if closeErr := db.batchInsertScanProperty.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertScanProperty")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertScanProperty: %w", closeErr))
+		}
+		db.batchInsertScanProperty = nil
+	}
 
 	return errors.Join(closeErrs...)
 }
@@ -1423,6 +1431,7 @@ func (db *MediaDB) FlushBatchInserters() error {
 		db.batchInsertMediaTag,
 		db.batchInsertScanStage,
 		db.batchInsertScanTag,
+		db.batchInsertScanProperty,
 	} {
 		if bi == nil {
 			continue
@@ -1438,7 +1447,7 @@ func (db *MediaDB) FlushBatchInserters() error {
 // staging tables through the batch inserters. Requires an open batch
 // transaction (BeginTransaction(true)).
 func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
-	if db.batchInsertScanStage == nil || db.batchInsertScanTag == nil {
+	if db.batchInsertScanStage == nil || db.batchInsertScanTag == nil || db.batchInsertScanProperty == nil {
 		return errors.New("staging scanned media requires an open batch transaction")
 	}
 	if err := db.batchInsertScanStage.Add(
@@ -1452,6 +1461,13 @@ func (db *MediaDB) StageScannedMedia(media *database.ScanStagedMedia) error {
 			media.Path, tag.Type, tags.PadTagValue(tag.Value),
 		); err != nil {
 			return fmt.Errorf("failed to stage scanned media tag %s:%s: %w", tag.Type, tag.Value, err)
+		}
+	}
+	for _, property := range media.Properties {
+		if err := db.batchInsertScanProperty.Add(
+			media.Path, property.Type, property.Name, property.Text,
+		); err != nil {
+			return fmt.Errorf("failed to stage scanned media property %s:%s: %w", property.Type, property.Name, err)
 		}
 	}
 	return nil
@@ -1576,6 +1592,11 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 
 	// Use batch inserters if enabled, otherwise use prepared statements
 	if batchEnabled {
+		if ensureErr := sqlEnsureScanStagingTables(db.ctx, tx); ensureErr != nil {
+			db.rollbackAndLogError()
+			return ensureErr
+		}
+
 		// Initialize batch inserters for multi-row bulk inserts.
 		// IMPORTANT: Column order must match the regular INSERT statements including DBID.
 		//
@@ -1645,6 +1666,11 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 			[]string{"Path", "TagType", "Tag"}, db.batchSize, true); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for scan stage tags: %w", err)
+		}
+		if db.batchInsertScanProperty, err = NewBatchInserterWithOptions(db.ctx, tx, "ScanStageProperties",
+			[]string{"Path", "PropertyType", "Property", "Text"}, db.batchSize, true); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for scan stage properties: %w", err)
 		}
 
 		// Set up foreign key dependencies to ensure proper flush order

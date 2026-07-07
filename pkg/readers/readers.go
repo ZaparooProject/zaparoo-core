@@ -53,10 +53,19 @@ type DriverMetadata struct {
 	DefaultAutoDetect bool
 }
 
+// ScanProperty is typed metadata a reader identified about a scanned object.
+// It has the same key/value shape as a stored media property.
+type ScanProperty struct {
+	System string // optional scope; empty means unscoped
+	Name   string
+	Value  string
+}
+
 type Scan struct {
 	Error       error
 	Token       *tokens.Token
 	Source      string
+	Properties  []ScanProperty
 	ReaderError bool // True when Token is nil due to reader error/disconnect vs normal token removal
 }
 

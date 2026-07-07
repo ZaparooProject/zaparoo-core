@@ -137,3 +137,49 @@ func TestSupportedReadersIncludesConfiguredDefaultDisabledReader(t *testing.T) {
 	}
 	assert.True(t, found, "configured readers should be available even when disabled by default")
 }
+
+func TestSupportedReadersDisablesOpticalDriveByDefault(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fsHelper := helpers.NewOSFS()
+	cfg, err := helpers.NewTestConfig(fsHelper, configDir)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	supportedReaders := SupportedReaders(cfg, mockPlatform)
+
+	for _, reader := range supportedReaders {
+		assert.NotEqual(t, "opticaldrive", reader.Metadata().ID)
+	}
+}
+
+func TestSupportedReadersIncludesConfiguredOpticalDrive(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fsHelper := helpers.NewOSFS()
+	cfg, err := helpers.NewTestConfig(fsHelper, configDir)
+	require.NoError(t, err)
+	cfg.SetReaderConnections([]config.ReadersConnect{{Driver: "opticaldrive"}})
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	supportedReaders := SupportedReaders(cfg, mockPlatform)
+
+	var found bool
+	for _, reader := range supportedReaders {
+		if reader.Metadata().ID == "opticaldrive" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "configured optical drive should remain available on desktop Linux")
+}

@@ -419,6 +419,7 @@ preprocessing:
 		var scan *tokens.Token
 		var readerError bool
 		var scanSource string
+		var scanProperties []readers.ScanProperty
 
 		select {
 		case <-svc.State.GetContext().Done():
@@ -436,6 +437,7 @@ preprocessing:
 			scan = t.Token
 			readerError = t.ReaderError
 			scanSource = t.Source
+			scanProperties = t.Properties
 		case stoken := <-svc.LaunchSoftwareQueue:
 			// a token has been launched that starts software, used for managing exits
 			log.Debug().Msgf("new software token: %v", stoken)
@@ -618,6 +620,8 @@ preprocessing:
 			if handlePendingWrite(svc, scan, player) {
 				continue preprocessing
 			}
+
+			resolveTokenProperties(svc.State.GetContext(), svc, scan, scanProperties)
 
 			// Launch guard: when enabled and media is playing, stage tokens that
 			// would disrupt the current media (launches, playlist changes, stop).

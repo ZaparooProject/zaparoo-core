@@ -1100,6 +1100,33 @@ func (m *MockMediaDBI) GetLaunchCommandForMedia(ctx context.Context, systemID, p
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockMediaDBI) SearchMediaByProperty(
+	ctx context.Context,
+	systemID string,
+	property string,
+	value string,
+) ([]database.SearchResult, error) {
+	args := m.Called(ctx, systemID, property, value)
+	if results, ok := args.Get(0).([]database.SearchResult); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) HasMediaPropertyForPath(ctx context.Context, systemID, path, property string) (bool, error) {
+	args := m.Called(ctx, systemID, path, property)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
 func (m *MockMediaDBI) GetTags(
 	ctx context.Context,
 	systems []systemdefs.System,

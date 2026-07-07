@@ -679,6 +679,14 @@ type ScanStagedTag struct {
 	Value string
 }
 
+// ScanStagedProperty is one property derived from a scanned file, staged for
+// set-based reconcile after the corresponding Media row exists.
+type ScanStagedProperty struct {
+	Type string
+	Name string
+	Text string
+}
+
 // ScanStagedMedia is one scanned file's parsed fragments, staged into the
 // ScanStage/ScanStageTags tables for set-based reconcile against the media
 // tables. SecondarySlug is empty when the title has none.
@@ -690,6 +698,7 @@ type ScanStagedMedia struct {
 	SortName      string
 	SecondarySlug string
 	Tags          []ScanStagedTag
+	Properties    []ScanStagedProperty
 	SlugLength    int
 	SlugWordCount int
 }
@@ -907,6 +916,10 @@ type MediaDBI interface {
 		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 	) ([]MediaTitle, error)
 	GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error)
+	// SearchMediaByProperty finds media by a stored property value. systemID is an optional scope.
+	SearchMediaByProperty(ctx context.Context, systemID, property, value string) ([]SearchResult, error)
+	// HasMediaPropertyForPath reports whether indexed media already has a stored property.
+	HasMediaPropertyForPath(ctx context.Context, systemID, path, property string) (bool, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error

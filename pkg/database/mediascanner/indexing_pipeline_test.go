@@ -20,12 +20,18 @@
 package mediascanner
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetTitleFromFilename(t *testing.T) {
@@ -622,4 +628,72 @@ func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
 				tc.name, virtualResult.Slug, regularResult.Slug)
 		})
 	}
+}
+
+func TestStagedPropertiesFromPath_SkipsIdentifyWhenPropertyExists(t *testing.T) {
+	t.Parallel()
+
+	mockDB := &helpers.MockMediaDBI{}
+	path := filepath.Join("roms", systemdefs.SystemPSX, "Final Fantasy VII (Disc 1).cue")
+	mockDB.On(
+		"HasMediaPropertyForPath", mock.Anything, systemdefs.SystemPSX, path, string(tags.TagPropertyGameID),
+	).Return(true, nil).Once()
+
+	props := stagedPropertiesFromPath(mockDB, systemdefs.SystemPSX, path)
+
+	require.Empty(t, props)
+	mockDB.AssertExpectations(t)
+}
+
+func TestStagedPropertiesFromPath_NonCandidateSkipsAllDBWork(t *testing.T) {
+	t.Parallel()
+
+	mockDB := &helpers.MockMediaDBI{}
+	path := filepath.Join("roms", systemdefs.SystemNES, "Super Mario Bros.nes")
+
+	props := stagedPropertiesFromPath(mockDB, systemdefs.SystemNES, path)
+
+	require.Empty(t, props)
+	mockDB.AssertNotCalled(t, "HasMediaPropertyForPath", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestReconcileStagedSystem_PersistsStagedMediaProperty(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	require.NoError(t, mediaDB.ClearScanStage())
+	path := filepath.Join("roms", systemdefs.SystemPSX, "Final Fantasy VII (Disc 1).cue")
+	require.NoError(t, mediaDB.StageScannedMedia(&database.ScanStagedMedia{
+		Path:          path,
+		ParentDir:     filepath.Dir(path),
+		Slug:          "final-fantasy-vii",
+		TitleName:     "Final Fantasy VII",
+		SortName:      "Final Fantasy VII",
+		SlugLength:    16,
+		SlugWordCount: 3,
+		Properties: []database.ScanStagedProperty{{
+			Type: string(tags.TagTypeProperty),
+			Name: string(tags.TagPropertyGameID),
+			Text: "SLUS-00594",
+		}},
+	}))
+	_, err := mediaDB.ReconcileStagedSystem(ctx, systemdefs.SystemPSX, database.ScanReconcileOpts{})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	system, err := mediaDB.FindSystemBySystemID(systemdefs.SystemPSX)
+	require.NoError(t, err)
+	media, err := mediaDB.FindMediaBySystemAndPath(ctx, system.DBID, path)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	props, err := mediaDB.GetMediaProperties(ctx, media.DBID)
+	require.NoError(t, err)
+	require.Len(t, props, 1)
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyGameID), props[0].TypeTag)
+	assert.Equal(t, "SLUS-00594", props[0].Text)
 }
