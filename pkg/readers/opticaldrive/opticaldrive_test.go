@@ -24,7 +24,6 @@ package opticaldrive
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,22 +72,34 @@ func TestIDs(t *testing.T) {
 func TestDetect(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	sysBlockPath := filepath.Join(root, "sys", "block")
-	devPath := filepath.Join(root, "dev")
-	require.NoError(t, os.MkdirAll(sysBlockPath, 0o750))
-	require.NoError(t, os.MkdirAll(devPath, 0o750))
-	require.NoError(t, os.Mkdir(filepath.Join(sysBlockPath, "sr0"), 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(devPath, "sr0"), nil, 0o600))
-
+	const devPath = "/fake/dev"
 	reader := &FileReader{
-		sysBlockPath: sysBlockPath,
+		fsChecker: &mockFSChecker{
+			readDirFunc: func(path string) ([]os.DirEntry, error) {
+				require.Equal(t, "/fake/sys/block", path)
+				return []os.DirEntry{mockDirEntry{name: "sr0"}}, nil
+			},
+			statFunc: func(path string) (os.FileInfo, error) {
+				require.Equal(t, devPath+"/sr0", path)
+				return &mockFileInfo{}, nil
+			},
+		},
+		sysBlockPath: "/fake/sys/block",
 		devPath:      devPath,
 	}
 
-	path := filepath.Join(devPath, "sr0")
+	path := devPath + "/sr0"
 	assert.Empty(t, reader.Detect([]string{path}))
 	assert.Equal(t, "opticaldrive:"+path, reader.Detect(nil))
+}
+
+func TestOpticalPathExcluded(t *testing.T) {
+	t.Parallel()
+
+	const path = "/dev/sr0"
+	assert.True(t, opticalPathExcluded(path, []string{path}))
+	assert.True(t, opticalPathExcluded(path, []string{"opticaldrive:" + path}))
+	assert.False(t, opticalPathExcluded(path, []string{"opticaldrive:/dev/sr1"}))
 }
 
 func TestWrite_NotSupported(t *testing.T) {
@@ -271,7 +282,8 @@ func TestConstants(t *testing.T) {
 }
 
 type mockFSChecker struct {
-	statFunc func(path string) (os.FileInfo, error)
+	statFunc    func(path string) (os.FileInfo, error)
+	readDirFunc func(path string) ([]os.DirEntry, error)
 }
 
 func (m *mockFSChecker) Stat(path string) (os.FileInfo, error) {
@@ -279,6 +291,25 @@ func (m *mockFSChecker) Stat(path string) (os.FileInfo, error) {
 		return m.statFunc(path)
 	}
 	// Default behavior for mock when no function is set - file exists
+	return &mockFileInfo{}, nil
+}
+
+func (m *mockFSChecker) ReadDir(path string) ([]os.DirEntry, error) {
+	if m.readDirFunc != nil {
+		return m.readDirFunc(path)
+	}
+	return nil, nil
+}
+
+type mockDirEntry struct {
+	name  string
+	isDir bool
+}
+
+func (m mockDirEntry) Name() string    { return m.name }
+func (m mockDirEntry) IsDir() bool     { return m.isDir }
+func (mockDirEntry) Type() os.FileMode { return 0 }
+func (mockDirEntry) Info() (os.FileInfo, error) {
 	return &mockFileInfo{}, nil
 }
 

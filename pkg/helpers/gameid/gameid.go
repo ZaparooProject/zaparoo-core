@@ -99,41 +99,48 @@ func IsCandidate(path, systemID string) bool {
 	return ok
 }
 
-func IdentifyPathForSystem(path, systemID string) (id string, err error) {
+func safeCall[T any](fn func() (T, error), panicErr func(any) error) (value T, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("identify %s as %s panicked: %v", path, systemID, recovered)
+			var zero T
+			value = zero
+			err = panicErr(recovered)
 		}
 	}()
 
-	if !IsCandidate(path, systemID) {
-		return "", nil
-	}
-
-	console, _ := ConsoleForSystem(systemID)
-
-	result, err := gameid.IdentifyWithConsole(path, console, nil)
-	if err != nil {
-		return "", fmt.Errorf("identify %s as %s: %w", path, systemID, err)
-	}
-
-	return NormalizeID(result.ID), nil
+	return fn()
 }
 
-func identifyLiveDiscForSystem(path, systemID string, console gameid.Console) (candidate Candidate, ok bool) {
-	defer func() {
-		if recover() != nil {
-			candidate = Candidate{}
-			ok = false
+func IdentifyPathForSystem(path, systemID string) (string, error) {
+	return safeCall(func() (string, error) {
+		if !IsCandidate(path, systemID) {
+			return "", nil
 		}
-	}()
 
-	result, err := gameid.IdentifyWithConsole(path, console, nil)
-	if err != nil {
-		return Candidate{}, false
-	}
-	candidate = Candidate{SystemID: systemID, ID: NormalizeID(result.ID)}
-	return candidate, candidate.ID != ""
+		console, _ := ConsoleForSystem(systemID)
+
+		result, err := gameid.IdentifyWithConsole(path, console, nil)
+		if err != nil {
+			return "", fmt.Errorf("identify %s as %s: %w", path, systemID, err)
+		}
+
+		return NormalizeID(result.ID), nil
+	}, func(recovered any) error {
+		return fmt.Errorf("identify %s as %s panicked: %v", path, systemID, recovered)
+	})
+}
+
+func identifyLiveDiscForSystem(path, systemID string, console gameid.Console) (Candidate, bool) {
+	candidate, err := safeCall(func() (Candidate, error) {
+		result, identifyErr := gameid.IdentifyWithConsole(path, console, nil)
+		if identifyErr != nil {
+			return Candidate{}, fmt.Errorf("identify live disc: %w", identifyErr)
+		}
+		return Candidate{SystemID: systemID, ID: NormalizeID(result.ID)}, nil
+	}, func(recovered any) error {
+		return fmt.Errorf("identify live disc panicked: %v", recovered)
+	})
+	return candidate, err == nil && candidate.ID != ""
 }
 
 func IdentifyLiveDisc(path string) []Candidate {
@@ -154,19 +161,13 @@ func IdentifyLiveDisc(path string) []Candidate {
 	return []Candidate{candidate}
 }
 
-func detectLiveConsole(path string) (console gameid.Console, ok bool) {
-	defer func() {
-		if recover() != nil {
-			console = ""
-			ok = false
-		}
-	}()
-
-	console, err := gameid.DetectConsole(path)
-	if err != nil {
-		return "", false
-	}
-	return console, true
+func detectLiveConsole(path string) (gameid.Console, bool) {
+	console, err := safeCall(func() (gameid.Console, error) {
+		return gameid.DetectConsole(path)
+	}, func(recovered any) error {
+		return fmt.Errorf("detect live disc console panicked: %v", recovered)
+	})
+	return console, err == nil
 }
 
 func NormalizeID(id string) string {

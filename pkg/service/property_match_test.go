@@ -132,6 +132,47 @@ func TestResolveTokenProperties_PathWithCommaRoundTrips(t *testing.T) {
 	require.Equal(t, path, script.Cmds[0].Args[0])
 }
 
+func TestResolveTokenProperties_DeduplicatesSameMediaIDAcrossProperties(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("games", "psx", "game.cue")
+	svc, mediaDB, platform := newPropertyMatchService(t, nil)
+	mediaDB.On(
+		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345",
+	).Return([]database.SearchResult{{SystemID: systemdefs.SystemPSX, Path: path, MediaID: 7}}, nil)
+	mediaDB.On(
+		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345-DUPE",
+	).Return([]database.SearchResult{{SystemID: systemdefs.SystemPSX, Path: path, MediaID: 7}}, nil)
+	platform.On("LookupMapping", mock.Anything).Return("", false)
+
+	token := &tokens.Token{UID: "legacy-id", ScanTime: time.Now()}
+	resolveTokenProperties(context.Background(), svc, token, []readers.ScanProperty{
+		{System: systemdefs.SystemPSX, Name: string(tags.TagPropertyGameID), Value: "SLUS-12345"},
+		{System: systemdefs.SystemPSX, Name: string(tags.TagPropertyGameID), Value: "SLUS-12345-DUPE"},
+	})
+
+	require.Equal(t, "**launch:"+path, token.Text)
+}
+
+func TestResolveTokenProperties_SearchErrorDoesNotLaunch(t *testing.T) {
+	t.Parallel()
+
+	svc, mediaDB, platform := newPropertyMatchService(t, nil)
+	mediaDB.On(
+		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345",
+	).Return(nil, context.Canceled)
+	platform.On("LookupMapping", mock.Anything).Return("", false)
+
+	token := &tokens.Token{UID: "legacy-id", ScanTime: time.Now()}
+	resolveTokenProperties(context.Background(), svc, token, []readers.ScanProperty{{
+		System: systemdefs.SystemPSX,
+		Name:   string(tags.TagPropertyGameID),
+		Value:  "SLUS-12345",
+	}})
+
+	require.Empty(t, token.Text)
+}
+
 func TestResolveTokenProperties_IgnoresNonDBMatchProperties(t *testing.T) {
 	t.Parallel()
 

@@ -49,9 +49,10 @@ const (
 	MergedIDSeparator = "/"
 )
 
-// FSChecker checks if files/devices exist.
+// FSChecker checks filesystem paths used by the optical drive reader.
 type FSChecker interface {
 	Stat(path string) (os.FileInfo, error)
+	ReadDir(path string) ([]os.DirEntry, error)
 }
 
 // CommandRunner runs external commands.
@@ -68,6 +69,14 @@ func (DefaultFSChecker) Stat(path string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("stat failed: %w", err)
 	}
 	return info, nil
+}
+
+func (DefaultFSChecker) ReadDir(path string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("read dir failed: %w", err)
+	}
+	return entries, nil
 }
 
 // DefaultCommandRunner runs real blkid commands.
@@ -306,7 +315,12 @@ func (r *FileReader) Detect(exclude []string) string {
 		devPath = filepath.Join(string(filepath.Separator), "dev")
 	}
 
-	entries, err := os.ReadDir(sysBlockPath)
+	fsChecker := r.fsChecker
+	if fsChecker == nil {
+		fsChecker = DefaultFSChecker{}
+	}
+
+	entries, err := fsChecker.ReadDir(sysBlockPath)
 	if err != nil {
 		return ""
 	}
@@ -320,7 +334,7 @@ func (r *FileReader) Detect(exclude []string) string {
 		if opticalPathExcluded(path, exclude) {
 			continue
 		}
-		if _, statErr := os.Stat(path); statErr != nil {
+		if _, statErr := fsChecker.Stat(path); statErr != nil {
 			continue
 		}
 		return "opticaldrive:" + path

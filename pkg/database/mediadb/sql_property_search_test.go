@@ -83,6 +83,60 @@ func TestSearchMediaByProperty_MatchesStoredValue(t *testing.T) {
 	assert.Empty(t, noMatch)
 }
 
+func TestHasMediaPropertyForPath_MatchesStoredProperty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	media := insertMediaWithGameIDProperty(t, mediaDB, "PSX", "SLUS-00594")
+
+	has, err := mediaDB.HasMediaPropertyForPath(ctx, "PSX", media.Path, string(tags.TagPropertyGameID))
+	require.NoError(t, err)
+	assert.True(t, has)
+
+	wrongPath, err := mediaDB.HasMediaPropertyForPath(ctx, "PSX", filepath.Join("roms", "PSX", "missing.cue"),
+		string(tags.TagPropertyGameID))
+	require.NoError(t, err)
+	assert.False(t, wrongPath)
+
+	wrongSystem, err := mediaDB.HasMediaPropertyForPath(ctx, "PS2", media.Path, string(tags.TagPropertyGameID))
+	require.NoError(t, err)
+	assert.False(t, wrongSystem)
+}
+
+func insertMediaWithGameIDProperty(t *testing.T, mediaDB *MediaDB, systemID, gameID string) database.Media {
+	t.Helper()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	propertyType, err := mediaDB.InsertTagType(database.TagType{Type: string(tags.TagTypeProperty)})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertTag(database.Tag{
+		TypeDBID: propertyType.DBID,
+		Tag:      string(tags.TagPropertyGameID),
+	})
+	require.NoError(t, err)
+
+	system, err := mediaDB.InsertSystem(database.System{SystemID: systemID, Name: systemID})
+	require.NoError(t, err)
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID, Slug: "ff7", Name: "Final Fantasy VII",
+	})
+	require.NoError(t, err)
+	path := filepath.Join("roms", systemID, "Final Fantasy VII (Disc 1).cue")
+	media, err := mediaDB.InsertMedia(database.Media{
+		MediaTitleDBID: title.DBID, SystemDBID: system.DBID, Path: path,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, media.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyGameID), Text: gameID},
+	}))
+	return media
+}
+
 func TestSearchMediaByProperty_NullSQLGuard(t *testing.T) {
 	t.Parallel()
 	mediaDB := &MediaDB{}

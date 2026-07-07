@@ -21,6 +21,7 @@ package gameid
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -149,6 +150,19 @@ func checkedByte(value int) byte {
 		panic("value does not fit in byte")
 	}
 	return byte(value)
+}
+
+func TestSafeCall_RecoversPanic(t *testing.T) {
+	t.Parallel()
+
+	got, err := safeCall(func() (string, error) {
+		panic("boom")
+	}, func(recovered any) error {
+		return fmt.Errorf("wrapped panic: %v", recovered)
+	})
+
+	require.Empty(t, got)
+	require.EqualError(t, err, "wrapped panic: boom")
 }
 
 func TestNormalizeID(t *testing.T) {
