@@ -76,9 +76,9 @@ func TestDetect(t *testing.T) {
 	root := t.TempDir()
 	sysBlockPath := filepath.Join(root, "sys", "block")
 	devPath := filepath.Join(root, "dev")
-	require.NoError(t, os.MkdirAll(sysBlockPath, 0o755))
-	require.NoError(t, os.MkdirAll(devPath, 0o755))
-	require.NoError(t, os.Mkdir(filepath.Join(sysBlockPath, "sr0"), 0o755))
+	require.NoError(t, os.MkdirAll(sysBlockPath, 0o750))
+	require.NoError(t, os.MkdirAll(devPath, 0o750))
+	require.NoError(t, os.Mkdir(filepath.Join(sysBlockPath, "sr0"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(devPath, "sr0"), nil, 0o600))
 
 	reader := &FileReader{

@@ -131,7 +131,7 @@ func writeDirRecord(dst []byte, lba, size uint32, flags byte, name string) int {
 	if recordLen%2 == 1 {
 		recordLen++
 	}
-	dst[0] = byte(recordLen)
+	dst[0] = checkedByte(recordLen)
 	binary.LittleEndian.PutUint32(dst[2:], lba)
 	binary.BigEndian.PutUint32(dst[6:], lba)
 	binary.LittleEndian.PutUint32(dst[10:], size)
@@ -139,9 +139,16 @@ func writeDirRecord(dst []byte, lba, size uint32, flags byte, name string) int {
 	dst[25] = flags
 	dst[28] = 1
 	binary.BigEndian.PutUint16(dst[30:], 1)
-	dst[32] = byte(nameLen)
+	dst[32] = checkedByte(nameLen)
 	copy(dst[33:], name)
 	return recordLen
+}
+
+func checkedByte(value int) byte {
+	if value < 0 || value > 255 {
+		panic("value does not fit in byte")
+	}
+	return byte(value)
 }
 
 func TestNormalizeID(t *testing.T) {
