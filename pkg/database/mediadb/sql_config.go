@@ -240,6 +240,31 @@ func sqlGetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable) (string, 
 	return checkpoint, nil
 }
 
+func sqlResetIndexResumeState(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin index resume reset transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := sqlSetIndexResumeAttempts(ctx, tx, 0); err != nil {
+		return err
+	}
+	if err := sqlSetIndexResumeCheckpoint(ctx, tx, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit index resume reset transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func sqlSetIndexingStatus(ctx context.Context, db sqlQueryable, status string) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",

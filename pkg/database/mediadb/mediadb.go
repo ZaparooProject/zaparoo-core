@@ -742,13 +742,11 @@ func (db *MediaDB) IncrementIndexResumeAttempts() (int, error) {
 func (db *MediaDB) ResetIndexResumeAttempts() error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
-	if db.sql.Load() == nil {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
 		return ErrNullSQL
 	}
-	if err := sqlSetIndexResumeAttempts(db.ctx, db.conn(), 0); err != nil {
-		return err
-	}
-	return sqlSetIndexResumeCheckpoint(db.ctx, db.conn(), "")
+	return sqlResetIndexResumeState(db.ctx, sqlDB)
 }
 
 // GetIndexResumeCheckpoint returns the durable indexing checkpoint observed at

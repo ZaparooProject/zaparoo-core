@@ -75,6 +75,47 @@ func TestSqlGetLastGenerated_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlResetIndexResumeState_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeAttempts, "0").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeCheckpoint, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = sqlResetIndexResumeState(context.Background(), db)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlResetIndexResumeState_CheckpointErrorRollsBack(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeAttempts, "0").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigIndexResumeCheckpoint, "").
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	err = sqlResetIndexResumeState(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to set index resume checkpoint")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlFindSystem_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
