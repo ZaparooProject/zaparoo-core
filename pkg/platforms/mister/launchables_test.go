@@ -11,6 +11,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,4 +154,71 @@ func TestCoreExists(t *testing.T) {
 	assert.True(t, coreExists(rootDir, filepath.Join("_Console", "AY-3-8500")))
 	assert.True(t, coreExists(rootDir, filepath.Join("_Computer", "VT52")))
 	assert.False(t, coreExists(rootDir, filepath.Join("_Computer", "Altair8800")))
+}
+
+func TestMergeOtherLaunchableDefinitions_AppendsNewEntry(t *testing.T) {
+	merged := mergeOtherLaunchableDefinitions(
+		misterOtherLaunchableDefinitions,
+		[]config.OtherLaunchable{
+			{ID: "arduboy", Name: "Arduboy", Category: "Other", CorePath: "Arduboy"},
+		},
+	)
+
+	require.Len(t, merged, len(misterOtherLaunchableDefinitions)+1)
+	added := merged[len(merged)-1]
+	assert.Equal(t, "Arduboy", added.Name)
+	assert.Equal(t, "Other", added.Category)
+	assert.Equal(t, "Arduboy", added.CoreName)
+	assert.Equal(t, uuid.NewSHA1(launchables.ZaparooLaunchableNamespace, []byte("arduboy")), added.ID)
+}
+
+func TestMergeOtherLaunchableDefinitions_OverridesBuiltinKeepsUUID(t *testing.T) {
+	merged := mergeOtherLaunchableDefinitions(
+		misterOtherLaunchableDefinitions,
+		[]config.OtherLaunchable{
+			{ID: "chess", Name: "Chess Renamed", Category: "Console", CorePath: "ChessAlt"},
+		},
+	)
+
+	require.Len(t, merged, len(misterOtherLaunchableDefinitions))
+
+	var chess *misterOtherLaunchableDefinition
+	for i := range merged {
+		if merged[i].ConfigID == "chess" {
+			chess = &merged[i]
+			break
+		}
+	}
+	require.NotNil(t, chess, "chess entry missing from merged list")
+	assert.Equal(t, "Chess Renamed", chess.Name)
+	assert.Equal(t, "Console", chess.Category)
+	assert.Equal(t, "ChessAlt", chess.CoreName)
+	assert.Equal(t, launchables.MisterOtherChess, chess.ID)
+}
+
+func TestLaunchables_IncludesUserConfiguredOtherLaunchable(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[other_launchables]]
+id = "arduboy"
+name = "Arduboy"
+core_path = "Arduboy"
+`))
+
+	items := (&Platform{}).Launchables(cfg)
+
+	require.Len(t, items, 33)
+
+	var found *launchables.VirtualSystem
+	for i := range items {
+		if system, ok := items[i].(launchables.VirtualSystem); ok && system.Name == "Arduboy" {
+			found = &system
+			break
+		}
+	}
+	require.NotNil(t, found, "Arduboy launchable missing")
+	assert.Equal(t, "Other", found.Category)
+	assert.Equal(t, uuid.NewSHA1(launchables.ZaparooLaunchableNamespace, []byte("arduboy")), found.ID)
+	assert.NotNil(t, found.Launch)
+	assert.NotNil(t, found.Test)
 }
