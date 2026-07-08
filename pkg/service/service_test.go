@@ -814,7 +814,7 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
 }
 
-func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
+func TestCheckAndResumeIndexing_StopsAfterMaxNoProgressResumeAttempts(t *testing.T) {
 	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
 	methods.ClearIndexingStatus()
 
@@ -827,7 +827,7 @@ func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
 	defer cleanup()
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	// Wire an inbox so the resume-limit branch can surface a user-facing message.
+	// Wire an inbox so the stall-limit branch can surface a user-facing message.
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(m *database.InboxMessage) bool {
 		return m.Category == inboxservice.CategoryMediaIndexResumeLimit &&
@@ -835,10 +835,12 @@ func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
 	})).Return(&database.InboxMessage{}, nil)
 	st.SetInbox(inboxservice.NewService(mockUserDB, st.Notifications))
 
-	// Simulate a reindex that keeps getting interrupted: status wedged at
-	// "running" with the resume-attempt counter already at the limit.
+	// Simulate a reindex that keeps getting interrupted at the same durable
+	// checkpoint. The next resume attempt reaches the no-progress stall limit.
 	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning))
-	for range maxIndexResumeAttempts {
+	require.NoError(t, db.MediaDB.SetLastIndexedSystem("NES"))
+	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
+	for i := 0; i < maxIndexNoProgressResumeAttempts-1; i++ {
 		_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
 		require.NoError(t, incErr)
 	}
@@ -850,10 +852,33 @@ func TestCheckAndResumeIndexing_StopsAfterMaxResumeAttempts(t *testing.T) {
 	status, err := db.MediaDB.GetIndexingStatus()
 	require.NoError(t, err)
 	assert.Equal(t, mediadb.IndexingStatusCancelled, status)
-	assert.False(t, methods.IsIndexing(), "indexing must not be relaunched past the resume limit")
+	assert.False(t, methods.IsIndexing(), "indexing must not be relaunched past the no-progress limit")
 
 	// The user must be told why indexing stopped, via a resume-limit inbox message.
 	mockUserDB.AssertCalled(t, "AddInboxMessage", mock.Anything)
+}
+
+func TestRecordIndexResumeCheckpoint_ProgressMovedResetsAttempts(t *testing.T) {
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	require.NoError(t, db.MediaDB.SetLastIndexedSystem("SNES"))
+	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
+	_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
+	require.NoError(t, incErr)
+
+	attempts, stalled, err := recordIndexResumeCheckpoint(db.MediaDB)
+	require.NoError(t, err)
+	assert.False(t, stalled)
+	assert.Equal(t, 0, attempts)
+
+	storedAttempts, err := db.MediaDB.GetIndexResumeAttempts()
+	require.NoError(t, err)
+	assert.Equal(t, 0, storedAttempts)
+
+	checkpoint, err := db.MediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Equal(t, indexResumeCheckpointPrefix+"SNES", checkpoint)
 }
 
 func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
@@ -870,6 +895,7 @@ func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCompleted))
+	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
 	_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
 	require.NoError(t, incErr)
 
@@ -878,6 +904,9 @@ func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
 	attempts, err := db.MediaDB.GetIndexResumeAttempts()
 	require.NoError(t, err)
 	assert.Equal(t, 0, attempts, "a clean indexing state must reset the resume-attempt counter")
+	checkpoint, err := db.MediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Empty(t, checkpoint, "a clean indexing state must clear the resume checkpoint")
 }
 
 func TestCheckAndResumeScraping_StatusErrorDoesNothing(t *testing.T) {

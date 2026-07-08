@@ -42,15 +42,51 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// maxIndexResumeAttempts bounds how many consecutive boots will auto-resume an
-// interrupted media index before giving up and leaving the library browsable
-// from cache. A large-library reindex can take hours; without this bound a device
-// that reboots mid-index would relaunch the reindex on every boot forever.
-const maxIndexResumeAttempts = 3
+// maxIndexNoProgressResumeAttempts bounds automatic resumes only when the
+// durable indexing checkpoint stops moving. Normal power-offs during a long
+// background index can resume forever as long as each completed system advances
+// the checkpoint.
+const maxIndexNoProgressResumeAttempts = 5
+
+const indexResumeCheckpointPrefix = "last_indexed_system="
 
 // mediaDBRecovering serializes media database recovery so the startup check and the
 // runtime watcher can never run a close/reopen rebuild concurrently.
 var mediaDBRecovering atomic.Bool
+
+func currentIndexResumeCheckpoint(mediaDB database.MediaDBI) (string, error) {
+	lastIndexedSystem, err := mediaDB.GetLastIndexedSystem()
+	if err != nil {
+		return "", err
+	}
+	return indexResumeCheckpointPrefix + lastIndexedSystem, nil
+}
+
+func recordIndexResumeCheckpoint(mediaDB database.MediaDBI) (int, bool, error) {
+	currentCheckpoint, err := currentIndexResumeCheckpoint(mediaDB)
+	if err != nil {
+		return 0, false, err
+	}
+	previousCheckpoint, err := mediaDB.GetIndexResumeCheckpoint()
+	if err != nil {
+		return 0, false, err
+	}
+	if previousCheckpoint != currentCheckpoint {
+		if resetErr := mediaDB.ResetIndexResumeAttempts(); resetErr != nil {
+			return 0, false, resetErr
+		}
+		if setErr := mediaDB.SetIndexResumeCheckpoint(currentCheckpoint); setErr != nil {
+			return 0, false, setErr
+		}
+		return 0, false, nil
+	}
+
+	attempts, err := mediaDB.IncrementIndexResumeAttempts()
+	if err != nil {
+		return 0, false, err
+	}
+	return attempts, attempts >= maxIndexNoProgressResumeAttempts, nil
+}
 
 // checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it.
 // It returns true when an index resume was started so callers can defer lower-priority
@@ -80,31 +116,31 @@ func checkAndResumeIndexing(
 		return false
 	}
 
-	// Bound automatic resumes. A full reindex on a large library can take hours;
-	// if the device keeps rebooting mid-index we would otherwise relaunch it every
-	// boot forever, and while indexing is "running" the browse-cache self-heal is
-	// suppressed. After enough consecutive interruptions, stop looping and mark the
-	// index cancelled so the library stays browsable from the (stale) cache instead.
-	attempts, err := db.MediaDB.GetIndexResumeAttempts()
+	// Bound only stalled resumes. A full reindex on a large library can span many
+	// user power cycles; those should resume indefinitely as long as completed
+	// systems move the durable checkpoint. If the same checkpoint is retried too
+	// many times, stop looping and mark the index cancelled so browse-cache repair
+	// and user-initiated indexing can recover.
+	noProgressAttempts, stalled, err := recordIndexResumeCheckpoint(db.MediaDB)
 	if err != nil {
-		// The persisted counter is the only thing bounding automatic resumes. If it
-		// can't be read we cannot prove we're under the limit, so fail closed and skip
-		// resuming rather than risk an unbounded reboot-resume loop; the library stays
-		// browsable from the (stale) cache.
-		log.Warn().Err(err).Msg("failed to read index resume attempt counter; skipping auto-resume")
+		// The persisted checkpoint/counter is the only thing bounding stalled
+		// automatic resumes. If it can't be updated, fail closed and keep cached
+		// library data browsable rather than risk an unbounded resume loop.
+		log.Warn().Err(err).Msg("failed to record index resume checkpoint; skipping auto-resume")
 		return false
 	}
-	if attempts >= maxIndexResumeAttempts {
-		log.Warn().Int("attempts", attempts).
-			Msg("interrupted media indexing exceeded automatic resume limit; leaving library browsable")
+	if stalled {
+		log.Warn().Int("noProgressAttempts", noProgressAttempts).
+			Int("limit", maxIndexNoProgressResumeAttempts).
+			Msg("interrupted media indexing made no durable progress across repeated resumes; leaving library browsable")
 		if setErr := db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
-			log.Warn().Err(setErr).Msg("failed to mark wedged indexing as cancelled")
+			log.Warn().Err(setErr).Msg("failed to mark stalled indexing as cancelled")
 		}
 		if inbox := st.Inbox(); inbox != nil {
-			if inboxErr := inbox.Add("Media indexing paused after repeated interruptions",
-				inboxservice.WithBody("Media indexing was interrupted several times before it could "+
-					"finish, so it has been paused to keep your library browsable. Start indexing again "+
-					"from Settings when your device can stay on long enough to complete it."),
+			if inboxErr := inbox.Add("Media indexing paused after repeated stalls",
+				inboxservice.WithBody("Media indexing resumed several times without completing another system, "+
+					"so it has been paused to keep your library browsable. Start indexing again from "+
+					"Settings when your device can stay on long enough to make progress."),
 				inboxservice.WithSeverity(inboxservice.SeverityWarning),
 				inboxservice.WithCategory(inboxservice.CategoryMediaIndexResumeLimit),
 			); inboxErr != nil {
@@ -113,16 +149,8 @@ func checkAndResumeIndexing(
 		}
 		return false
 	}
-	newAttempts, incErr := db.MediaDB.IncrementIndexResumeAttempts()
-	if incErr != nil {
-		// A failed increment means the next boot reads the same count and resumes
-		// again — a persistent write failure would loop forever. Fail closed.
-		log.Warn().Err(incErr).Msg("failed to record index resume attempt; skipping auto-resume")
-		return false
-	}
-	attempts = newAttempts
 
-	log.Info().Int("attempt", attempts).Int("limit", maxIndexResumeAttempts).
+	log.Info().Int("noProgressAttempts", noProgressAttempts).Int("limit", maxIndexNoProgressResumeAttempts).
 		Msg("detected interrupted media indexing, automatically resuming")
 
 	// Get the systems that were being indexed from the database

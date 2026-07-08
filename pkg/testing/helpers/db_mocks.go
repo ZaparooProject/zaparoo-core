@@ -1670,6 +1670,19 @@ func (m *MockMediaDBI) ResetIndexResumeAttempts() error {
 	return nil
 }
 
+func (m *MockMediaDBI) GetIndexResumeCheckpoint() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetIndexResumeCheckpoint(checkpoint string) error {
+	args := m.Called(checkpoint)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) hasExpectation(method string) bool {
 	for _, call := range m.ExpectedCalls {
 		if call.Method == method {
@@ -2257,6 +2270,8 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("GetIndexResumeAttempts").Return(0, nil).Maybe()
 	mockMediaDB.On("IncrementIndexResumeAttempts").Return(1, nil).Maybe()
 	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil).Maybe()
+	mockMediaDB.On("GetIndexResumeCheckpoint").Return("", nil).Maybe()
+	mockMediaDB.On("SetIndexResumeCheckpoint", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("HasAnyMedia").Return(false, nil).Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()

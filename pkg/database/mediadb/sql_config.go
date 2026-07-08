@@ -47,6 +47,7 @@ const (
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
 	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
+	DBConfigIndexResumeCheckpoint           = "IndexResumeCheckpoint"
 	DBConfigDisambiguationVersion           = "DisambiguationVersion"
 
 	temporaryRepairParentDirVersion = "1"
@@ -211,6 +212,32 @@ func sqlGetIndexResumeAttempts(ctx context.Context, db sqlQueryable) (int, error
 		return 0, fmt.Errorf("failed to parse index resume attempts: %w", err)
 	}
 	return attempts, nil
+}
+
+func sqlSetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable, checkpoint string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexResumeCheckpoint,
+		checkpoint,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set index resume checkpoint: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable) (string, error) {
+	var checkpoint string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexResumeCheckpoint,
+	).Scan(&checkpoint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get index resume checkpoint: %w", err)
+	}
+	return checkpoint, nil
 }
 
 func sqlSetIndexingStatus(ctx context.Context, db sqlQueryable, status string) error {

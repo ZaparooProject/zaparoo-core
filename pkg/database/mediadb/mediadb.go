@@ -706,8 +706,8 @@ func (db *MediaDB) GetOptimizationStep() (string, error) {
 }
 
 // GetIndexResumeAttempts returns the number of consecutive automatic resume
-// attempts recorded for an interrupted media index. It resets to zero once
-// indexing reaches a clean (non-interrupted) state.
+// attempts that found no durable indexing progress since the previous resume.
+// It resets to zero once indexing reaches a clean state or the resume checkpoint moves.
 func (db *MediaDB) GetIndexResumeAttempts() (int, error) {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
@@ -717,9 +717,9 @@ func (db *MediaDB) GetIndexResumeAttempts() (int, error) {
 	return sqlGetIndexResumeAttempts(db.ctx, db.sql.Load())
 }
 
-// IncrementIndexResumeAttempts bumps the consecutive resume-attempt counter and
-// returns the new value. It bounds how many times an interrupted index is
-// auto-resumed so a reindex that keeps getting interrupted cannot loop forever.
+// IncrementIndexResumeAttempts bumps the no-progress resume-attempt counter and
+// returns the new value. It bounds repeated resumes only when the durable
+// indexing checkpoint is not moving.
 func (db *MediaDB) IncrementIndexResumeAttempts() (int, error) {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
@@ -737,15 +737,40 @@ func (db *MediaDB) IncrementIndexResumeAttempts() (int, error) {
 	return next, nil
 }
 
-// ResetIndexResumeAttempts clears the consecutive resume-attempt counter,
-// giving a future interruption a fresh budget of automatic resumes.
+// ResetIndexResumeAttempts clears the no-progress resume-attempt counter and
+// checkpoint, giving a future interrupted index a fresh stall budget.
 func (db *MediaDB) ResetIndexResumeAttempts() error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexResumeAttempts(db.ctx, db.conn(), 0)
+	if err := sqlSetIndexResumeAttempts(db.ctx, db.conn(), 0); err != nil {
+		return err
+	}
+	return sqlSetIndexResumeCheckpoint(db.ctx, db.conn(), "")
+}
+
+// GetIndexResumeCheckpoint returns the durable indexing checkpoint observed at
+// the previous auto-resume. A changed checkpoint proves the index made progress.
+func (db *MediaDB) GetIndexResumeCheckpoint() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql.Load() == nil {
+		return "", ErrNullSQL
+	}
+	return sqlGetIndexResumeCheckpoint(db.ctx, db.sql.Load())
+}
+
+// SetIndexResumeCheckpoint stores the durable indexing checkpoint observed at
+// auto-resume time so the next boot can detect whether progress moved.
+func (db *MediaDB) SetIndexResumeCheckpoint(checkpoint string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexResumeCheckpoint(db.ctx, db.conn(), checkpoint)
 }
 
 func (db *MediaDB) SetIndexingStatus(status string) error {
