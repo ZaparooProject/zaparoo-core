@@ -24,6 +24,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
@@ -57,33 +58,33 @@ var mediaDBRecovering atomic.Bool
 func currentIndexResumeCheckpoint(mediaDB database.MediaDBI) (string, error) {
 	lastIndexedSystem, err := mediaDB.GetLastIndexedSystem()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get last indexed system: %w", err)
 	}
 	return indexResumeCheckpointPrefix + lastIndexedSystem, nil
 }
 
-func recordIndexResumeCheckpoint(mediaDB database.MediaDBI) (int, bool, error) {
+func recordIndexResumeCheckpoint(mediaDB database.MediaDBI) (attempts int, stalled bool, err error) {
 	currentCheckpoint, err := currentIndexResumeCheckpoint(mediaDB)
 	if err != nil {
 		return 0, false, err
 	}
 	previousCheckpoint, err := mediaDB.GetIndexResumeCheckpoint()
 	if err != nil {
-		return 0, false, err
+		return 0, false, fmt.Errorf("failed to get index resume checkpoint: %w", err)
 	}
 	if previousCheckpoint != currentCheckpoint {
 		if resetErr := mediaDB.ResetIndexResumeAttempts(); resetErr != nil {
-			return 0, false, resetErr
+			return 0, false, fmt.Errorf("failed to reset index resume attempts: %w", resetErr)
 		}
 		if setErr := mediaDB.SetIndexResumeCheckpoint(currentCheckpoint); setErr != nil {
-			return 0, false, setErr
+			return 0, false, fmt.Errorf("failed to set index resume checkpoint: %w", setErr)
 		}
 		return 0, false, nil
 	}
 
-	attempts, err := mediaDB.IncrementIndexResumeAttempts()
+	attempts, err = mediaDB.IncrementIndexResumeAttempts()
 	if err != nil {
-		return 0, false, err
+		return 0, false, fmt.Errorf("failed to increment index resume attempts: %w", err)
 	}
 	return attempts, attempts >= maxIndexNoProgressResumeAttempts, nil
 }
@@ -132,7 +133,7 @@ func checkAndResumeIndexing(
 	if stalled {
 		log.Warn().Int("noProgressAttempts", noProgressAttempts).
 			Int("limit", maxIndexNoProgressResumeAttempts).
-			Msg("interrupted media indexing made no durable progress across repeated resumes; leaving library browsable")
+			Msg("media indexing made no durable progress across repeated resumes; leaving library browsable")
 		if setErr := db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark stalled indexing as cancelled")
 		}

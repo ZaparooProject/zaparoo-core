@@ -840,7 +840,7 @@ func TestCheckAndResumeIndexing_StopsAfterMaxNoProgressResumeAttempts(t *testing
 	require.NoError(t, db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning))
 	require.NoError(t, db.MediaDB.SetLastIndexedSystem("NES"))
 	require.NoError(t, db.MediaDB.SetIndexResumeCheckpoint(indexResumeCheckpointPrefix+"NES"))
-	for i := 0; i < maxIndexNoProgressResumeAttempts-1; i++ {
+	for range maxIndexNoProgressResumeAttempts - 1 {
 		_, incErr := db.MediaDB.IncrementIndexResumeAttempts()
 		require.NoError(t, incErr)
 	}
