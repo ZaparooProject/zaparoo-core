@@ -25,6 +25,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -37,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func TestNewReader(t *testing.T) {
@@ -276,7 +279,7 @@ func TestReadISO9660Identity(t *testing.T) {
 	t.Parallel()
 
 	image := newTestISO9660Image("SCES-01420", "1998102813221100", "1998010100000000")
-	identity, found, err := readISO9660Identity(bytes.NewReader(image))
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
 	require.NoError(t, err)
 	require.True(t, found)
@@ -288,7 +291,7 @@ func TestReadISO9660Identity_FallsBackToCreatedDate(t *testing.T) {
 	t.Parallel()
 
 	image := newTestISO9660Image("SCES-01420", "0000000000000000", "1998010100000000")
-	identity, found, err := readISO9660Identity(bytes.NewReader(image))
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
 	require.NoError(t, err)
 	require.True(t, found)
@@ -298,7 +301,7 @@ func TestReadISO9660Identity_FallsBackToCreatedDate(t *testing.T) {
 func TestReadISO9660Identity_NotFound(t *testing.T) {
 	t.Parallel()
 
-	identity, found, err := readISO9660Identity(
+	identity, found, err := readTestISO9660Identity(
 		bytes.NewReader(make([]byte, iso9660SuperblockOffset+iso9660MaxDescriptors*iso9660SectorSize)),
 	)
 
@@ -310,11 +313,32 @@ func TestReadISO9660Identity_NotFound(t *testing.T) {
 func TestReadISO9660Identity_ShortReadIsMiss(t *testing.T) {
 	t.Parallel()
 
-	identity, found, err := readISO9660Identity(bytes.NewReader(make([]byte, iso9660SuperblockOffset+1)))
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(make([]byte, iso9660SuperblockOffset+1)))
 
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Empty(t, identity)
+}
+
+type testReaderAtContextAdapter struct {
+	reader *bytes.Reader
+}
+
+func (r testReaderAtContextAdapter) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+	n, err := r.reader.ReadAt(p, off)
+	if err != nil {
+		return n, fmt.Errorf("read test data: %w", err)
+	}
+	return n, nil
+}
+
+func readTestISO9660Identity(reader *bytes.Reader) (discIdentity, bool, error) {
+	return readISO9660IdentityContext(context.Background(), testReaderAtContextAdapter{reader: reader})
 }
 
 func newTestISO9660Image(label, modified, created string) []byte {
@@ -402,6 +426,106 @@ func newTestReader(cfg *config.Instance) *FileReader {
 	reader := NewReader(cfg)
 	reader.gameIDProbe = func(string) []readers.ScanProperty { return nil }
 	return reader
+}
+
+func overrideUnixDiscIO(
+	t *testing.T,
+	pread func(int, []byte, int64) (int, error),
+	closeFn func(int) error,
+) {
+	t.Helper()
+	oldPread := unixPread
+	oldClose := unixClose
+	oldDelay := discReadRetryDelay
+	unixPread = pread
+	unixClose = closeFn
+	discReadRetryDelay = time.Millisecond
+	t.Cleanup(func() {
+		unixPread = oldPread
+		unixClose = oldClose
+		discReadRetryDelay = oldDelay
+	})
+}
+
+func TestUnixDiscDeviceReaderReadAtContext_PartialReads(t *testing.T) {
+	calls := 0
+	offsets := make([]int64, 0, 2)
+	overrideUnixDiscIO(t, func(_ int, p []byte, off int64) (int, error) {
+		calls++
+		offsets = append(offsets, off)
+		if calls == 1 {
+			return copy(p, "ab"), nil
+		}
+		return copy(p, "cd"), nil
+	}, unix.Close)
+
+	buf := make([]byte, 4)
+	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(context.Background(), buf, 10)
+
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+	assert.Equal(t, "abcd", string(buf))
+	assert.Equal(t, []int64{10, 12}, offsets)
+}
+
+func TestUnixDiscDeviceReaderReadAtContext_RetriesTemporaryErrors(t *testing.T) {
+	calls := 0
+	overrideUnixDiscIO(t, func(_ int, p []byte, _ int64) (int, error) {
+		calls++
+		switch calls {
+		case 1:
+			return 0, unix.EAGAIN
+		case 2:
+			return 0, unix.EINTR
+		default:
+			return copy(p, "ok"), nil
+		}
+	}, unix.Close)
+
+	buf := make([]byte, 2)
+	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(context.Background(), buf, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, "ok", string(buf))
+	assert.Equal(t, 3, calls)
+}
+
+func TestUnixDiscDeviceReaderReadAtContext_ZeroReadIsEOF(t *testing.T) {
+	overrideUnixDiscIO(t, func(_ int, _ []byte, _ int64) (int, error) {
+		return 0, nil
+	}, unix.Close)
+
+	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(context.Background(), make([]byte, 1), 0)
+
+	assert.Equal(t, 0, n)
+	require.ErrorIs(t, err, io.EOF)
+}
+
+func TestUnixDiscDeviceReaderReadAtContext_CancelDuringRetry(t *testing.T) {
+	calls := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	overrideUnixDiscIO(t, func(_ int, _ []byte, _ int64) (int, error) {
+		calls++
+		cancel()
+		return 0, unix.EAGAIN
+	}, unix.Close)
+
+	n, err := (&unixDiscDeviceReader{fd: -1}).ReadAtContext(ctx, make([]byte, 1), 0)
+
+	assert.Equal(t, 0, n)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls)
+}
+
+func TestUnixDiscDeviceReaderClose_ReturnsCloseError(t *testing.T) {
+	overrideUnixDiscIO(t, unix.Pread, func(int) error {
+		return unix.EBADF
+	})
+
+	err := (&unixDiscDeviceReader{fd: -1}).Close()
+
+	require.ErrorIs(t, err, unix.EBADF)
 }
 
 func TestDefaultDiscIdentifierIdentify_TimeoutDoesNotLeakGoroutine(t *testing.T) {

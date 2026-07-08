@@ -23,6 +23,7 @@ package opticaldrive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -30,7 +31,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const discReadRetryDelay = 10 * time.Millisecond
+var (
+	discReadRetryDelay = 10 * time.Millisecond
+	unixPread          = unix.Pread
+	unixClose          = unix.Close
+)
 
 type unixDiscDeviceReader struct {
 	fd int
@@ -53,7 +58,7 @@ func (r *unixDiscDeviceReader) ReadAtContext(ctx context.Context, p []byte, off 
 		default:
 		}
 
-		n, err := unix.Pread(r.fd, p[total:], off+int64(total))
+		n, err := unixPread(r.fd, p[total:], off+int64(total))
 		if n > 0 {
 			total += n
 		}
@@ -63,7 +68,7 @@ func (r *unixDiscDeviceReader) ReadAtContext(ctx context.Context, p []byte, off 
 			}
 			continue
 		}
-		if err == unix.EAGAIN || err == unix.EWOULDBLOCK || err == unix.EINTR {
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR) {
 			if waitDiscReadRetry(ctx) != nil {
 				return total, fmt.Errorf("wait for optical device read: %w", ctx.Err())
 			}
@@ -75,7 +80,7 @@ func (r *unixDiscDeviceReader) ReadAtContext(ctx context.Context, p []byte, off 
 }
 
 func (r *unixDiscDeviceReader) Close() error {
-	if err := unix.Close(r.fd); err != nil {
+	if err := unixClose(r.fd); err != nil {
 		return fmt.Errorf("close optical device: %w", err)
 	}
 	return nil
