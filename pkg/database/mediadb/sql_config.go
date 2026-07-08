@@ -47,6 +47,7 @@ const (
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
 	DBConfigIndexGeneration                 = "IndexGeneration"
 	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
+	DBConfigIndexResumeCheckpoint           = "IndexResumeCheckpoint"
 	DBConfigDisambiguationVersion           = "DisambiguationVersion"
 
 	temporaryRepairParentDirVersion = "1"
@@ -211,6 +212,57 @@ func sqlGetIndexResumeAttempts(ctx context.Context, db sqlQueryable) (int, error
 		return 0, fmt.Errorf("failed to parse index resume attempts: %w", err)
 	}
 	return attempts, nil
+}
+
+func sqlSetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable, checkpoint string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexResumeCheckpoint,
+		checkpoint,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set index resume checkpoint: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexResumeCheckpoint(ctx context.Context, db sqlQueryable) (string, error) {
+	var checkpoint string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexResumeCheckpoint,
+	).Scan(&checkpoint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get index resume checkpoint: %w", err)
+	}
+	return checkpoint, nil
+}
+
+func sqlResetIndexResumeState(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin index resume reset transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := sqlSetIndexResumeAttempts(ctx, tx, 0); err != nil {
+		return err
+	}
+	if err := sqlSetIndexResumeCheckpoint(ctx, tx, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit index resume reset transaction: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func sqlSetIndexingStatus(ctx context.Context, db sqlQueryable, status string) error {

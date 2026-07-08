@@ -27,18 +27,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMediaDB_IndexResumeAttempts_RoundTrip exercises the persisted resume-attempt
-// counter that bounds automatic reindex resumes: a missing key reads as zero,
-// Increment returns and persists successive values, and Reset clears it.
+// TestMediaDB_IndexResumeAttempts_RoundTrip exercises the persisted no-progress
+// resume counter and checkpoint: missing keys read as zero/empty, Increment
+// persists successive values, checkpoint round-trips, and Reset clears both.
 func TestMediaDB_IndexResumeAttempts_RoundTrip(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
-	// A fresh DB has no stored counter; it must default to zero rather than error.
+	// A fresh DB has no stored counter/checkpoint; both must default rather than error.
 	attempts, err := mediaDB.GetIndexResumeAttempts()
 	require.NoError(t, err)
 	assert.Equal(t, 0, attempts, "unset counter defaults to zero")
+	checkpoint, err := mediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Empty(t, checkpoint, "unset checkpoint defaults to empty")
 
 	// Each increment returns the new value and persists it.
 	next, err := mediaDB.IncrementIndexResumeAttempts()
@@ -53,11 +56,20 @@ func TestMediaDB_IndexResumeAttempts_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, got, "incremented value survives a re-read")
 
-	// Reset returns the counter to zero.
+	// The durable progress checkpoint round-trips beside the counter.
+	require.NoError(t, mediaDB.SetIndexResumeCheckpoint("last_indexed_system=NES"))
+	checkpoint, err = mediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Equal(t, "last_indexed_system=NES", checkpoint)
+
+	// Reset returns the counter to zero and clears the checkpoint.
 	require.NoError(t, mediaDB.ResetIndexResumeAttempts())
 	got, err = mediaDB.GetIndexResumeAttempts()
 	require.NoError(t, err)
 	assert.Equal(t, 0, got, "reset clears the counter")
+	checkpoint, err = mediaDB.GetIndexResumeCheckpoint()
+	require.NoError(t, err)
+	assert.Empty(t, checkpoint, "reset clears the checkpoint")
 
 	// Incrementing after a reset starts from one again, giving a future
 	// interruption a fresh resume budget.

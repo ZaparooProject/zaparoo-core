@@ -879,6 +879,8 @@ type MediaDBI interface {
 	GetIndexResumeAttempts() (int, error)
 	IncrementIndexResumeAttempts() (int, error)
 	ResetIndexResumeAttempts() error
+	GetIndexResumeCheckpoint() (string, error)
+	SetIndexResumeCheckpoint(checkpoint string) error
 	SetScrapingStatus(status string) error
 	GetScrapingStatus() (string, error)
 	SetScrapingOperation(operation ScrapingOperation) error
