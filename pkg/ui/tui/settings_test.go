@@ -31,6 +31,7 @@ import (
 	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +71,7 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	mockSvc.SetupGetSettings(defaultTestSettings())
 	mockSvc.SetupGetSystems(defaultTestSystems())
 	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 
 	cfg := &config.Instance{}
 
@@ -96,6 +98,35 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("Advanced"), "Advanced menu item should be visible")
 	assert.True(t, runner.ContainsText("Logs"), "Logs menu item should be visible")
 	assert.True(t, runner.ContainsText("About"), "About menu item should be visible")
+	assert.False(t, runner.ContainsText("Zaparoo Online"),
+		"linked devices do not see the account link entry")
+}
+
+func TestBuildSettingsMainMenu_OnlineLinkVisibleWhenUnlinked_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSettings(defaultTestSettings())
+	mockSvc.SetupGetSystems(defaultTestSystems())
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+
+	cfg := &config.Instance{}
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		BuildSettingsMainMenuWithService(cfg, mockSvc, pages, runner.App(), nil, nil, "", "")
+	})
+
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Zaparoo Online"),
+		"unlinked devices are offered the account link entry")
 }
 
 func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
@@ -110,6 +141,7 @@ func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
 	mockSvc.SetupGetSettings(defaultTestSettings())
 	mockSvc.SetupGetSystems(defaultTestSystems())
 	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 
 	cfg := &config.Instance{}
 
@@ -148,6 +180,7 @@ func TestBuildSettingsMainMenu_EscapeGoesBack_Integration(t *testing.T) {
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetSettings(defaultTestSettings())
 	mockSvc.SetupGetSystems(defaultTestSystems())
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 
 	cfg := &config.Instance{}
 
@@ -544,6 +577,140 @@ func TestFindExitDelayIndex(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func backupTestStatus(linked bool) *models.BackupStatusResponse {
+	return &models.BackupStatusResponse{
+		Local: models.BackupStatusEntry{
+			Enabled:    true,
+			LastStatus: "never",
+		},
+		Remote: models.BackupStatusEntry{
+			Enabled:    false,
+			Linked:     linked,
+			Schedule:   "daily",
+			LastStatus: "never",
+		},
+	}
+}
+
+func TestBuildBackupSettingsMenu_LocalActionsRemoteHidden_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Backup", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Back up now"))
+	assert.True(t, runner.ContainsText("View backups"))
+	assert.False(t, runner.ContainsText("Remote backup"))
+	assert.False(t, runner.ContainsText("Remote schedule"))
+	assert.False(t, runner.ContainsText("Zaparoo Online"),
+		"the account link entry lives in the main settings menu, not the backup menu")
+}
+
+func TestBuildBackupSettingsMenu_RemoteControlsVisibleWhenLinked_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Backup", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Remote backup"))
+	assert.True(t, runner.ContainsText("Remote schedule"))
+	assert.True(t, runner.ContainsText("Remote status"))
+	assert.False(t, runner.ContainsText("Zaparoo Online"),
+		"the account link entry lives in the main settings menu, not the backup menu")
+}
+
+func TestBuildBackupSettingsMenu_BackupNowCallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupCreateBackup("backup-20260624-150405-000000000-manual.zip")
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup created", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "CreateBackup", mock.Anything)
+}
+
+func TestBuildBackupListPage_DisplaysBackups_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupListBackups([]map[string]any{{"name": backupName, "createdAt": "2026-06-24T15:04:05Z"}})
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText(backupName, 100*time.Millisecond))
+	pageName, primitive := pages.GetFrontPage()
+	require.Equal(t, PageSettingsBackupList, pageName)
+	frame, ok := primitive.(*PageFrame)
+	require.True(t, ok)
+	list, ok := frame.GetContent().(*tview.List)
+	require.True(t, ok)
+	require.Positive(t, list.GetItemCount())
+	mainText, _ := list.GetItemText(0)
+	assert.Equal(t, backupName, mainText)
+}
+
+func TestShowBackupRestoreConfirm_CallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	focus := tview.NewTextView().SetText("Backup list")
+	pages.AddPage("main", focus, true, true)
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupRestoreBackupSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		showBackupRestoreConfirm(mockSvc, pages, runner.App(), focus, backupName, nil)
+	})
+
+	require.True(t, runner.WaitForText("Restore backup", 100*time.Millisecond))
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	require.True(t, runner.WaitForText("Backup restored", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "RestoreBackup", mock.Anything, backupName)
 }
 
 func TestBuildAdvancedSettingsMenu_ErrorReportingVisible_Integration(t *testing.T) {

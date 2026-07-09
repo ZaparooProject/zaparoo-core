@@ -271,16 +271,20 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
 		// settings
-		models.MethodSettings:              methods.HandleSettings,
-		models.MethodSettingsUpdate:        methods.HandleSettingsUpdate,
-		models.MethodSettingsReload:        methods.HandleSettingsReload,
-		models.MethodSettingsLogsDownload:  methods.HandleLogsDownload,
-		models.MethodSettingsBackup:        methods.HandleBackup,
-		models.MethodSettingsBackupList:    methods.HandleBackupList,
-		models.MethodSettingsBackupRestore: methods.HandleBackupRestore,
-		models.MethodPlaytimeLimits:        methods.HandlePlaytimeLimits,
-		models.MethodPlaytimeLimitsUpdate:  methods.HandlePlaytimeLimitsUpdate,
-		models.MethodPlaytime:              methods.HandlePlaytime,
+		models.MethodSettings:                    methods.HandleSettings,
+		models.MethodSettingsUpdate:              methods.HandleSettingsUpdate,
+		models.MethodSettingsReload:              methods.HandleSettingsReload,
+		models.MethodSettingsLogsDownload:        methods.HandleLogsDownload,
+		models.MethodSettingsBackup:              methods.HandleBackup,
+		models.MethodSettingsBackupList:          methods.HandleBackupList,
+		models.MethodSettingsBackupRestore:       methods.HandleBackupRestore,
+		models.MethodSettingsBackupStatus:        methods.HandleBackupStatus,
+		models.MethodSettingsBackupRemoteRun:     methods.HandleBackupRemoteRun,
+		models.MethodSettingsBackupRemoteList:    methods.HandleBackupRemoteList,
+		models.MethodSettingsBackupRemoteRestore: methods.HandleBackupRemoteRestore,
+		models.MethodPlaytimeLimits:              methods.HandlePlaytimeLimits,
+		models.MethodPlaytimeLimitsUpdate:        methods.HandlePlaytimeLimitsUpdate,
+		models.MethodPlaytime:                    methods.HandlePlaytime,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
@@ -330,6 +334,12 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
 		},
+		models.MethodSettingsAuthStatus: methods.HandleSettingsAuthStatus,
+		models.MethodSettingsAuthLink: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleSettingsAuthLink(env, zapscript.FetchWellKnown)
+		},
+		models.MethodSettingsAuthLinkStatus: methods.HandleSettingsAuthLinkStatus,
+		models.MethodSettingsAuthLinkCancel: methods.HandleSettingsAuthLinkCancel,
 		// update
 		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateCheck(env, updater.Check)

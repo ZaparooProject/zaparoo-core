@@ -77,6 +77,12 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
+	if env.IsLocal {
+		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
+		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
+		resp.BackupRemoteEnabled = &backupRemoteEnabled
+		resp.BackupRemoteSchedule = &backupRemoteSchedule
+	}
 
 	return resp, nil
 }
@@ -123,6 +129,12 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	if params.BackupRemoteEnabled != nil || params.BackupRemoteSchedule != nil {
+		if !env.IsLocal {
+			return nil, models.ClientErrf("backup settings require a local client")
+		}
 	}
 
 	// Pre-flight validation of inputs that depend on runtime state. Run before
@@ -181,6 +193,15 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ErrorReporting != nil {
 		log.Debug().Bool("errorReporting", *params.ErrorReporting).Msg("updating setting")
 		env.Config.SetErrorReporting(*params.ErrorReporting)
+	}
+
+	if params.BackupRemoteEnabled != nil {
+		log.Debug().Bool("backupRemoteEnabled", *params.BackupRemoteEnabled).Msg("updating setting")
+		env.Config.SetBackupRemoteEnabled(*params.BackupRemoteEnabled)
+	}
+	if params.BackupRemoteSchedule != nil {
+		log.Debug().Str("backupRemoteSchedule", *params.BackupRemoteSchedule).Msg("updating setting")
+		env.Config.SetBackupRemoteSchedule(*params.BackupRemoteSchedule)
 	}
 
 	if params.ReadersScanMode != nil {

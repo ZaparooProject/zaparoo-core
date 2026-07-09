@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 )
 
 func requireBackupAccess(env *requests.RequestEnv) error {
@@ -35,6 +36,26 @@ func requireBackupAccess(env *requests.RequestEnv) error {
 	if !env.IsLocal {
 		return models.ClientErrf("backup actions require a local client")
 	}
+	if env.Config == nil || env.Platform == nil {
+		return errors.New("backup runtime is not available")
+	}
+	return nil
+}
+
+func requireBackupRuntime(env *requests.RequestEnv) error {
+	if env.Config == nil || env.Platform == nil {
+		return errors.New("backup runtime is not available")
+	}
+	return nil
+}
+
+func requireRemoteBackupAccess(env *requests.RequestEnv) error {
+	if err := requireBackupAccess(env); err != nil {
+		return err
+	}
+	if !env.Config.BackupRemoteEnabled() {
+		return models.ClientErrf("remote backup is disabled")
+	}
 	return nil
 }
 
@@ -43,7 +64,7 @@ func HandleBackup(env requests.RequestEnv) (any, error) {
 	if err := requireBackupAccess(&env); err != nil {
 		return nil, err
 	}
-	backup, err := env.Database.UserDB.Backup("manual", true)
+	backup, err := backupsvc.NewManager(env.Config, env.Platform, env.Database).Create()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create backup: %w", err)
 	}
@@ -55,11 +76,19 @@ func HandleBackupList(env requests.RequestEnv) (any, error) {
 	if err := requireBackupAccess(&env); err != nil {
 		return nil, err
 	}
-	backups, err := env.Database.UserDB.ListBackups()
+	backups, err := backupsvc.NewManager(env.Config, env.Platform, env.Database).List()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list backups: %w", err)
 	}
 	return backups, nil
+}
+
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleBackupStatus(env requests.RequestEnv) (any, error) {
+	if err := requireBackupRuntime(&env); err != nil {
+		return nil, err
+	}
+	return backupsvc.NewManager(env.Config, env.Platform, env.Database).Status(), nil
 }
 
 //nolint:gocritic // API dispatch requires RequestEnv by value.
@@ -74,9 +103,56 @@ func HandleBackupRestore(env requests.RequestEnv) (any, error) {
 	if params.Name == "" {
 		return nil, models.ClientErrf("invalid params: name is required")
 	}
-	restore, err := env.Database.UserDB.RestoreBackup(params.Name)
+	restore, err := backupsvc.NewManager(env.Config, env.Platform, env.Database).Restore(params.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to restore backup: %w", err)
+	}
+	return restore, nil
+}
+
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleBackupRemoteRun(env requests.RequestEnv) (any, error) {
+	if err := requireRemoteBackupAccess(&env); err != nil {
+		return nil, err
+	}
+	mgr := backupsvc.NewManager(env.Config, env.Platform, env.Database)
+	if env.State != nil {
+		mgr.WithInbox(env.State.Inbox())
+	}
+	backup, err := mgr.RunRemote(env.Context, backupsvc.RemoteBackupTypeManual)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run remote backup: %w", err)
+	}
+	return backup, nil
+}
+
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleBackupRemoteList(env requests.RequestEnv) (any, error) {
+	if err := requireBackupAccess(&env); err != nil {
+		return nil, err
+	}
+	backups, err := backupsvc.NewManager(env.Config, env.Platform, env.Database).ListRemote(env.Context)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list remote backups: %w", err)
+	}
+	return backups, nil
+}
+
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleBackupRemoteRestore(env requests.RequestEnv) (any, error) {
+	if err := requireRemoteBackupAccess(&env); err != nil {
+		return nil, err
+	}
+	var params models.BackupRemoteRestoreParams
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if params.ID <= 0 {
+		return nil, models.ClientErrf("invalid params: id is required")
+	}
+	restore, err := backupsvc.NewManager(env.Config, env.Platform, env.Database).RestoreRemote(env.Context, params.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to restore remote backup: %w", err)
 	}
 	return restore, nil
 }

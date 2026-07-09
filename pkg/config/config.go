@@ -60,6 +60,7 @@ type Values struct {
 	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
 	UpdateChannel  *string   `toml:"update_channel,omitempty"`
 	Audio          Audio     `toml:"audio"`
+	Backup         Backup    `toml:"backup,omitempty"`
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
 	Playtime       Playtime  `toml:"playtime,omitempty"`
@@ -112,6 +113,12 @@ var BaseDefaults = Values{
 	ConfigSchema: SchemaVersion,
 	Audio: Audio{
 		ScanFeedback: true,
+	},
+	Backup: Backup{
+		Remote: BackupRemote{
+			BaseURL:  DefaultBackupRemoteBaseURL,
+			Schedule: DefaultBackupRemoteSchedule,
+		},
 	},
 	Readers: Readers{
 		AutoDetect: true,

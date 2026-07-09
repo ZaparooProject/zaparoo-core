@@ -39,6 +39,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettingsAuthStatus_RequiresURL(t *testing.T) {
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	_, err = HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "url is required")
+}
+
+func TestSettingsAuthStatus_LinkedOfficialURL(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"https://api.zaparoo.com": {Bearer: "token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "https://api.zaparoo.com"})
+	require.NoError(t, err)
+
+	result, err := HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg, Params: params})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthStatusResponse)
+	require.True(t, ok)
+	assert.True(t, resp.Linked)
+}
+
+func TestSettingsAuthStatus_RejectsUnsupportedURL(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"https://other.example.com": {Bearer: "token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "https://other.example.com"})
+	require.NoError(t, err)
+
+	result, err := HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg, Params: params})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthStatusResponse)
+	require.True(t, ok)
+	assert.False(t, resp.Linked)
+}
+
+func TestSettingsAuthStatus_AllowsConfiguredBackupURL(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"http://127.0.0.1:8787": {Bearer: "token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL("http://127.0.0.1:8787"))
+	params, err := json.Marshal(models.SettingsAuthStatusParams{URL: "http://127.0.0.1:8787"})
+	require.NoError(t, err)
+
+	result, err := HandleSettingsAuthStatus(requests.RequestEnv{Config: cfg, Params: params})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsAuthStatusResponse)
+	require.True(t, ok)
+	assert.True(t, resp.Linked)
+}
+
 func TestSettingsAuthClaim_MissingParams(t *testing.T) {
 	t.Parallel()
 
@@ -326,7 +387,9 @@ func TestRedeemClaimToken_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bearer, err := redeemClaimToken(context.Background(), server.URL+"/claim", "test-token-123", "test-platform")
+	bearer, err := redeemClaimToken(
+		context.Background(), server.URL+"/claim", "test-token-123", "test-platform", "hint-uuid",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, "real-api-key", bearer)
 }
@@ -340,7 +403,7 @@ func TestRedeemClaimToken_EmptyBearer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform")
+	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing bearer token")
 }
@@ -354,7 +417,7 @@ func TestRedeemClaimToken_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform")
+	_, err := redeemClaimToken(context.Background(), server.URL+"/claim", "token", "test-platform", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }

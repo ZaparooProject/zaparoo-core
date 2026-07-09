@@ -132,3 +132,7 @@ func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
 	sendNotification(ns, models.NotificationClientsPaired, payload)
 }
+
+func AuthLinkStatus(ns chan<- models.Notification, payload *models.AuthLinkStatusResponse) {
+	sendNotification(ns, models.NotificationAuthLinkStatus, payload)
+}

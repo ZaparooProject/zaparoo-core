@@ -110,6 +110,20 @@ type BackupRestoreParams struct {
 	Name string `json:"name" validate:"required"`
 }
 
+type BackupRemoteRestoreParams struct {
+	ID int64 `json:"id" validate:"gt=0"`
+}
+
+type SettingsAuthStatusParams struct {
+	URL string `json:"url,omitempty" validate:"omitempty,url"`
+}
+
+type SettingsAuthLinkParams struct {
+	// URL overrides the auth server base URL; defaults to the official
+	// Zaparoo API.
+	URL string `json:"url,omitempty" validate:"omitempty,url"`
+}
+
 type ReaderWriteCancelParams struct {
 	ReaderID *string `json:"readerId,omitempty"`
 }
@@ -139,7 +153,9 @@ type UpdateSettingsParams struct {
 	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
 	ErrorReporting            *bool               `json:"errorReporting"`
+	BackupRemoteEnabled       *bool               `json:"backupRemoteEnabled"`
 	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
+	BackupRemoteSchedule      *string             `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
 	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`

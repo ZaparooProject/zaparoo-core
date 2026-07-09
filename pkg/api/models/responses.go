@@ -108,6 +108,8 @@ type BrowseIndexResults struct {
 }
 
 type SettingsResponse struct {
+	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
+	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
@@ -634,6 +636,55 @@ type ClientsPairedNotification struct {
 
 type SettingsAuthClaimResponse struct {
 	Domains []string `json:"domains"`
+}
+
+type SettingsAuthStatusResponse struct {
+	Linked bool `json:"linked"`
+}
+
+// Auth link session statuses (settings.auth.link).
+const (
+	AuthLinkStatusNone      = "none"
+	AuthLinkStatusPending   = "pending"
+	AuthLinkStatusApproved  = "approved"
+	AuthLinkStatusFailed    = "failed"
+	AuthLinkStatusCancelled = "cancelled"
+)
+
+// AuthLinkStatusResponse is the state of the reverse (QR / user code) device
+// link flow. It is returned by settings.auth.link and
+// settings.auth.link.status, and pushed as the auth.link.status notification
+// on every transition.
+type AuthLinkStatusResponse struct {
+	ExpiresAt               *time.Time `json:"expiresAt,omitempty"`
+	Status                  string     `json:"status"`
+	UserCode                string     `json:"userCode,omitempty"`
+	VerificationURL         string     `json:"verificationUrl,omitempty"`
+	VerificationURLComplete string     `json:"verificationUrlComplete,omitempty"`
+	Error                   string     `json:"error,omitempty"`
+}
+
+type BackupCategoryStatus struct {
+	Files   int64 `json:"files"`
+	Bytes   int64 `json:"bytes"`
+	Enabled bool  `json:"enabled"`
+}
+
+type BackupStatusEntry struct {
+	LastRunAt      *string                         `json:"lastRunAt,omitempty"`
+	LastSuccessAt  *string                         `json:"lastSuccessAt,omitempty"`
+	Categories     map[string]BackupCategoryStatus `json:"categories,omitempty"`
+	LastError      string                          `json:"lastError,omitempty"`
+	Schedule       string                          `json:"schedule,omitempty"`
+	LastStatus     string                          `json:"lastStatus"`
+	LastBackupSize int64                           `json:"lastBackupSize"`
+	Linked         bool                            `json:"linked,omitempty"`
+	Enabled        bool                            `json:"enabled"`
+}
+
+type BackupStatusResponse struct {
+	Local  BackupStatusEntry `json:"local"`
+	Remote BackupStatusEntry `json:"remote"`
 }
 
 type UpdateCheckResponse struct {

@@ -534,6 +534,45 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 
 // TestHandleSettings_ReaderConnectionsEnabled tests that the enabled field
 // is passed through in the settings response.
+func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	cfg.SetDebugLogging(false)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	debugLogging := true
+	backupRemoteEnabled := true
+	params := models.UpdateSettingsParams{
+		DebugLogging:        &debugLogging,
+		BackupRemoteEnabled: &backupRemoteEnabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  false,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backup settings require a local client")
+	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
+	assert.False(t, cfg.BackupRemoteEnabled())
+}
+
 func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
 	t.Parallel()
 

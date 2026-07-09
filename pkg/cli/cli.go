@@ -109,17 +109,17 @@ func SetupFlags() *Flags {
 		Backup: flag.Bool(
 			"backup",
 			false,
-			"create a backup of the database",
+			"create a local backup",
 		),
 		Backups: flag.Bool(
 			"backups",
 			false,
-			"list available database backups",
+			"list available local backups",
 		),
 		Restore: flag.String(
 			"restore",
 			"",
-			"restore the database from the named backup",
+			"restore from the named local backup",
 		),
 	}
 }

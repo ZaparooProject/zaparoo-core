@@ -444,6 +444,7 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
+	startRemoteBackupScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)

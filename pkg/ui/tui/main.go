@@ -42,6 +42,8 @@ const (
 	PageSettingsMain          = "settings_main"
 	PageSettingsBasic         = "settings_basic"
 	PageSettingsAdvanced      = "settings_advanced"
+	PageSettingsBackup        = "settings_backup"
+	PageSettingsBackupList    = "settings_backup_list"
 	PageSettingsReaderList    = "settings_reader_list"
 	PageSettingsReaderEdit    = "settings_reader_edit"
 	PageSettingsIgnoreSystems = "settings_ignore_systems"

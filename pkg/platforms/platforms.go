@@ -285,6 +285,29 @@ type Launcher struct {
 	SkipFilesystemScan bool
 }
 
+type BackupPattern struct {
+	Glob     string
+	Contains string
+	All      bool
+}
+
+type BackupDefinition struct {
+	SourceRoot   string
+	RestoreRoot  string
+	Category     string
+	Include      []BackupPattern
+	Exclude      []BackupPattern
+	NonRecursive bool
+}
+
+type BackupProvider interface {
+	BackupDefinitions() []BackupDefinition
+}
+
+type BackupRestoreRootProvider interface {
+	BackupRestoreRoot() string
+}
+
 // Settings defines all simple settings/configuration values available for a
 // platform.
 type Settings struct {
