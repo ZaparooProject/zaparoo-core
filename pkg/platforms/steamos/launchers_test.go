@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +115,11 @@ func TestEmulatorMapping(t *testing.T) {
 }
 
 // TestCreateEmuDeckLauncherTest tests the Test function of EmuDeck launchers.
+func testEmuDeckRetroArchOptions() *sharedretroarch.Options {
+	options := steamOSRetroArchOptions(defaultRetroArchAppendConfigPath())
+	return &options
+}
+
 func TestCreateEmuDeckLauncherTest(t *testing.T) {
 	t.Parallel()
 
@@ -126,7 +132,7 @@ func TestCreateEmuDeckLauncherTest(t *testing.T) {
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	tests := []struct {
 		name     string
@@ -263,7 +269,7 @@ func TestEmuDeckLauncherID(t *testing.T) {
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	assert.Equal(t, "nes", launcher.SystemID)
 	assert.Contains(t, launcher.ID, "EmuDeck")
@@ -302,7 +308,7 @@ func TestEmuDeckRetroArchLauncherHasControls(t *testing.T) {
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	expectedControls := []string{
 		platforms.ControlSaveState,
@@ -338,7 +344,7 @@ func TestEmuDeckStandaloneLauncherHasNoControls(t *testing.T) {
 		SystemID: "psx",
 	}
 
-	launcher := createEmuDeckLauncher("psx", systemInfo, paths)
+	launcher := createEmuDeckLauncher("psx", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	assert.Nil(t, launcher.Controls, "standalone launcher should not have controls")
 }

@@ -255,6 +255,7 @@ func TestPreWarmZapLinkHostsContext_CancelledAfterConnectivityCheckSkipsDatabase
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	checkInternet := func(_ context.Context, _ int) bool {
 		cancel()
 		return true

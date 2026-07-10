@@ -133,18 +133,14 @@ func createEmuDeckLauncher(
 	systemFolder string,
 	systemInfo esde.SystemInfo,
 	paths EmuDeckPaths,
-	option ...sharedretroarch.Options,
+	retroArchOpts *sharedretroarch.Options,
 ) platforms.Launcher {
 	emulator := emulatorMapping[systemFolder]
 	var launcher platforms.Launcher
 	if emulator.Type == EmulatorRetroArch {
 		core, ok := sharedretroarch.CoreLaunchForFolder(sharedretroarch.ProfileDesktop, systemFolder)
 		if ok {
-			retroArchOpts := steamOSRetroArchOptions(defaultRetroArchAppendConfigPath())
-			if len(option) > 0 {
-				retroArchOpts = option[0]
-			}
-			launcher = sharedretroarch.NewLauncher(retroArchOpts, core)
+			launcher = sharedretroarch.NewLauncher(*retroArchOpts, core)
 			withGamescopeFocus(&launcher)
 		}
 	} else {
@@ -237,7 +233,7 @@ func buildEmuDeckLaunchers(
 		if !ok {
 			continue
 		}
-		result = append(result, createEmuDeckLauncher(systemFolder, systemInfo, paths, *retroArchOpts))
+		result = append(result, createEmuDeckLauncher(systemFolder, systemInfo, paths, retroArchOpts))
 	}
 	log.Info().Int("count", len(result)).Msg("EmuDeck launchers registered")
 	return result

@@ -505,6 +505,7 @@ func TestUnixDiscDeviceReaderReadAtContext_ZeroReadIsEOF(t *testing.T) {
 func TestUnixDiscDeviceReaderReadAtContext_CancelDuringRetry(t *testing.T) {
 	calls := 0
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	overrideUnixDiscIO(t, func(_ int, _ []byte, _ int64) (int, error) {
 		calls++
 		cancel()

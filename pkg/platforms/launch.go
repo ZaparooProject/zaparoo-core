@@ -107,6 +107,7 @@ func activeMediaLookupContext(parent context.Context) (context.Context, context.
 	if parent == nil {
 		parent = context.Background()
 	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
 	return context.WithTimeout(parent, activeMediaLookupTimeout)
 }
 
