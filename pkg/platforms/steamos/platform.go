@@ -129,6 +129,10 @@ func (p *Platform) StartPost(
 		return err
 	}
 
+	// Resolve Steam root once so tracker uses the same configured installation
+	// as the Steam launcher.
+	steamRoot := steam.NewClient(steam.DefaultSteamOSOptions()).FindSteamDir(cfg)
+
 	// Create shared process scanner for both Steam and emulator tracking
 	p.procScanner = procscanner.New()
 	if err := p.procScanner.Start(); err != nil {
@@ -142,6 +146,7 @@ func (p *Platform) StartPost(
 		p.Base,
 		activeMedia,
 		setActiveMedia,
+		steamRoot,
 	)
 	p.steamTracker.Start()
 
@@ -193,6 +198,13 @@ func (p *Platform) Stop() error {
 
 	//nolint:wrapcheck // Pass-through to base implementation
 	return p.Base.Stop()
+}
+
+// ReturnToMenu stops active media on SteamOS. Steam's Game Mode shell remains
+// responsible for presenting its menu.
+func (p *Platform) ReturnToMenu() error {
+	//nolint:wrapcheck // Pass-through to the shared Linux process manager.
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
 // LaunchMedia launches media using the appropriate launcher.

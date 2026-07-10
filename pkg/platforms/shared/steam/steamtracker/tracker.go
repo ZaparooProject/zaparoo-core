@@ -59,14 +59,14 @@ func New(scanner *procscanner.Scanner, onStart GameStartCallback, onStop GameSto
 type steamReaperMatcher struct{}
 
 func (*steamReaperMatcher) Match(proc procscanner.ProcessInfo) bool {
-	// Must be named "reaper"
-	if proc.Comm != "reaper" {
+	// Must be named "reaper".
+	if !strings.EqualFold(proc.Comm, "reaper") {
 		return false
 	}
 
-	// Must contain SteamLaunch in cmdline
+	// Must contain SteamLaunch in cmdline.
 	cmdline := strings.ReplaceAll(proc.Cmdline, "\x00", " ")
-	if !strings.Contains(cmdline, "SteamLaunch") {
+	if !strings.Contains(strings.ToLower(cmdline), "steamlaunch") {
 		return false
 	}
 

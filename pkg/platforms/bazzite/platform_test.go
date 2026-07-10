@@ -40,6 +40,7 @@ func TestNewPlatform(t *testing.T) {
 
 	assert.NotNil(t, p)
 	assert.NotNil(t, p.Base)
+	assert.True(t, p.gameMode.Enabled())
 	assert.Equal(t, platformids.Bazzite, p.ID())
 }
 
@@ -111,6 +112,12 @@ func TestPlatformLaunchers(t *testing.T) {
 	assert.True(t, launcherIDs["Heroic"], "Should have Heroic launcher")
 	assert.True(t, launcherIDs["WebBrowser"], "Should have WebBrowser launcher")
 	assert.True(t, launcherIDs["Generic"], "Should have Generic launcher")
+
+	for i := range launchers {
+		if launchers[i].ID == "Generic" {
+			assert.NotNil(t, launchers[i].Kill, "non-Steam launchers should restore Game Mode focus")
+		}
+	}
 }
 
 func TestPlatformLaunchersHaveSteamWithFlatpak(t *testing.T) {
@@ -165,4 +172,11 @@ func TestPlatformLaunchersHaveHeroicWithFlatpak(t *testing.T) {
 	}
 
 	require.NotNil(t, heroicLauncher, "Heroic launcher should be present")
+}
+
+func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	assert.NoError(t, p.ReturnToMenu())
 }

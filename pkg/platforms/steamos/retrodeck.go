@@ -33,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 	"github.com/rs/zerolog/log"
 )
 
@@ -146,14 +145,14 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			}
 			// Set up gamescope focus management in Gaming Mode
 			if proc != nil {
-				go gamescope.ManageFocus(proc)
+				go steamOSGameMode.ManageFocus(proc)
 			}
 			return proc, nil
 		},
 
 		Kill: func(_ *config.Instance) error {
 			// Revert gamescope focus properties
-			gamescope.RevertFocus()
+			steamOSGameMode.RevertFocus()
 			log.Debug().Msg("kill requested for RetroDECK launcher")
 			return nil
 		},

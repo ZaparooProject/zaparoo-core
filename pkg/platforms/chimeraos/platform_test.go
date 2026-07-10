@@ -39,6 +39,7 @@ func TestNewPlatform(t *testing.T) {
 
 	assert.NotNil(t, p)
 	assert.NotNil(t, p.Base)
+	assert.True(t, p.gameMode.Enabled())
 	assert.Equal(t, platformids.ChimeraOS, p.ID())
 }
 
@@ -108,6 +109,12 @@ func TestPlatformLaunchers(t *testing.T) {
 	assert.True(t, launcherIDs["Steam"], "Should have Steam launcher")
 	assert.True(t, launcherIDs["ChimeraGOG"], "Should have ChimeraGOG launcher")
 	assert.True(t, launcherIDs["Generic"], "Should have Generic launcher")
+
+	for i := range launchers {
+		if launchers[i].ID == "Generic" {
+			assert.NotNil(t, launchers[i].Kill, "non-Steam launchers should restore Game Mode focus")
+		}
+	}
 }
 
 func TestPlatformLaunchersContainSteamFirst(t *testing.T) {
@@ -138,4 +145,11 @@ func TestPlatformLaunchersContainSteamFirst(t *testing.T) {
 		}
 		assert.GreaterOrEqual(t, steamPos, 0, "Steam launcher should be present")
 	}
+}
+
+func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	assert.NoError(t, p.ReturnToMenu())
 }

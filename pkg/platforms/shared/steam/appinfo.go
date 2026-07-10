@@ -371,8 +371,8 @@ func GetGameExecutable(steamDir string, appID int) (string, bool) {
 		return "", false
 	}
 
-	// Get install directory
-	installDir, found := FindInstallDirByAppID(appID)
+	// Get install directory from the same Steam installation as appinfo.vdf.
+	installDir, found := FindInstallDirByAppIDInSteamDir(steamDir, appID)
 	if !found {
 		return "", false
 	}

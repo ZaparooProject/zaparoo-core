@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
@@ -43,6 +44,9 @@ type PlatformIntegration struct {
 	base           *linuxbase.Base
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	activeGames    map[int]int
+	steamRoot      string
+	mu             syncutil.Mutex
 }
 
 // NewPlatformIntegration creates a new platform integration for game tracking.
@@ -51,11 +55,19 @@ func NewPlatformIntegration(
 	base *linuxbase.Base,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	steamRoots ...string,
 ) *PlatformIntegration {
+	steamRoot := ""
+	if len(steamRoots) > 0 {
+		steamRoot = steamRoots[0]
+	}
+
 	pi := &PlatformIntegration{
 		base:           base,
 		activeMedia:    activeMedia,
 		setActiveMedia: setActiveMedia,
+		steamRoot:      steamRoot,
+		activeGames:    make(map[int]int),
 	}
 	pi.tracker = New(scanner, pi.onGameStart, pi.onGameStop)
 	return pi
@@ -71,10 +83,17 @@ func (pi *PlatformIntegration) Stop() {
 	if pi.tracker != nil {
 		pi.tracker.Stop()
 	}
+	pi.mu.Lock()
+	clear(pi.activeGames)
+	pi.mu.Unlock()
 }
 
 // onGameStart is called when a Steam game starts (detected via reaper process).
 func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string) {
+	pi.mu.Lock()
+	pi.activeGames[appID] = reaperPID
+	pi.mu.Unlock()
+
 	alreadyTracked := false
 	current := pi.activeMedia()
 	if current != nil {
@@ -86,15 +105,17 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 		}
 	}
 
-	// Find and track the actual game process for killing.
-	// Run in goroutine with retries since game may not have started yet.
-	go pi.findAndTrackGameProcess(gamePath)
-
 	if alreadyTracked {
+		// Find and track the actual game process for killing.
+		// Run in goroutine with retries since game may not have started yet.
+		go pi.findAndTrackGameProcess(appID, reaperPID, gamePath)
 		return
 	}
 
-	gameName, found := steam.FindAppNameByAppID(appID)
+	gameName, found := steam.LookupAppNameInSteamDir(pi.steamRoot, appID)
+	if !found {
+		gameName, found = steam.FindAppNameByAppID(appID)
+	}
 	if !found {
 		gameName = steam.FormatGameName(appID, "")
 	}
@@ -118,29 +139,105 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 		gameName,
 		"Steam",
 	)
+	if !pi.publishActiveMediaIfActive(appID, reaperPID, activeMedia) {
+		log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
+			Msg("discarding stale Steam game start")
+		return
+	}
+
+	// Find and track the actual game process for killing after publishing
+	// ActiveMedia, so ownership checks see this external Steam launch.
+	go pi.findAndTrackGameProcess(appID, reaperPID, gamePath)
+}
+
+func (pi *PlatformIntegration) publishActiveMediaIfActive(
+	appID, reaperPID int,
+	activeMedia *models.ActiveMedia,
+) bool {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	if pi.activeGames[appID] != reaperPID {
+		return false
+	}
 	pi.setActiveMedia(activeMedia)
+	return true
 }
 
 // findAndTrackGameProcess attempts to find the game process with retries.
-func (pi *PlatformIntegration) findAndTrackGameProcess(gamePath string) {
+func (pi *PlatformIntegration) findAndTrackGameProcess(appID, reaperPID int, gamePath string) {
 	const maxRetries = 10
 	const retryDelay = 500 * time.Millisecond
 
+	targets, installDir := resolveGameProcessTargets(pi.steamRoot, appID, gamePath)
+	if len(targets) == 0 && installDir == "" {
+		log.Debug().Int("appID", appID).Msg("no Steam process targets available")
+		return
+	}
+
 	for i := range maxRetries {
-		if gamePID, ok := FindGamePID(gamePath); ok {
-			log.Debug().Int("gamePID", gamePID).Int("attempt", i+1).Msg("found game process")
-			if proc, err := os.FindProcess(gamePID); err == nil {
+		if !pi.gameIsActive(appID, reaperPID) {
+			log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
+				Msg("skipping stale Steam process lookup")
+			return
+		}
+
+		if gamePID, ok := findGamePIDWithPaths("/proc", targets, installDir); ok {
+			if !pi.gameIsActive(appID, reaperPID) {
+				log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
+					Msg("discarding stale Steam process match")
+				return
+			}
+			if !pi.canOwnActiveProcess(appID) {
+				log.Debug().Int("appID", appID).
+					Msg("discarding Steam process owned by another active launch")
+				return
+			}
+
+			log.Debug().Int("appID", appID).Int("gamePID", gamePID).
+				Int("attempt", i+1).Msg("found Steam game process")
+			if proc, err := os.FindProcess(gamePID); err == nil && pi.base != nil {
 				pi.base.SetTrackedProcess(proc)
 			}
 			return
 		}
 		time.Sleep(retryDelay)
 	}
-	log.Warn().Str("gamePath", gamePath).Msg("could not find game process after retries")
+	log.Warn().Int("appID", appID).Str("gamePath", gamePath).
+		Msg("could not find Steam game process after retries")
+}
+
+func (pi *PlatformIntegration) gameIsActive(appID, reaperPID int) bool {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	return pi.activeGames[appID] == reaperPID
+}
+
+func (pi *PlatformIntegration) canOwnActiveProcess(appID int) bool {
+	current := pi.activeMedia()
+	if current == nil {
+		return true
+	}
+
+	currentAppID, ok := steam.ExtractAppIDFromPath(current.Path)
+	return ok && currentAppID == appID
 }
 
 // onGameStop is called when a Steam game exits (reaper process terminated).
 func (pi *PlatformIntegration) onGameStop(appID int) {
+	pi.mu.Lock()
+	defer pi.mu.Unlock()
+	delete(pi.activeGames, appID)
+
 	log.Info().Int("appID", appID).Msg("detected Steam game exit")
+	current := pi.activeMedia()
+	if current == nil {
+		return
+	}
+
+	currentAppID, ok := steam.ExtractAppIDFromPath(current.Path)
+	if !ok || currentAppID != appID {
+		log.Debug().Int("appID", appID).Msg("preserving ActiveMedia owned by another launch")
+		return
+	}
 	pi.setActiveMedia(nil)
 }

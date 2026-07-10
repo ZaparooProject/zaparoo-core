@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
@@ -49,12 +50,14 @@ type Platform struct {
 	*linuxbase.Base
 	procScanner  *procscanner.Scanner
 	steamTracker *steamtracker.PlatformIntegration
+	gameMode     *gamescope.Manager
 }
 
 // NewPlatform creates a new ChimeraOS platform instance.
 func NewPlatform() *Platform {
 	return &Platform{
-		Base: linuxbase.NewBase(platformids.ChimeraOS),
+		Base:     linuxbase.NewBase(platformids.ChimeraOS),
+		gameMode: gamescope.NewManager(gamescope.SessionOptions{Enabled: true}),
 	}
 }
 
@@ -85,6 +88,10 @@ func (p *Platform) StartPost(
 		return err
 	}
 
+	// Resolve Steam root once so tracker uses the same configured installation
+	// as the Steam launcher.
+	steamRoot := steam.NewClient(steam.DefaultChimeraOSOptions()).FindSteamDir(cfg)
+
 	// Create process scanner for Steam game tracking
 	p.procScanner = procscanner.New()
 	if err := p.procScanner.Start(); err != nil {
@@ -98,6 +105,7 @@ func (p *Platform) StartPost(
 		p.Base,
 		activeMedia,
 		setActiveMedia,
+		steamRoot,
 	)
 	p.steamTracker.Start()
 
@@ -114,6 +122,13 @@ func (p *Platform) Stop() error {
 	}
 	//nolint:wrapcheck // Pass-through to base implementation
 	return p.Base.Stop()
+}
+
+// ReturnToMenu stops active media on ChimeraOS. Its Steam shell remains
+// responsible for presenting the menu.
+func (p *Platform) ReturnToMenu() error {
+	//nolint:wrapcheck // Pass-through to the shared Linux process manager.
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
 // LaunchMedia launches media using the appropriate launcher.
@@ -153,5 +168,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		launchers.NewGenericLauncher(),
 	}
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	ls = append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	p.gameMode.WrapLaunchers(ls)
+	return ls
 }

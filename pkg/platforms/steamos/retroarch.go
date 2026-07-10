@@ -15,8 +15,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 )
 
 const (
@@ -55,6 +55,8 @@ func nativeRetroArchLaunchers(opts *sharedretroarch.Options) []platforms.Launche
 	return result
 }
 
+var steamOSGameMode = gamescope.NewManager(gamescope.SessionOptions{Enabled: true})
+
 func withGamescopeFocus(launcher *platforms.Launcher) {
 	launch := launcher.Launch
 	kill := launcher.Kill
@@ -68,12 +70,12 @@ func withGamescopeFocus(launcher *platforms.Launcher) {
 			return nil, err
 		}
 		if proc != nil {
-			go gamescope.ManageFocus(proc)
+			go steamOSGameMode.ManageFocus(proc)
 		}
 		return proc, nil
 	}
 	launcher.Kill = func(cfg *config.Instance) error {
-		gamescope.RevertFocus()
+		steamOSGameMode.RevertFocus()
 		if kill == nil {
 			return nil
 		}

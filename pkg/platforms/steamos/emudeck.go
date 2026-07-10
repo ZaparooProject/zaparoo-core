@@ -19,7 +19,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 	"github.com/rs/zerolog/log"
 )
 
@@ -186,12 +185,12 @@ func standaloneEmuDeckLauncher(
 				return nil, err
 			}
 			if proc != nil {
-				go gamescope.ManageFocus(proc)
+				go steamOSGameMode.ManageFocus(proc)
 			}
 			return proc, nil
 		},
 		Kill: func(_ *config.Instance) error {
-			gamescope.RevertFocus()
+			steamOSGameMode.RevertFocus()
 			return nil
 		},
 	}

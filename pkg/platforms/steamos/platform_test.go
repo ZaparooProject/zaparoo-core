@@ -194,3 +194,10 @@ func TestPlatformSteamDeckPaths(t *testing.T) {
 	// The launcher is properly configured - we just verify it exists
 	// Internal paths like /home/deck/.steam/steam are set in the launcher options
 }
+
+func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	assert.NoError(t, p.ReturnToMenu())
+}
