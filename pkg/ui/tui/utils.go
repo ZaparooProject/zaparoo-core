@@ -38,6 +38,10 @@ const TUIRequestTimeout = 5 * time.Second
 // This is longer than TUIRequestTimeout to give users time to physically tap a tag.
 const TagReadTimeout = 30 * time.Second
 
+// BackupRequestTimeout is the timeout for backup operations that may zip or
+// upload large save sets.
+const BackupRequestTimeout = 30 * time.Minute
+
 // tuiContext creates a context with the TUI request timeout.
 // Use this for API calls from the TUI to avoid long hangs.
 func tuiContext() (context.Context, context.CancelFunc) {
@@ -50,6 +54,12 @@ func tuiContext() (context.Context, context.CancelFunc) {
 func tagReadContext() (context.Context, context.CancelFunc) {
 	//nolint:gosec // G118: caller is responsible for cancel
 	return context.WithTimeout(context.Background(), TagReadTimeout)
+}
+
+// backupContext creates a context with a long timeout for local and remote backups.
+func backupContext() (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: caller is responsible for cancel
+	return context.WithTimeout(context.Background(), BackupRequestTimeout)
 }
 
 // DefaultMaxWidth is the default maximum width for the TUI in non-CRT mode.

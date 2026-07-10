@@ -106,9 +106,11 @@ type ReaderWriteParams struct {
 	Text     string  `json:"text" validate:"required"`
 }
 
-type BackupRestoreParams struct {
+type BackupNameParams struct {
 	Name string `json:"name" validate:"required"`
 }
+
+type BackupRestoreParams = BackupNameParams
 
 type BackupRemoteRestoreParams struct {
 	ID int64 `json:"id" validate:"gt=0"`

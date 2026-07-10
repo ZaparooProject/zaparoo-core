@@ -181,14 +181,7 @@ func LocalClient(
 		return "", fmt.Errorf("failed to write json to websocket: %w", err)
 	}
 
-	timeout := config.APIRequestTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(requestWaitTimeout(ctx))
 	select {
 	case <-done:
 
@@ -213,6 +206,17 @@ func LocalClient(
 	}
 
 	return string(b), nil
+}
+
+func requestWaitTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			return remaining
+		}
+		return 0
+	}
+	return config.APIRequestTimeout
 }
 
 func WaitNotification(

@@ -39,8 +39,14 @@ type SettingsService interface {
 	// CreateBackup creates a local backup ZIP.
 	CreateBackup(ctx context.Context) (string, error)
 
-	// ListBackups fetches local backup ZIPs.
+	// ListBackups fetches local backup ZIP metadata.
 	ListBackups(ctx context.Context) ([]map[string]any, error)
+
+	// InspectBackup fetches local backup manifest details.
+	InspectBackup(ctx context.Context, name string) (map[string]any, error)
+
+	// DeleteBackup removes a local backup ZIP.
+	DeleteBackup(ctx context.Context, name string) error
 
 	// RestoreBackup restores a local backup ZIP.
 	RestoreBackup(ctx context.Context, name string) error
@@ -57,7 +63,7 @@ type SettingsService interface {
 	// RestoreRemoteBackup restores a remote backup snapshot.
 	RestoreRemoteBackup(ctx context.Context, id int64) error
 
-	// StartAuthLink starts the reverse device link flow (user code / QR).
+	// StartAuthLink starts the reverse device link flow.
 	StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error)
 
 	// GetAuthLinkStatus reports the active link flow's state.
@@ -153,6 +159,36 @@ func (s *DefaultSettingsService) ListBackups(ctx context.Context) ([]map[string]
 		return nil, fmt.Errorf("failed to parse backups: %w", err)
 	}
 	return backups, nil
+}
+
+func (s *DefaultSettingsService) InspectBackup(ctx context.Context, name string) (map[string]any, error) {
+	params := models.BackupNameParams{Name: name}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal inspect params: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupInspect, string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect backup: %w", err)
+	}
+	var backup map[string]any
+	if err := json.Unmarshal([]byte(resp), &backup); err != nil {
+		return nil, fmt.Errorf("failed to parse backup details: %w", err)
+	}
+	return backup, nil
+}
+
+func (s *DefaultSettingsService) DeleteBackup(ctx context.Context, name string) error {
+	params := models.BackupNameParams{Name: name}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete params: %w", err)
+	}
+	_, err = s.apiClient.Call(ctx, models.MethodSettingsBackupDelete, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to delete backup: %w", err)
+	}
+	return nil
 }
 
 func (s *DefaultSettingsService) RestoreBackup(ctx context.Context, name string) error {

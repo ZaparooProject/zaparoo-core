@@ -412,6 +412,21 @@ func TestTagReadContext(t *testing.T) {
 	assert.True(t, deadline.After(tuiDeadline), "Tag read timeout should be longer than TUI timeout")
 }
 
+func TestBackupContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := backupContext()
+	defer cancel()
+
+	require.NotNil(t, ctx)
+	require.NotNil(t, cancel)
+
+	deadline, ok := ctx.Deadline()
+	assert.True(t, ok, "backupContext should have a deadline")
+	assert.True(t, deadline.After(time.Now().Add(TagReadTimeout)),
+		"backup timeout should be longer than interactive tag reads")
+}
+
 func TestShowInfoModal_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -828,9 +843,11 @@ func TestTimeoutConstants(t *testing.T) {
 	// Verify timeout constants have sensible values
 	assert.Equal(t, 5*time.Second, TUIRequestTimeout)
 	assert.Equal(t, 30*time.Second, TagReadTimeout)
+	assert.Equal(t, 30*time.Minute, BackupRequestTimeout)
 
-	// Tag read should be longer than TUI request (for user interaction)
+	// Longer operations should have longer request windows.
 	assert.Greater(t, TagReadTimeout, TUIRequestTimeout)
+	assert.Greater(t, BackupRequestTimeout, TagReadTimeout)
 }
 
 func TestDefaultDimensions(t *testing.T) {

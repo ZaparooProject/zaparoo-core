@@ -100,10 +100,49 @@ func TestHandleBackupList_Success(t *testing.T) {
 
 	result, err := HandleBackupList(env)
 	require.NoError(t, err)
-	backups, ok := result.([]backupsvc.Info)
+	backups, ok := result.([]backupsvc.ListInfo)
 	require.True(t, ok)
 	require.Len(t, backups, 1)
-	assert.True(t, backups[0].Valid)
+	assert.NotEmpty(t, backups[0].Name)
+	assert.NotZero(t, backups[0].Size)
+}
+
+func TestHandleBackupInspect_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err := HandleBackupInspect(env)
+	require.NoError(t, err)
+	inspected, ok := result.(backupsvc.Info)
+	require.True(t, ok)
+	assert.True(t, inspected.Valid)
+	assert.NotEmpty(t, inspected.Categories)
+}
+
+func TestHandleBackupDelete_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err := HandleBackupDelete(env)
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, result)
+
+	_, err = backupsvc.NewManager(env.Config, env.Platform, env.Database).Inspect(backupInfo.Name)
+	require.Error(t, err)
 }
 
 func TestHandleBackupRestore_Success(t *testing.T) {

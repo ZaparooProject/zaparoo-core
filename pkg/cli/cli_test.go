@@ -25,11 +25,40 @@ import (
 	"fmt"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestBackupCommandContextUsesLongTimeoutForBackupMethods(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{
+		models.MethodSettingsBackup,
+		models.MethodSettingsBackupRestore,
+		models.MethodSettingsBackupRemoteRun,
+		models.MethodSettingsBackupRemoteRestore,
+	} {
+		ctx, cancel := backupCommandContext(method)
+		deadline, ok := ctx.Deadline()
+		cancel()
+		require.True(t, ok)
+		assert.Greater(t, time.Until(deadline), 29*time.Minute)
+	}
+}
+
+func TestBackupCommandContextUsesDefaultTimeoutForOtherMethods(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := backupCommandContext(models.MethodSettingsBackupList)
+	defer cancel()
+	_, ok := ctx.Deadline()
+	assert.False(t, ok)
+}
 
 func TestLogClientCommandError(t *testing.T) {
 	tests := []struct {

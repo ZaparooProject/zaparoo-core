@@ -277,6 +277,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsLogsDownload:        methods.HandleLogsDownload,
 		models.MethodSettingsBackup:              methods.HandleBackup,
 		models.MethodSettingsBackupList:          methods.HandleBackupList,
+		models.MethodSettingsBackupInspect:       methods.HandleBackupInspect,
+		models.MethodSettingsBackupDelete:        methods.HandleBackupDelete,
 		models.MethodSettingsBackupRestore:       methods.HandleBackupRestore,
 		models.MethodSettingsBackupStatus:        methods.HandleBackupStatus,
 		models.MethodSettingsBackupRemoteRun:     methods.HandleBackupRemoteRun,

@@ -236,6 +236,20 @@ func TestLocalClient_Timeout(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrRequestTimeout) || errors.Is(err, ErrRequestCancelled))
 }
 
+func TestRequestWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, config.APIRequestTimeout, requestWaitTimeout(context.Background()))
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer shortCancel()
+	assert.LessOrEqual(t, requestWaitTimeout(shortCtx), 100*time.Millisecond)
+
+	longCtx, longCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout+time.Minute)
+	defer longCancel()
+	assert.Greater(t, requestWaitTimeout(longCtx), config.APIRequestTimeout)
+}
+
 func TestLocalClient_IgnoresMismatchedIDs(t *testing.T) {
 	t.Parallel()
 

@@ -227,7 +227,7 @@ func TestManagerCreateListRestore(t *testing.T) {
 	}
 }
 
-func TestListUsesManifestOnlyButRestoreVerifiesPayloadHash(t *testing.T) {
+func TestInspectUsesManifestOnlyButRestoreVerifiesPayloadHash(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)
 
@@ -238,7 +238,13 @@ func TestListUsesManifestOnlyButRestoreVerifiesPayloadHash(t *testing.T) {
 	backups, err := env.Manager.List()
 	require.NoError(t, err)
 	require.Len(t, backups, 1)
-	assert.True(t, backups[0].Valid)
+	assert.Equal(t, info.Name, backups[0].Name)
+	assert.NotZero(t, backups[0].Size)
+
+	inspected, err := env.Manager.Inspect(info.Name)
+	require.NoError(t, err)
+	assert.True(t, inspected.Valid)
+	assert.Contains(t, inspected.Categories, CategorySavestates)
 
 	_, err = env.Manager.Restore(info.Name)
 	require.Error(t, err)

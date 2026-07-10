@@ -90,6 +90,13 @@ type Manifest struct {
 	Version     int                                    `json:"version"`
 }
 
+type ListInfo struct {
+	CreatedAt time.Time `json:"createdAt"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path,omitempty"`
+	Size      int64     `json:"size"`
+}
+
 type Info struct {
 	CreatedAt  time.Time                              `json:"createdAt"`
 	Categories map[string]models.BackupCategoryStatus `json:"categories,omitempty"`
@@ -194,7 +201,7 @@ func (m *Manager) createBackup(preRestore bool) (Info, error) {
 	return info, nil
 }
 
-func (m *Manager) List() ([]Info, error) {
+func (m *Manager) List() ([]ListInfo, error) {
 	entries, err := os.ReadDir(m.backupDir())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -202,23 +209,43 @@ func (m *Manager) List() ([]Info, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing backup ZIPs: %w", err)
 	}
-	infos := make([]Info, 0, len(entries))
+	infos := make([]ListInfo, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !isBackupZipName(entry.Name()) {
 			continue
 		}
-		info, inspectErr := inspectZipManifest(filepath.Join(m.backupDir(), entry.Name()))
-		if inspectErr != nil {
-			log.Warn().Err(inspectErr).Str("name", entry.Name()).Msg("failed to inspect backup ZIP")
-			infos = append(infos, Info{
-				Name: entry.Name(), Status: StatusFailed, Error: safeError(inspectErr), Valid: false,
-			})
+		info, infoErr := fastInfoFromDirEntry(m.backupDir(), entry)
+		if infoErr != nil {
+			log.Debug().Err(infoErr).Str("name", entry.Name()).Msg("failed to read backup ZIP metadata")
 			continue
 		}
 		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].CreatedAt.After(infos[j].CreatedAt) })
 	return infos, nil
+}
+
+func (m *Manager) Inspect(name string) (Info, error) {
+	backupPath, err := m.resolveBackupPath(name)
+	if err != nil {
+		return Info{}, err
+	}
+	info, err := inspectZipManifest(backupPath)
+	if err != nil {
+		return Info{}, fmt.Errorf("inspecting backup ZIP: %w", err)
+	}
+	return info, nil
+}
+
+func (m *Manager) Delete(name string) error {
+	backupPath, err := m.resolveBackupPath(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return fmt.Errorf("deleting backup ZIP: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) Restore(name string) (RestoreInfo, error) {
@@ -747,6 +774,36 @@ func writeZipBytes(zw *zip.Writer, name string, data []byte) error {
 	return nil
 }
 
+func fastInfoFromDirEntry(backupDir string, entry os.DirEntry) (ListInfo, error) {
+	fileInfo, err := entry.Info()
+	if err != nil {
+		return ListInfo{}, fmt.Errorf("stating backup ZIP: %w", err)
+	}
+	createdAt := fileInfo.ModTime().UTC()
+	if parsed, ok := parseBackupNameTime(entry.Name()); ok {
+		createdAt = parsed
+	}
+	return ListInfo{
+		Name:      entry.Name(),
+		Path:      filepath.Join(backupDir, entry.Name()),
+		CreatedAt: createdAt,
+		Size:      fileInfo.Size(),
+	}, nil
+}
+
+func parseBackupNameTime(name string) (time.Time, bool) {
+	trimmed := strings.TrimPrefix(name, "backup-")
+	parts := strings.SplitN(trimmed, "-", 3)
+	if len(parts) < 2 {
+		return time.Time{}, false
+	}
+	parsed, err := time.ParseInLocation("20060102150405", parts[0]+parts[1], time.UTC)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
 func infoFromManifest(zipPath string, manifest *Manifest) (Info, error) {
 	st, err := os.Stat(zipPath)
 	if err != nil {
@@ -997,15 +1054,4 @@ func safeStatusErrorString(msg string) string {
 		return msg
 	}
 	return "backup failed"
-}
-
-func safeError(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := err.Error()
-	if len(msg) > 300 {
-		msg = msg[:300]
-	}
-	return msg
 }

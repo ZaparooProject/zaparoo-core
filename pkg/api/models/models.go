@@ -86,6 +86,8 @@ const (
 	MethodSettingsLogsDownload        = "settings.logs.download"
 	MethodSettingsBackup              = "settings.backup"
 	MethodSettingsBackupList          = "settings.backup.list"
+	MethodSettingsBackupInspect       = "settings.backup.inspect"
+	MethodSettingsBackupDelete        = "settings.backup.delete"
 	MethodSettingsBackupRestore       = "settings.backup.restore"
 	MethodSettingsBackupStatus        = "settings.backup.status"
 	MethodSettingsBackupRemoteRun     = "settings.backup.remote.run"

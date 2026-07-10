@@ -105,6 +105,23 @@ func (m *MockSettingsService) ListBackups(ctx context.Context) ([]map[string]any
 	return backups, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
 }
 
+func (m *MockSettingsService) InspectBackup(ctx context.Context, name string) (map[string]any, error) {
+	args := m.Called(ctx, name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	backup, ok := args.Get(0).(map[string]any)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return backup, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+func (m *MockSettingsService) DeleteBackup(ctx context.Context, name string) error {
+	args := m.Called(ctx, name)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
 func (m *MockSettingsService) RestoreBackup(ctx context.Context, name string) error {
 	args := m.Called(ctx, name)
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
@@ -214,6 +231,18 @@ func (m *MockSettingsService) SetupCreateBackup(name string) {
 
 func (m *MockSettingsService) SetupListBackups(backups []map[string]any) {
 	m.On("ListBackups", mock.Anything).Return(backups, nil)
+}
+
+func (m *MockSettingsService) SetupInspectBackup(backup map[string]any) {
+	m.On("InspectBackup", mock.Anything, mock.AnythingOfType("string")).Return(backup, nil)
+}
+
+func (m *MockSettingsService) SetupInspectBackupError(err error) {
+	m.On("InspectBackup", mock.Anything, mock.AnythingOfType("string")).Return(nil, err)
+}
+
+func (m *MockSettingsService) SetupDeleteBackupSuccess() {
+	m.On("DeleteBackup", mock.Anything, mock.AnythingOfType("string")).Return(nil)
 }
 
 func (m *MockSettingsService) SetupRestoreBackupSuccess() {

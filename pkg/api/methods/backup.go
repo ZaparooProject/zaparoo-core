@@ -84,6 +84,43 @@ func HandleBackupList(env requests.RequestEnv) (any, error) {
 }
 
 //nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleBackupInspect(env requests.RequestEnv) (any, error) {
+	if err := requireBackupAccess(&env); err != nil {
+		return nil, err
+	}
+	var params models.BackupNameParams
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if params.Name == "" {
+		return nil, models.ClientErrf("invalid params: name is required")
+	}
+	backup, err := backupsvc.NewManager(env.Config, env.Platform, env.Database).Inspect(params.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect backup: %w", err)
+	}
+	return backup, nil
+}
+
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleBackupDelete(env requests.RequestEnv) (any, error) {
+	if err := requireBackupAccess(&env); err != nil {
+		return nil, err
+	}
+	var params models.BackupNameParams
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if params.Name == "" {
+		return nil, models.ClientErrf("invalid params: name is required")
+	}
+	if err := backupsvc.NewManager(env.Config, env.Platform, env.Database).Delete(params.Name); err != nil {
+		return nil, fmt.Errorf("failed to delete backup: %w", err)
+	}
+	return NoContent{}, nil
+}
+
+//nolint:gocritic // API dispatch requires RequestEnv by value.
 func HandleBackupStatus(env requests.RequestEnv) (any, error) {
 	if err := requireBackupRuntime(&env); err != nil {
 		return nil, err

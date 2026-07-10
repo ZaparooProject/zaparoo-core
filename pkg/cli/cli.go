@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
@@ -40,6 +41,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+const backupCommandTimeout = 30 * time.Minute
 
 type Flags struct {
 	Write      *string
@@ -157,6 +160,25 @@ func logClientCommandError(err error, msg string) {
 	log.Error().Err(err).Msg(msg)
 }
 
+func backupCommandContext(method string) (context.Context, context.CancelFunc) {
+	if isLongBackupMethod(method) {
+		return context.WithTimeout(context.Background(), backupCommandTimeout)
+	}
+	return context.WithCancel(context.Background())
+}
+
+func isLongBackupMethod(method string) bool {
+	switch method {
+	case models.MethodSettingsBackup,
+		models.MethodSettingsBackupRestore,
+		models.MethodSettingsBackupRemoteRun,
+		models.MethodSettingsBackupRemoteRestore:
+		return true
+	default:
+		return false
+	}
+}
+
 func runFlag(cfg *config.Instance, value string) {
 	data, err := json.Marshal(&models.RunParams{
 		Text: &value,
@@ -267,7 +289,9 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			params = ps[1]
 		}
 
-		resp, err := client.LocalClient(context.Background(), cfg, method, params)
+		ctx, cancel := backupCommandContext(method)
+		resp, err := client.LocalClient(ctx, cfg, method, params)
+		cancel()
 		if err != nil {
 			logClientCommandError(err, "error calling API")
 			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
@@ -324,7 +348,9 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		}
 		os.Exit(0)
 	case *f.Backup:
-		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackup, "")
+		ctx, cancel := backupCommandContext(models.MethodSettingsBackup)
+		resp, err := client.LocalClient(ctx, cfg, models.MethodSettingsBackup, "")
+		cancel()
 		if err != nil {
 			logClientCommandError(err, "error creating backup")
 			_, _ = fmt.Fprintf(os.Stderr, "Error creating backup: %v\n", err)
@@ -351,7 +377,9 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
 			os.Exit(1)
 		}
-		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackupRestore, string(data))
+		ctx, cancel := backupCommandContext(models.MethodSettingsBackupRestore)
+		resp, err := client.LocalClient(ctx, cfg, models.MethodSettingsBackupRestore, string(data))
+		cancel()
 		if err != nil {
 			logClientCommandError(err, "error restoring backup")
 			_, _ = fmt.Fprintf(os.Stderr, "Error restoring backup: %v\n", err)

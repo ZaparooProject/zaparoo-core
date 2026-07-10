@@ -579,6 +579,29 @@ func TestFindExitDelayIndex(t *testing.T) {
 	}
 }
 
+func TestFormatHumanBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		want  string
+		bytes int64
+	}{
+		{name: "bytes", bytes: 512, want: "512 B"},
+		{name: "exact kb", bytes: 2048, want: "2 KB"},
+		{name: "rounds up kb", bytes: 1537, want: "1.6 KB"},
+		{name: "mb", bytes: 5 * 1024 * 1024, want: "5 MB"},
+		{name: "gb", bytes: 3 * 1024 * 1024 * 1024, want: "3 GB"},
+		{name: "tb", bytes: 1298312830128, want: "1.2 TB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, formatHumanBytes(tt.bytes))
+		})
+	}
+}
+
 func backupTestStatus(linked bool) *models.BackupStatusResponse {
 	return &models.BackupStatusResponse{
 		Local: models.BackupStatusEntry{
@@ -648,7 +671,10 @@ func TestBuildBackupSettingsMenu_BackupNowCallsService_Integration(t *testing.T)
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
-	mockSvc.SetupCreateBackup("backup-20260624-150405-000000000-manual.zip")
+	release := make(chan time.Time, 1)
+	mockSvc.On("CreateBackup", mock.Anything).
+		WaitUntil(release).
+		Return("backup-20260624-150405-000000000-manual.zip", nil)
 
 	runner.Start(pages)
 	runner.QueueUpdateDraw(func() {
@@ -657,8 +683,37 @@ func TestBuildBackupSettingsMenu_BackupNowCallsService_Integration(t *testing.T)
 
 	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Backup created", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Creating backup", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Hide", 100*time.Millisecond))
+	release <- time.Now()
+	require.True(t, runner.WaitForText("Backup created", 500*time.Millisecond))
 	mockSvc.AssertCalled(t, "CreateBackup", mock.Anything)
+}
+
+func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.On("RunRemoteBackup", mock.Anything).Return(int64(42), nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Back up remotely now", 100*time.Millisecond))
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Remote backup created", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Remote backup 42", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "RunRemoteBackup", mock.Anything)
 }
 
 func TestBuildBackupListPage_DisplaysBackups_Integration(t *testing.T) {
@@ -677,7 +732,7 @@ func TestBuildBackupListPage_DisplaysBackups_Integration(t *testing.T) {
 		buildBackupListPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText(backupName, 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
 	pageName, primitive := pages.GetFrontPage()
 	require.Equal(t, PageSettingsBackupList, pageName)
 	frame, ok := primitive.(*PageFrame)
@@ -686,7 +741,116 @@ func TestBuildBackupListPage_DisplaysBackups_Integration(t *testing.T) {
 	require.True(t, ok)
 	require.Positive(t, list.GetItemCount())
 	mainText, _ := list.GetItemText(0)
-	assert.Equal(t, backupName, mainText)
+	assert.Equal(t, "Local backup 2026-06-24 15:04:05 UTC", mainText)
+}
+
+func TestBuildBackupListPage_SelectShowsDetailsModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 40)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	backupDetails := map[string]any{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+		"status":    "success",
+		"valid":     true,
+		"categories": map[string]any{
+			"zaparoo":  map[string]any{"files": float64(3), "bytes": float64(1000)},
+			"settings": map[string]any{"files": float64(2), "bytes": float64(500)},
+		},
+	}
+	mockSvc.SetupListBackups([]map[string]any{{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+	}})
+	mockSvc.SetupInspectBackup(backupDetails)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup details", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Size: 2 KB", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Manifest:", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Zaparoo", 100*time.Millisecond), runner.GetScreenText())
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), runner.GetScreenText())
+}
+
+func TestBuildBackupListPage_InspectFailureDisablesRestore_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 40)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupListBackups([]map[string]any{{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+	}})
+	mockSvc.SetupInspectBackupError(errors.New("bad manifest"))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Unable", 500*time.Millisecond), runner.GetScreenText())
+	require.True(t, runner.WaitForText("disabled", 100*time.Millisecond), runner.GetScreenText())
+	mockSvc.AssertNotCalled(t, "RestoreBackup", mock.Anything, backupName)
+}
+
+func TestBackupDetailsModal_DeleteCallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 40)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	backupDetails := map[string]any{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+		"status":    "success",
+		"valid":     true,
+	}
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupListBackups([]map[string]any{{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+	}})
+	mockSvc.SetupInspectBackup(backupDetails)
+	mockSvc.SetupDeleteBackupSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup details", 500*time.Millisecond))
+	runner.SimulateTab()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Delete Local backup", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup deleted", 500*time.Millisecond))
+	mockSvc.AssertCalled(t, "DeleteBackup", mock.Anything, backupName)
 }
 
 func TestShowBackupRestoreConfirm_CallsService_Integration(t *testing.T) {
@@ -706,7 +870,7 @@ func TestShowBackupRestoreConfirm_CallsService_Integration(t *testing.T) {
 		showBackupRestoreConfirm(mockSvc, pages, runner.App(), focus, backupName, nil)
 	})
 
-	require.True(t, runner.WaitForText("Restore backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Restore Local backup", 100*time.Millisecond))
 	runner.Screen().InjectEnter()
 	runner.Draw()
 	require.True(t, runner.WaitForText("Backup restored", 100*time.Millisecond))

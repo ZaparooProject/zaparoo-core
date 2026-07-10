@@ -20,10 +20,13 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
@@ -384,17 +387,25 @@ func buildBackupSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 
 	localDesc := backupStatusDescription(&status.Local)
 	menu.AddNavAction("Back up now", "Create a portable local backup ZIP", func() {
-		ctx, cancel := tuiContext()
-		defer cancel()
-		name, backupErr := svc.CreateBackup(ctx)
-		if backupErr != nil {
-			log.Warn().Err(backupErr).Msg("error creating backup")
-			ShowErrorModal(pages, app, "Failed to create backup", func() { app.SetFocus(menu.List) })
-			return
-		}
-		ShowInfoModal(pages, app, "Backup created", "Created "+name, func() {
-			buildBackupSettingsMenu(svc, pages, app)
-		})
+		runBackupAction(
+			pages,
+			app,
+			menu.List,
+			"Creating backup",
+			"Creating local backup ZIP...",
+			func(ctx context.Context) (string, error) {
+				name, backupErr := svc.CreateBackup(ctx)
+				if backupErr != nil {
+					return "", fmt.Errorf("create local backup: %w", backupErr)
+				}
+				return backupLabelFromName("Local backup", name), nil
+			},
+			func(label string) {
+				ShowInfoModal(pages, app, "Backup created", label, func() {
+					buildBackupSettingsMenu(svc, pages, app)
+				})
+			},
+		)
 	})
 	menu.AddNavAction("View backups", localDesc, func() {
 		buildBackupListPage(svc, pages, app)
@@ -412,17 +423,25 @@ func buildBackupSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 			}
 		})
 		menu.AddNavAction("Back up remotely now", "Upload current backup to remote provider", func() {
-			ctx, cancel := tuiContext()
-			defer cancel()
-			id, backupErr := svc.RunRemoteBackup(ctx)
-			if backupErr != nil {
-				log.Warn().Err(backupErr).Msg("error running remote backup")
-				ShowErrorModal(pages, app, "Failed to run remote backup", func() { app.SetFocus(menu.List) })
-				return
-			}
-			ShowInfoModal(pages, app, "Remote backup created", fmt.Sprintf("Created remote backup %d", id), func() {
-				buildBackupSettingsMenu(svc, pages, app)
-			})
+			runBackupAction(
+				pages,
+				app,
+				menu.List,
+				"Creating remote backup",
+				"Uploading backup to remote provider...",
+				func(ctx context.Context) (string, error) {
+					id, backupErr := svc.RunRemoteBackup(ctx)
+					if backupErr != nil {
+						return "", fmt.Errorf("create remote backup: %w", backupErr)
+					}
+					return fmt.Sprintf("Remote backup %d", id), nil
+				},
+				func(label string) {
+					ShowInfoModal(pages, app, "Remote backup created", label, func() {
+						buildBackupSettingsMenu(svc, pages, app)
+					})
+				},
+			)
 		})
 		menu.AddNavAction("View remote backups", "List and restore remote backup snapshots", func() {
 			buildRemoteBackupListPage(svc, pages, app)
@@ -465,6 +484,84 @@ func buildBackupSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 	pages.AddAndSwitchToPage(PageSettingsBackup, frame, true)
 }
 
+const backupProgressModalPage = "backup_progress_modal"
+
+func runBackupAction(
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	title string,
+	message string,
+	run func(context.Context) (string, error),
+	onSuccess func(string),
+) {
+	ctx, cancel := backupContext()
+	started := time.Now()
+	var dismissed atomic.Bool
+	done := make(chan struct{})
+
+	modal := tview.NewModal().
+		SetText(backupProgressText(message, started)).
+		AddButtons([]string{"Hide"}).
+		SetDoneFunc(func(_ int, _ string) {
+			dismissed.Store(true)
+			pages.HidePage(backupProgressModalPage)
+			pages.RemovePage(backupProgressModalPage)
+			app.SetFocus(focus)
+		})
+	modal.SetTitle(" " + title + " ").
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	pages.AddPage(backupProgressModalPage, modal, false, true)
+	app.SetFocus(modal)
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if dismissed.Load() {
+					return
+				}
+				app.QueueUpdateDraw(func() {
+					modal.SetText(backupProgressText(message, started))
+				})
+			}
+		}
+	}()
+
+	go func() {
+		label, err := run(ctx)
+		cancel()
+		close(done)
+		app.QueueUpdateDraw(func() {
+			pages.HidePage(backupProgressModalPage)
+			pages.RemovePage(backupProgressModalPage)
+			if dismissed.Load() {
+				app.SetFocus(focus)
+				return
+			}
+			if err != nil {
+				log.Warn().Err(err).Msg("error running backup action")
+				ShowErrorModal(pages, app, title+" failed", func() { app.SetFocus(focus) })
+				return
+			}
+			onSuccess(label)
+		})
+	}()
+}
+
+func backupProgressText(message string, started time.Time) string {
+	return fmt.Sprintf(
+		"%s\n\nElapsed: %s\n\nTime depends on save data size. Hide keeps it running.",
+		message,
+		time.Since(started).Round(time.Second),
+	)
+}
+
 // showZaparooOnlineLink reports whether the main settings menu should offer
 // the account linking entry: only when the device is not already linked.
 func showZaparooOnlineLink(svc SettingsService) bool {
@@ -494,8 +591,8 @@ func startAuthLinkFlow(svc SettingsService, pages *tview.Pages, app *tview.Appli
 	}
 
 	message := fmt.Sprintf(
-		"Visit %s\n\nEnter code: %s\n\nOr scan the QR code at:\n%s\n\nWaiting for approval…",
-		link.VerificationURL, link.UserCode, link.VerificationURLComplete,
+		"Visit:\n%s\n\nEnter code:\n%s\n\nWaiting for approval...",
+		link.VerificationURL, link.UserCode,
 	)
 
 	done := make(chan struct{})
@@ -601,13 +698,11 @@ func buildBackupListPage(svc SettingsService, pages *tview.Pages, app *tview.App
 		if name == "" {
 			continue
 		}
-		secondary := backupString(backup, "createdAt")
-		if size, ok := backup["size"].(float64); ok {
-			secondary = fmt.Sprintf("%s  %.0f bytes", secondary, size)
-		}
+		secondary := formatBackupSize(backup, "size")
 		backupName := name
-		list.AddItem(name, secondary, 0, func() {
-			showBackupRestoreConfirm(svc, pages, app, list, backupName, goBack)
+		backupInfo := backup
+		list.AddItem(backupDisplayLabel("Local backup", name, backupString(backup, "createdAt")), secondary, 0, func() {
+			showBackupManageModal(svc, pages, app, list, backupInfo, backupName, goBack)
 		})
 	}
 	if len(backups) == 0 {
@@ -620,6 +715,118 @@ func buildBackupListPage(svc SettingsService, pages *tview.Pages, app *tview.App
 	frame.FocusContent()
 }
 
+const backupManageModalPage = "backup_manage_modal"
+
+func showBackupManageModal(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	backup map[string]any,
+	backupName string,
+	onRestored func(),
+) {
+	label := backupDisplayLabel("Local backup", backupName, backupString(backup, "createdAt"))
+	showBackupModal(pages, app, " Backup details ", "Loading backup manifest...", []string{"Back"}, func(_ int) {
+		app.SetFocus(focus)
+	})
+
+	go func() {
+		ctx, cancel := backupContext()
+		details, err := svc.InspectBackup(ctx, backupName)
+		cancel()
+		app.QueueUpdateDraw(func() {
+			if err != nil {
+				log.Warn().Err(err).Str("name", backupName).Msg("error inspecting backup")
+				showBackupModal(
+					pages,
+					app,
+					" Backup details ",
+					label+"\n\nUnable to read backup manifest.\n\nRestore is disabled for this backup.",
+					[]string{"Back"},
+					func(_ int) { app.SetFocus(focus) },
+				)
+				return
+			}
+			showBackupDetailsActions(svc, pages, app, focus, details, backupName, onRestored)
+		})
+	}()
+}
+
+func showBackupDetailsActions(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	backup map[string]any,
+	backupName string,
+	onRestored func(),
+) {
+	label := backupDisplayLabel("Local backup", backupName, backupString(backup, "createdAt"))
+	showBackupModal(
+		pages,
+		app,
+		" Backup details ",
+		formatBackupDetails(label, backup),
+		[]string{"Restore", "Delete", "Back"},
+		func(buttonIndex int) {
+			switch buttonIndex {
+			case 0:
+				showBackupRestoreConfirm(svc, pages, app, focus, backupName, onRestored)
+			case 1:
+				showBackupDeleteConfirm(svc, pages, app, focus, label, backupName, onRestored)
+			default:
+				app.SetFocus(focus)
+			}
+		},
+	)
+}
+
+func showBackupModal(
+	pages *tview.Pages,
+	app *tview.Application,
+	title string,
+	message string,
+	buttons []string,
+	onDone func(int),
+) {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons(buttons).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			pages.HidePage(backupManageModalPage)
+			pages.RemovePage(backupManageModalPage)
+			onDone(buttonIndex)
+		})
+	modal.SetTitle(title).
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	pages.RemovePage(backupManageModalPage)
+	pages.AddPage(backupManageModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+func showBackupDeleteConfirm(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	label string,
+	backupName string,
+	onDeleted func(),
+) {
+	ShowConfirmModal(pages, app, "Delete "+label+"?", func() {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		if err := svc.DeleteBackup(ctx, backupName); err != nil {
+			log.Warn().Err(err).Msg("error deleting backup")
+			ShowErrorModal(pages, app, "Failed to delete backup", func() { app.SetFocus(focus) })
+			return
+		}
+		ShowInfoModal(pages, app, "Backup deleted", label, onDeleted)
+	}, func() { app.SetFocus(focus) })
+}
+
 func showBackupRestoreConfirm(
 	svc SettingsService,
 	pages *tview.Pages,
@@ -628,16 +835,24 @@ func showBackupRestoreConfirm(
 	backupName string,
 	onRestored func(),
 ) {
-	ShowConfirmModal(pages, app, "Restore backup "+backupName+"?", func() {
-		ctx, cancel := tuiContext()
-		defer cancel()
-		err := svc.RestoreBackup(ctx, backupName)
-		if err != nil {
-			log.Warn().Err(err).Msg("error restoring backup")
-			ShowErrorModal(pages, app, "Failed to restore backup", func() { app.SetFocus(focus) })
-			return
-		}
-		ShowInfoModal(pages, app, "Backup restored", backupName, onRestored)
+	label := backupLabelFromName("Local backup", backupName)
+	ShowConfirmModal(pages, app, "Restore "+label+"?", func() {
+		runBackupAction(
+			pages,
+			app,
+			focus,
+			"Restoring backup",
+			"Restoring local backup...",
+			func(ctx context.Context) (string, error) {
+				if err := svc.RestoreBackup(ctx, backupName); err != nil {
+					return "", fmt.Errorf("restore local backup: %w", err)
+				}
+				return label, nil
+			},
+			func(restoredLabel string) {
+				ShowInfoModal(pages, app, "Backup restored", restoredLabel, onRestored)
+			},
+		)
 	}, func() { app.SetFocus(focus) })
 }
 
@@ -666,10 +881,13 @@ func buildRemoteBackupListPage(svc SettingsService, pages *tview.Pages, app *tvi
 		if !ok {
 			continue
 		}
-		label := fmt.Sprintf("Remote backup %d", id)
-		secondary := backupString(backup, "createdAt")
-		if size, ok := backup["sizeBytes"].(float64); ok {
-			secondary = fmt.Sprintf("%s  %.0f bytes", secondary, size)
+		label := backupDisplayLabel("Remote backup", "", backupString(backup, "createdAt"))
+		if label == "Remote backup" {
+			label = fmt.Sprintf("Remote backup %d", id)
+		}
+		secondary := "ID " + strconv.FormatInt(id, 10)
+		if size := formatBackupSize(backup, "sizeBytes"); size != "" {
+			secondary += "  " + size
 		}
 		if incompatible, ok := backup["incompatible"].(bool); ok && incompatible {
 			// Committed by a newer Core: listed, but refuses to restore.
@@ -704,15 +922,22 @@ func showRemoteBackupRestoreConfirm(
 	onRestored func(),
 ) {
 	ShowConfirmModal(pages, app, fmt.Sprintf("Restore remote backup %d?", backupID), func() {
-		ctx, cancel := tuiContext()
-		defer cancel()
-		err := svc.RestoreRemoteBackup(ctx, backupID)
-		if err != nil {
-			log.Warn().Err(err).Msg("error restoring remote backup")
-			ShowErrorModal(pages, app, "Failed to restore remote backup", func() { app.SetFocus(focus) })
-			return
-		}
-		ShowInfoModal(pages, app, "Remote backup restored", strconv.FormatInt(backupID, 10), onRestored)
+		runBackupAction(
+			pages,
+			app,
+			focus,
+			"Restoring remote backup",
+			"Downloading and restoring remote backup...",
+			func(ctx context.Context) (string, error) {
+				if err := svc.RestoreRemoteBackup(ctx, backupID); err != nil {
+					return "", fmt.Errorf("restore remote backup: %w", err)
+				}
+				return strconv.FormatInt(backupID, 10), nil
+			},
+			func(restoredLabel string) {
+				ShowInfoModal(pages, app, "Remote backup restored", restoredLabel, onRestored)
+			},
+		)
 	}, func() { app.SetFocus(focus) })
 }
 
@@ -747,6 +972,137 @@ func backupStatusText(status *models.BackupStatusEntry) string {
 	return strings.Join(lines, "\n")
 }
 
+func formatBackupDetails(label string, backup map[string]any) string {
+	lines := []string{label}
+	if createdAt, ok := formatBackupTimestamp(backupString(backup, "createdAt")); ok {
+		lines = append(lines, "Created: "+createdAt)
+	}
+	if size := formatBackupSize(backup, "size"); size != "" {
+		lines = append(lines, "Size: "+size)
+	}
+	if status := backupString(backup, "status"); status != "" {
+		lines = append(lines, "Status: "+status)
+	}
+	if valid, ok := backup["valid"].(bool); ok && !valid {
+		lines = append(lines, "Valid: no")
+	} else if ok {
+		lines = append(lines, "Valid: yes")
+	}
+	if errText := backupString(backup, "error"); errText != "" {
+		lines = append(lines, "Error: "+errText)
+	}
+	if categoryLines := formatBackupCategories(backup); len(categoryLines) > 0 {
+		lines = append(lines, "", "Manifest:")
+		lines = append(lines, categoryLines...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatBackupCategories(backup map[string]any) []string {
+	raw, ok := backup["categories"].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	labels := map[string]string{
+		"zaparoo":    "Zaparoo",
+		"settings":   "Settings",
+		"inputs":     "Inputs",
+		"saves":      "Saves",
+		"savestates": "Save states",
+	}
+	ordered := []string{"zaparoo", "settings", "inputs", "saves", "savestates"}
+	lines := make([]string, 0, len(raw))
+	for _, category := range ordered {
+		entry, ok := raw[category].(map[string]any)
+		if !ok {
+			continue
+		}
+		name := labels[category]
+		files, _ := backupAnyInt64(entry["files"])
+		bytes, _ := backupAnyInt64(entry["bytes"])
+		lines = append(lines, fmt.Sprintf("%s: %d files, %s", name, files, formatHumanBytes(bytes)))
+	}
+	return lines
+}
+
+func backupDisplayLabel(prefix, name, createdAt string) string {
+	if label, ok := formatBackupTimestamp(createdAt); ok {
+		return prefix + " " + label
+	}
+	return backupLabelFromName(prefix, name)
+}
+
+func backupLabelFromName(prefix, name string) string {
+	if label, ok := timestampFromBackupName(name); ok {
+		return prefix + " " + label
+	}
+	if name == "" {
+		return prefix
+	}
+	return name
+}
+
+func timestampFromBackupName(name string) (string, bool) {
+	trimmed := strings.TrimPrefix(name, "backup-")
+	parts := strings.SplitN(trimmed, "-", 3)
+	if len(parts) < 2 {
+		return "", false
+	}
+	parsed, err := time.ParseInLocation("20060102150405", parts[0]+parts[1], time.UTC)
+	if err != nil {
+		return "", false
+	}
+	return formatBackupTime(parsed), true
+}
+
+func formatBackupTimestamp(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "", false
+	}
+	return formatBackupTime(parsed), true
+}
+
+func formatBackupTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05 UTC")
+}
+
+func formatBackupSize(backup map[string]any, key string) string {
+	value, ok := backup[key]
+	if !ok || value == nil {
+		return ""
+	}
+	bytes, ok := backupAnyInt64(value)
+	if !ok {
+		return ""
+	}
+	return formatHumanBytes(bytes)
+}
+
+func formatHumanBytes(bytes int64) string {
+	if bytes < 0 {
+		bytes = 0
+	}
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	value := float64(bytes)
+	unitIndex := -1
+	for value >= 1024 && unitIndex < len(units)-1 {
+		value /= 1024
+		unitIndex++
+	}
+	value = math.Ceil(value*10) / 10
+	if value == math.Trunc(value) {
+		return fmt.Sprintf("%.0f %s", value, units[unitIndex])
+	}
+	return fmt.Sprintf("%.1f %s", value, units[unitIndex])
+}
+
 func backupString(backup map[string]any, key string) string {
 	value, ok := backup[key]
 	if !ok || value == nil {
@@ -760,6 +1116,10 @@ func backupInt64(backup map[string]any, key string) (int64, bool) {
 	if !ok || value == nil {
 		return 0, false
 	}
+	return backupAnyInt64(value)
+}
+
+func backupAnyInt64(value any) (int64, bool) {
 	switch typed := value.(type) {
 	case int64:
 		return typed, true
