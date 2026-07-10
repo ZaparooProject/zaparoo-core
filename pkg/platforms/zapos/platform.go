@@ -35,11 +35,10 @@ func NewPlatform() *Platform {
 
 // Settings returns appliance-specific persistent paths.
 func (*Platform) Settings() platforms.Settings {
-	dataDir := userdataPath("data", config.AppName)
 	return platforms.Settings{
 		ConfigDir: userdataPath("config", config.AppName),
-		DataDir:   dataDir,
-		LogDir:    filepath.Join(dataDir, config.LogsDir),
+		DataDir:   userdataPath("data", config.AppName),
+		LogDir:    logDir(),
 		TempDir:   filepath.Join(os.TempDir(), config.AppName),
 	}
 }
@@ -80,15 +79,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 func applianceRetroArchOptions() retroarch.Options {
 	pack := userdataPath("runtime", "retroarch")
 	return retroarch.Options{
-		Exec:           []string{filepath.Join(pack, "retroarch")},
-		VTWrap:         []string{"openvt", "-c", "2", "-s", "-w", "--"},
-		CoresDir:       filepath.Join(pack, "cores"),
-		ConfigPath:     filepath.Join(pack, "retroarch.cfg"),
-		LibDir:         filepath.Join(pack, "lib"),
-		Home:           userdataPath("home"),
-		ExtraArgs:      []string{"-v", "--log-file", userdataPath("ra.log")},
+		Exec:       []string{filepath.Join(pack, "retroarch")},
+		VTWrap:     []string{"openvt", "-c", "2", "-s", "-w", "--"},
+		CoresDir:   filepath.Join(pack, "cores"),
+		ConfigPath: filepath.Join(pack, "retroarch.cfg"),
+		LibDir:     filepath.Join(pack, "lib"),
+		Home:       userdataPath("home"),
+		// RetroArch runs as the service user, which cannot create files in the
+		// root-owned /userdata top level; log next to the service's own logs.
+		ExtraArgs:      []string{"-v", "--log-file", filepath.Join(logDir(), "retroarch.log")},
 		NetworkCmdAddr: retroArchNetworkAddr,
 	}
+}
+
+func logDir() string {
+	return filepath.Join(userdataPath("data", config.AppName), config.LogsDir)
 }
 
 func userdataPath(elements ...string) string {
