@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
@@ -127,6 +128,28 @@ func TestSetTrackedProcess(t *testing.T) {
 
 		assert.Nil(t, base.trackedProcess)
 	})
+}
+
+func TestClearTrackedProcessMediaDoesNotClearReplacement(t *testing.T) {
+	t.Parallel()
+
+	oldProcess := &os.Process{Pid: 1001}
+	newProcess := &os.Process{Pid: 1002}
+	activeMedia := &models.ActiveMedia{Name: "replacement"}
+	base := NewBase("test")
+	base.trackedProcess = newProcess
+	base.completedTrackedProcess = oldProcess
+	base.setActiveMedia = func(media *models.ActiveMedia) {
+		activeMedia = media
+	}
+
+	assert.False(t, base.ClearTrackedProcessMedia(oldProcess))
+	assert.Equal(t, "replacement", activeMedia.Name)
+
+	base.trackedProcess = nil
+	base.completedTrackedProcess = newProcess
+	assert.True(t, base.ClearTrackedProcessMedia(newProcess))
+	assert.Nil(t, activeMedia)
 }
 
 func TestStopActiveLauncher(t *testing.T) {
@@ -230,6 +253,80 @@ func TestStopActiveLauncher(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, base.trackedProcess)
 		assert.Nil(t, activeMedia)
+	})
+
+	t.Run("custom_kill_waits_for_exit", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.CommandContext(context.Background(), "sleep", "10")
+		require.NoError(t, cmd.Start())
+
+		base := NewBase("test")
+		base.SetTrackedProcess(cmd.Process)
+		base.setActiveMedia = func(_ *models.ActiveMedia) {}
+
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- base.WaitTrackedProcess(cmd.Process)
+		}()
+		require.Eventually(t, func() bool {
+			base.processMu.RLock()
+			defer base.processMu.RUnlock()
+			return base.processWaitClaimed
+		}, time.Second, 10*time.Millisecond)
+
+		killCalled := false
+		base.lastLauncher = platforms.Launcher{
+			Kill: func(_ *config.Instance) error {
+				killCalled = true
+				return cmd.Process.Signal(syscall.SIGTERM)
+			},
+		}
+
+		require.NoError(t, base.StopActiveLauncher(platforms.StopForMenu))
+		assert.True(t, killCalled)
+		assert.Nil(t, base.trackedProcess)
+		assert.NoError(t, <-waitDone)
+	})
+
+	t.Run("custom_kill_falls_back_when_process_stays_running", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.CommandContext(context.Background(), "sleep", "10")
+		require.NoError(t, cmd.Start())
+
+		base := NewBase("test")
+		base.SetTrackedProcess(cmd.Process)
+		base.setActiveMedia = func(_ *models.ActiveMedia) {}
+		base.lastLauncher = platforms.Launcher{
+			Kill: func(_ *config.Instance) error { return nil },
+		}
+
+		start := time.Now()
+		require.NoError(t, base.StopActiveLauncher(platforms.StopForMenu))
+
+		assert.GreaterOrEqual(t, time.Since(start), CustomKillTimeout)
+		assert.Nil(t, base.trackedProcess)
+	})
+
+	t.Run("custom_kill_error_falls_back_immediately", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.CommandContext(context.Background(), "sleep", "10")
+		require.NoError(t, cmd.Start())
+
+		base := NewBase("test")
+		base.SetTrackedProcess(cmd.Process)
+		base.setActiveMedia = func(_ *models.ActiveMedia) {}
+		base.lastLauncher = platforms.Launcher{
+			Kill: func(_ *config.Instance) error { return assert.AnError },
+		}
+
+		start := time.Now()
+		require.NoError(t, base.StopActiveLauncher(platforms.StopForMenu))
+
+		assert.Less(t, time.Since(start), CustomKillTimeout)
+		assert.Nil(t, base.trackedProcess)
 	})
 
 	t.Run("already_dead_process", func(t *testing.T) {

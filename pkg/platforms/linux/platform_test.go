@@ -108,6 +108,26 @@ func TestLinuxHasKodiMusicLauncher(t *testing.T) {
 	require.NotNil(t, kodiMusic, "KodiMusic launcher should exist")
 }
 
+func TestLinuxHasRetroArchLaunchers(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	launchers := (&Platform{}).Launchers(cfg)
+	for _, launcher := range launchers {
+		if launcher.ID != "RetroArchSNES9x" {
+			continue
+		}
+		assert.Equal(t, systemdefs.SystemSNES, launcher.SystemID)
+		assert.Equal(t, []string{"snes"}, launcher.Folders)
+		assert.NotEmpty(t, launcher.Controls)
+		return
+	}
+	t.Fatal("RetroArchSNES9x launcher should exist")
+}
+
 func TestLinuxHasAllKodiCollectionLaunchers(t *testing.T) {
 	t.Parallel()
 

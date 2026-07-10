@@ -23,8 +23,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -438,6 +440,84 @@ func TestDoLaunch_LaunchError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to launch")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_BlockingLaunchError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:        "blocking-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleBlocking,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			return nil, assert.AnError
+		},
+	}
+
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           filepath.Join("test", "path.rom"),
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, assert.AnError)
+	assert.True(t, launchCalled, "blocking launch must run before DoLaunch returns")
+	assert.Nil(t, activeMedia)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_BlockingProcessCannotLeaveStaleActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	mockPlatform.On("SetTrackedProcess", mock.AnythingOfType("*os.Process")).Return().Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "blocking-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleBlocking,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			cmd := exec.CommandContext(context.Background(), "true")
+			require.NoError(t, cmd.Start())
+			require.NoError(t, cmd.Wait())
+			return cmd.Process, nil
+		},
+	}
+	mediaUpdates := make(chan *models.ActiveMedia, 2)
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { mediaUpdates <- media },
+		Launcher:       launcher,
+		Path:           filepath.Join("test", "path.rom"),
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "path" }))
+	select {
+	case active := <-mediaUpdates:
+		require.NotNil(t, active)
+	case <-time.After(time.Second):
+		t.Fatal("ActiveMedia was not published")
+	}
+	select {
+	case cleared := <-mediaUpdates:
+		assert.Nil(t, cleared)
+	case <-time.After(time.Second):
+		t.Fatal("completed process did not clear ActiveMedia")
+	}
 	mockPlatform.AssertExpectations(t)
 }
 

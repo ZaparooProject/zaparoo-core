@@ -336,6 +336,18 @@ type Scraper struct {
 	SupportedSystemIDs []string
 }
 
+// TrackedProcessWaiter is optionally implemented by platforms that coordinate
+// process waiting with StopActiveLauncher. Exactly one caller must reap a process.
+type TrackedProcessWaiter interface {
+	WaitTrackedProcess(*os.Process) error
+}
+
+// TrackedProcessMediaClearer optionally clears active media only when proc
+// remains the process that most recently completed for the platform.
+type TrackedProcessMediaClearer interface {
+	ClearTrackedProcessMedia(*os.Process) bool
+}
+
 // Platform is the central interface that defines how Core interacts with a
 // supported platform.
 type Platform interface {
