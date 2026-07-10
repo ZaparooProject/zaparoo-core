@@ -164,6 +164,7 @@ func TestRunControlScript_CancelsMidExecution(t *testing.T) {
 	mockPlatform.On("ID").Return("test")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	mockPlatform.On("KeyboardPress", "{f2}").
 		Run(func(_ mock.Arguments) { cancel() }).
 		Return(nil)

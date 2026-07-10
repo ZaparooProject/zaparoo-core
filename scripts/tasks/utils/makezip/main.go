@@ -49,6 +49,8 @@ var platformDocs = map[string]string{
 	"replayos":  "replayos.md",
 	"steamos":   "steamos.md",
 	"windows":   "windows/index.md",
+	// Interim packaging fallback until dedicated ZapOS docs are published.
+	"zapos": "linux/index.md",
 }
 
 // platformURLs maps platform IDs to their online documentation URLs
@@ -65,6 +67,8 @@ var platformURLs = map[string]string{
 	"replayos":  "https://zaparoo.org/docs/platforms/replayos/",
 	"steamos":   "https://zaparoo.org/docs/platforms/steamos/",
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
+	// Interim packaging fallback until dedicated ZapOS docs are published.
+	"zapos": "https://zaparoo.org/docs/platforms/linux/",
 }
 
 var extraItems = map[string][]string{

@@ -224,9 +224,6 @@ type LaunchOptions struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	// Controls maps control action identifiers to control actions that execute
-	// on active media (e.g., save state, load state, open menu).
-	Controls map[string]Control
 	// Kill function provides custom termination logic for the launcher.
 	// If defined, this function is called instead of signal-based termination
 	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
@@ -239,6 +236,8 @@ type Launcher struct {
 	// Test function returns true if file looks supported by this launcher.
 	// It's checked after all standard extension and folder checks.
 	Test func(*config.Instance, string) bool
+	// Availability checks runtime dependencies. Nil means always available.
+	Availability func(*config.Instance) error
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	// The opts parameter is optional and may be nil.
@@ -246,6 +245,11 @@ type Launcher struct {
 	// WaitForReady optionally blocks until launched media is ready for controls
 	// or raw input. If nil, platform-level readiness is used, then immediate ready.
 	WaitForReady func(context.Context, *config.Instance, *models.ActiveMedia) error
+	// Controls maps control action identifiers to control actions that execute
+	// on active media (e.g., save state, load state, open menu).
+	Controls map[string]Control
+	// AvailabilityReason is populated by LauncherCache when runtime dependencies are missing.
+	AvailabilityReason string
 	// UsesRunningInstance identifies which running application instance this launcher
 	// communicates with (e.g., "kodi", "plex"). Empty string means the launcher starts
 	// its own process. When non-empty, platforms should not kill the running app if both
@@ -262,8 +266,6 @@ type Launcher struct {
 	// group. Example: ["Kodi", "KodiTV"] means this launcher matches config entries for
 	// both "Kodi" and "KodiTV".
 	Groups []string
-	// Accepted schemes for URI-style launches.
-	Schemes []string
 	// Extensions to match for files during a standard scan.
 	Extensions []string
 	// ScanExcludes are case-insensitive slash-normalized glob patterns that
@@ -273,6 +275,8 @@ type Launcher struct {
 	ScanExcludes []string
 	// Folders to scan for files, relative to the root folders of the platform.
 	Folders []string
+	// Accepted schemes for URI-style launches.
+	Schemes []string
 	// Lifecycle determines how the launcher process is managed.
 	Lifecycle LauncherLifecycle
 	// If true, all resolved paths must be in the allow list before they
@@ -283,6 +287,8 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
+	// Available is populated by LauncherCache.
+	Available bool
 }
 
 // Settings defines all simple settings/configuration values available for a
@@ -334,6 +340,18 @@ type Scraper struct {
 	ID                 string
 	Name               string
 	SupportedSystemIDs []string
+}
+
+// TrackedProcessWaiter is optionally implemented by platforms that coordinate
+// process waiting with StopActiveLauncher. Exactly one caller must reap a process.
+type TrackedProcessWaiter interface {
+	WaitTrackedProcess(*os.Process) error
+}
+
+// TrackedProcessMediaClearer optionally clears active media only when proc
+// remains the process that most recently completed for the platform.
+type TrackedProcessMediaClearer interface {
+	ClearTrackedProcessMedia(*os.Process) bool
 }
 
 // Platform is the central interface that defines how Core interacts with a

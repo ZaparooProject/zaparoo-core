@@ -24,6 +24,7 @@ package linux
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -35,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
+	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -66,6 +68,15 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 // Settings returns XDG-based settings for Linux.
 func (*Platform) Settings() platforms.Settings {
 	return linuxbase.Settings()
+}
+
+// StartPre writes the RetroArch network-command overlay used by Linux's
+// built-in RetroArch Flatpak launchers.
+func (p *Platform) StartPre(cfg *config.Instance) error {
+	if err := p.Base.StartPre(cfg); err != nil {
+		return fmt.Errorf("start Linux base: %w", err)
+	}
+	return ensureRetroArchNetworkConfig()
 }
 
 // StartPost initializes the platform after service startup.
@@ -143,7 +154,12 @@ func (p *Platform) LaunchMedia(
 // Linux supports the full set of launchers: Kodi (8 types), Steam,
 // Lutris, Heroic, WebBrowser, and Generic scripts.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	ls := []platforms.Launcher{
+	retroArchLaunchers := sharedretroarch.NewLaunchers(
+		linuxRetroArchOptions(),
+		sharedretroarch.CoreLaunches(sharedretroarch.ProfileDesktop),
+	)
+	ls := make([]platforms.Launcher, 0, 13+len(retroArchLaunchers))
+	ls = append(ls, []platforms.Launcher{
 		// Kodi launchers (8 types)
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
@@ -172,7 +188,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 		// Generic scripts
 		launchers.NewGenericLauncher(),
-	}
+	}...)
 
+	ls = append(ls, retroArchLaunchers...)
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
 }

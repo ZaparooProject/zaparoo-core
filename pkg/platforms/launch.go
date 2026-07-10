@@ -22,6 +22,7 @@ package platforms
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -106,6 +107,7 @@ func activeMediaLookupContext(parent context.Context) (context.Context, context.
 	if parent == nil {
 		parent = context.Background()
 	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
 	return context.WithTimeout(parent, activeMediaLookupTimeout)
 }
 
@@ -132,19 +134,20 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		return fmt.Errorf("background slot only supports %s launcher", NativeAudioLauncherID)
 	}
 
-	// Stop any currently running launcher before starting new one
-	// This ensures tracked processes (like videos) are stopped even when
-	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
-	// uses a running instance (e.g., Kodi), in which case the platform's
-	// shouldKeepRunningInstance logic will handle stopping if needed.
+	if params.Launcher.Launch == nil {
+		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
+	}
+	if params.Launcher.Availability != nil {
+		if err := params.Launcher.Availability(params.Config); err != nil {
+			return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
+		}
+	}
+
+	// Stop any currently running launcher only after validating the replacement.
 	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
 			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 		}
-	}
-
-	if params.Launcher.Launch == nil {
-		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
 	}
 
 	// Convert DB paths (forward slashes) to OS-native format for launcher
@@ -162,29 +165,22 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		}
 		log.Debug().Msgf("launched tracked process for: %s", params.Path)
 	case LifecycleBlocking:
-		go func() {
-			log.Debug().Msgf("launching blocking process for: %s", params.Path)
-			proc, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
-			if err != nil {
-				log.Error().Err(err).Msgf("blocking launcher failed for: %s", params.Path)
-				params.SetActiveMedia(nil)
-				return
-			}
+		log.Debug().Msgf("launching blocking process for: %s", params.Path)
+		proc, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
+		if err != nil {
+			return fmt.Errorf("failed to launch: %w", err)
+		}
 
-			if proc != nil {
-				params.Platform.SetTrackedProcess(proc)
+		if proc != nil {
+			params.Platform.SetTrackedProcess(proc)
 
-				_, waitErr := proc.Wait()
-				if waitErr != nil {
-					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", params.Path)
-				} else {
-					log.Debug().Msgf("blocking process completed for: %s", params.Path)
-				}
-
-				params.SetActiveMedia(nil)
-				log.Debug().Msgf("cleared active media after blocking process ended: %s", params.Path)
-			}
-		}()
+			// Start waiting only after DoLaunch has finished publishing ActiveMedia.
+			// Otherwise a fast process can clear media before this function sets it,
+			// leaving stale active state behind.
+			defer func() {
+				go waitForBlockingProcess(params.Platform, proc, params.SetActiveMedia, params.Path)
+			}()
+		}
 	case LifecycleFireAndForget:
 		_, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
 		if err != nil {
@@ -255,4 +251,35 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	params.SetActiveMedia(activeMedia)
 
 	return nil
+}
+
+func waitForBlockingProcess(
+	platform Platform,
+	proc *os.Process,
+	setActiveMedia func(*models.ActiveMedia),
+	path string,
+) {
+	var waitErr error
+	if waiter, ok := platform.(TrackedProcessWaiter); ok {
+		waitErr = waiter.WaitTrackedProcess(proc)
+	} else {
+		_, waitErr = proc.Wait()
+	}
+	if waitErr != nil {
+		log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", path)
+	} else {
+		log.Debug().Msgf("blocking process completed for: %s", path)
+	}
+
+	if clearer, ok := platform.(TrackedProcessMediaClearer); ok {
+		if clearer.ClearTrackedProcessMedia(proc) {
+			log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+		} else {
+			log.Debug().Msgf("skipped stale active-media clear after blocking process ended: %s", path)
+		}
+		return
+	}
+
+	setActiveMedia(nil)
+	log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
 }

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -124,7 +125,8 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			}
 
 			// Ensure the path is actually within the system dir (not ../other)
-			if filepath.IsAbs(relPath) || relPath[:2] == ".." {
+			if filepath.IsAbs(relPath) || relPath == ".." ||
+				strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 				return false
 			}
 

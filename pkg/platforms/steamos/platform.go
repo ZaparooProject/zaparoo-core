@@ -24,6 +24,9 @@ package steamos
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -35,20 +38,24 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
+	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // Platform implements the SteamOS platform (Steam Deck and compatible handhelds).
 // Uses console-first approach with direct steam command for Game Mode integration.
 type Platform struct {
 	*linuxbase.Base
-	procScanner  *procscanner.Scanner
-	steamTracker *steamtracker.PlatformIntegration
-	emuTracker   *EmulatorTracker
+	fs                        afero.Fs
+	procScanner               *procscanner.Scanner
+	steamTracker              *steamtracker.PlatformIntegration
+	emuTracker                *EmulatorTracker
+	retroArchAppendConfigPath string
 }
 
 // NewPlatform creates a new SteamOS platform instance.
@@ -56,6 +63,31 @@ func NewPlatform() *Platform {
 	return &Platform{
 		Base: linuxbase.NewBase(platformids.SteamOS),
 	}
+}
+
+// StartPre writes the RetroArch network-command overlay.
+func (p *Platform) StartPre(cfg *config.Instance) error {
+	if err := p.Base.StartPre(cfg); err != nil {
+		return fmt.Errorf("start SteamOS base: %w", err)
+	}
+	if err := sharedretroarch.EnsureNetworkCommandConfig(p.fileSystem(), p.retroArchConfigPath()); err != nil {
+		return fmt.Errorf("write RetroArch network config: %w", err)
+	}
+	return nil
+}
+
+func (p *Platform) fileSystem() afero.Fs {
+	if p.fs == nil {
+		return afero.NewOsFs()
+	}
+	return p.fs
+}
+
+func (p *Platform) retroArchConfigPath() string {
+	if p.retroArchAppendConfigPath != "" {
+		return p.retroArchAppendConfigPath
+	}
+	return defaultRetroArchAppendConfigPath()
 }
 
 // SupportedReaders returns the list of enabled readers for SteamOS.
@@ -66,6 +98,18 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 // Settings returns XDG-based settings for SteamOS.
 func (*Platform) Settings() platforms.Settings {
 	return linuxbase.Settings()
+}
+
+// RootDirs returns configured roots or the neutral ES-DE ROM root.
+func (*Platform) RootDirs(cfg *config.Instance) []string {
+	if roots := cfg.IndexRoots(); len(roots) > 0 {
+		return roots
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.Getenv("HOME")
+	}
+	return []string{filepath.Join(home, "ROMs")}
 }
 
 // StartPost initializes the platform after service startup.
@@ -184,13 +228,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		launchers.NewGenericLauncher(),
 	}
 
+	// Native RetroArch launchers register even before Flatpak or cores are installed.
+	retroArchOpts := steamOSRetroArchOptions(p.retroArchConfigPath())
+	ls = append(ls, nativeRetroArchLaunchers(&retroArchOpts)...)
+
 	// Add RetroDECK launchers if available
 	if retrodeckLaunchers := GetRetroDECKLaunchers(cfg); len(retrodeckLaunchers) > 0 {
 		ls = append(ls, retrodeckLaunchers...)
 	}
 
 	// Add EmuDeck launchers if available
-	if emudeckLaunchers := GetEmuDeckLaunchers(cfg); len(emudeckLaunchers) > 0 {
+	if emudeckLaunchers := buildEmuDeckLaunchers(cfg, &retroArchOpts); len(emudeckLaunchers) > 0 {
 		ls = append(ls, emudeckLaunchers...)
 	}
 

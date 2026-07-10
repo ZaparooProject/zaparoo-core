@@ -27,6 +27,7 @@ includes:
   retropie: ./scripts/tasks/retropie.yml
   steamos: ./scripts/tasks/steamos.yml
   windows: ./scripts/tasks/windows.yml
+  zapos: ./scripts/tasks/zapos.yml
   cross-lint: ./scripts/tasks/cross-lint.yml
   zigcc: ./scripts/tasks/zigcc.yml
 
