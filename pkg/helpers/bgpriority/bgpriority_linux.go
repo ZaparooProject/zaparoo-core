@@ -68,6 +68,7 @@ func Apply() {
 		log.Warn().Err(err).Msg("bgpriority: failed to set SCHED_IDLE")
 	}
 
+	//nolint:gosec // Gettid returns a non-negative OS thread ID.
 	if _, _, errno := unix.Syscall(
 		unix.SYS_IOPRIO_SET, ioprioWhoProcess, uintptr(tid), ioprioIdleValue(),
 	); errno != 0 {

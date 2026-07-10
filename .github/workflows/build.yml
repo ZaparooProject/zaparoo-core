@@ -119,6 +119,8 @@ jobs:
             arch: arm
           - platform: replayos
             arch: arm64
+          - platform: zapos
+            arch: arm64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Get latest Zaparoo App release tag

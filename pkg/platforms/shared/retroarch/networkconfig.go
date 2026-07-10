@@ -17,23 +17,28 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package ids provides platform ID constants.
-// This package has no dependencies to avoid import cycles.
-package ids
+package retroarch
 
-const (
-	Batocera  = "batocera"
-	Bazzite   = "bazzite"
-	ChimeraOS = "chimeraos"
-	LibreELEC = "libreelec"
-	Linux     = "linux"
-	Mac       = "mac"
-	Mister    = "mister"
-	Mistex    = "mistex"
-	Recalbox  = "recalbox"
-	ReplayOS  = "replayos"
-	RetroPie  = "retropie"
-	SteamOS   = "steamos"
-	Windows   = "windows"
-	ZapOS     = "zapos"
+import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/spf13/afero"
 )
+
+const NetworkCommandConfig = "network_cmd_enable = \"true\"\nnetwork_cmd_port = \"55355\"\n"
+
+// EnsureNetworkCommandConfig writes Core's minimal RetroArch network-command
+// overlay without changing the user's primary RetroArch configuration.
+func EnsureNetworkCommandConfig(fs afero.Fs, path string) error {
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
+	if err := fs.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("create RetroArch config directory: %w", err)
+	}
+	if err := afero.WriteFile(fs, path, []byte(NetworkCommandConfig), 0o600); err != nil {
+		return fmt.Errorf("write RetroArch network config: %w", err)
+	}
+	return nil
+}

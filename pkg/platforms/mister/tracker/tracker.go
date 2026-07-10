@@ -141,6 +141,7 @@ func (tr *Tracker) mediaLookupContext() (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
 	return context.WithTimeout(parent, mediaLookupTimeout)
 }
 

@@ -229,6 +229,12 @@ func TestAddDocFooter(t *testing.T) {
 			wantURL:    "https://zaparoo.org/docs/platforms/batocera/",
 		},
 		{
+			name:       "zapos interim documentation",
+			content:    "ZapOS docs",
+			platformID: "zapos",
+			wantURL:    "https://zaparoo.org/docs/platforms/linux/",
+		},
+		{
 			name:       "unknown platform uses default",
 			content:    "Unknown",
 			platformID: "unknown-platform",

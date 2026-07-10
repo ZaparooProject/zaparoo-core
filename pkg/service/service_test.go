@@ -157,6 +157,7 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 	mockUserDB := &testhelpers.MockUserDBI{}
 	db := &database.Database{UserDB: mockUserDB}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	mockUserDB.On("CleanupHistory", 30).Run(func(_ mock.Arguments) {
 		cancel()
 	}).Return(int64(1), nil).Once()

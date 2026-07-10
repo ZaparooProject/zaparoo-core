@@ -465,6 +465,7 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	tracker := &countingRequestTracker{}
 	tracker.RequestStarted()
 	jobCtx, jobCancel := context.WithCancel(ctx)
+	defer jobCancel()
 	require.NoError(t, d.enqueue(&wsRequestJob{
 		env:     &requests.RequestEnv{Context: jobCtx},
 		tracker: tracker,

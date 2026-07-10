@@ -26,7 +26,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	"github.com/rs/zerolog/log"
 )
 
 type mediaUserDataKey struct {
@@ -87,7 +86,7 @@ func scanExistingFavorites(
 	if err != nil {
 		return fmt.Errorf("failed to query existing favourites: %w", err)
 	}
-	defer closeRows(rows)
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var k mediaUserDataKey
@@ -119,7 +118,7 @@ func scanExistingLauncherOverrides(
 	if err != nil {
 		return fmt.Errorf("failed to query existing launcher overrides: %w", err)
 	}
-	defer closeRows(rows)
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var (
@@ -138,10 +137,4 @@ func scanExistingLauncherOverrides(
 		return fmt.Errorf("failed to iterate existing launcher overrides: %w", rowsErr)
 	}
 	return nil
-}
-
-func closeRows(rows *sql.Rows) {
-	if closeErr := rows.Close(); closeErr != nil {
-		log.Warn().Err(closeErr).Msg("failed to close sql rows")
-	}
 }

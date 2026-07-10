@@ -33,10 +33,11 @@ import (
 // LauncherCache provides fast O(1) launcher lookups by system ID.
 // This replaces the expensive O(n*m) pl.Launchers() calls in hot paths.
 type LauncherCache struct {
-	bySystemID        map[string][]platforms.Launcher
-	allLaunchers      []platforms.Launcher
-	launchableSystems []launchables.VirtualSystem
-	mu                syncutil.RWMutex
+	bySystemID          map[string][]platforms.Launcher
+	availableBySystemID map[string][]platforms.Launcher
+	allLaunchers        []platforms.Launcher
+	launchableSystems   []launchables.VirtualSystem
+	mu                  syncutil.RWMutex
 }
 
 // GlobalLauncherCache is the singleton instance used throughout the application.
@@ -52,6 +53,17 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance,
 	for i := range extra {
 		if !launcherInSlice(all, extra[i].ID) {
 			all = append(all, extra[i])
+		}
+	}
+	for i := range all {
+		all[i].Available = true
+		all[i].AvailabilityReason = ""
+		if all[i].Availability == nil {
+			continue
+		}
+		if err := all[i].Availability(cfg); err != nil {
+			all[i].Available = false
+			all[i].AvailabilityReason = err.Error()
 		}
 	}
 	lc.rebuildFromSlice(all)
@@ -88,6 +100,14 @@ func (lc *LauncherCache) GetLaunchersBySystem(systemID string) []platforms.Launc
 }
 
 // GetAllLaunchers returns all cached launchers.
+// GetAvailableLaunchersBySystem returns cached launchers whose runtime dependencies are available.
+func (lc *LauncherCache) GetAvailableLaunchersBySystem(systemID string) []platforms.Launcher {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	return lc.availableBySystemID[systemID]
+}
+
 func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -121,10 +141,20 @@ func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 	lc.launchableSystems = nil
 
 	lc.bySystemID = make(map[string][]platforms.Launcher)
+	lc.availableBySystemID = make(map[string][]platforms.Launcher)
 	for i := range launchers {
 		launcher := launchers[i]
-		if launcher.SystemID != "" {
-			lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
+		if launcher.Availability == nil {
+			launcher.Available = true
+			launcher.AvailabilityReason = ""
+		}
+		lc.allLaunchers[i] = launcher
+		if launcher.SystemID == "" {
+			continue
+		}
+		lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
+		if launcher.Available {
+			lc.availableBySystemID[launcher.SystemID] = append(lc.availableBySystemID[launcher.SystemID], launcher)
 		}
 	}
 }

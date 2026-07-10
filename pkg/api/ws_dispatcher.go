@@ -209,6 +209,7 @@ func (d *wsSessionDispatcher) worker(queue <-chan *wsRequestJob) {
 }
 
 func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
+	//nolint:gosec // Cancellation is transferred to job and invoked when response handling completes.
 	ctx, cancel := context.WithTimeout(d.ctx, config.APIRequestTimeout)
 	job.env.Context = ctx
 	job.cancel = cancel
