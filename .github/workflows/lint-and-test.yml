@@ -120,7 +120,27 @@ jobs:
 
       - name: Run govulncheck (CI gate)
         if: matrix.os == 'ubuntu'
-        run: govulncheck ./...
+        run: |
+          set +e
+          report="$(mktemp)"
+          govulncheck -format json ./... | tee "$report"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          unexpected="$(jq -s '[.finding.osv? | select(. != "GO-2026-5932")] | unique' "$report")"
+          known="$(jq -s '[.finding.osv? | select(. == "GO-2026-5932")] | length > 0' "$report")"
+          rm "$report"
+
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$known" = "true" ] && [ "$unexpected" = "[]" ]; then
+            echo "Accepted GO-2026-5932: go-selfupdate requires unmaintained OpenPGP; no upstream fix exists."
+            exit 0
+          fi
+
+          echo "Unexpected govulncheck findings: $unexpected" >&2
+          exit "$status"
 
       - name: Upload govulncheck SARIF
         if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call' && hashFiles('govulncheck.sarif') != ''
