@@ -49,9 +49,11 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			copy(groups, l.Groups)
 		}
 		entry := models.Launcher{
-			ID:       l.ID,
-			SystemID: l.SystemID,
-			Groups:   groups,
+			ID:                 l.ID,
+			SystemID:           l.SystemID,
+			Groups:             groups,
+			Available:          l.Available,
+			AvailabilityReason: l.AvailabilityReason,
 		}
 		if l.SystemID != "" {
 			if sm, mErr := assets.GetSystemMetadata(l.SystemID); mErr == nil && sm.Name != "" {

@@ -22,6 +22,7 @@ package retroarch
 
 import (
 	"path/filepath"
+	"sync"
 
 	"github.com/spf13/afero"
 )
@@ -94,6 +95,21 @@ type CoreDef struct {
 // BuildCommand constructs a RetroArch invocation without starting it.
 func BuildCommand(opts Options, c CoreLaunch, mediaPath string) CommandSpec { //nolint:gocritic // Public value API.
 	return buildCommandWithCore(&opts, c.Core, mediaPath)
+}
+
+// MemoizePreflight ensures a shared runtime dependency check runs once per
+// launcher catalog while per-core filesystem checks remain independent.
+func MemoizePreflight(preflight PreflightFunc) PreflightFunc {
+	if preflight == nil {
+		return nil
+	}
+
+	var once sync.Once
+	var result error
+	return func(corePath string) error {
+		once.Do(func() { result = preflight(corePath) })
+		return result
+	}
 }
 
 func buildCommandWithCore(opts *Options, core, mediaPath string) CommandSpec {

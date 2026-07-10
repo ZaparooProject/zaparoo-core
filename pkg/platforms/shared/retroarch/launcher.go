@@ -48,6 +48,13 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		launcher.Extensions = c.Extensions
 	}
 
+	launcher.Availability = func(cfg *config.Instance) error {
+		core, err := resolveCore(cfg, &c)
+		if err != nil {
+			return err
+		}
+		return validateLaunch(&opts, filepath.Join(opts.CoresDir, core))
+	}
 	launcher.Launch = func(cfg *config.Instance, mediaPath string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		core, err := resolveCore(cfg, &c)
 		if err != nil {

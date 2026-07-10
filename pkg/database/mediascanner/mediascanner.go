@@ -354,7 +354,7 @@ func getSystemPathsForLauncherCache(
 		default:
 		}
 
-		launchers := launcherCache.GetLaunchersBySystem(system.ID)
+		launchers := launcherCache.GetAvailableLaunchersBySystem(system.ID)
 
 		var folders []string
 		for j := range launchers {

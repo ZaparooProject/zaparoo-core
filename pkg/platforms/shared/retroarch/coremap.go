@@ -189,14 +189,29 @@ func CoreLaunches(profile Profile) []CoreLaunch {
 	}
 	for i := range alternateCoreLaunches {
 		launch, ok := alternateCoreLaunches[i].forProfile(profile)
-		if ok {
-			launches = append(launches, launch)
+		if !ok {
+			continue
 		}
+		if scanSpec, found := scanSpecForSystem(profile, launch.SystemID, coreCounts); found {
+			launch.Folders = scanSpec.Folders
+			launch.Extensions = scanSpec.Extensions
+			launch.Scan = true
+		}
+		launches = append(launches, launch)
 	}
 	return launches
 }
 
 // CoreLaunchForFolder returns launch metadata for one ES-DE folder.
+func scanSpecForSystem(profile Profile, systemID string, coreCounts map[string]int) (CoreLaunch, bool) {
+	for i := range coreDefinitions {
+		if coreDefinitions[i].SystemID == systemID {
+			return coreLaunchForDef(&coreDefinitions[i], profile, coreCounts)
+		}
+	}
+	return CoreLaunch{}, false
+}
+
 func CoreLaunchForFolder(profile Profile, folder string) (CoreLaunch, bool) {
 	for i := range coreDefinitions {
 		if strings.EqualFold(coreDefinitions[i].ESFolder, folder) {

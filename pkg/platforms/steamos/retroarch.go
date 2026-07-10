@@ -38,12 +38,12 @@ func steamOSRetroArchOptions(appendConfigPath string) sharedretroarch.Options {
 		),
 		AppendConfigPath: appendConfigPath,
 		NetworkCmdAddr:   retroArchNetworkAddr,
-		Preflight: func(_ string) error {
+		Preflight: sharedretroarch.MemoizePreflight(func(_ string) error {
 			if !launchers.IsFlatpakInstalled(RetroArchFlatpakID) {
 				return errors.New("RetroArch Flatpak is not installed")
 			}
 			return nil
-		},
+		}),
 	}
 }
 

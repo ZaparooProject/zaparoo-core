@@ -562,10 +562,12 @@ type MediaTitleParseResponse struct {
 }
 
 type Launcher struct {
-	ID         string   `json:"id"`
-	SystemID   string   `json:"systemId,omitempty"`
-	SystemName string   `json:"systemName,omitempty"`
-	Groups     []string `json:"groups,omitempty"`
+	ID                 string   `json:"id"`
+	SystemID           string   `json:"systemId,omitempty"`
+	SystemName         string   `json:"systemName,omitempty"`
+	AvailabilityReason string   `json:"availabilityReason,omitempty"`
+	Groups             []string `json:"groups,omitempty"`
+	Available          bool     `json:"available"`
 }
 
 type LaunchersResponse struct {

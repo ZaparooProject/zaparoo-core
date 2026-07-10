@@ -117,7 +117,9 @@ func TestCoreLaunchesUseMiSTerStyleDefaultAndAlternateLaunchers(t *testing.T) {
 	assert.Equal(t, "RetroArchSNES9x", snesLaunchers[0].ID)
 	assert.True(t, snesLaunchers[0].Scan)
 	assert.Equal(t, "RetroArchBSNES", snesLaunchers[1].ID)
-	assert.False(t, snesLaunchers[1].Scan)
+	assert.True(t, snesLaunchers[1].Scan)
+	assert.Equal(t, snesLaunchers[0].Folders, snesLaunchers[1].Folders)
+	assert.Equal(t, snesLaunchers[0].Extensions, snesLaunchers[1].Extensions)
 }
 
 func TestCoreLaunchIDsUniquePerProfile(t *testing.T) {

@@ -35,12 +35,12 @@ func linuxRetroArchOptions() sharedretroarch.Options {
 		),
 		AppendConfigPath: defaultRetroArchAppendConfigPath(),
 		NetworkCmdAddr:   retroArchNetworkAddr,
-		Preflight: func(_ string) error {
+		Preflight: sharedretroarch.MemoizePreflight(func(_ string) error {
 			if !launchers.IsFlatpakInstalled(retroArchFlatpakID) {
 				return errors.New("RetroArch Flatpak is not installed")
 			}
 			return nil
-		},
+		}),
 	}
 }
 

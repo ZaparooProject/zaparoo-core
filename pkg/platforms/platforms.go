@@ -239,6 +239,8 @@ type Launcher struct {
 	// Test function returns true if file looks supported by this launcher.
 	// It's checked after all standard extension and folder checks.
 	Test func(*config.Instance, string) bool
+	// Availability checks runtime dependencies. Nil means always available.
+	Availability func(*config.Instance) error
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	// The opts parameter is optional and may be nil.
@@ -283,6 +285,9 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
+	// Available and AvailabilityReason are populated by LauncherCache.
+	Available          bool
+	AvailabilityReason string
 }
 
 // Settings defines all simple settings/configuration values available for a

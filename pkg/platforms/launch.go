@@ -147,6 +147,11 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	if params.Launcher.Launch == nil {
 		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
 	}
+	if params.Launcher.Availability != nil {
+		if err := params.Launcher.Availability(params.Config); err != nil {
+			return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
+		}
+	}
 
 	// Convert DB paths (forward slashes) to OS-native format for launcher
 	// executables. URI paths are left unchanged. On Linux this is a no-op.
