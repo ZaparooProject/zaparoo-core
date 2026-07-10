@@ -143,6 +143,36 @@ func TestParseCustomLaunchers_NewFields(t *testing.T) {
 	assert.Equal(t, platforms.LifecycleBlocking, launcher3.Lifecycle)
 }
 
+func TestParseCustomLaunchers_IncludesCommandVirtualSystemsAndSkipsNativeBackends(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+	customLaunchers := []config.LaunchersCustom{
+		{ID: "Command", Execute: "echo test"},
+		{
+			ID: "CommandVirtual", Kind: config.CustomLauncherKindVirtualSystem,
+			Backend: config.CustomLauncherBackendCommand, Name: "Command Virtual",
+			Category: "Other", Execute: "echo test",
+		},
+		{
+			ID: "MisterSNES", Backend: config.CustomLauncherBackendMisterCore,
+			System: "SNES", LoadPath: "_Console/SNES",
+		},
+		{
+			ID: "MisterOtherArduboy", Kind: config.CustomLauncherKindVirtualSystem,
+			Backend: config.CustomLauncherBackendMisterCore, Name: "Arduboy",
+			Category: "Handheld", LoadPath: "_Other/Arduboy",
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+
+	require.Len(t, launchers, 2)
+	assert.Equal(t, "Command", launchers[0].ID)
+	assert.Equal(t, "CommandVirtual", launchers[1].ID)
+}
+
 func TestParseCustomLaunchers_EmptyGroups(t *testing.T) {
 	t.Parallel()
 
@@ -344,6 +374,11 @@ func TestFormatExtensions(t *testing.T) {
 		{
 			name:     "whitespace is trimmed",
 			input:    []string{" .mp4 ", " mkv "},
+			expected: []string{".mp4", ".mkv"},
+		},
+		{
+			name:     "whitespace-only strings are filtered",
+			input:    []string{".mp4", " ", "\t", ".mkv"},
 			expected: []string{".mp4", ".mkv"},
 		},
 		{

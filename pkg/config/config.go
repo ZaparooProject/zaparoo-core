@@ -55,24 +55,22 @@ const configHeader = `# Zaparoo Core configuration file.
 `
 
 type Values struct {
-	Groovy                Groovy            `toml:"groovy,omitempty"`
-	Input                 Input             `toml:"input,omitempty"`
-	AutoUpdate            *bool             `toml:"auto_update,omitempty"`
-	UpdateChannel         *string           `toml:"update_channel,omitempty"`
-	Audio                 Audio             `toml:"audio"`
-	Service               Service           `toml:"service,omitempty"`
-	Launchers             Launchers         `toml:"launchers,omitempty"`
-	Playtime              Playtime          `toml:"playtime,omitempty"`
-	Media                 Media             `toml:"media,omitempty"`
-	ZapScript             ZapScript         `toml:"zapscript,omitempty"`
-	Mappings              Mappings          `toml:"mappings,omitempty"`
-	Systems               Systems           `toml:"systems,omitempty"`
-	Readers               Readers           `toml:"readers,omitempty"`
-	OtherLaunchables      []OtherLaunchable `toml:"other_launchables,omitempty"`
-	otherLaunchablesValid []OtherLaunchable
-	ConfigSchema          int  `toml:"config_schema"`
-	DebugLogging          bool `toml:"debug_logging"`
-	ErrorReporting        bool `toml:"error_reporting"`
+	Groovy         Groovy    `toml:"groovy,omitempty"`
+	Input          Input     `toml:"input,omitempty"`
+	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
+	UpdateChannel  *string   `toml:"update_channel,omitempty"`
+	Audio          Audio     `toml:"audio"`
+	Service        Service   `toml:"service,omitempty"`
+	Launchers      Launchers `toml:"launchers,omitempty"`
+	Playtime       Playtime  `toml:"playtime,omitempty"`
+	Media          Media     `toml:"media,omitempty"`
+	ZapScript      ZapScript `toml:"zapscript,omitempty"`
+	Mappings       Mappings  `toml:"mappings,omitempty"`
+	Systems        Systems   `toml:"systems,omitempty"`
+	Readers        Readers   `toml:"readers,omitempty"`
+	ConfigSchema   int       `toml:"config_schema"`
+	DebugLogging   bool      `toml:"debug_logging"`
+	ErrorReporting bool      `toml:"error_reporting"`
 }
 
 type Audio struct {
@@ -124,13 +122,14 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
-	fs       afero.Fs
-	appPath  string
-	cfgPath  string
-	authPath string
-	vals     Values
-	defaults Values
-	mu       syncutil.RWMutex
+	fs                      afero.Fs
+	appPath                 string
+	cfgPath                 string
+	authPath                string
+	customLaunchersExternal []LaunchersCustom
+	vals                    Values
+	defaults                Values
+	mu                      syncutil.RWMutex
 }
 
 // getFs returns the instance's filesystem, defaulting to the OS filesystem
@@ -248,13 +247,11 @@ func (c *Instance) Load() error {
 	oldVals := c.vals
 	c.vals = c.defaults
 
-	// Save mappings and custom launchers — they're normally loaded from
-	// separate files via LoadMappings/LoadCustomLaunchers, not config.toml.
-	// Save() strips them before marshal, so after a round-trip they'd be
-	// empty. Restore the old values only when the TOML didn't provide new
-	// ones (a user might hand-edit config.toml to include them).
+	// Save mappings — they're normally loaded from separate files via
+	// LoadMappings, not config.toml. Save() strips them before marshal, so
+	// after a round-trip they'd be empty. Restore old values only when TOML
+	// did not provide new ones.
 	savedMappings := oldVals.Mappings
-	savedCustomLaunchers := oldVals.Launchers.Custom
 
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
@@ -263,9 +260,6 @@ func (c *Instance) Load() error {
 
 	if len(c.vals.Mappings.Entry) == 0 {
 		c.vals.Mappings = savedMappings
-	}
-	if len(c.vals.Launchers.Custom) == 0 {
-		c.vals.Launchers.Custom = savedCustomLaunchers
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {
@@ -305,7 +299,11 @@ func (c *Instance) applyTOML(data string) error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	c.vals.otherLaunchablesValid = validateOtherLaunchables(c.vals.OtherLaunchables)
+	c.vals.Launchers.Custom = validateCustomLaunchers(
+		c.vals.Launchers.Custom,
+		nil,
+		"config.toml",
+	)
 
 	// prepare allow files regexes
 	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))

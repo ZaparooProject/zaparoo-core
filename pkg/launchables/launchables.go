@@ -122,13 +122,12 @@ func makeURI(id uuid.UUID, name string) string {
 	return fmt.Sprintf("%s://%s/%s", Scheme, EncodeID(id), url.PathEscape(name))
 }
 
-// Launchables returns validated launchables defined by a platform.
+// Launchables returns validated launchables defined by configuration and platform.
 func Launchables(cfg *config.Instance, pl platforms.Platform) []Launchable {
-	provider, ok := pl.(Provider)
-	if !ok {
-		return nil
+	defs := commandVirtualSystems(cfg, pl)
+	if provider, ok := pl.(Provider); ok {
+		defs = append(defs, provider.Launchables(cfg)...)
 	}
-	defs := provider.Launchables(cfg)
 	if len(defs) == 0 {
 		return nil
 	}
@@ -136,6 +135,45 @@ func Launchables(cfg *config.Instance, pl platforms.Platform) []Launchable {
 		panic(err)
 	}
 	return filterAvailable(cfg, defs)
+}
+
+func commandVirtualSystems(cfg *config.Instance, pl platforms.Platform) []Launchable {
+	if cfg == nil {
+		return nil
+	}
+	custom := cfg.CustomLaunchers()
+	if len(custom) == 0 {
+		return nil
+	}
+
+	platformLaunchers := pl.Launchers(cfg)
+	launchersByID := make(map[string]platforms.Launcher, len(platformLaunchers))
+	for i := range platformLaunchers {
+		launchersByID[platformLaunchers[i].ID] = platformLaunchers[i]
+	}
+
+	defs := make([]Launchable, 0)
+	for i := range custom {
+		entry := &custom[i]
+		if entry.Kind != config.CustomLauncherKindVirtualSystem ||
+			entry.Backend != config.CustomLauncherBackendCommand {
+			continue
+		}
+		launcher, ok := launchersByID[entry.ID]
+		if !ok || launcher.Launch == nil {
+			continue
+		}
+		launch := launcher.Launch
+		defs = append(defs, VirtualSystem{
+			ID:       uuid.NewSHA1(ZaparooLaunchableNamespace, []byte(entry.Backend+":"+strings.ToLower(entry.ID))),
+			Name:     entry.Name,
+			Category: entry.Category,
+			Launch: func(runtimeCfg *config.Instance, _ string, opts *platforms.LaunchOptions) (*os.Process, error) {
+				return launch(runtimeCfg, "", opts)
+			},
+		})
+	}
+	return defs
 }
 
 func filterAvailable(cfg *config.Instance, defs []Launchable) []Launchable {

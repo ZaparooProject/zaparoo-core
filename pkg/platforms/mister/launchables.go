@@ -75,88 +75,89 @@ func misterComputerCore(id uuid.UUID, name, coreName string) misterCoreLaunchabl
 }
 
 type misterOtherLaunchableDefinition struct {
-	// ConfigID is the canonical lowercase id a user's other_launchables
-	// entry must use in config.toml to override this built-in entry.
 	ConfigID string
 	Name     string
 	Category string
-	// CoreName is the bare filename prefix within _Other (no directory).
-	CoreName string
+	LoadPath string
 	ID       uuid.UUID
 }
 
 var misterOtherLaunchableDefinitions = []misterOtherLaunchableDefinition{
 	{
-		ConfigID: "chess", ID: launchables.MisterOtherChess,
-		Name: "Chess", Category: misterLaunchableCategoryOther, CoreName: "Chess",
+		ConfigID: "MisterOtherChess", ID: launchables.MisterOtherChess,
+		Name: "Chess", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "Chess"),
 	},
 	{
-		ConfigID: "donut", ID: launchables.MisterOtherDonut,
-		Name: "Donut", Category: misterLaunchableCategoryOther, CoreName: "Donut",
+		ConfigID: "MisterOtherDonut", ID: launchables.MisterOtherDonut,
+		Name: "Donut", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "Donut"),
 	},
 	{
-		ConfigID: "epochgalaxyii", ID: launchables.MisterOtherEpochGalaxyII,
-		Name: "Epoch Galaxy II", Category: misterLaunchableCategoryOther, CoreName: "EpochGalaxyII",
+		ConfigID: "MisterOtherEpochGalaxyII", ID: launchables.MisterOtherEpochGalaxyII,
+		Name: "Epoch Galaxy II", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "EpochGalaxyII"),
 	},
 	{
-		ConfigID: "flappybird", ID: launchables.MisterOtherFlappyBird,
-		Name: "Flappy Bird", Category: misterLaunchableCategoryOther, CoreName: "FlappyBird",
+		ConfigID: "MisterOtherFlappyBird", ID: launchables.MisterOtherFlappyBird,
+		Name: "Flappy Bird", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "FlappyBird"),
 	},
 	{
-		ConfigID: "gameoflife", ID: launchables.MisterOtherGameOfLife,
-		Name: "Game of Life", Category: misterLaunchableCategoryOther, CoreName: "GameOfLife",
+		ConfigID: "MisterOtherGameOfLife", ID: launchables.MisterOtherGameOfLife,
+		Name: "Game of Life", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "GameOfLife"),
 	},
 	{
-		ConfigID: "gbmidi", ID: launchables.MisterOtherGBMidi,
-		Name: "GBMidi", Category: misterLaunchableCategoryOther, CoreName: "GBMidi",
+		ConfigID: "MisterOtherGBMidi", ID: launchables.MisterOtherGBMidi,
+		Name: "GBMidi", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "GBMidi"),
 	},
 	{
-		ConfigID: "genmidi", ID: launchables.MisterOtherGenMidi,
-		Name: "GenMidi", Category: misterLaunchableCategoryOther, CoreName: "GenMidi",
+		ConfigID: "MisterOtherGenMidi", ID: launchables.MisterOtherGenMidi,
+		Name: "GenMidi", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "GenMidi"),
 	},
 	{
-		ConfigID: "slugcross", ID: launchables.MisterOtherSlugCross,
-		Name: "Slug Cross", Category: misterLaunchableCategoryOther, CoreName: "SlugCross",
+		ConfigID: "MisterOtherSlugCross", ID: launchables.MisterOtherSlugCross,
+		Name: "Slug Cross", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "SlugCross"),
 	},
 	{
-		ConfigID: "tomyscramble", ID: launchables.MisterOtherTomyScramble,
-		Name: "Tomy Scramble", Category: misterLaunchableCategoryOther, CoreName: "TomyScramble",
+		ConfigID: "MisterOtherTomyScramble", ID: launchables.MisterOtherTomyScramble,
+		Name: "Tomy Scramble", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "TomyScramble"),
 	},
 }
 
-// mergeOtherLaunchableDefinitions overlays user-configured other_launchables
-// entries onto the built-in _Other definitions. A user entry whose id
-// matches a built-in's ConfigID (case-insensitive) replaces that entry's
-// Name/Category/CoreName but keeps its original fixed UUID, so any existing
-// frontend hidden/renamed/cover-art state tied to that system id survives.
-// A user entry with no matching ConfigID is appended as a new definition
-// with a UUID derived deterministically from its id.
+// mergeOtherLaunchableDefinitions overlays custom virtual systems onto built-in
+// _Other definitions while preserving fixed UUIDs for matching built-ins.
 func mergeOtherLaunchableDefinitions(
 	builtins []misterOtherLaunchableDefinition,
-	userEntries []config.OtherLaunchable,
+	userEntries []config.LaunchersCustom,
 ) []misterOtherLaunchableDefinition {
 	merged := make([]misterOtherLaunchableDefinition, 0, len(builtins)+len(userEntries))
 	merged = append(merged, builtins...)
 
 	index := make(map[string]int, len(merged))
 	for i, def := range merged {
-		index[def.ConfigID] = i
+		index[strings.ToLower(def.ConfigID)] = i
 	}
 
-	for _, entry := range userEntries {
+	for i := range userEntries {
+		entry := &userEntries[i]
 		id := strings.ToLower(entry.ID)
 		if i, ok := index[id]; ok {
 			merged[i].Name = entry.Name
 			merged[i].Category = entry.Category
-			merged[i].CoreName = entry.CorePath
+			merged[i].LoadPath = filepath.FromSlash(entry.LoadPath)
 			continue
 		}
 		merged = append(merged, misterOtherLaunchableDefinition{
-			ConfigID: id,
+			ConfigID: entry.ID,
 			Name:     entry.Name,
 			Category: entry.Category,
-			CoreName: entry.CorePath,
-			ID:       uuid.NewSHA1(launchables.ZaparooLaunchableNamespace, []byte(id)),
+			LoadPath: filepath.FromSlash(entry.LoadPath),
+			ID: uuid.NewSHA1(
+				launchables.ZaparooLaunchableNamespace,
+				[]byte(config.CustomLauncherBackendMisterCore+":"+id),
+			),
 		})
 		index[id] = len(merged) - 1
 	}
@@ -167,7 +168,16 @@ func mergeOtherLaunchableDefinitions(
 // Launchables exposes launch-only MiSTer core entries that do not already have
 // media launchers.
 func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
-	otherDefs := mergeOtherLaunchableDefinitions(misterOtherLaunchableDefinitions, cfg.OtherLaunchables())
+	customVirtualSystems := make([]config.LaunchersCustom, 0)
+	customLaunchers := cfg.CustomLaunchers()
+	for i := range customLaunchers {
+		entry := &customLaunchers[i]
+		if entry.Backend == config.CustomLauncherBackendMisterCore &&
+			entry.Kind == config.CustomLauncherKindVirtualSystem {
+			customVirtualSystems = append(customVirtualSystems, *entry)
+		}
+	}
+	otherDefs := mergeOtherLaunchableDefinitions(misterOtherLaunchableDefinitions, customVirtualSystems)
 
 	items := make([]launchables.Launchable, 0, len(otherDefs)+1+len(misterCoreLaunchableDefinitions))
 	for _, def := range otherDefs {
@@ -175,8 +185,8 @@ func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
 			ID:       def.ID,
 			Name:     def.Name,
 			Category: def.Category,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", def.CoreName)),
-			Test:     testOtherCore(def.CoreName),
+			Launch:   p.launchCore(def.LoadPath),
+			Test:     testCore(def.LoadPath),
 		})
 	}
 
