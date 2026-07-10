@@ -127,8 +127,8 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
 
-          unexpected="$(jq -s '[.finding.osv? | select(. != "GO-2026-5932")] | unique' "$report")"
-          known="$(jq -s '[.finding.osv? | select(. == "GO-2026-5932")] | length > 0' "$report")"
+          unexpected="$(jq -s '[.[] | select(type == "object" and has("finding")) | .finding.osv | select(. != "GO-2026-5932")] | unique' "$report")"
+          known="$(jq -s '[.[] | select(type == "object" and has("finding")) | .finding.osv | select(. == "GO-2026-5932")] | length > 0' "$report")"
           rm "$report"
 
           if [ "$status" -eq 0 ]; then
