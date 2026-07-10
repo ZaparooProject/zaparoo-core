@@ -134,23 +134,19 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		return fmt.Errorf("background slot only supports %s launcher", NativeAudioLauncherID)
 	}
 
-	// Stop any currently running launcher before starting new one
-	// This ensures tracked processes (like videos) are stopped even when
-	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
-	// uses a running instance (e.g., Kodi), in which case the platform's
-	// shouldKeepRunningInstance logic will handle stopping if needed.
-	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
-		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
-			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
-		}
-	}
-
 	if params.Launcher.Launch == nil {
 		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
 	}
 	if params.Launcher.Availability != nil {
 		if err := params.Launcher.Availability(params.Config); err != nil {
 			return fmt.Errorf("launcher %q is unavailable: %w", params.Launcher.ID, err)
+		}
+	}
+
+	// Stop any currently running launcher only after validating the replacement.
+	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
+		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
+			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 		}
 	}
 

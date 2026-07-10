@@ -113,6 +113,17 @@ func MemoizePreflight(preflight PreflightFunc) PreflightFunc {
 }
 
 func buildCommandWithCore(opts *Options, core, mediaPath string) CommandSpec {
+	env := append([]string(nil), opts.ExtraEnv...)
+	if opts.Home != "" {
+		env = append(env, "HOME="+opts.Home)
+	}
+	if opts.LibDir != "" {
+		env = append(env, "LD_LIBRARY_PATH="+opts.LibDir)
+	}
+	if len(opts.Exec) == 0 {
+		return CommandSpec{Env: env}
+	}
+
 	argv := make([]string, 0,
 		len(opts.VTWrap)+len(opts.Exec)+len(opts.ExtraArgs)+7)
 	argv = append(argv, opts.VTWrap...)
@@ -126,17 +137,6 @@ func buildCommandWithCore(opts *Options, core, mediaPath string) CommandSpec {
 	}
 	argv = append(argv, "-L", filepath.Join(opts.CoresDir, core), mediaPath)
 
-	env := append([]string(nil), opts.ExtraEnv...)
-	if opts.Home != "" {
-		env = append(env, "HOME="+opts.Home)
-	}
-	if opts.LibDir != "" {
-		env = append(env, "LD_LIBRARY_PATH="+opts.LibDir)
-	}
-
-	if len(argv) == 0 {
-		return CommandSpec{Env: env}
-	}
 	return CommandSpec{
 		Name: argv[0],
 		Args: append([]string(nil), argv[1:]...),

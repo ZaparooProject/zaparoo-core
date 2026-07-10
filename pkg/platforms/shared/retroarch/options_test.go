@@ -82,6 +82,20 @@ func TestBuildCommand_FlatpakWithVTWrap(t *testing.T) {
 	assert.Empty(t, spec.Env)
 }
 
+func TestBuildCommand_EmptyExecPreservesEnvironment(t *testing.T) {
+	t.Parallel()
+
+	spec := BuildCommand(Options{
+		CoresDir: "cores",
+		ExtraEnv: []string{"LANG=C"},
+		Home:     "home",
+	}, CoreLaunch{Core: "gambatte_libretro.so"}, "game.gb")
+
+	assert.Empty(t, spec.Name)
+	assert.Empty(t, spec.Args)
+	assert.Equal(t, []string{"LANG=C", "HOME=home"}, spec.Env)
+}
+
 func TestBuildCommand_OmitsEmptyOptions(t *testing.T) {
 	t.Parallel()
 

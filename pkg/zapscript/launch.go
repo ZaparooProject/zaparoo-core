@@ -226,10 +226,10 @@ func inferLauncherForPath(pl platforms.Platform, env *platforms.CmdEnv, path str
 	best := -1
 	bestScore := -1
 	for i := range launchers {
-		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
+		if !helpers.PathIsLauncher(env.Cfg, pl, &launchers[i], path) {
 			continue
 		}
-		if !helpers.PathIsLauncher(env.Cfg, pl, &launchers[i], path) {
+		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
 			continue
 		}
 		score := launcherInferenceScore(&launchers[i])

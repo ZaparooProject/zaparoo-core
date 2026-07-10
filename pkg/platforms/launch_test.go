@@ -609,7 +609,6 @@ func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
 
 	launcher := &platforms.Launcher{
 		ID:       "no-launch-func",
@@ -631,6 +630,7 @@ func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no-launch-func")
 	assert.Contains(t, err.Error(), "no launch function configured")
+	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForPreemption)
 	mockPlatform.AssertExpectations(t)
 }
 

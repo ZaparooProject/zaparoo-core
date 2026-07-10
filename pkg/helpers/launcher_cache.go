@@ -50,6 +50,11 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance,
 	launchableSystems, launchableMedia := launchables.Available(cfg, pl)
 	all := pl.Launchers(cfg)
 	all = append(all, launchables.LaunchersFor(launchableSystems, launchableMedia)...)
+	for i := range extra {
+		if !launcherInSlice(all, extra[i].ID) {
+			all = append(all, extra[i])
+		}
+	}
 	for i := range all {
 		all[i].Available = true
 		all[i].AvailabilityReason = ""
@@ -59,11 +64,6 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance,
 		if err := all[i].Availability(cfg); err != nil {
 			all[i].Available = false
 			all[i].AvailabilityReason = err.Error()
-		}
-	}
-	for i := range extra {
-		if !launcherInSlice(all, extra[i].ID) {
-			all = append(all, extra[i])
 		}
 	}
 	lc.rebuildFromSlice(all)

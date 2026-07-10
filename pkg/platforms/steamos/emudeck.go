@@ -174,6 +174,12 @@ func standaloneEmuDeckLauncher(
 		ID:        "EmuDeck" + systemInfo.GetLauncherID(),
 		SystemID:  systemInfo.SystemID,
 		Lifecycle: platforms.LifecycleTracked,
+		Availability: func(*config.Instance) error {
+			if !launchers.IsFlatpakInstalled(emulator.FlatpakID) {
+				return fmt.Errorf("emulator not installed: %s", emulator.FlatpakID)
+			}
+			return nil
+		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			proc, err := launchStandaloneEmulator(context.Background(), emulator, path, systemFolder)
 			if err != nil {
