@@ -120,6 +120,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/gmcnaught">
+                    <img src="https://avatars.githubusercontent.com/u/1371263?v=4" width="100;" alt="gmcnaught"/>
+                    <br />
+                    <sub><b>Grant McNaught</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/Spice-King">
                     <img src="https://avatars.githubusercontent.com/u/590498?v=4" width="100;" alt="Spice-King"/>
                     <br />
@@ -133,6 +140,8 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Matthew O'Gorman</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/sreuter">
                     <img src="https://avatars.githubusercontent.com/u/550246?v=4" width="100;" alt="sreuter"/>
@@ -140,8 +149,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Sascha Reuter</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/jmf866">
                     <img src="https://avatars.githubusercontent.com/u/11838274?v=4" width="100;" alt="jmf866"/>

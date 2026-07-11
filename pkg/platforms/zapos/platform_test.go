@@ -86,7 +86,8 @@ func TestApplianceRetroArchOptions(t *testing.T) {
 	assert.Equal(t, filepath.Join(pack, "retroarch.cfg"), opts.ConfigPath)
 	assert.Equal(t, filepath.Join(pack, "lib"), opts.LibDir)
 	assert.Equal(t, userdataPath("home"), opts.Home)
-	assert.Equal(t, []string{"-v", "--log-file", userdataPath("ra.log")}, opts.ExtraArgs)
+	logPath := filepath.Join(userdataPath("data", "zaparoo"), "logs", "retroarch.log")
+	assert.Equal(t, []string{"-v", "--log-file", logPath}, opts.ExtraArgs)
 	assert.Equal(t, retroArchNetworkAddr, opts.NetworkCmdAddr)
 }
 
@@ -103,7 +104,7 @@ func TestAppliancePSXCommand(t *testing.T) {
 	assert.Equal(t, []string{
 		"-c", "2", "-s", "-w", "--",
 		filepath.Join(pack, "retroarch"),
-		"-v", "--log-file", userdataPath("ra.log"),
+		"-v", "--log-file", filepath.Join(userdataPath("data", "zaparoo"), "logs", "retroarch.log"),
 		"--config", filepath.Join(pack, "retroarch.cfg"),
 		"-L", filepath.Join(pack, "cores", "pcsx_rearmed_libretro.so"),
 		mediaPath,

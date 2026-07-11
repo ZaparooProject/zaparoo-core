@@ -59,3 +59,8 @@ var (
 	MisterComputerTandy1000   = uuid.MustParse("1aae818d-8a80-5bca-9ed7-36078f499689")
 	MisterComputerVT52        = uuid.MustParse("ffa35024-0bbf-57fc-a0c4-7712498c1d7a")
 )
+
+// ZaparooLaunchableNamespace derives stable UUIDs (via uuid.NewSHA1) for
+// user-configured launchables from their config.toml "id" string, so the
+// same id always produces the same UUID across restarts and devices.
+var ZaparooLaunchableNamespace = uuid.MustParse("f7a49fd1-2910-4fa8-8b41-db0f3510e1fc")
