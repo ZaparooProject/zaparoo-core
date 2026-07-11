@@ -33,6 +33,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type mediaDBLockMode uint8
+
 const (
 	wsHighConcurrency       = 1
 	wsNormalConcurrency     = 4
@@ -40,6 +42,10 @@ const (
 	wsQueueSize             = 256
 	wsResponseQueueSize     = 256
 	wsGlobalImageConcurrent = 2
+
+	mediaDBLockNone mediaDBLockMode = iota
+	mediaDBLockRead
+	mediaDBLockWrite
 )
 
 var (
@@ -244,24 +250,35 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 	d.enqueueResponse(&wsResponseJob{result: result, cs: job.cs, tracker: job.tracker, cancel: job.cancel})
 }
 
-func lockMediaDBForAPIMethod(method string) func() {
+func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
 	// Instant control methods (run/launch, stop, media.control) never touch
 	// MediaDB, so they must not wait behind a slow tag/meta write or an
 	// in-flight indexing commit holding this lock.
 	if isMediaDBFreeInstantMethod(method) {
-		return func() {}
+		return mediaDBLockNone
 	}
 	if isMediaDBTransactionAPIMethod(method) {
-		wsMediaDBMu.Lock()
-		return wsMediaDBMu.Unlock
+		return mediaDBLockWrite
 	}
 	// media.image already has its own tiny concurrency gate; do not let slow
 	// image reads/resizes hold the API DB read lane and starve tag/meta writes.
 	if isImageAPIMethod(method) {
+		return mediaDBLockNone
+	}
+	return mediaDBLockRead
+}
+
+func lockMediaDBForAPIMethod(method string) func() {
+	switch mediaDBLockModeForAPIMethod(method) {
+	case mediaDBLockWrite:
+		wsMediaDBMu.Lock()
+		return wsMediaDBMu.Unlock
+	case mediaDBLockRead:
+		wsMediaDBMu.RLock()
+		return wsMediaDBMu.RUnlock
+	default:
 		return func() {}
 	}
-	wsMediaDBMu.RLock()
-	return wsMediaDBMu.RUnlock
 }
 
 func (d *wsSessionDispatcher) finishWithoutReply(job *wsRequestJob) {
