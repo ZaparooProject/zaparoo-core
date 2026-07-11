@@ -20,6 +20,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -163,9 +164,9 @@ func TestValidateCustomLauncher_RejectsInvalidVirtualSystem(t *testing.T) {
 
 func TestLoadCustomLaunchers_StrictAndAtomic(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	launchersDir := "/data/launchers"
+	launchersDir := filepath.Join("data", "launchers")
 	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
-	require.NoError(t, afero.WriteFile(fs, launchersDir+"/valid.toml", []byte(`
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "valid.toml"), []byte(`
 [[launchers.custom]]
 id = "MisterOtherArduboy"
 kind = "virtual_system"
@@ -173,7 +174,7 @@ backend = "mister_core"
 name = "Arduboy"
 load_path = "_Other/Arduboy"
 `), 0o600))
-	require.NoError(t, afero.WriteFile(fs, launchersDir+"/unknown.toml", []byte(`
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "unknown.toml"), []byte(`
 [[launchers.custom]]
 id = "Typo"
 execute = "echo test"
@@ -191,8 +192,8 @@ excute = "misspelled"
 
 func TestLoadCustomLaunchers_RetainsSnapshotWhenAllFilesFail(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	launchersDir := "/data/launchers"
-	launcherPath := launchersDir + "/launcher.toml"
+	launchersDir := filepath.Join("data", "launchers")
+	launcherPath := filepath.Join(launchersDir, "launcher.toml")
 	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
 	require.NoError(t, afero.WriteFile(fs, launcherPath, []byte(`
 [[launchers.custom]]
@@ -213,9 +214,9 @@ execute = "echo test"
 
 func TestLoadCustomLaunchers_InlineEntryWinsDuplicateID(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	launchersDir := "/data/launchers"
+	launchersDir := filepath.Join("data", "launchers")
 	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
-	require.NoError(t, afero.WriteFile(fs, launchersDir+"/duplicate.toml", []byte(`
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "duplicate.toml"), []byte(`
 [[launchers.custom]]
 id = "InlineLauncher"
 execute = "echo external"
