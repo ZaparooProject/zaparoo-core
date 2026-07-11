@@ -46,7 +46,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 	}
 
 	if len(indexed) == 0 {
-		log.Warn().Msg("no indexed systems found")
+		log.Debug().Msg("no indexed systems found")
 	}
 
 	systemIDs := make([]string, 0, len(indexed))
