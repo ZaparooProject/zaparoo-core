@@ -89,6 +89,8 @@ var coreDefinitions = []CoreDef{
 	{
 		SystemID: systemdefs.SystemGenesis, DefaultCore: "genesis_plus_gx",
 		Policy: PolicyNonCommercial, ESFolder: "megadrive",
+		PerProfileCore:   map[Profile]string{ProfileApplianceARM: "clownmdemu"},
+		PerProfilePolicy: map[Profile]DownloadPolicy{ProfileApplianceARM: PolicyFree},
 	},
 	{SystemID: systemdefs.SystemMSX, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "msx1"},
 	{SystemID: systemdefs.SystemMSX, DefaultCore: "bluemsx", Policy: PolicyFree, ESFolder: "msx2"},
