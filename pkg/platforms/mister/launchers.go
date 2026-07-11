@@ -139,6 +139,16 @@ func resolveAmigaVisionVirtualMGLPath(path string) string {
 	return path
 }
 
+func isAmigaVisionVirtualMGLPath(path string) bool {
+	if filepath.Ext(strings.ToLower(path)) != ".mgl" {
+		return false
+	}
+	if !hasAmigaVisionImage(filepath.Dir(path)) {
+		return false
+	}
+	return resolveAmigaVisionVirtualMGLPath(path) != path
+}
+
 func launchAmiga(pl platforms.Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	genericLaunch := launch(pl, systemdefs.SystemAmiga)
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
