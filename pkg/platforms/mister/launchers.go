@@ -27,11 +27,19 @@ import (
 )
 
 const (
-	f9ConsoleVT       = "1"
-	armLauncherVT     = "3"
-	scriptConsoleVT   = "2"
-	frontendConsoleVT = "7"
+	f9ConsoleVT             = "1"
+	armLauncherVT           = "3"
+	scriptConsoleVT         = "2"
+	frontendConsoleVT       = "7"
+	videoRenderScale        = 33
+	scummVMRenderResolution = "640x480"
 )
+
+type framebufferMode struct {
+	width   int
+	height  int
+	divisor int
+}
 
 var mglIndexingSkippedLaunchers = map[string]struct{}{
 	"GenericVideo": {},
@@ -690,6 +698,59 @@ func launchAtari2600AltCore(
 	}
 }
 
+func resolveFramebufferMode(
+	opts *platforms.LaunchOptions,
+	defaultScale int,
+	defaultResolution string,
+) (framebufferMode, error) {
+	var renderScale *int
+	renderResolution := ""
+	if opts != nil {
+		renderScale = opts.RenderScale
+		renderResolution = opts.RenderResolution
+	}
+	if renderScale != nil && renderResolution != "" {
+		return framebufferMode{}, errors.New("render_scale and render_resolution are mutually exclusive")
+	}
+	if renderScale == nil && renderResolution == "" {
+		if defaultScale > 0 {
+			renderScale = &defaultScale
+		} else {
+			renderResolution = defaultResolution
+		}
+	}
+
+	if renderScale != nil {
+		divisors := map[int]int{100: 1, 50: 2, 33: 3, 25: 4}
+		divisor, ok := divisors[*renderScale]
+		if !ok {
+			return framebufferMode{}, fmt.Errorf(
+				"unsupported MiSTer render_scale %d: use 25, 33, 50, or 100", *renderScale,
+			)
+		}
+		return framebufferMode{divisor: divisor}, nil
+	}
+
+	width, height, err := config.ValidateRenderResolution(renderResolution)
+	if err != nil {
+		return framebufferMode{}, fmt.Errorf("validate MiSTer render_resolution: %w", err)
+	}
+	return framebufferMode{width: width, height: height}, nil
+}
+
+func applyFramebufferMode(mode framebufferMode, format string) error {
+	if mode.divisor > 0 {
+		if err := mistermain.SetFramebufferScaled(mode.divisor, format); err != nil {
+			return fmt.Errorf("set scaled framebuffer: %w", err)
+		}
+		return nil
+	}
+	if err := mistermain.SetFramebufferExact(mode.width, mode.height, format); err != nil {
+		return fmt.Errorf("set exact framebuffer: %w", err)
+	}
+	return nil
+}
+
 // buildFvpCommand constructs the command for launching fvp video player.
 func buildFvpCommand(ctx context.Context, path string) *exec.Cmd {
 	fvpBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
@@ -710,21 +771,17 @@ func buildFvpCommand(ctx context.Context, path string) *exec.Cmd {
 }
 
 func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-		// videoDivisor controls the framebuffer resolution divisor for video playback.
-		// Using fb_cmd0 (scaled mode):
-		//   - divisor 3: ~640x360 on 1920x1080, ~853x480 on 2560x1440
-		//   - Scales to fill entire screen (no borders)
-		const videoDivisor = 3
-
+	return func(_ *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		if path == "" {
 			return nil, errors.New("no path specified")
 		}
 
-		log.Info().
-			Int("divisor", videoDivisor).
-			Str("path", path).
-			Msg("video playback starting")
+		framebuffer, err := resolveFramebufferMode(opts, videoRenderScale, "")
+		if err != nil {
+			return nil, fmt.Errorf("resolve video render size: %w", err)
+		}
+
+		log.Info().Str("path", path).Msg("video playback starting")
 
 		// Capture launcher context for staleness detection and cancellation
 		launcherCtx := pl.launcherManager.GetContext()
@@ -735,10 +792,9 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 			return nil, err
 		}
 
-		// Set scaled video mode for video playback
-		if modeErr := mistermain.SetVideoModeScaled(videoDivisor); modeErr != nil {
-			return nil, fmt.Errorf("failed to set scaled video mode (divisor %d): %w",
-				videoDivisor, modeErr)
+		if modeErr := applyFramebufferMode(framebuffer, mistermain.VideoModeFormatRGB32); modeErr != nil {
+			_ = cm.Close()
+			return nil, fmt.Errorf("failed to set video render size: %w", modeErr)
 		}
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
@@ -780,7 +836,7 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 
 // launchScummVM returns a launcher function for ScummVM games on MiSTer.
 func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	return func(_ *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		if path == "" {
 			return nil, errors.New("no path specified")
 		}
@@ -793,6 +849,11 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 
 		if targetID == "" {
 			return nil, errors.New("no ScummVM target ID specified in path")
+		}
+
+		framebuffer, err := resolveFramebufferMode(opts, 0, scummVMRenderResolution)
+		if err != nil {
+			return nil, fmt.Errorf("resolve ScummVM render size: %w", err)
 		}
 
 		log.Info().Str("target", targetID).Msg("ScummVM game launching")
@@ -812,10 +873,9 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 			return nil, err
 		}
 
-		// Set video mode for ScummVM (640x480 RGB16)
-		// Matches original MiSTer_ScummVM: vmode -r 640 480 rgb16
-		if err := mistermain.SetVideoModeExact(640, 480, mistermain.VideoModeFormatRGB16); err != nil {
-			return nil, fmt.Errorf("failed to set video mode: %w", err)
+		if modeErr := applyFramebufferMode(framebuffer, mistermain.VideoModeFormatRGB16); modeErr != nil {
+			_ = cm.Close()
+			return nil, fmt.Errorf("failed to set ScummVM render size: %w", modeErr)
 		}
 
 		// Start MIDIMeister if available

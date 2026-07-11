@@ -269,6 +269,43 @@ func TestDoLaunch_RunningInstanceLauncher(t *testing.T) {
 	}
 }
 
+func TestDoLaunch_AppliesRenderDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[[launchers.default]]
+launcher = "test-launcher"
+render_scale = 33`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	mockPlatform.On("SetTrackedProcess", mock.AnythingOfType("*os.Process")).Return().Once()
+	var captured *platforms.LaunchOptions
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleTracked,
+		Launch: func(_ *config.Instance, _ string, opts *platforms.LaunchOptions) (*os.Process, error) {
+			captured = opts
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+
+	err := platforms.DoLaunch(&platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         cfg,
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           filepath.Join("test", "game.rom"),
+	}, filepath.Base)
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.RenderScale)
+	assert.Equal(t, 33, *captured.RenderScale)
+	assert.Empty(t, captured.RenderResolution)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_LifecycleModes(t *testing.T) {
 	t.Parallel()
 

@@ -308,6 +308,59 @@ func TestLaunchScummVM_InvalidPath_NoTargetID(t *testing.T) {
 	}
 }
 
+func TestResolveFramebufferMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		renderResolution  string
+		defaultResolution string
+		renderScale       int
+		defaultScale      int
+		expect            framebufferMode
+		expectError       bool
+	}{
+		{name: "video default", defaultScale: 33, expect: framebufferMode{divisor: 3}},
+		{name: "ScummVM default", defaultResolution: "640x480", expect: framebufferMode{width: 640, height: 480}},
+		{name: "half scale", renderScale: 50, expect: framebufferMode{divisor: 2}},
+		{name: "exact override", renderResolution: "800x600", expect: framebufferMode{width: 800, height: 600}},
+		{name: "unsupported scale", renderScale: 75, expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var opts *platforms.LaunchOptions
+			if tt.renderScale != 0 || tt.renderResolution != "" {
+				opts = &platforms.LaunchOptions{RenderResolution: tt.renderResolution}
+				if tt.renderScale != 0 {
+					renderScale := tt.renderScale
+					opts.RenderScale = &renderScale
+				}
+			}
+			mode, err := resolveFramebufferMode(opts, tt.defaultScale, tt.defaultResolution)
+			if tt.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expect, mode)
+		})
+	}
+}
+
+func TestResolveFramebufferMode_RejectsConflictingOptions(t *testing.T) {
+	t.Parallel()
+
+	renderScale := 50
+	_, err := resolveFramebufferMode(&platforms.LaunchOptions{
+		RenderScale:      &renderScale,
+		RenderResolution: "640x480",
+	}, videoRenderScale, "")
+	require.Error(t, err)
+}
+
 func TestBuildFvpCommand(t *testing.T) {
 	t.Parallel()
 

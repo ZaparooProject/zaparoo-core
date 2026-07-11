@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
@@ -47,9 +48,11 @@ type Launchers struct {
 }
 
 type LaunchersDefault struct {
-	Launcher   string `toml:"launcher"`
-	InstallDir string `toml:"install_dir,omitempty"`
-	ServerURL  string `toml:"server_url,omitempty"`
+	RenderScale      *int   `toml:"render_scale,omitempty"`
+	Launcher         string `toml:"launcher"`
+	InstallDir       string `toml:"install_dir,omitempty"`
+	ServerURL        string `toml:"server_url,omitempty"`
+	RenderResolution string `toml:"render_resolution,omitempty"`
 	// Action specifies the default launch action. Common values:
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
@@ -165,6 +168,15 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 			if entry.LoadPath != "" {
 				result.LoadPath = entry.LoadPath
 			}
+			if entry.RenderScale != nil {
+				renderScale := *entry.RenderScale
+				result.RenderScale = &renderScale
+				result.RenderResolution = ""
+			}
+			if entry.RenderResolution != "" {
+				result.RenderScale = nil
+				result.RenderResolution = entry.RenderResolution
+			}
 		}
 	}
 
@@ -177,6 +189,38 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result
+}
+
+// ValidateRenderResolution validates and parses a positive WIDTHxHEIGHT render target.
+func ValidateRenderResolution(value string) (width, height int, err error) {
+	widthText, heightText, ok := strings.Cut(strings.ToLower(value), "x")
+	if !ok || widthText == "" || heightText == "" || strings.Contains(heightText, "x") {
+		return 0, 0, fmt.Errorf("render resolution must use WIDTHxHEIGHT, got %q", value)
+	}
+	width, widthErr := strconv.Atoi(widthText)
+	height, heightErr := strconv.Atoi(heightText)
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, fmt.Errorf("render resolution must use positive dimensions, got %q", value)
+	}
+	return width, height, nil
+}
+
+func validateLauncherDefaults(defaults []LaunchersDefault) error {
+	for i := range defaults {
+		entry := &defaults[i]
+		if entry.RenderScale != nil && entry.RenderResolution != "" {
+			return fmt.Errorf("launcher default %d cannot set both render_scale and render_resolution", i)
+		}
+		if entry.RenderScale != nil && *entry.RenderScale <= 0 {
+			return fmt.Errorf("launcher default %d render_scale must be positive", i)
+		}
+		if entry.RenderResolution != "" {
+			if _, _, err := ValidateRenderResolution(entry.RenderResolution); err != nil {
+				return fmt.Errorf("launcher default %d: %w", i, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
