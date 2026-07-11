@@ -140,6 +140,9 @@ func resolveAmigaVisionVirtualMGLPath(path string) string {
 }
 
 func isAmigaVisionVirtualMGLPath(path string) bool {
+	if filepath.Ext(strings.ToLower(path)) != ".mgl" {
+		return false
+	}
 	if !hasAmigaVisionImage(filepath.Dir(path)) {
 		return false
 	}
