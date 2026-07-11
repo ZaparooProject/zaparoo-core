@@ -102,6 +102,30 @@ func TestLaunchablesReturnsPlatformDefinitions(t *testing.T) {
 	assert.Equal(t, "zaparoo://"+EncodeID(mediaID)+"/Street%20Fighter%20III", media[0].ZapScript())
 }
 
+func TestLaunchablesReturnsCommandVirtualSystemWithoutPlatformProvider(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.custom]]
+id = "Tools"
+kind = "virtual_system"
+backend = "command"
+name = "Tools"
+category = "Computer"
+execute = "echo tools"
+`))
+	platform := mocks.NewMockPlatform()
+	platform.On("Launchers", cfg).Return([]platforms.Launcher{{ID: "Tools", Launch: testLaunch()}})
+
+	defs := Launchables(cfg, platform)
+
+	require.Len(t, defs, 1)
+	entry, ok := defs[0].(VirtualSystem)
+	require.True(t, ok)
+	assert.Equal(t, "Tools", entry.Name)
+	assert.Equal(t, "Computer", entry.Category)
+	assert.Equal(t, uuid.NewSHA1(ZaparooLaunchableNamespace, []byte("command:tools")), entry.ID)
+}
+
 func TestLaunchablesReturnsNilForPlatformsWithoutDefinitions(t *testing.T) {
 	platform := mocks.NewMockPlatform()
 

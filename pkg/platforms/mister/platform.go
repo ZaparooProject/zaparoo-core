@@ -1351,7 +1351,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := CreateLaunchers(p)
 	ls = append(ls, amiga, neogeo, createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher())
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	return append(custom, ls...)
 }
 
 func (p *Platform) ShowNotice(
