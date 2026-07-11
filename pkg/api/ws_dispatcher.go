@@ -42,7 +42,9 @@ const (
 	wsQueueSize             = 256
 	wsResponseQueueSize     = 256
 	wsGlobalImageConcurrent = 2
+)
 
+const (
 	mediaDBLockNone mediaDBLockMode = iota
 	mediaDBLockRead
 	mediaDBLockWrite
