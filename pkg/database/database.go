@@ -1087,6 +1087,11 @@ type MediaDBI interface {
 	// writes the sentinel tag last.
 	ApplyScrapeResult(ctx context.Context, mediaDBID, mediaTitleDBID int64, write *ScrapeWrite) error
 
+	// ConsumeScrapeImageChanges returns and clears systems with materially changed
+	// image properties. all is true when tracking could not resolve a safe targeted
+	// set and callers must conservatively invalidate the full cache.
+	ConsumeScrapeImageChanges() (systems []string, all bool)
+
 	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
 	// that have no Media row with the given sentinel tag value.
 	FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]MediaTitle, error)
