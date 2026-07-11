@@ -381,6 +381,11 @@ func TestResolveAmigaVisionVirtualMGLPath(t *testing.T) {
 	amigaVisionMGLPaths = []string{realMGL}
 	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
 
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	routedVirtualMGL := filepath.Join(installPath, "Amiga.mgl")
+	require.NoError(t, os.MkdirAll(installPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(installPath, "AmigaVision.hdf"), []byte("test"), 0o600))
+
 	missingMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga 500.mgl")
 	nonMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Readme.txt")
 
@@ -388,6 +393,11 @@ func TestResolveAmigaVisionVirtualMGLPath(t *testing.T) {
 	assert.Equal(t, realVirtualMGL, resolveAmigaVisionVirtualMGLPath(realVirtualMGL))
 	assert.Equal(t, missingMGL, resolveAmigaVisionVirtualMGLPath(missingMGL))
 	assert.Equal(t, nonMGL, resolveAmigaVisionVirtualMGLPath(nonMGL))
+	assert.True(t, isAmigaVisionVirtualMGLPath(routedVirtualMGL))
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+	assert.True(t, amigaLauncher.Test(nil, routedVirtualMGL))
 }
 
 func TestAmigaLauncher_TestRequiresAmigaVisionVirtualPath(t *testing.T) {
