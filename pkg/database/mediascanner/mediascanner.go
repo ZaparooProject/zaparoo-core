@@ -354,7 +354,10 @@ func getSystemPathsForLauncherCache(
 		default:
 		}
 
-		launchers := launcherCache.GetAvailableLaunchersBySystem(system.ID)
+		// Availability describes whether media can launch right now. Indexing
+		// still needs every platform launcher so users can discover media before
+		// installing or configuring its runtime dependency.
+		launchers := launcherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
 		for j := range launchers {

@@ -2087,17 +2087,21 @@ Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`,
 
 ### systems
 
-List all currently indexed systems.
+List systems currently indexed or supported by an available launcher on the running platform. Virtual systems are also included.
+
+Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index.
 
 #### Parameters
 
-None.
+| Key | Type    | Required | Description                                                                                     |
+| :-- | :------ | :------- | :---------------------------------------------------------------------------------------------- |
+| all | boolean | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 
 #### Result
 
-| Key     | Type                       | Required | Description                    |
-| :------ | :------------------------- | :------- | :----------------------------- |
-| systems | [System](#system-object)[] | Yes      | A list of all indexed systems. |
+| Key     | Type                       | Required | Description                                                        |
+| :------ | :------------------------- | :------- | :----------------------------------------------------------------- |
+| systems | [System](#system-object)[] | Yes      | Indexed, available, and optionally unavailable platform systems.   |
 
 See [System object](#system-object).
 
@@ -2109,7 +2113,10 @@ See [System object](#system-object).
 {
   "jsonrpc": "2.0",
   "id": "dbd312f3-7a5f-11ef-8f29-020304050607",
-  "method": "systems"
+  "method": "systems",
+  "params": {
+    "all": true
+  }
 }
 ```
 
