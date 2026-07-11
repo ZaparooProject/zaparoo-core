@@ -213,7 +213,8 @@ func (c *mediaThumbCache) reapStaleVersions() {
 			return nil
 		}
 		if err := c.fs.Remove(path); err != nil {
-			return fmt.Errorf("remove abandoned thumb temporary file %q: %w", path, err)
+			log.Warn().Err(err).Str("path", path).
+				Msg("media.image: thumb cache: failed to reap temporary file")
 		}
 		return nil
 	}); err != nil {

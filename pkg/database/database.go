@@ -1088,7 +1088,8 @@ type MediaDBI interface {
 	ApplyScrapeResult(ctx context.Context, mediaDBID, mediaTitleDBID int64, write *ScrapeWrite) error
 
 	// ConsumeScrapeImageChanges returns and clears systems with materially changed
-	// image properties. all requests conservative full-cache invalidation.
+	// image properties. all is true when tracking could not resolve a safe targeted
+	// set and callers must conservatively invalidate the full cache.
 	ConsumeScrapeImageChanges() (systems []string, all bool)
 
 	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system

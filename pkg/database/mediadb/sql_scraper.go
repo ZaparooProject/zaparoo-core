@@ -1647,6 +1647,13 @@ LIMIT 1`, systemID, path, typeTagDBID).Scan(&exists)
 	return true, nil
 }
 
+func (db *MediaDB) requireFullScrapeImageInvalidation(err error, message string) {
+	db.scrapeImageChangesMu.Lock()
+	db.scrapeImageChangesAll = true
+	db.scrapeImageChangesMu.Unlock()
+	log.Warn().Err(err).Msg(message)
+}
+
 func (db *MediaDB) recordScrapeImageChanges(ctx context.Context, writeCtx *scrapeWriteTxContext) {
 	if len(writeCtx.changedImageMediaIDs) == 0 && len(writeCtx.changedImageMediaTitleIDs) == 0 {
 		return
@@ -1675,10 +1682,8 @@ FROM Media m
 JOIN Systems s ON s.DBID = m.SystemDBID
 WHERE `+strings.Join(conditions, " OR "), args...)
 	if err != nil {
-		db.scrapeImageChangesMu.Lock()
-		db.scrapeImageChangesAll = true
-		db.scrapeImageChangesMu.Unlock()
-		log.Warn().Err(err).Msg("failed to resolve systems with changed scrape images; full invalidation required")
+		db.requireFullScrapeImageInvalidation(
+			err, "failed to resolve systems with changed scrape images; full invalidation required")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -1687,19 +1692,15 @@ WHERE `+strings.Join(conditions, " OR "), args...)
 	for rows.Next() {
 		var systemID string
 		if err := rows.Scan(&systemID); err != nil {
-			db.scrapeImageChangesMu.Lock()
-			db.scrapeImageChangesAll = true
-			db.scrapeImageChangesMu.Unlock()
-			log.Warn().Err(err).Msg("failed to read system with changed scrape images; full invalidation required")
+			db.requireFullScrapeImageInvalidation(
+				err, "failed to read system with changed scrape images; full invalidation required")
 			return
 		}
 		changed = append(changed, systemID)
 	}
 	if err := rows.Err(); err != nil {
-		db.scrapeImageChangesMu.Lock()
-		db.scrapeImageChangesAll = true
-		db.scrapeImageChangesMu.Unlock()
-		log.Warn().Err(err).Msg("failed to iterate systems with changed scrape images; full invalidation required")
+		db.requireFullScrapeImageInvalidation(
+			err, "failed to iterate systems with changed scrape images; full invalidation required")
 		return
 	}
 

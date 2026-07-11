@@ -232,6 +232,43 @@ func TestInvalidateIndexedThumbnails_SelectiveSystems(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
+	tests := []struct {
+		name    string
+		systems []systemdefs.System
+		rebuild bool
+	}{
+		{name: "rebuild", systems: []systemdefs.System{{ID: "SNES"}}, rebuild: true},
+		{name: "empty systems"},
+		{name: "all systems", systems: systemdefs.AllSystems()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			cache := &mediaThumbCache{
+				fs: fs, dir: filepath.Join("cache", "thumbs", mediaThumbCacheVersionDir()),
+				resolvedTypes: make(map[string]resolvedThumb),
+			}
+			mediaThumbCachePointer.Store(cache)
+			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+			snesID, genesisID := int64(1), int64(2)
+			snesRef := mediaRefParam{MediaID: &snesID}
+			genesisRef := mediaRefParam{MediaID: &genesisID}
+			cache.set(snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp")
+			cache.set(genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp")
+
+			invalidateIndexedThumbnails(tt.systems, tt.rebuild)
+
+			_, _, found := cache.get(snesRef, "SNES", "property:image-boxart", 256)
+			assert.False(t, found)
+			_, _, found = cache.get(genesisRef, "Genesis", "property:image-boxart", 256)
+			assert.False(t, found)
+		})
+	}
+}
+
 func TestReapStaleVersions_RemovesOtherVersionsAndLegacyDirs(t *testing.T) {
 	t.Parallel()
 
