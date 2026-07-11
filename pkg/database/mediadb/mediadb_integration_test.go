@@ -3323,23 +3323,27 @@ func TestMediaDB_BrowseRouteHasMediaProbe_Integration(t *testing.T) {
 	ctx := context.Background()
 	snesSystem, err := systemdefs.GetSystem("SNES")
 	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
 
 	populatedRoot := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes"))
 	insertSystemWithMedia(t, mediaDB, "SNES", "Probe Game",
 		filepath.ToSlash(filepath.Join(populatedRoot, "RPG", "game.sfc")))
 
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	_, err = mediaDB.FindOrInsertSystem(database.System{SystemID: nesSystem.ID, Name: nesSystem.ID})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
 	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", []systemdefs.System{*snesSystem})
-
-	has, err := sqlBrowseRouteHasMedia(ctx, mediaDB.sql.Load(),
-		browseRouteCacheKey(populatedRoot), systemClause, systemArgs)
+	has, err := sqlBrowseRouteHasMedia(ctx, mediaDB.sql.Load(), systemClause, systemArgs)
 	require.NoError(t, err)
-	assert.True(t, has, "probe finds media under a populated root")
+	assert.True(t, has, "probe finds media for a populated system")
 
-	emptyRoot := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "empty"))
-	has, err = sqlBrowseRouteHasMedia(ctx, mediaDB.sql.Load(),
-		browseRouteCacheKey(emptyRoot), systemClause, systemArgs)
+	systemClause, systemArgs = browseSystemFilterClause("s.SystemID", []systemdefs.System{*nesSystem})
+	has, err = sqlBrowseRouteHasMedia(ctx, mediaDB.sql.Load(), systemClause, systemArgs)
 	require.NoError(t, err)
-	assert.False(t, has, "probe reports no media under an empty root")
+	assert.False(t, has, "probe reports no media for an empty system")
 }
 
 func TestMediaDB_SearchMediaWithFilters_SelectiveIndexingKeepsUnchangedSystemsCacheEligible_Integration(t *testing.T) {

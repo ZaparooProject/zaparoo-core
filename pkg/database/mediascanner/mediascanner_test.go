@@ -122,6 +122,35 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	assert.True(t, scanner2Called, "Scanner 2 should have been called") // This will fail with the current bug
 }
 
+func TestGetSystemPathsIncludesUnavailableLaunchers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemFolder := filepath.Join(root, "nes")
+	require.NoError(t, os.Mkdir(systemFolder, 0o750))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID:           "UnavailableLauncher",
+			SystemID:     systemdefs.SystemNES,
+			Folders:      []string{"nes"},
+			Availability: func(*config.Instance) error { return errors.New("runtime not installed") },
+		},
+	})
+
+	results := getSystemPathsForLauncherCache(
+		context.Background(),
+		[]string{root},
+		[]systemdefs.System{{ID: systemdefs.SystemNES}},
+		cache,
+	)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, systemdefs.SystemNES, results[0].System.ID)
+	assert.Equal(t, systemFolder, results[0].Path)
+}
+
 func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
 	// Setup test launchers - one that skips filesystem scan, one that doesn't
 	skipLauncher := platforms.Launcher{

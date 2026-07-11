@@ -69,18 +69,14 @@ func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 		},
 	}
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
-	originalCache := corehelpers.GlobalLauncherCache
 	cache := &corehelpers.LauncherCache{}
 	cache.Initialize(mockPlatform, &config.Instance{})
-	corehelpers.GlobalLauncherCache = cache
-	t.Cleanup(func() {
-		corehelpers.GlobalLauncherCache = originalCache
-	})
 
 	result, err := HandleSystems(requests.RequestEnv{
-		Platform: mockPlatform,
-		Config:   &config.Instance{},
-		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform:      mockPlatform,
+		Config:        &config.Instance{},
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
 	})
 
 	require.NoError(t, err)
