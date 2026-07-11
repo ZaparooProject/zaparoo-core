@@ -866,15 +866,28 @@ func collectNeoGeoRomsetEntries(
 		}
 
 		base := info.Name()
-		if info.IsDir() {
+		isDirectory := info.IsDir()
+		if info.Mode()&os.ModeSymlink != 0 {
+			targetInfo, statErr := fs.Stat(path)
+			isDirectory = statErr == nil && targetInfo.IsDir()
+			log.Debug().Str("path", path).Bool("directory", isDirectory).
+				Msg("neogeo symlink candidate found")
+		}
+		if isDirectory {
 			if base == "__MACOSX" || strings.HasPrefix(base, ".") {
-				return filepath.SkipDir
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 
 			markerPath := filepath.Join(path, ".zaparooignore")
 			if _, statErr := fs.Stat(markerPath); statErr == nil {
 				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
-				return filepath.SkipDir
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 		}
 
@@ -883,7 +896,7 @@ func collectNeoGeoRomsetEntries(
 		isZip := filepath.Ext(lowerBase) == ".zip"
 		if isZip {
 			candidateID = strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
-		} else if !info.IsDir() {
+		} else if !isDirectory {
 			return nil
 		}
 
@@ -1268,6 +1281,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			log.Info().Msg("starting neogeo scan")
+			inputResultCount := len(results)
+			filteredResultCount := 0
+			addedResultCount := 0
+			romsetDefinitionCount := 0
 			romsetsFilename := "romsets.xml"
 			names := make(map[string]string)
 
@@ -1277,13 +1294,13 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			sfs := mediascanner.GetSystemPaths(ctx, cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
-			log.Debug().Int("paths", len(sfs)).Msg("neogeo scan paths found")
 
 			// Collect NEOGEO paths for filtering
 			neogeoPaths := make([]string, len(sfs))
 			for i, sf := range sfs {
 				neogeoPaths[i] = sf.Path
 			}
+			log.Debug().Int("paths", len(sfs)).Strs("roots", neogeoPaths).Msg("neogeo scan paths found")
 
 			// First pass: load all romsets from all directories
 			for _, sf := range sfs {
@@ -1293,28 +1310,40 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				default:
 				}
 
-				rsf, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, romsetsFilename))
-				if err == nil {
-					romsets, readErr := readRomsets(rsf)
-					if readErr != nil {
-						log.Warn().Err(readErr).Msg("unable to read romsets")
-						continue
-					}
+				expectedRomsetsPath := filepath.Join(sf.Path, romsetsFilename)
+				rsf, findErr := mediascanner.FindPath(ctx, expectedRomsetsPath)
+				if findErr != nil {
+					log.Debug().Err(findErr).Str("path", expectedRomsetsPath).Msg("neogeo romsets not found")
+					continue
+				}
 
-					for _, romset := range romsets {
-						// Handle comma-separated romset name aliases
-						for _, name := range strings.Split(romset.Name, ",") {
-							names[strings.ToLower(strings.TrimSpace(name))] = romset.AltName
-						}
+				romsets, readErr := readRomsets(rsf)
+				if readErr != nil {
+					log.Warn().Err(readErr).Str("path", rsf).Msg("unable to read neogeo romsets")
+					continue
+				}
+
+				romsetDefinitionCount += len(romsets)
+				for _, romset := range romsets {
+					// Handle comma-separated romset name aliases
+					for _, name := range strings.Split(romset.Name, ",") {
+						names[strings.ToLower(strings.TrimSpace(name))] = romset.AltName
 					}
 				}
+				log.Debug().Str("path", rsf).Int("romsets", len(romsets)).Int("totalAliases", len(names)).
+					Msg("neogeo romsets loaded")
 			}
 
+			resultsBeforeFilter := len(results)
 			if len(names) == 0 {
-				log.Warn().Msg("no valid romsets.xml found, applying fallback filter for zip contents")
+				log.Warn().Strs("roots", neogeoPaths).
+					Msg("no valid romsets.xml found, applying fallback filter for zip contents")
 				results = filterNeoGeoZipToNeoOnly(results)
 			} else {
 				results = filterNeoGeoGameContents(results, names, neogeoPaths)
+			}
+			if removed := resultsBeforeFilter - len(results); removed > 0 {
+				filteredResultCount = removed
 			}
 
 			// Second pass: read directories recursively and add launchable romset entries.
@@ -1339,10 +1368,16 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 						continue
 					}
 					results = append(results, entries...)
+					addedResultCount += len(entries)
+					log.Debug().Str("path", sf.Path).Int("matches", len(entries)).
+						Msg("neogeo romset root scanned")
 				}
 			}
 
-			log.Debug().Int("results", len(results)).Msg("neogeo scan completed")
+			log.Debug().Int("roots", len(sfs)).Int("romsets", romsetDefinitionCount).
+				Int("aliases", len(names)).Int("input", inputResultCount).Int("filtered", filteredResultCount).
+				Int("added", addedResultCount).Int("results", len(results)).
+				Msg("neogeo scan completed")
 
 			return results, nil
 		},
