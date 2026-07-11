@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -42,11 +43,12 @@ import (
 // NeedsRescan returns true so the caller can schedule a background rescan.
 // Subsequent Refresh calls use directory mtimes as a cheap runtime check.
 type RBFCache struct {
+	persistPath   string
+	sdRoot        string
 	bySystemID    map[string]RBFInfo
 	byShortName   map[string][]RBFInfo
 	byLauncherID  map[string][]string
 	lastDirMtimes map[string]int64
-	persistPath   string
 	lastRootRBFs  []string
 	mu            syncutil.RWMutex
 	initialized   bool
@@ -145,11 +147,14 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 		return false
 	}
 
-	liveManifest, manifestErr := snapshotRBFManifest()
+	beforeManifest, beforeErr := c.snapshotRBFManifest()
 	c.BuildFromRBFs(stored.Files)
-	c.lastDirMtimes, _ = snapshotDirMtimes()
-	c.lastRootRBFs, _ = snapshotRootRBFs()
-	if manifestErr == nil && rbfManifestsMatch(stored.Manifest, liveManifest) {
+	afterManifest, afterErr := c.snapshotRBFManifest()
+	c.lastDirMtimes, _ = c.snapshotDirMtimes()
+	c.lastRootRBFs, _ = c.snapshotRootRBFs()
+	manifestStable := beforeErr == nil && afterErr == nil &&
+		rbfManifestsMatch(beforeManifest, afterManifest)
+	if manifestStable && rbfManifestsMatch(stored.Manifest, beforeManifest) {
 		log.Info().
 			Int("rbf_files", len(stored.Files)).
 			Int("systems_mapped", len(c.bySystemID)).
@@ -160,9 +165,11 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 		event := log.Info().
 			Str("path", c.persistPath).
 			Int("cached_rbf_files", len(stored.Manifest)).
-			Int("current_rbf_files", len(liveManifest))
-		if manifestErr != nil {
-			event = event.Err(manifestErr)
+			Int("current_rbf_files", len(afterManifest))
+		if beforeErr != nil {
+			event = event.Err(beforeErr)
+		} else if afterErr != nil {
+			event = event.Err(afterErr)
 		}
 		event.Msg("RBF cache loaded but manifest check failed or drifted; rescan needed")
 		c.needsRescan = true
@@ -174,36 +181,45 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 // and (when persistence is configured) writes the result to disk. Caller
 // must hold c.mu.
 func (c *RBFCache) scanLocked() {
-	rbfFiles, err := shallowScanRBF()
-	if err != nil {
-		log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
-		c.BuildFromRBFs(nil)
-		c.needsRescan = false
-		return
+	const maxScanAttempts = 2
+	var rbfFiles []RBFInfo
+	var manifest []string
+	stable := false
+	for range maxScanAttempts {
+		beforeManifest, beforeErr := c.snapshotRBFManifest()
+		files, err := shallowScanRBF()
+		if err != nil {
+			log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
+			c.BuildFromRBFs(nil)
+			c.needsRescan = true
+			return
+		}
+		rbfFiles = files
+		afterManifest, afterErr := c.snapshotRBFManifest()
+		if beforeErr == nil && afterErr == nil && rbfManifestsMatch(beforeManifest, afterManifest) {
+			manifest = afterManifest
+			stable = true
+			break
+		}
 	}
 	c.BuildFromRBFs(rbfFiles)
-	c.needsRescan = false
+	c.needsRescan = !stable
 	log.Info().
 		Int("rbf_files", len(rbfFiles)).
 		Int("systems_mapped", len(c.bySystemID)).
 		Msg("RBF cache initialized")
 
-	if c.persistPath == "" {
+	if c.persistPath == "" || !stable {
 		return
 	}
-	snapshot, snapErr := snapshotDirMtimes()
+	snapshot, snapErr := c.snapshotDirMtimes()
 	if snapErr != nil {
 		log.Warn().Err(snapErr).Msg("RBF cache: failed to snapshot directory mtimes, skipping persist")
 		return
 	}
-	rootRBFs, rootErr := snapshotRootRBFs()
+	rootRBFs, rootErr := c.snapshotRootRBFs()
 	if rootErr != nil {
 		log.Warn().Err(rootErr).Msg("RBF cache: failed to snapshot root RBFs, skipping persist")
-		return
-	}
-	manifest, manifestErr := snapshotRBFManifest()
-	if manifestErr != nil {
-		log.Warn().Err(manifestErr).Msg("RBF cache: failed to snapshot RBF manifest, skipping persist")
 		return
 	}
 	c.lastDirMtimes = snapshot
@@ -216,6 +232,25 @@ func (c *RBFCache) scanLocked() {
 		Int("rbf_files", len(rbfFiles)).
 		Str("path", c.persistPath).
 		Msg("RBF cache persisted to disk")
+}
+
+func (c *RBFCache) root() string {
+	if c.sdRoot != "" {
+		return c.sdRoot
+	}
+	return misterconfig.SDRootDir
+}
+
+func (c *RBFCache) snapshotRBFManifest() ([]string, error) {
+	return snapshotRBFManifestAt(c.root())
+}
+
+func (c *RBFCache) snapshotDirMtimes() (map[string]int64, error) {
+	return snapshotDirMtimesAt(c.root())
+}
+
+func (c *RBFCache) snapshotRootRBFs() ([]string, error) {
+	return snapshotRootRBFsAt(c.root())
 }
 
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a

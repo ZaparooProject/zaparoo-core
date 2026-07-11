@@ -34,16 +34,16 @@ import (
 func sampleRBFs() []RBFInfo {
 	return []RBFInfo{
 		{
-			Path:      "/media/fat/_Console/SNES_20240101.rbf",
+			Path:      filepath.Join(string(filepath.Separator), "media", "fat", "_Console", "SNES_20240101.rbf"),
 			Filename:  "SNES_20240101.rbf",
 			ShortName: "SNES",
-			MglName:   "_Console/SNES",
+			MglName:   filepath.Join("_Console", "SNES"),
 		},
 		{
-			Path:      "/media/fat/_Console/NES_20240101.rbf",
+			Path:      filepath.Join(string(filepath.Separator), "media", "fat", "_Console", "NES_20240101.rbf"),
 			Filename:  "NES_20240101.rbf",
 			ShortName: "NES",
-			MglName:   "_Console/NES",
+			MglName:   filepath.Join("_Console", "NES"),
 		},
 	}
 }
@@ -55,8 +55,8 @@ func TestPersistedRBFCache_RoundTrip(t *testing.T) {
 
 	rbfs := sampleRBFs()
 	manifest := []string{
-		"_Console/NES_20240101.rbf",
-		"_Console/SNES_20240101.rbf",
+		filepath.Join("_Console", "NES_20240101.rbf"),
+		filepath.Join("_Console", "SNES_20240101.rbf"),
 		"MyCustomCore.rbf",
 	}
 
@@ -129,8 +129,8 @@ func TestPersistedRBFCache_TruncatedFile(t *testing.T) {
 	path := filepath.Join(dir, RBFCacheFileName)
 
 	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), []string{
-		"_Console/NES_20240101.rbf",
-		"_Console/SNES_20240101.rbf",
+		filepath.Join("_Console", "NES_20240101.rbf"),
+		filepath.Join("_Console", "SNES_20240101.rbf"),
 	}))
 
 	info, err := os.Stat(path)
@@ -150,8 +150,8 @@ func TestPersistedRBFCache_OversizedFile(t *testing.T) {
 	path := filepath.Join(dir, RBFCacheFileName)
 
 	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), []string{
-		"_Console/NES_20240101.rbf",
-		"_Console/SNES_20240101.rbf",
+		filepath.Join("_Console", "NES_20240101.rbf"),
+		filepath.Join("_Console", "SNES_20240101.rbf"),
 	}))
 
 	originalCap := rbfCacheMaxBytes
@@ -312,9 +312,13 @@ func TestRBFManifestsMatch(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, rbfManifestsMatch(nil, nil))
-	assert.True(t, rbfManifestsMatch([]string{"_Console/Saturn.rbf"}, []string{"_Console/Saturn.rbf"}))
-	assert.False(t, rbfManifestsMatch([]string{"_Console/Saturn_old.rbf"}, []string{"_Console/Saturn_new.rbf"}))
-	assert.False(t, rbfManifestsMatch(nil, []string{"_Console/Saturn.rbf"}))
+	saturn := filepath.Join("_Console", "Saturn.rbf")
+	assert.True(t, rbfManifestsMatch([]string{saturn}, []string{saturn}))
+	assert.False(t, rbfManifestsMatch(
+		[]string{filepath.Join("_Console", "Saturn_old.rbf")},
+		[]string{filepath.Join("_Console", "Saturn_new.rbf")},
+	))
+	assert.False(t, rbfManifestsMatch(nil, []string{saturn}))
 }
 
 func TestRootRBFsMatch_NoFilesEqualsEmptySnapshot(t *testing.T) {
@@ -358,7 +362,7 @@ func TestRBFCache_NoPersistPath_ScanFlowsThrough(t *testing.T) {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 	assert.True(t, cache.initialized, "Refresh must mark cache initialized")
-	assert.False(t, cache.needsRescan, "scan path resets needsRescan")
+	assert.True(t, cache.needsRescan, "unavailable manifest keeps scan marked stale")
 	assert.Empty(t, cache.persistPath, "no persist path was configured")
 }
 
@@ -374,28 +378,41 @@ func TestRBFCache_SetPersistPath(t *testing.T) {
 	assert.Equal(t, "/tmp/example.gob", got)
 }
 
-// TestRBFCache_LoadFromDisk_PopulatesMaps verifies that a persisted file is
-// decoded and BuildFromRBFs is run, populating bySystemID for known systems.
 func TestRBFCache_LoadFromDisk_PopulatesMaps(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, RBFCacheFileName)
+	tests := []struct {
+		name        string
+		rootExists  bool
+		storedMatch bool
+		needsRescan bool
+	}{
+		{name: "matching manifest", rootExists: true, storedMatch: true},
+		{name: "mismatching manifest", rootExists: true, needsRescan: true},
+		{name: "snapshot error", needsRescan: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			root := filepath.Join(dir, "sd")
+			manifest := []string(nil)
+			if tt.rootExists {
+				require.NoError(t, os.MkdirAll(root, 0o750))
+				if !tt.storedMatch {
+					manifest = []string{"missing.rbf"}
+				}
+			}
+			path := filepath.Join(dir, RBFCacheFileName)
+			require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), manifest))
 
-	rbfs := sampleRBFs()
-	require.NoError(t, writePersistedRBFCache(path, rbfs, []string{"missing.rbf"}))
+			cache := &RBFCache{sdRoot: root}
+			cache.SetPersistPath(path)
+			cache.Refresh()
 
-	cache := &RBFCache{}
-	cache.SetPersistPath(path)
-	cache.Refresh()
-
-	// We don't assert specific systems — that depends on the Systems table
-	// containing entries with RBF "_Console/SNES" or "_Console/NES". What we
-	// CAN assert is that byShortName was populated from the persisted file
-	// and that the unavailable live manifest was treated as stale.
-	rbf, ok := cache.GetByShortName("snes")
-	assert.True(t, ok, "SNES should be loaded from the persisted file")
-	assert.Equal(t, "_Console/SNES", rbf.MglName)
-
-	assert.True(t, cache.NeedsRescan(),
-		"unavailable or mismatched live manifest must mark needsRescan=true")
+			rbf, ok := cache.GetByShortName("snes")
+			require.True(t, ok)
+			assert.Equal(t, filepath.Join("_Console", "SNES"), rbf.MglName)
+			assert.Equal(t, tt.needsRescan, cache.NeedsRescan())
+		})
+	}
 }

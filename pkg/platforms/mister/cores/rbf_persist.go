@@ -66,17 +66,9 @@ type persistedRBFCache struct {
 // signal runtime core changes. The SD root itself is intentionally excluded —
 // its mtime drifts from boot scripts and other unrelated writes — and
 // root-level RBFs are tracked separately via snapshotRootRBFs.
-func snapshotDirMtimes() (map[string]int64, error) {
-	return snapshotDirMtimesAt(config.SDRootDir)
-}
-
 // snapshotRBFManifest returns sorted shallow RBF paths relative to the SD root.
 // It scans root files, immediate files in every `_*` and Light Gun directory,
 // and immediate files in _RA_Cores/Cores. It never walks recursively.
-func snapshotRBFManifest() ([]string, error) {
-	return snapshotRBFManifestAt(config.SDRootDir)
-}
-
 func snapshotRBFManifestAt(root string) ([]string, error) {
 	rootFiles, err := os.ReadDir(root)
 	if err != nil {
@@ -182,10 +174,6 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 // directories are tracked transitively via snapshotDirMtimes. This matches
 // MiSTer's convention that cores live at SD root, under top-level `_*`
 // folders, or in Light Gun. Other top-level directories are not scanned.
-func snapshotRootRBFs() ([]string, error) {
-	return snapshotRootRBFsAt(config.SDRootDir)
-}
-
 func snapshotRootRBFsAt(root string) ([]string, error) {
 	files, err := os.ReadDir(root)
 	if err != nil {
