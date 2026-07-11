@@ -37,12 +37,10 @@ import (
 //
 // On-disk persistence: when SetPersistPath has been called, the first
 // Refresh of the process tries to load `<path>` instead of scanning the
-// SD. If the loaded file's directory-mtime snapshot still matches the
-// live filesystem, no scan runs at all. If mtimes have drifted, the
-// loaded data is still installed for serving and NeedsRescan() returns
-// true so the caller can schedule a background rescan via the idle
-// scheduler. Subsequent Refresh calls noop when mtimes still match
-// (cheap stat-only check) and rescan when they don't.
+// SD. If its shallow RBF manifest matches the live filesystem, no scan runs.
+// If the manifest differs, the loaded data is installed for serving and
+// NeedsRescan returns true so the caller can schedule a background rescan.
+// Subsequent Refresh calls use directory mtimes as a cheap runtime check.
 type RBFCache struct {
 	bySystemID    map[string]RBFInfo
 	byShortName   map[string][]RBFInfo
@@ -93,10 +91,9 @@ func (c *RBFCache) SetPersistPath(path string) {
 }
 
 // NeedsRescan reports whether the most recent first-call Refresh loaded a
-// persisted cache whose directory-mtime snapshot didn't match the live
-// filesystem. The caller (typically a platform's StartPost) is expected
-// to schedule a background Refresh when this is true. The flag is reset
-// once a fresh scan completes.
+// persisted cache whose RBF manifest did not match the live filesystem.
+// The caller (typically a platform's StartPost) is expected to schedule a
+// background Refresh when this is true. The flag resets after a fresh scan.
 func (c *RBFCache) NeedsRescan() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -106,13 +103,12 @@ func (c *RBFCache) NeedsRescan() bool {
 // Refresh ensures the cache reflects the current filesystem. Behaviour:
 //
 //   - First call after process start, with a configured persist path: try
-//     to load the persisted cache. If loaded and the directory-mtime
-//     snapshot matches the live filesystem, install the data and return
-//     without scanning. If loaded but mtimes drifted, install the data,
-//     set NeedsRescan, and return without scanning. If the file is
-//     missing, corrupt, or version-mismatched, fall through to a scan.
-//   - Subsequent calls: stat the snapshot directories; if all mtimes
-//     still match, noop. Otherwise, scan and persist.
+//     to load the persisted cache. If loaded and its shallow RBF manifest
+//     matches the filesystem, install the data and return without scanning.
+//     If the manifest differs, install the data, set NeedsRescan, and return.
+//     Missing, corrupt, or version-mismatched files fall through to a scan.
+//   - Subsequent calls: stat snapshot directories and compare root RBF names;
+//     if all still match, noop. Otherwise, scan and persist.
 //
 // The cheap-stat fast path means callers like Platform.Launchers (which
 // is invoked from many hot paths) pay only a handful of stats per call
@@ -126,7 +122,7 @@ func (c *RBFCache) Refresh() {
 		if c.tryLoadFromDiskLocked() {
 			return
 		}
-	} else if dirMtimesMatch(c.lastDirMtimes) && rootRBFsMatch(c.lastRootRBFs) {
+	} else if !c.needsRescan && dirMtimesMatch(c.lastDirMtimes) && rootRBFsMatch(c.lastRootRBFs) {
 		return
 	}
 
@@ -134,8 +130,8 @@ func (c *RBFCache) Refresh() {
 }
 
 // tryLoadFromDiskLocked attempts to populate the cache from the persisted
-// file. Returns true if a usable file was loaded (the cache is now
-// populated even if mtimes drifted; needsRescan tracks that case).
+// file. Returns true if a usable file was loaded. The cache is populated
+// even if its manifest drifted; needsRescan tracks that case.
 func (c *RBFCache) tryLoadFromDiskLocked() bool {
 	if c.persistPath == "" {
 		return false
@@ -149,12 +145,11 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 		return false
 	}
 
+	liveManifest, manifestErr := snapshotRBFManifest()
 	c.BuildFromRBFs(stored.Files)
-	c.lastDirMtimes = stored.DirMtimes
-	c.lastRootRBFs = stored.RootRBFs
-	mtimesOK := dirMtimesMatch(stored.DirMtimes)
-	rootOK := rootRBFsMatch(stored.RootRBFs)
-	if mtimesOK && rootOK {
+	c.lastDirMtimes, _ = snapshotDirMtimes()
+	c.lastRootRBFs, _ = snapshotRootRBFs()
+	if manifestErr == nil && rbfManifestsMatch(stored.Manifest, liveManifest) {
 		log.Info().
 			Int("rbf_files", len(stored.Files)).
 			Int("systems_mapped", len(c.bySystemID)).
@@ -162,15 +157,14 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 			Msg("RBF cache loaded from disk")
 		c.needsRescan = false
 	} else {
-		drifted := diffDirMtimes(stored.DirMtimes)
-		rootDiff := diffRootRBFs(stored.RootRBFs)
-		log.Info().
+		event := log.Info().
 			Str("path", c.persistPath).
-			Int("drifted_count", len(drifted)).
-			Interface("drifted", drifted).
-			Strs("added_root_rbfs", rootDiff.Added).
-			Strs("removed_root_rbfs", rootDiff.Removed).
-			Msg("RBF cache loaded but state drifted; rescan needed")
+			Int("cached_rbf_files", len(stored.Manifest)).
+			Int("current_rbf_files", len(liveManifest))
+		if manifestErr != nil {
+			event = event.Err(manifestErr)
+		}
+		event.Msg("RBF cache loaded but manifest check failed or drifted; rescan needed")
 		c.needsRescan = true
 	}
 	return true
@@ -207,9 +201,14 @@ func (c *RBFCache) scanLocked() {
 		log.Warn().Err(rootErr).Msg("RBF cache: failed to snapshot root RBFs, skipping persist")
 		return
 	}
+	manifest, manifestErr := snapshotRBFManifest()
+	if manifestErr != nil {
+		log.Warn().Err(manifestErr).Msg("RBF cache: failed to snapshot RBF manifest, skipping persist")
+		return
+	}
 	c.lastDirMtimes = snapshot
 	c.lastRootRBFs = rootRBFs
-	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, snapshot, rootRBFs); writeErr != nil {
+	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, manifest); writeErr != nil {
 		log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
 		return
 	}

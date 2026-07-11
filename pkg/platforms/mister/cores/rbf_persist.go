@@ -41,7 +41,7 @@ const RBFCacheFileName = "rbf_cache.gob"
 
 const (
 	rbfCacheFileMagic   = "zrbf"
-	rbfCacheFileVersion = 3
+	rbfCacheFileVersion = 4
 )
 
 // rbfCacheMaxBytes caps gob input at load time. ~200 RBFs × ~256 B per
@@ -50,28 +50,102 @@ const (
 // lower it to exercise the oversize-fallback path.
 var rbfCacheMaxBytes int64 = 2 << 20
 
-// persistedRBFCache is the on-disk shape. DirMtimes maps each scanned
-// `_*` subdirectory to its ModTime().UnixNano() at scan time; drift
-// signals a core was added or removed under that subdir. RootRBFs is the
-// sorted list of `.rbf` filenames placed directly at SD root — used in
-// place of an `/media/fat` mtime check, which proved too noisy because
-// boot scripts and other writes touch the SD root unrelated to RBFs.
+// persistedRBFCache is the on-disk shape. Manifest contains every RBF path
+// covered by shallowScanRBF, plus symlink targets. Comparing it at startup
+// avoids trusting directory mtimes on filesystems where they may not change
+// when a core is added, removed, or replaced.
 type persistedRBFCache struct {
-	DirMtimes map[string]int64
-	Magic     string
-	Files     []RBFInfo
-	RootRBFs  []string
-	Version   int
+	Magic    string
+	Files    []RBFInfo
+	Manifest []string
+	Version  int
 }
 
 // snapshotDirMtimes captures the current mtime for each `_*` subdirectory
-// of the SD root. Those are the only directories whose mtime tracks core
-// presence: any add/remove/rename of an RBF inside `_Console` (etc.)
-// mutates the dir mtime. The SD root itself is intentionally excluded —
+// and the Light Gun directory. These are directories whose mtime can cheaply
+// signal runtime core changes. The SD root itself is intentionally excluded —
 // its mtime drifts from boot scripts and other unrelated writes — and
 // root-level RBFs are tracked separately via snapshotRootRBFs.
 func snapshotDirMtimes() (map[string]int64, error) {
 	return snapshotDirMtimesAt(config.SDRootDir)
+}
+
+// snapshotRBFManifest returns sorted shallow RBF paths relative to the SD root.
+// It scans root files, immediate files in every `_*` and Light Gun directory,
+// and immediate files in _RA_Cores/Cores. It never walks recursively.
+func snapshotRBFManifest() ([]string, error) {
+	return snapshotRBFManifestAt(config.SDRootDir)
+}
+
+func snapshotRBFManifestAt(root string) ([]string, error) {
+	rootFiles, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("readdir SD root for RBF manifest: %w", err)
+	}
+
+	manifest := make([]string, 0)
+	addRBF := func(dir, relativeDir string, entry os.DirEntry) error {
+		if entry.IsDir() || filepath.Ext(strings.ToLower(entry.Name())) != ".rbf" {
+			return nil
+		}
+		relativePath := filepath.Join(relativeDir, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, linkErr := os.Readlink(filepath.Join(dir, entry.Name()))
+			if linkErr != nil {
+				return fmt.Errorf("read RBF symlink %s: %w", relativePath, linkErr)
+			}
+			relativePath += " -> " + target
+		}
+		manifest = append(manifest, relativePath)
+		return nil
+	}
+	addRBFs := func(dir, relativeDir string) error {
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			return fmt.Errorf("readdir %s: %w", dir, readErr)
+		}
+		for _, entry := range entries {
+			if addErr := addRBF(dir, relativeDir, entry); addErr != nil {
+				return addErr
+			}
+		}
+		return nil
+	}
+
+	for _, entry := range rootFiles {
+		switch {
+		case entry.IsDir() && (strings.HasPrefix(entry.Name(), "_") || strings.EqualFold(entry.Name(), "Light Gun")):
+			dir := filepath.Join(root, entry.Name())
+			if addErr := addRBFs(dir, entry.Name()); addErr != nil {
+				return nil, fmt.Errorf("readdir RBF directory %s: %w", dir, addErr)
+			}
+		default:
+			if addErr := addRBF(root, "", entry); addErr != nil {
+				return nil, addErr
+			}
+		}
+	}
+
+	raRelativeDir := filepath.Join("_RA_Cores", "Cores")
+	raCoreDir := filepath.Join(root, raRelativeDir)
+	if addErr := addRBFs(raCoreDir, raRelativeDir); addErr != nil && !errors.Is(addErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("readdir RBF directory %s: %w", raCoreDir, addErr)
+	}
+
+	sort.Strings(manifest)
+	return manifest, nil
+}
+
+func rbfManifestsMatch(stored, current []string) bool {
+	if len(stored) != len(current) {
+		return false
+	}
+	for i := range stored {
+		if stored[i] != current[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func snapshotDirMtimesAt(root string) (map[string]int64, error) {
@@ -82,7 +156,7 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 		return nil, fmt.Errorf("readdir SD root: %w", err)
 	}
 	for _, f := range files {
-		if !f.IsDir() || !strings.HasPrefix(f.Name(), "_") {
+		if !f.IsDir() || (!strings.HasPrefix(f.Name(), "_") && !strings.EqualFold(f.Name(), "Light Gun")) {
 			continue
 		}
 		sub := filepath.Join(root, f.Name())
@@ -106,9 +180,8 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 //
 // Only direct SD-root files are captured here; RBFs nested under `_*`
 // directories are tracked transitively via snapshotDirMtimes. This matches
-// MiSTer's convention that cores live at SD root or under top-level `_*`
-// folders — a `.rbf` placed inside a brand-new non-`_*` top-level
-// directory would not be detected.
+// MiSTer's convention that cores live at SD root, under top-level `_*`
+// folders, or in Light Gun. Other top-level directories are not scanned.
 func snapshotRootRBFs() ([]string, error) {
 	return snapshotRootRBFsAt(config.SDRootDir)
 }
@@ -146,14 +219,6 @@ type dirMtimeDiff struct {
 	DeltaMs         int64
 }
 
-// rootRBFsDiff describes the divergence between a stored sorted list of
-// root-level RBF filenames and the live state. Either or both slices may
-// be empty when there is no divergence in that direction.
-type rootRBFsDiff struct {
-	Added   []string
-	Removed []string
-}
-
 // rootRBFsMatch reports whether the stored sorted list of root-level RBF
 // filenames is identical to the live filesystem state. A read failure on
 // the SD root is treated as a mismatch.
@@ -175,41 +240,6 @@ func rootRBFsMatchAt(root string, stored []string) bool {
 		}
 	}
 	return true
-}
-
-// diffRootRBFs returns the names added to and removed from the live
-// filesystem relative to the stored snapshot. Returns an empty diff when
-// the live filesystem can't be read, so the caller can still log the
-// stale state without crashing on the diagnostic path.
-func diffRootRBFs(stored []string) rootRBFsDiff {
-	return diffRootRBFsAt(config.SDRootDir, stored)
-}
-
-func diffRootRBFsAt(root string, stored []string) rootRBFsDiff {
-	current, err := snapshotRootRBFsAt(root)
-	if err != nil {
-		return rootRBFsDiff{}
-	}
-	storedSet := make(map[string]struct{}, len(stored))
-	for _, n := range stored {
-		storedSet[n] = struct{}{}
-	}
-	currentSet := make(map[string]struct{}, len(current))
-	for _, n := range current {
-		currentSet[n] = struct{}{}
-	}
-	var diff rootRBFsDiff
-	for _, n := range current {
-		if _, ok := storedSet[n]; !ok {
-			diff.Added = append(diff.Added, n)
-		}
-	}
-	for _, n := range stored {
-		if _, ok := currentSet[n]; !ok {
-			diff.Removed = append(diff.Removed, n)
-		}
-	}
-	return diff
 }
 
 // diffDirMtimes returns the per-path differences between snapshot and the
@@ -242,7 +272,7 @@ func diffDirMtimes(snapshot map[string]int64) []dirMtimeDiff {
 	files, err := os.ReadDir(config.SDRootDir)
 	if err == nil {
 		for _, f := range files {
-			if !f.IsDir() || !strings.HasPrefix(f.Name(), "_") {
+			if !f.IsDir() || (!strings.HasPrefix(f.Name(), "_") && !strings.EqualFold(f.Name(), "Light Gun")) {
 				continue
 			}
 			sub := filepath.Join(config.SDRootDir, f.Name())
@@ -266,8 +296,8 @@ func diffDirMtimes(snapshot map[string]int64) []dirMtimeDiff {
 // dirMtimesMatch reports whether the live filesystem state matches the
 // snapshot. Any of these makes the cache stale: a snapshotted dir is gone
 // or has a different mtime; a new `_*` dir exists that wasn't in the
-// snapshot. An empty snapshot is always considered stale so we don't trust
-// a half-written file.
+// snapshot. Light Gun is treated like a `_*` directory. An empty snapshot
+// is always considered stale so we don't trust incomplete runtime state.
 func dirMtimesMatch(snapshot map[string]int64) bool {
 	if len(snapshot) == 0 {
 		return false
@@ -286,7 +316,7 @@ func dirMtimesMatch(snapshot map[string]int64) bool {
 		return false
 	}
 	for _, f := range files {
-		if !f.IsDir() || !strings.HasPrefix(f.Name(), "_") {
+		if !f.IsDir() || (!strings.HasPrefix(f.Name(), "_") && !strings.EqualFold(f.Name(), "Light Gun")) {
 			continue
 		}
 		sub := filepath.Join(config.SDRootDir, f.Name())
@@ -339,9 +369,7 @@ func loadPersistedRBFCache(path string) (*persistedRBFCache, bool, error) {
 // fsynced, so a hard power-off between rename and the next sync can lose
 // the file. Recovery is automatic: a missing or truncated file falls back
 // to a scan on the next boot.
-func writePersistedRBFCache(
-	path string, files []RBFInfo, dirMtimes map[string]int64, rootRBFs []string,
-) error {
+func writePersistedRBFCache(path string, files []RBFInfo, manifest []string) error {
 	if path == "" {
 		return nil
 	}
@@ -357,11 +385,10 @@ func writePersistedRBFCache(
 	cleanup := func() { _ = os.Remove(tmpPath) }
 
 	payload := persistedRBFCache{
-		Magic:     rbfCacheFileMagic,
-		Version:   rbfCacheFileVersion,
-		Files:     files,
-		DirMtimes: dirMtimes,
-		RootRBFs:  rootRBFs,
+		Magic:    rbfCacheFileMagic,
+		Version:  rbfCacheFileVersion,
+		Files:    files,
+		Manifest: manifest,
 	}
 	if encErr := gob.NewEncoder(tmp).Encode(&payload); encErr != nil {
 		_ = tmp.Close()
