@@ -11,6 +11,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,4 +154,87 @@ func TestCoreExists(t *testing.T) {
 	assert.True(t, coreExists(rootDir, filepath.Join("_Console", "AY-3-8500")))
 	assert.True(t, coreExists(rootDir, filepath.Join("_Computer", "VT52")))
 	assert.False(t, coreExists(rootDir, filepath.Join("_Computer", "Altair8800")))
+}
+
+func TestMergeOtherLaunchableDefinitions_AppendsNewEntry(t *testing.T) {
+	merged := mergeOtherLaunchableDefinitions(
+		misterOtherLaunchableDefinitions,
+		[]config.LaunchersCustom{
+			{
+				ID: "MisterOtherArduboy", Kind: config.CustomLauncherKindVirtualSystem,
+				Backend: config.CustomLauncherBackendMisterCore, Name: "Arduboy",
+				Category: "Other", LoadPath: "_Other/Arduboy",
+			},
+		},
+	)
+
+	require.Len(t, merged, len(misterOtherLaunchableDefinitions)+1)
+	added := merged[len(merged)-1]
+	assert.Equal(t, "Arduboy", added.Name)
+	assert.Equal(t, "Other", added.Category)
+	assert.Equal(t, filepath.Join("_Other", "Arduboy"), added.LoadPath)
+	assert.Equal(t, uuid.NewSHA1(
+		launchables.ZaparooLaunchableNamespace,
+		[]byte("mister_core:misterotherarduboy"),
+	), added.ID)
+}
+
+func TestMergeOtherLaunchableDefinitions_OverridesBuiltinKeepsUUID(t *testing.T) {
+	merged := mergeOtherLaunchableDefinitions(
+		misterOtherLaunchableDefinitions,
+		[]config.LaunchersCustom{
+			{
+				ID: "MisterOtherChess", Kind: config.CustomLauncherKindVirtualSystem,
+				Backend: config.CustomLauncherBackendMisterCore, Name: "Chess Renamed",
+				Category: "Console", LoadPath: "_Other/ChessAlt",
+			},
+		},
+	)
+
+	require.Len(t, merged, len(misterOtherLaunchableDefinitions))
+
+	var chess *misterOtherLaunchableDefinition
+	for i := range merged {
+		if merged[i].ConfigID == "MisterOtherChess" {
+			chess = &merged[i]
+			break
+		}
+	}
+	require.NotNil(t, chess, "chess entry missing from merged list")
+	assert.Equal(t, "Chess Renamed", chess.Name)
+	assert.Equal(t, "Console", chess.Category)
+	assert.Equal(t, filepath.Join("_Other", "ChessAlt"), chess.LoadPath)
+	assert.Equal(t, launchables.MisterOtherChess, chess.ID)
+}
+
+func TestLaunchables_IncludesUserConfiguredOtherLaunchable(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.custom]]
+id = "MisterOtherArduboy"
+kind = "virtual_system"
+backend = "mister_core"
+name = "Arduboy"
+load_path = "_Other/Arduboy"
+`))
+
+	items := (&Platform{}).Launchables(cfg)
+
+	require.Len(t, items, 33)
+
+	var found *launchables.VirtualSystem
+	for i := range items {
+		if system, ok := items[i].(launchables.VirtualSystem); ok && system.Name == "Arduboy" {
+			found = &system
+			break
+		}
+	}
+	require.NotNil(t, found, "Arduboy launchable missing")
+	assert.Equal(t, "Other", found.Category)
+	assert.Equal(t, uuid.NewSHA1(
+		launchables.ZaparooLaunchableNamespace,
+		[]byte("mister_core:misterotherarduboy"),
+	), found.ID)
+	assert.NotNil(t, found.Launch)
+	assert.NotNil(t, found.Test)
 }

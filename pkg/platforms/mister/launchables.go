@@ -74,85 +74,132 @@ func misterComputerCore(id uuid.UUID, name, coreName string) misterCoreLaunchabl
 	}
 }
 
+type misterOtherLaunchableDefinition struct {
+	ConfigID string
+	Name     string
+	Category string
+	LoadPath string
+	ID       uuid.UUID
+}
+
+var misterOtherLaunchableDefinitions = []misterOtherLaunchableDefinition{
+	{
+		ConfigID: "MisterOtherChess", ID: launchables.MisterOtherChess,
+		Name: "Chess", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "Chess"),
+	},
+	{
+		ConfigID: "MisterOtherDonut", ID: launchables.MisterOtherDonut,
+		Name: "Donut", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "Donut"),
+	},
+	{
+		ConfigID: "MisterOtherEpochGalaxyII", ID: launchables.MisterOtherEpochGalaxyII,
+		Name: "Epoch Galaxy II", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "EpochGalaxyII"),
+	},
+	{
+		ConfigID: "MisterOtherFlappyBird", ID: launchables.MisterOtherFlappyBird,
+		Name: "Flappy Bird", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "FlappyBird"),
+	},
+	{
+		ConfigID: "MisterOtherGameOfLife", ID: launchables.MisterOtherGameOfLife,
+		Name: "Game of Life", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "GameOfLife"),
+	},
+	{
+		ConfigID: "MisterOtherGBMidi", ID: launchables.MisterOtherGBMidi,
+		Name: "GBMidi", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "GBMidi"),
+	},
+	{
+		ConfigID: "MisterOtherGenMidi", ID: launchables.MisterOtherGenMidi,
+		Name: "GenMidi", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "GenMidi"),
+	},
+	{
+		ConfigID: "MisterOtherSlugCross", ID: launchables.MisterOtherSlugCross,
+		Name: "Slug Cross", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "SlugCross"),
+	},
+	{
+		ConfigID: "MisterOtherTomyScramble", ID: launchables.MisterOtherTomyScramble,
+		Name: "Tomy Scramble", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "TomyScramble"),
+	},
+}
+
+// mergeOtherLaunchableDefinitions overlays custom virtual systems onto built-in
+// _Other definitions while preserving fixed UUIDs for matching built-ins.
+func mergeOtherLaunchableDefinitions(
+	builtins []misterOtherLaunchableDefinition,
+	userEntries []config.LaunchersCustom,
+) []misterOtherLaunchableDefinition {
+	merged := make([]misterOtherLaunchableDefinition, 0, len(builtins)+len(userEntries))
+	merged = append(merged, builtins...)
+
+	index := make(map[string]int, len(merged))
+	for i, def := range merged {
+		index[strings.ToLower(def.ConfigID)] = i
+	}
+
+	for i := range userEntries {
+		entry := &userEntries[i]
+		id := strings.ToLower(entry.ID)
+		if i, ok := index[id]; ok {
+			merged[i].Name = entry.Name
+			merged[i].Category = entry.Category
+			merged[i].LoadPath = filepath.FromSlash(entry.LoadPath)
+			continue
+		}
+		merged = append(merged, misterOtherLaunchableDefinition{
+			ConfigID: entry.ID,
+			Name:     entry.Name,
+			Category: entry.Category,
+			LoadPath: filepath.FromSlash(entry.LoadPath),
+			ID: uuid.NewSHA1(
+				launchables.ZaparooLaunchableNamespace,
+				[]byte(config.CustomLauncherBackendMisterCore+":"+id),
+			),
+		})
+		index[id] = len(merged) - 1
+	}
+
+	return merged
+}
+
 // Launchables exposes launch-only MiSTer core entries that do not already have
 // media launchers.
-func (p *Platform) Launchables(*config.Instance) []launchables.Launchable {
-	items := make([]launchables.Launchable, 0, 10+len(misterCoreLaunchableDefinitions))
-	items = append(items,
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherChess,
-			Name:     "Chess",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "Chess")),
-			Test:     testOtherCore("Chess"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherDonut,
-			Name:     "Donut",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "Donut")),
-			Test:     testOtherCore("Donut"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherEpochGalaxyII,
-			Name:     "Epoch Galaxy II",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "EpochGalaxyII")),
-			Test:     testOtherCore("EpochGalaxyII"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherFlappyBird,
-			Name:     "Flappy Bird",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "FlappyBird")),
-			Test:     testOtherCore("FlappyBird"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherGameOfLife,
-			Name:     "Game of Life",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "GameOfLife")),
-			Test:     testOtherCore("GameOfLife"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherGBMidi,
-			Name:     "GBMidi",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "GBMidi")),
-			Test:     testOtherCore("GBMidi"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherGenMidi,
-			Name:     "GenMidi",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "GenMidi")),
-			Test:     testOtherCore("GenMidi"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherSlugCross,
-			Name:     "Slug Cross",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "SlugCross")),
-			Test:     testOtherCore("SlugCross"),
-		},
-		launchables.VirtualSystem{
-			ID:       launchables.MisterOtherTomyScramble,
-			Name:     "Tomy Scramble",
-			Category: misterLaunchableCategoryOther,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "TomyScramble")),
-			Test:     testOtherCore("TomyScramble"),
-		},
-		// 3S-ARM is a native ARM port of Street Fighter III: 3rd Strike that
-		// ships as an _Other core but is a real arcade game, so it is exposed
-		// as virtual media under the Arcade system rather than an Other entry.
-		launchables.VirtualMedia{
-			ID:       launchables.MisterArcadeThirdStrike,
-			Name:     "Street Fighter III: 3rd Strike (3S-ARM)",
-			SystemID: systemdefs.SystemArcade,
-			Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
-			Test:     testOtherCore("3S-ARM"),
-		},
-	)
+func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
+	customVirtualSystems := make([]config.LaunchersCustom, 0)
+	customLaunchers := cfg.CustomLaunchers()
+	for i := range customLaunchers {
+		entry := &customLaunchers[i]
+		if entry.Backend == config.CustomLauncherBackendMisterCore &&
+			entry.Kind == config.CustomLauncherKindVirtualSystem {
+			customVirtualSystems = append(customVirtualSystems, *entry)
+		}
+	}
+	otherDefs := mergeOtherLaunchableDefinitions(misterOtherLaunchableDefinitions, customVirtualSystems)
+
+	items := make([]launchables.Launchable, 0, len(otherDefs)+1+len(misterCoreLaunchableDefinitions))
+	for _, def := range otherDefs {
+		items = append(items, launchables.VirtualSystem{
+			ID:       def.ID,
+			Name:     def.Name,
+			Category: def.Category,
+			Launch:   p.launchCore(def.LoadPath),
+			Test:     testCore(def.LoadPath),
+		})
+	}
+
+	// 3S-ARM is a native ARM port of Street Fighter III: 3rd Strike that
+	// ships as an _Other core but is a real arcade game, so it is exposed
+	// as virtual media under the Arcade system rather than an Other entry.
+	items = append(items, launchables.VirtualMedia{
+		ID:       launchables.MisterArcadeThirdStrike,
+		Name:     "Street Fighter III: 3rd Strike (3S-ARM)",
+		SystemID: systemdefs.SystemArcade,
+		Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
+		Test:     testOtherCore("3S-ARM"),
+	})
 
 	for _, def := range misterCoreLaunchableDefinitions {
 		items = append(items, launchables.VirtualSystem{

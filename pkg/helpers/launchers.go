@@ -38,10 +38,10 @@ import (
 func formatExtensions(exts []string) []string {
 	newExts := make([]string, 0)
 	for _, v := range exts {
-		if v == "" {
+		newExt := strings.TrimSpace(v)
+		if newExt == "" {
 			continue
 		}
-		newExt := strings.TrimSpace(v)
 		if newExt[0] != '.' {
 			newExt = "." + newExt
 		}
@@ -82,153 +82,140 @@ func parseCustomControls(commands map[string]string) map[string]platforms.Contro
 	return controls
 }
 
-// ParseCustomLaunchers converts user-configured custom launchers into platform
-// launchers. When a custom launcher has an empty Execute field, the returned
-// launcher's Launch function will be nil — the platform is expected to fill in
-// its own default launch mechanism (e.g., ES API on Batocera).
+// ParseCustomLauncher converts common custom-launcher fields into a platform
+// launcher. Native backends can add their own availability and launch functions.
+func ParseCustomLauncher(pl platforms.Platform, v *config.LaunchersCustom) (platforms.Launcher, bool) {
+	systemID := ""
+	if v.System != "" {
+		system, err := systemdefs.LookupSystem(v.System)
+		if err != nil {
+			log.Warn().Err(err).Str("launcherID", v.ID).Str("system", v.System).
+				Msg("skipping custom launcher: system not found")
+			return platforms.Launcher{}, false
+		}
+		systemID = system.ID
+	}
+
+	lifecycle := parseLifecycle(v.Lifecycle)
+	launcherID := v.ID
+	launcherGroups := v.Groups
+	executeCmd := v.Execute
+	exts := formatExtensions(v.FileExts)
+	resolvedDirs := make([]string, len(v.MediaDirs))
+	for i, dir := range v.MediaDirs {
+		resolvedDirs[i] = ResolveRelativePath(dir)
+	}
+
+	launcher := platforms.Launcher{
+		ID:            launcherID,
+		SystemID:      systemID,
+		Folders:       resolvedDirs,
+		Extensions:    exts,
+		Groups:        launcherGroups,
+		Schemes:       v.Schemes,
+		AllowListOnly: v.Restricted,
+		Lifecycle:     lifecycle,
+		Controls:      parseCustomControls(v.Controls),
+	}
+
+	if executeCmd != "" {
+		launcher.Launch = func(
+			cfg *config.Instance, path string, opts *platforms.LaunchOptions,
+		) (*os.Process, error) {
+			hostname, err := os.Hostname()
+			if err != nil {
+				log.Debug().Err(err).Msgf("error getting hostname, continuing")
+			}
+			defaults := cfg.LookupLauncherDefaults(launcherID, launcherGroups)
+			action := ""
+			if opts != nil && opts.Action != "" {
+				action = opts.Action
+			} else {
+				action = defaults.Action
+			}
+
+			exprEnv := zapscript.CustomLauncherExprEnv{
+				Platform: pl.ID(),
+				Version:  config.AppVersion,
+				Device: zapscript.ExprEnvDevice{
+					Hostname: hostname,
+					OS:       runtime.GOOS,
+					Arch:     runtime.GOARCH,
+				},
+				MediaPath:  path,
+				Action:     action,
+				InstallDir: defaults.InstallDir,
+				ServerURL:  defaults.ServerURL,
+				SystemID:   systemID,
+				LauncherID: launcherID,
+			}
+
+			parseReader := zapscript.NewParser(executeCmd)
+			parsed, parseErr := parseReader.ParseExpressions()
+			if parseErr != nil {
+				return nil, fmt.Errorf("error parsing expressions: %w", parseErr)
+			}
+			evalReader := zapscript.NewParser(parsed)
+			output, evalErr := evalReader.EvalExpressions(exprEnv)
+			if evalErr != nil {
+				return nil, fmt.Errorf("error evaluating execute expression: %w", evalErr)
+			}
+			parts, splitErr := SplitCommand(output)
+			if splitErr != nil {
+				return nil, fmt.Errorf("failed to parse execute command: %w", splitErr)
+			}
+			if len(parts) == 0 {
+				return nil, errors.New("execute command is empty after parsing")
+			}
+
+			log.Debug().Str("launcherID", launcherID).Str("command", output).Strs("argv", parts).
+				Msg("executing custom launcher")
+			//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
+			cmd := exec.Command(parts[0], parts[1:]...)
+			cmd.Dir = ExeDir()
+			envJSON, jsonErr := json.Marshal(exprEnv)
+			if jsonErr != nil {
+				log.Debug().Err(jsonErr).Msg("failed to marshal ZAPAROO_ENVIRONMENT")
+			} else {
+				cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
+			}
+			if startErr := cmd.Start(); startErr != nil {
+				log.Error().Err(startErr).Msgf("error running custom launcher: %s", output)
+				return nil, fmt.Errorf("failed to start custom launcher command: %w", startErr)
+			}
+			return cmd.Process, nil
+		}
+	}
+
+	log.Info().Str("launcherID", launcher.ID).Str("systemID", launcher.SystemID).
+		Strs("folders", launcher.Folders).Strs("extensions", launcher.Extensions).
+		Int("lifecycle", int(launcher.Lifecycle)).Msg("registered custom launcher")
+	return launcher, true
+}
+
+// ParseCustomLaunchers converts legacy and command-backed custom launchers.
+// Native backends and virtual systems are compiled by their owning platform.
 func ParseCustomLaunchers(
 	pl platforms.Platform,
 	customLaunchers []config.LaunchersCustom,
 ) []platforms.Launcher {
-	launchers := make([]platforms.Launcher, 0)
+	launchers := make([]platforms.Launcher, 0, len(customLaunchers))
 	skipped := 0
 	for i := range customLaunchers {
-		v := &customLaunchers[i]
-
-		systemID := ""
-		if v.System != "" {
-			system, err := systemdefs.LookupSystem(v.System)
-			if err != nil {
-				log.Warn().Err(err).Str("launcherID", v.ID).Str("system", v.System).
-					Msg("skipping custom launcher: system not found")
-				skipped++
-				continue
-			}
-			systemID = system.ID
+		entry := &customLaunchers[i]
+		if entry.Backend == config.CustomLauncherBackendMisterCore {
+			continue
 		}
-
-		lifecycle := parseLifecycle(v.Lifecycle)
-
-		// Capture values for the closure
-		launcherID := v.ID
-		launcherSystemID := systemID
-		launcherGroups := v.Groups
-		executeCmd := v.Execute
-
-		exts := formatExtensions(v.FileExts)
-
-		resolvedDirs := make([]string, len(v.MediaDirs))
-		for j, dir := range v.MediaDirs {
-			resolvedDirs[j] = ResolveRelativePath(dir)
+		launcher, ok := ParseCustomLauncher(pl, entry)
+		if !ok {
+			skipped++
+			continue
 		}
-
-		log.Info().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
-			Strs("folders", resolvedDirs).Strs("extensions", exts).
-			Int("lifecycle", int(lifecycle)).
-			Msg("registered custom launcher")
-
-		launcher := platforms.Launcher{
-			ID:            launcherID,
-			SystemID:      launcherSystemID,
-			Folders:       resolvedDirs,
-			Extensions:    exts,
-			Groups:        launcherGroups,
-			Schemes:       v.Schemes,
-			AllowListOnly: v.Restricted,
-			Lifecycle:     lifecycle,
-			Controls:      parseCustomControls(v.Controls),
-		}
-
-		// When execute is empty, leave Launch nil so the platform can
-		// fill in its own default launch mechanism (e.g., ES API on Batocera).
-		if executeCmd != "" {
-			launcher.Launch = func(
-				cfg *config.Instance, path string, opts *platforms.LaunchOptions,
-			) (*os.Process, error) {
-				hostname, err := os.Hostname()
-				if err != nil {
-					log.Debug().Err(err).Msgf("error getting hostname, continuing")
-				}
-
-				// Get config defaults for this launcher
-				defaults := cfg.LookupLauncherDefaults(launcherID, launcherGroups)
-
-				// Resolve action from opts or defaults
-				action := ""
-				if opts != nil && opts.Action != "" {
-					action = opts.Action
-				} else {
-					action = defaults.Action
-				}
-
-				exprEnv := zapscript.CustomLauncherExprEnv{
-					Platform: pl.ID(),
-					Version:  config.AppVersion,
-					Device: zapscript.ExprEnvDevice{
-						Hostname: hostname,
-						OS:       runtime.GOOS,
-						Arch:     runtime.GOARCH,
-					},
-					MediaPath:  path,
-					Action:     action,
-					InstallDir: defaults.InstallDir,
-					ServerURL:  defaults.ServerURL,
-					SystemID:   launcherSystemID,
-					LauncherID: launcherID,
-				}
-
-				parseReader := zapscript.NewParser(executeCmd)
-				parsed, err := parseReader.ParseExpressions()
-				if err != nil {
-					return nil, fmt.Errorf("error parsing expressions: %w", err)
-				}
-
-				evalReader := zapscript.NewParser(parsed)
-				output, err := evalReader.EvalExpressions(exprEnv)
-				if err != nil {
-					return nil, fmt.Errorf("error evaluating execute expression: %w", err)
-				}
-
-				parts, splitErr := SplitCommand(output)
-				if splitErr != nil {
-					return nil, fmt.Errorf("failed to parse execute command: %w", splitErr)
-				}
-				if len(parts) == 0 {
-					return nil, errors.New("execute command is empty after parsing")
-				}
-
-				log.Debug().Str("launcherID", launcherID).Str("command", output).Strs("argv", parts).
-					Msg("executing custom launcher")
-
-				//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
-				cmd := exec.Command(parts[0], parts[1:]...)
-				cmd.Dir = ExeDir()
-
-				// Pass ZAPAROO_ENVIRONMENT JSON env var
-				envJSON, jsonErr := json.Marshal(exprEnv)
-				if jsonErr != nil {
-					log.Debug().Err(jsonErr).Msg("failed to marshal ZAPAROO_ENVIRONMENT")
-				} else {
-					cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
-				}
-
-				if err = cmd.Start(); err != nil {
-					log.Error().Err(err).Msgf("error running custom launcher: %s", output)
-					return nil, fmt.Errorf("failed to start custom launcher command: %w", err)
-				}
-
-				// Custom launchers can be tracked - return process for lifecycle management
-				return cmd.Process, nil
-			}
-		}
-
 		launchers = append(launchers, launcher)
 	}
-
 	if skipped > 0 {
 		log.Warn().Int("skipped", skipped).Int("parsed", len(launchers)).
 			Msg("some custom launchers were skipped due to errors")
 	}
-
 	return launchers
 }
