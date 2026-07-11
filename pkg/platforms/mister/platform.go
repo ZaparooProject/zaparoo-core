@@ -640,6 +640,13 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 }
 
 func (p *Platform) ReturnToMenu() error {
+	p.processMu.Lock()
+	hasTrackedProcess := p.trackedProcess != nil
+	p.processMu.Unlock()
+	if hasTrackedProcess {
+		return p.StopActiveLauncher(platforms.StopForMenu)
+	}
+
 	// Restore console cursor state on both TTYs
 	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
 		log.Warn().Err(err).Msg("failed to restore tty1 cursor")

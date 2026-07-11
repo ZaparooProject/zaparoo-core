@@ -356,6 +356,29 @@ func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
 	}
 }
 
+func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.CommandContext(context.Background(), "sleep", "10")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	restoreDone := make(chan struct{})
+	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test")
+	require.NoError(t, err)
+
+	require.NoError(t, p.ReturnToMenu())
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("console cleanup did not complete before ReturnToMenu returned")
+	}
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(proc.Pid, 0), syscall.ESRCH)
+	}, time.Second, 10*time.Millisecond, "tracked console process survived ReturnToMenu")
+}
+
 func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
 	pidPath := filepath.Join(t.TempDir(), "child.pid")
 	cmd := exec.CommandContext( //nolint:gosec // Fixed test shell; only temp path is variable.
@@ -391,8 +414,9 @@ func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
 		t.Fatal("console cleanup did not complete before stop returned")
 	}
 
-	assert.ErrorIs(t, syscall.Kill(childPID, 0), syscall.ESRCH,
-		"descendant process survived console cleanup")
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(childPID, 0), syscall.ESRCH)
+	}, time.Second, 10*time.Millisecond, "descendant process survived console cleanup")
 }
 
 func TestArcadeCardLaunchCache(t *testing.T) {

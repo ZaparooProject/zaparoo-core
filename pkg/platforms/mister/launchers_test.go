@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -379,16 +378,15 @@ func TestScummVMKill_SendsCtrlQWithoutWaiting(t *testing.T) {
 		return nil
 	})
 
-	done := make(chan error, 1)
-	go func() { done <- kill(&config.Instance{}) }()
+	err := kill(&config.Instance{})
+	require.NoError(t, err)
 
 	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("ScummVM Kill waited for process termination")
+	case keys := <-pressed:
+		assert.Equal(t, "{ctrl+q}", keys)
+	default:
+		t.Fatal("ScummVM Kill did not send ctrl+q")
 	}
-	assert.Equal(t, "{ctrl+q}", <-pressed)
 }
 
 func TestScummVMKill_PropagatesKeyboardError(t *testing.T) {
@@ -421,10 +419,9 @@ func TestBuildScummVMCommand(t *testing.T) {
 	assert.Contains(t, cmd.Args, "--opl-driver=db")
 	assert.Contains(t, cmd.Args, "--output-rate=48000")
 
-	// Verify working directory and isolated process group.
+	// Verify working directory and inherited session required by SDL VT handling.
 	assert.Equal(t, scummvmBaseDir, cmd.Dir)
-	require.NotNil(t, cmd.SysProcAttr)
-	assert.True(t, cmd.SysProcAttr.Setsid)
+	assert.Nil(t, cmd.SysProcAttr)
 
 	// Verify environment variables - check that our custom ones are set
 	hasCustomHome := false

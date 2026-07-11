@@ -66,15 +66,18 @@ func (m *mockCoreNameGetter) GetCoreName() string {
 }
 
 type mockConsoleLeaseController struct {
-	acquireErr  error
-	releaseErr  error
-	acquiredVT  string
-	releasedKey string
-	available   bool
+	acquireErr     error
+	releaseErr     error
+	acquiredVT     string
+	releasedKey    string
+	available      bool
+	availableAfter int
+	availableCalls int
 }
 
 func (m *mockConsoleLeaseController) Available() bool {
-	return m.available
+	m.availableCalls++
+	return m.available || (m.availableAfter > 0 && m.availableCalls >= m.availableAfter)
 }
 
 func (m *mockConsoleLeaseController) Acquire(_ context.Context, vt string) (string, error) {
@@ -190,6 +193,22 @@ func TestMiSTerConsoleManager_Open_UsesMainConsoleLease(t *testing.T) {
 	assert.Equal(t, "test-nonce", cm.leaseNonce)
 	assert.Equal(t, "3", cm.activeVT)
 	assert.True(t, cm.active)
+}
+
+func TestMiSTerConsoleManager_Open_UsesLeasePublishedAfterMenuTransition(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{availableAfter: 2}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.coreNameGetter = &mockCoreNameGetter{coreName: "GAMEBOY"}
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+
+	err := cm.Open(context.Background(), "3")
+	require.NoError(t, err)
+	assert.Equal(t, 2, lease.availableCalls)
+	assert.Equal(t, "3", lease.acquiredVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
 }
 
 func TestMiSTerConsoleManager_Open_LeaseFailure(t *testing.T) {

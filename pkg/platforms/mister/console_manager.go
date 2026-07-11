@@ -124,39 +124,11 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 		return nil
 	}
 
-	if m.leaseController.Available() {
-		leaseCtx, leaseCancel := context.WithTimeout(ctx, 3*time.Second)
-		nonce, err := m.leaseController.Acquire(leaseCtx, vt)
-		leaseCancel()
-		if err != nil {
-			return fmt.Errorf("failed to acquire Main console lease: %w", err)
-		}
-
-		m.mu.Lock()
-		m.active = true
-		m.activeVT = vt
-		m.leaseNonce = nonce
-		m.mu.Unlock()
-
-		if framebufferErr := m.waitForFramebuffer(m.framebufferWait); framebufferErr != nil {
-			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			releaseErr := m.leaseController.Release(releaseCtx, nonce)
-			releaseCancel()
-			if releaseErr != nil {
-				wrappedReleaseErr := fmt.Errorf(
-					"release Main console lease after framebuffer failure: %w", releaseErr,
-				)
-				return errors.Join(framebufferErr, wrappedReleaseErr)
-			}
-
-			m.mu.Lock()
-			m.active = false
-			m.activeVT = ""
-			m.leaseNonce = ""
-			m.mu.Unlock()
-			return framebufferErr
-		}
-		log.Debug().Str("vt", vt).Msg("Main console lease acquired")
+	acquired, err := m.tryAcquireLease(ctx, vt)
+	if err != nil {
+		return err
+	}
+	if acquired {
 		return nil
 	}
 
@@ -189,6 +161,16 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 	maxBackoff := 500 * time.Millisecond
 
 	for time.Now().Before(deadline) {
+		// Main may restart and publish its lease capability while returning
+		// from an FPGA core to the menu. Prefer that protocol once available.
+		acquired, err := m.tryAcquireLease(ctx, vt)
+		if err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+
 		// Check if launcher context was cancelled
 		if ctx.Err() != nil {
 			log.Debug().Err(ctx.Err()).Msg("launcher context cancelled during F9 loop")
@@ -196,7 +178,7 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 		}
 
 		// Press F9 to signal MiSTer_Main to release framebuffer
-		err := m.platform.KeyboardPress("{f9}")
+		err = m.platform.KeyboardPress("{f9}")
 		if err != nil {
 			return fmt.Errorf("failed to press F9 key: %w", err)
 		}
@@ -246,6 +228,46 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 		Str("targetVT", vt).Str("core", coreName).
 		Msg("timeout waiting for console switch")
 	return errors.New("timeout waiting for console switch after 5s")
+}
+
+func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (bool, error) {
+	if !m.leaseController.Available() {
+		return false, nil
+	}
+
+	leaseCtx, leaseCancel := context.WithTimeout(ctx, 3*time.Second)
+	nonce, err := m.leaseController.Acquire(leaseCtx, vt)
+	leaseCancel()
+	if err != nil {
+		return false, fmt.Errorf("failed to acquire Main console lease: %w", err)
+	}
+
+	m.mu.Lock()
+	m.active = true
+	m.activeVT = vt
+	m.leaseNonce = nonce
+	m.mu.Unlock()
+
+	if framebufferErr := m.waitForFramebuffer(m.framebufferWait); framebufferErr != nil {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		releaseErr := m.leaseController.Release(releaseCtx, nonce)
+		releaseCancel()
+		if releaseErr != nil {
+			wrappedReleaseErr := fmt.Errorf(
+				"release Main console lease after framebuffer failure: %w", releaseErr,
+			)
+			return false, errors.Join(framebufferErr, wrappedReleaseErr)
+		}
+
+		m.mu.Lock()
+		m.active = false
+		m.activeVT = ""
+		m.leaseNonce = ""
+		m.mu.Unlock()
+		return false, framebufferErr
+	}
+	log.Debug().Str("vt", vt).Msg("Main console lease acquired")
+	return true, nil
 }
 
 // Close exits console mode and returns to normal display.

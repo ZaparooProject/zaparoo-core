@@ -764,8 +764,8 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 		targetID,
 	)
 
-	// Set environment variables
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// ScummVM's SDL VT backend requires the inherited session. Unlike FVP,
+	// starting it in a new session causes an immediate SIGHUP on MiSTer.
 	cmd.Env = append(os.Environ(),
 		"HOME="+scummvmBaseDir,
 		"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
