@@ -28,7 +28,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -366,6 +368,36 @@ func TestBuildFvpCommand_DifferentPaths(t *testing.T) {
 			assert.Contains(t, cmd.Args, tt.path, "path should be in args")
 		})
 	}
+}
+
+func TestScummVMKill_SendsCtrlQWithoutWaiting(t *testing.T) {
+	t.Parallel()
+
+	pressed := make(chan string, 1)
+	kill := scummVMKill(func(keys string) error {
+		pressed <- keys
+		return nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- kill(&config.Instance{}) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("ScummVM Kill waited for process termination")
+	}
+	assert.Equal(t, "{ctrl+q}", <-pressed)
+}
+
+func TestScummVMKill_PropagatesKeyboardError(t *testing.T) {
+	t.Parallel()
+
+	kill := scummVMKill(func(string) error { return assert.AnError })
+	err := kill(&config.Instance{})
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "failed to send ctrl+q")
 }
 
 func TestBuildScummVMCommand(t *testing.T) {

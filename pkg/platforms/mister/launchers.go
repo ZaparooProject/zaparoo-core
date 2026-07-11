@@ -846,6 +846,15 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 	}
 }
 
+func scummVMKill(keyboardPress func(string) error) func(*config.Instance) error {
+	return func(_ *config.Instance) error {
+		if err := keyboardPress("{ctrl+q}"); err != nil {
+			return fmt.Errorf("failed to send ctrl+q: %w", err)
+		}
+		return nil
+	}
+}
+
 // createScummVMLauncher creates a Launcher definition for ScummVM games.
 func createScummVMLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
@@ -858,12 +867,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		Launch:             launchScummVM(pl),
 		// ScummVM needs a keyboard-triggered graceful exit to avoid VT locks.
 		// Shared process lifecycle code owns waiting and timeout escalation.
-		Kill: func(_ *config.Instance) error {
-			if err := pl.KeyboardPress("{ctrl+q}"); err != nil {
-				return fmt.Errorf("failed to send ctrl+q: %w", err)
-			}
-			return nil
-		},
+		Kill: scummVMKill(pl.KeyboardPress),
 	}
 }
 

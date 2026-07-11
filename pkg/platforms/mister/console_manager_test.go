@@ -294,6 +294,29 @@ func TestMiSTerConsoleManager_Close_ReleaseFailurePreservesRetryState(t *testing
 	assert.Equal(t, "test-nonce", lease.releasedKey)
 }
 
+func TestMiSTerConsoleManager_CleanAndRestoreUseHardwareBoundary(t *testing.T) {
+	t.Parallel()
+
+	hardware := &mockConsoleHardware{}
+	cm := newConsoleManager(&Platform{})
+	cm.hardware = hardware
+
+	require.NoError(t, cm.Clean("3"))
+	require.NoError(t, cm.Restore("3"))
+	assert.Equal(t, []string{"3"}, hardware.cleanedVTs)
+	assert.Equal(t, []string{"3"}, hardware.restoredVTs)
+}
+
+func TestMiSTerConsoleManager_CleanAndRestoreWrapHardwareErrors(t *testing.T) {
+	t.Parallel()
+
+	cm := newConsoleManager(&Platform{})
+	cm.hardware = &mockConsoleHardware{cleanErr: assert.AnError, restoreErr: assert.AnError}
+
+	require.ErrorIs(t, cm.Clean("3"), assert.AnError)
+	require.ErrorIs(t, cm.Restore("3"), assert.AnError)
+}
+
 func TestMiSTerConsoleManager_Open_ChvtAfterTty1Confirmed(t *testing.T) {
 	t.Parallel()
 

@@ -601,9 +601,13 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 		p.launcherManager.NewContext()
 	}
 
-	// Check if launcher has custom Kill function
+	// Capture the current launcher cleanup before clearing it. Script-tracked
+	// processes do not set lastLauncher and must not inherit a stale Kill hook.
 	p.platformMu.Lock()
 	customKill := p.lastLauncher.Kill
+	if proc != nil {
+		p.lastLauncher = platforms.Launcher{}
+	}
 	p.platformMu.Unlock()
 
 	if proc != nil {

@@ -266,6 +266,34 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 	}
 }
 
+func TestStopActiveLauncher_DoesNotReuseStaleKillForScript(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	killCalls := 0
+	launcher := platforms.Launcher{Kill: func(*config.Instance) error {
+		killCalls++
+		p.processMu.Lock()
+		proc := p.trackedProcess
+		p.processMu.Unlock()
+		return proc.Signal(syscall.SIGTERM)
+	}}
+	p.setLastLauncher(&launcher)
+
+	first := exec.CommandContext(context.Background(), "sleep", "10")
+	require.NoError(t, first.Start())
+	p.SetTrackedProcess(first.Process)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, killCalls)
+
+	second := exec.CommandContext(context.Background(), "sleep", "10")
+	require.NoError(t, second.Start())
+	p.SetTrackedProcess(second.Process)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, killCalls, "script stop reused stale launcher Kill hook")
+}
+
 func TestScummVMLauncher_HasCustomKill(t *testing.T) {
 	t.Parallel()
 

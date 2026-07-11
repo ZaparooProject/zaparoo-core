@@ -24,6 +24,7 @@ package mister
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -54,9 +55,10 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 		}
 	}
 
-	// Get console manager
-	cm := pl.ConsoleManager()
+	return setupConsoleManager(ctx, pl.ConsoleManager())
+}
 
+func setupConsoleManager(ctx context.Context, cm platforms.ConsoleManager) (platforms.ConsoleManager, error) {
 	// Switch to console mode (F9 + chvt to launcher VT)
 	if err := cm.Open(ctx, armLauncherVT); err != nil {
 		return nil, fmt.Errorf("failed to open console: %w", err)
@@ -70,7 +72,11 @@ func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.Conso
 
 	// Clean launcher console (tty3) - where content actually displays
 	if err := cm.Clean(armLauncherVT); err != nil {
-		return nil, fmt.Errorf("failed to clean launcher console: %w", err)
+		cleanErr := fmt.Errorf("failed to clean launcher console: %w", err)
+		if closeErr := cm.Close(); closeErr != nil {
+			return nil, errors.Join(cleanErr, fmt.Errorf("close console after clean failure: %w", closeErr))
+		}
+		return nil, cleanErr
 	}
 
 	return cm, nil

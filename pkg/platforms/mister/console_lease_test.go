@@ -153,6 +153,28 @@ func TestMainConsoleLeaseController_Release(t *testing.T) {
 	require.NoError(t, controller.Release(context.Background(), "test-nonce"))
 }
 
+func TestMainConsoleLeaseController_AcquireCommandFailure(t *testing.T) {
+	t.Parallel()
+
+	controller, _ := newTestConsoleLeaseController(t)
+	controller.commandPath = filepath.Join(string(filepath.Separator), "missing", "MiSTer_cmd")
+
+	_, err := controller.Acquire(context.Background(), "3")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open Main command interface")
+}
+
+func TestMainConsoleLeaseController_ReleaseCommandFailure(t *testing.T) {
+	t.Parallel()
+
+	controller, _ := newTestConsoleLeaseController(t)
+	controller.commandPath = filepath.Join(string(filepath.Separator), "missing", "MiSTer_cmd")
+
+	err := controller.Release(context.Background(), "test-nonce")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open Main command interface")
+}
+
 func TestMainConsoleLeaseController_WriteCommandFailure(t *testing.T) {
 	t.Parallel()
 
@@ -178,6 +200,21 @@ func TestMainConsoleLeaseController_ReleaseStateFailure(t *testing.T) {
 	err := controller.Release(context.Background(), "test-nonce")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed")
+}
+
+func TestMainConsoleLeaseController_ReadStateValidation(t *testing.T) {
+	t.Parallel()
+
+	controller, fs := newTestConsoleLeaseController(t)
+	require.NoError(t, afero.WriteFile(fs, controller.statePath, []byte("invalid\n"), 0o600))
+	_, err := controller.readState()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid Main console state")
+
+	require.NoError(t, afero.WriteFile(fs, controller.statePath, []byte("1 bad ready -\n"), 0o600))
+	_, err = controller.readState()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid Main console PID")
 }
 
 func TestMainConsoleLeaseController_WaitForFailure(t *testing.T) {

@@ -33,3 +33,17 @@ func TestNoticeArgsLifecycleUsesInjectedFilesystem(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, exists)
 }
+
+func TestNoticeArgsLifecycleReportsFilesystemErrors(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewReadOnlyFs(afero.NewMemMapFs())
+	argsPath := filepath.Join("tmp", "zaparoo", "notice.json")
+	err := writeNoticeArgs(fs, argsPath, widgetmodels.NoticeArgs{Text: "Loading"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error writing notice args")
+
+	err = hideNotice(fs, argsPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error removing notice args")
+}
