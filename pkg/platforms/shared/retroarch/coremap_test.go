@@ -81,6 +81,29 @@ func TestCoreLaunchesProfiles(t *testing.T) {
 	assert.Equal(t, "mednafen_psx_hw_libretro.so", desktopPSX.Core)
 }
 
+func TestGenesisCoreAndPolicyByProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		profile Profile
+		core    string
+		policy  DownloadPolicy
+	}{
+		{profile: ProfileApplianceARM, core: "clownmdemu", policy: PolicyFree},
+		{profile: ProfileDesktop, core: "genesis_plus_gx", policy: PolicyNonCommercial},
+	}
+
+	for _, tt := range tests {
+		launch, ok := CoreLaunchForFolder(tt.profile, "megadrive")
+		require.True(t, ok)
+		assert.Equal(t, tt.core+"_libretro.so", launch.Core)
+
+		policy, ok := CorePolicyForFolder(tt.profile, "megadrive")
+		require.True(t, ok)
+		assert.Equal(t, tt.policy, policy)
+	}
+}
+
 func TestCorePoliciesMatchSelectedNonCommercialCores(t *testing.T) {
 	t.Parallel()
 
