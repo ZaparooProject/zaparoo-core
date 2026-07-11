@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -868,19 +869,27 @@ type tagCacheKey struct {
 }
 
 type scrapeWriteTxContext struct {
-	tx               *sql.Tx
-	tagTypes         map[string]tagTypeEntry
-	tags             map[tagCacheKey]int64
-	propertyTypeTags map[string]int64
+	tx                        *sql.Tx
+	tagTypes                  map[string]tagTypeEntry
+	tags                      map[tagCacheKey]int64
+	propertyTypeTags          map[string]int64
+	changedImageMediaIDs      map[int64]struct{}
+	changedImageMediaTitleIDs map[int64]struct{}
 }
 
 func newScrapeWriteTxContext(tx *sql.Tx) *scrapeWriteTxContext {
 	return &scrapeWriteTxContext{
-		tx:               tx,
-		tagTypes:         make(map[string]tagTypeEntry),
-		tags:             make(map[tagCacheKey]int64),
-		propertyTypeTags: make(map[string]int64),
+		tx:                        tx,
+		tagTypes:                  make(map[string]tagTypeEntry),
+		tags:                      make(map[tagCacheKey]int64),
+		propertyTypeTags:          make(map[string]int64),
+		changedImageMediaIDs:      make(map[int64]struct{}),
+		changedImageMediaTitleIDs: make(map[int64]struct{}),
 	}
+}
+
+func isImageProperty(typeTag string) bool {
+	return strings.HasPrefix(typeTag, "property:image-")
 }
 
 func (c *scrapeWriteTxContext) resolveTagType(
@@ -1481,7 +1490,7 @@ func upsertMediaTitleProperties(
 		if err != nil {
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
-		if err := upsertMediaTitleProperty(ctx, q, mediaTitleDBID, typeTagDBID, &p); err != nil {
+		if _, err := upsertMediaTitleProperty(ctx, q, mediaTitleDBID, typeTagDBID, &p); err != nil {
 			return err
 		}
 	}
@@ -1496,8 +1505,12 @@ func upsertMediaTitlePropertiesWithContext(
 		if err != nil {
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
-		if err := upsertMediaTitleProperty(ctx, writeCtx.tx, mediaTitleDBID, typeTagDBID, &p); err != nil {
+		changed, err := upsertMediaTitleProperty(ctx, writeCtx.tx, mediaTitleDBID, typeTagDBID, &p)
+		if err != nil {
 			return err
+		}
+		if changed && isImageProperty(p.TypeTag) {
+			writeCtx.changedImageMediaTitleIDs[mediaTitleDBID] = struct{}{}
 		}
 	}
 	return nil
@@ -1505,8 +1518,8 @@ func upsertMediaTitlePropertiesWithContext(
 
 func upsertMediaTitleProperty(
 	ctx context.Context, q sqlQueryable, mediaTitleDBID, typeTagDBID int64, p *database.MediaProperty,
-) error {
-	_, err := q.ExecContext(ctx, `
+) (bool, error) {
+	result, err := q.ExecContext(ctx, `
 		INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text, BlobDBID)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(MediaTitleDBID, TypeTagDBID) DO UPDATE SET
@@ -1516,9 +1529,13 @@ func upsertMediaTitleProperty(
 		   OR MediaTitleProperties.BlobDBID IS NOT excluded.BlobDBID
 	`, mediaTitleDBID, typeTagDBID, p.Text, p.BlobDBID)
 	if err != nil {
-		return fmt.Errorf("failed to upsert MediaTitleProperty (typeTag=%q): %w", p.TypeTag, err)
+		return false, fmt.Errorf("failed to upsert MediaTitleProperty (typeTag=%q): %w", p.TypeTag, err)
 	}
-	return nil
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read MediaTitleProperty upsert result (typeTag=%q): %w", p.TypeTag, err)
+	}
+	return rows > 0, nil
 }
 
 // UpsertMediaProperties upserts properties into MediaProperties.
@@ -1630,6 +1647,89 @@ LIMIT 1`, systemID, path, typeTagDBID).Scan(&exists)
 	return true, nil
 }
 
+func (db *MediaDB) recordScrapeImageChanges(ctx context.Context, writeCtx *scrapeWriteTxContext) {
+	if len(writeCtx.changedImageMediaIDs) == 0 && len(writeCtx.changedImageMediaTitleIDs) == 0 {
+		return
+	}
+
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, len(writeCtx.changedImageMediaIDs)+len(writeCtx.changedImageMediaTitleIDs))
+	if len(writeCtx.changedImageMediaIDs) > 0 {
+		conditions = append(conditions, "m.DBID IN ("+prepareVariadic("?", ",", len(writeCtx.changedImageMediaIDs))+")")
+		for id := range writeCtx.changedImageMediaIDs {
+			args = append(args, id)
+		}
+	}
+	if len(writeCtx.changedImageMediaTitleIDs) > 0 {
+		conditions = append(conditions,
+			"m.MediaTitleDBID IN ("+prepareVariadic("?", ",", len(writeCtx.changedImageMediaTitleIDs))+")")
+		for id := range writeCtx.changedImageMediaTitleIDs {
+			args = append(args, id)
+		}
+	}
+
+	//nolint:gosec // conditions contain only generated placeholders
+	rows, err := db.sql.Load().QueryContext(ctx, `
+SELECT DISTINCT s.SystemID
+FROM Media m
+JOIN Systems s ON s.DBID = m.SystemDBID
+WHERE `+strings.Join(conditions, " OR "), args...)
+	if err != nil {
+		db.scrapeImageChangesMu.Lock()
+		db.scrapeImageChangesAll = true
+		db.scrapeImageChangesMu.Unlock()
+		log.Warn().Err(err).Msg("failed to resolve systems with changed scrape images; full invalidation required")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	changed := make([]string, 0)
+	for rows.Next() {
+		var systemID string
+		if err := rows.Scan(&systemID); err != nil {
+			db.scrapeImageChangesMu.Lock()
+			db.scrapeImageChangesAll = true
+			db.scrapeImageChangesMu.Unlock()
+			log.Warn().Err(err).Msg("failed to read system with changed scrape images; full invalidation required")
+			return
+		}
+		changed = append(changed, systemID)
+	}
+	if err := rows.Err(); err != nil {
+		db.scrapeImageChangesMu.Lock()
+		db.scrapeImageChangesAll = true
+		db.scrapeImageChangesMu.Unlock()
+		log.Warn().Err(err).Msg("failed to iterate systems with changed scrape images; full invalidation required")
+		return
+	}
+
+	db.scrapeImageChangesMu.Lock()
+	if db.scrapeImageSystems == nil {
+		db.scrapeImageSystems = make(map[string]struct{})
+	}
+	for _, systemID := range changed {
+		db.scrapeImageSystems[systemID] = struct{}{}
+	}
+	db.scrapeImageChangesMu.Unlock()
+}
+
+// ConsumeScrapeImageChanges returns and clears systems whose image properties
+// materially changed in committed scrape writes. all is true when tracking
+// could not resolve a safe targeted set and callers must invalidate everything.
+func (db *MediaDB) ConsumeScrapeImageChanges() (systems []string, all bool) {
+	db.scrapeImageChangesMu.Lock()
+	defer db.scrapeImageChangesMu.Unlock()
+	systems = make([]string, 0, len(db.scrapeImageSystems))
+	for systemID := range db.scrapeImageSystems {
+		systems = append(systems, systemID)
+	}
+	sort.Strings(systems)
+	all = db.scrapeImageChangesAll
+	db.scrapeImageSystems = nil
+	db.scrapeImageChangesAll = false
+	return systems, all
+}
+
 // ApplyScrapeResult writes all scraper metadata for a match in one transaction.
 // The sentinel tag is inserted last so interrupted writes remain retryable.
 func (db *MediaDB) ApplyScrapeResult(
@@ -1666,6 +1766,7 @@ func (db *MediaDB) ApplyScrapeResult(
 		return fmt.Errorf("ApplyScrapeResult: commit: %w", err)
 	}
 	committed = true
+	db.recordScrapeImageChanges(ctx, writeCtx)
 	// Scraped tags can change which tags distinguish a title's variants. Refresh
 	// after commit (the scrape ran on its own tx, not db.tx). Non-fatal.
 	if disErr := db.RecomputeTitleDisambiguation(ctx, []int64{mediaTitleDBID}); disErr != nil {
@@ -1713,6 +1814,7 @@ func (db *MediaDB) ApplyScrapeResults(ctx context.Context, targets []database.Sc
 		return fmt.Errorf("ApplyScrapeResults: commit: %w", err)
 	}
 	committed = true
+	db.recordScrapeImageChanges(ctx, writeCtx)
 	// Scraped tags can change which tags distinguish a title's variants. Refresh
 	// the affected titles after commit (the batch ran on its own tx). Non-fatal.
 	titleIDs := make([]int64, 0, len(targets))
@@ -1980,6 +2082,29 @@ func insertMediaTitleTagPairs(
 	return nil
 }
 
+func trackChangedTitlePropertyRows(
+	changedRows *sql.Rows,
+	rowsByKey map[titlePropKey]titlePropRow,
+	writeCtx *scrapeWriteTxContext,
+) (int, error) {
+	defer func() { _ = changedRows.Close() }()
+	changedCount := 0
+	for changedRows.Next() {
+		var key titlePropKey
+		if err := changedRows.Scan(&key.mediaTitleDBID, &key.typeTagDBID); err != nil {
+			return 0, fmt.Errorf("failed to scan changed MediaTitleProperty: %w", err)
+		}
+		changedCount++
+		if row, ok := rowsByKey[key]; ok && isImageProperty(row.p.TypeTag) {
+			writeCtx.changedImageMediaTitleIDs[key.mediaTitleDBID] = struct{}{}
+		}
+	}
+	if err := changedRows.Err(); err != nil {
+		return 0, fmt.Errorf("failed to iterate changed MediaTitleProperties: %w", err)
+	}
+	return changedCount, nil
+}
+
 func upsertMediaTitlePropertiesBulkWithContext(
 	ctx context.Context,
 	writeCtx *scrapeWriteTxContext,
@@ -2023,11 +2148,17 @@ func upsertMediaTitlePropertiesBulkWithContext(
 				BlobDBID = excluded.BlobDBID
 			WHERE MediaTitleProperties.Text IS NOT excluded.Text
 			   OR MediaTitleProperties.BlobDBID IS NOT excluded.BlobDBID
+			RETURNING MediaTitleDBID, TypeTagDBID
 		`
-		if _, err := writeCtx.tx.ExecContext(ctx, query, args...); err != nil {
+		changedRows, err := writeCtx.tx.QueryContext(ctx, query, args...)
+		if err != nil {
 			return fmt.Errorf("failed to upsert MediaTitleProperties bulk: %w", err)
 		}
-		stats.TitlePropertyUpsertRows += len(chunk)
+		changedCount, err := trackChangedTitlePropertyRows(changedRows, rowsByKey, writeCtx)
+		if err != nil {
+			return err
+		}
+		stats.TitlePropertyUpsertRows += changedCount
 		stats.TitlePropertyUpsertStatements++
 	}
 	return nil
@@ -2181,7 +2312,7 @@ func upsertMediaProperties(ctx context.Context, q sqlQueryable, mediaDBID int64,
 		if err != nil {
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
-		if err := upsertMediaProperty(ctx, q, mediaDBID, typeTagDBID, &p); err != nil {
+		if _, err := upsertMediaProperty(ctx, q, mediaDBID, typeTagDBID, &p); err != nil {
 			return err
 		}
 	}
@@ -2196,8 +2327,12 @@ func upsertMediaPropertiesWithContext(
 		if err != nil {
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
-		if err := upsertMediaProperty(ctx, writeCtx.tx, mediaDBID, typeTagDBID, &p); err != nil {
+		changed, err := upsertMediaProperty(ctx, writeCtx.tx, mediaDBID, typeTagDBID, &p)
+		if err != nil {
 			return err
+		}
+		if changed && isImageProperty(p.TypeTag) {
+			writeCtx.changedImageMediaIDs[mediaDBID] = struct{}{}
 		}
 	}
 	return nil
@@ -2205,18 +2340,24 @@ func upsertMediaPropertiesWithContext(
 
 func upsertMediaProperty(
 	ctx context.Context, q sqlQueryable, mediaDBID, typeTagDBID int64, p *database.MediaProperty,
-) error {
-	_, err := q.ExecContext(ctx, `
+) (bool, error) {
+	result, err := q.ExecContext(ctx, `
 		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text, BlobDBID)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(MediaDBID, TypeTagDBID) DO UPDATE SET
 			Text    = excluded.Text,
 			BlobDBID = excluded.BlobDBID
+		WHERE MediaProperties.Text IS NOT excluded.Text
+		   OR MediaProperties.BlobDBID IS NOT excluded.BlobDBID
 	`, mediaDBID, typeTagDBID, p.Text, p.BlobDBID)
 	if err != nil {
-		return fmt.Errorf("failed to upsert MediaProperty (typeTag=%q): %w", p.TypeTag, err)
+		return false, fmt.Errorf("failed to upsert MediaProperty (typeTag=%q): %w", p.TypeTag, err)
 	}
-	return nil
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read MediaProperty upsert result (typeTag=%q): %w", p.TypeTag, err)
+	}
+	return rows > 0, nil
 }
 
 // DeleteMediaTitleProperty removes the property row for (mediaTitleDBID, typeTagDBID)

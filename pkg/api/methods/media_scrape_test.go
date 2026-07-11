@@ -374,12 +374,9 @@ func TestHandleMediaScrape_NotifiesPreparingBeforeScraperStartFailure(t *testing
 	mockDB.AssertExpectations(t)
 }
 
-// TestHandleMediaScrape_WipesThumbCacheOnCompletion verifies that finishing a
-// scrape invalidates the resized-thumbnail disk cache (issue #967): a re-scrape
-// can change image sources under a stable cache key, so the cache must be
-// wiped or it keeps serving stale art. Both completion paths are covered: the
-// in-loop wipe on an explicit Done=true update, and the synthesized-done wipe
-// when the scraper closes the channel without ever emitting a Done update.
+// TestHandleMediaScrape_WipesThumbCacheOnCompletion verifies that terminal
+// scrape handling invalidates systems whose committed image properties changed.
+// Both completion paths are covered: an explicit Done update and channel close.
 func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance and the
 	// process-wide thumb cache pointer.
@@ -405,16 +402,18 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 			oldCache := &mediaThumbCache{
 				fs:            fs,
 				dir:           filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
-				resolvedTypes: make(map[string]string),
+				resolvedTypes: make(map[string]resolvedThumb),
 			}
 			mediaID := int64(1)
 			oldCache.set(
-				mediaRefParam{MediaID: &mediaID}, "property:image-boxart", 100, []byte("png-data"), "image/png",
+				mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
+				[]byte("png-data"), "image/png",
 			)
 			mediaThumbCachePointer.Store(oldCache)
 			t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
 			mockDB := testhelpers.NewMockMediaDBI()
+			mockDB.ScrapeImageSystems = []string{"SNES"}
 			mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "test-scraper"}).Return(nil).Once()
 			mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 			mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
@@ -472,10 +471,30 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 				"wipe keeps the deterministic version dir in place")
 			assert.Equal(t, mediaThumbCacheVersionDir(), filepath.Base(newCache.dir),
 				"live cache stays in the versioned thumbs/v<N> directory")
-			_, _, found := newCache.get(mediaRefParam{MediaID: &mediaID}, "property:image-boxart", 100)
+			_, _, found := newCache.get(
+				mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
+			)
 			assert.False(t, found, "scrape completion should wipe cached thumbnails")
 		})
 	}
+}
+
+func TestInvalidateChangedScrapeThumbnails_NoChangesPreservesCache(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	cache := &mediaThumbCache{
+		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]resolvedThumb),
+	}
+	mediaID := int64(1)
+	ref := mediaRefParam{MediaID: &mediaID}
+	cache.set(ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	invalidateChangedScrapeThumbnails(testhelpers.NewMockMediaDBI())
+
+	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 256)
+	assert.True(t, found, "metadata-only scrape must keep existing thumbnails")
 }
 
 func TestHandleMediaScrape_ResumesStalePauseForBackgroundMedia(t *testing.T) {
@@ -566,7 +585,19 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	ClearScrapingStatus()
 	statusInstance.clear()
 
+	fs := afero.NewMemMapFs()
+	cache := &mediaThumbCache{
+		fs: fs, dir: filepath.Join("cache", mediaThumbCacheDirName, mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]resolvedThumb),
+	}
+	mediaID := int64(1)
+	ref := mediaRefParam{MediaID: &mediaID}
+	cache.set(ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
 	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.ScrapeImageSystems = []string{"SNES"}
 	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "fail-scraper"}).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
@@ -598,6 +629,8 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond)
+	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 256)
+	assert.False(t, found, "failed scrape must invalidate artwork changed before failure")
 
 	var sawFailure bool
 	for {

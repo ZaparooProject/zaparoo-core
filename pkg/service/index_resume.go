@@ -413,6 +413,14 @@ func checkAndHealBrowseCache(
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
+func invalidateInterruptedScrapeThumbnails(systems []string) {
+	if len(systems) == 0 {
+		methods.WipeMediaThumbCache()
+		return
+	}
+	methods.WipeMediaThumbCacheSystems(systems)
+}
+
 func checkAndResumeScraping(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -437,6 +445,7 @@ func checkAndResumeScraping(
 	}
 	if !found || operation.ScraperID == "" {
 		log.Warn().Msg("scraping marked incomplete but no scraping operation was stored")
+		invalidateInterruptedScrapeThumbnails(nil)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark incomplete scraping as failed")
 		}
@@ -445,12 +454,16 @@ func checkAndResumeScraping(
 
 	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok {
 		log.Warn().Str("scraper", operation.ScraperID).Msg("stored scraper not available; marking scrape failed")
+		invalidateInterruptedScrapeThumbnails(operation.Systems)
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to mark unavailable scraper as failed")
 		}
 		return
 	}
 
+	// Writes commit incrementally, so artwork may have changed before the
+	// interruption even though no terminal invalidation ran.
+	invalidateInterruptedScrapeThumbnails(operation.Systems)
 	log.Info().Str("scraper", operation.ScraperID).Msg("detected interrupted media scraping, automatically resuming")
 	env := requests.RequestEnv{
 		Context:      st.GetContext(),

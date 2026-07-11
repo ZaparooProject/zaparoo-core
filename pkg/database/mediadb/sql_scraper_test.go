@@ -1045,6 +1045,54 @@ func TestApplyScrapeResults_SkipsUnchangedTitleMetadataAndStillWritesSentinel(t 
 	assert.True(t, hasSentinel)
 }
 
+func TestApplyScrapeResults_TracksOnlyChangedImageProperties(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	boxart := filepath.ToSlash(filepath.Join("media", "boxart", "mario.png"))
+	target := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			MediaProps: []database.MediaProperty{{
+				TypeTag: "property:image-boxart",
+				Text:    boxart,
+			}},
+		},
+	}
+
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	systems, all := mediaDB.ConsumeScrapeImageChanges()
+	assert.Equal(t, []string{"NES"}, systems)
+	assert.False(t, all)
+
+	// Identical upsert is a no-op and must not trigger cache invalidation.
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	systems, all = mediaDB.ConsumeScrapeImageChanges()
+	assert.Empty(t, systems)
+	assert.False(t, all)
+
+	// A changed image source is tracked again.
+	target.Write.MediaProps[0].Text = filepath.ToSlash(filepath.Join("media", "boxart", "mario-v2.png"))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	systems, all = mediaDB.ConsumeScrapeImageChanges()
+	assert.Equal(t, []string{"NES"}, systems)
+	assert.False(t, all)
+
+	// Title-level artwork affects every media row attached to the title.
+	target.Write.MediaProps = nil
+	target.Write.TitleProps = []database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.ToSlash(filepath.Join("media", "titles", "mario.png")),
+	}}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	systems, all = mediaDB.ConsumeScrapeImageChanges()
+	assert.Equal(t, []string{"NES"}, systems)
+	assert.False(t, all)
+}
+
 func TestApplyScrapeResults_ReplacesChangedExclusiveTitleTags(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

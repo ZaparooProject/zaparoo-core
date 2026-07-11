@@ -409,6 +409,36 @@ func notifyMediaIndexingStopped(ns chan<- models.Notification, mediaDB database.
 	})
 }
 
+func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
+	if rebuild || len(systems) == 0 {
+		WipeMediaThumbCache()
+		return
+	}
+	requested := make(map[string]struct{}, len(systems))
+	for _, system := range systems {
+		requested[system.ID] = struct{}{}
+	}
+	allSystems := systemdefs.AllSystems()
+	if len(requested) >= len(allSystems) {
+		allRequested := true
+		for _, system := range allSystems {
+			if _, ok := requested[system.ID]; !ok {
+				allRequested = false
+				break
+			}
+		}
+		if allRequested {
+			WipeMediaThumbCache()
+			return
+		}
+	}
+	systemIDs := make([]string, 0, len(requested))
+	for systemID := range requested {
+		systemIDs = append(systemIDs, systemID)
+	}
+	WipeMediaThumbCacheSystems(systemIDs)
+}
+
 func GenerateMediaDB(
 	ctx context.Context,
 	pl platforms.Platform,
@@ -654,7 +684,7 @@ func startMediaDBGeneration(
 			log.Warn().Err(resetErr).Msg("failed to reset index resume attempts after successful index")
 		}
 		mediaImageNoImages.clear()
-		WipeMediaThumbCache()
+		invalidateIndexedThumbnails(systems, rebuild)
 		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
