@@ -365,7 +365,7 @@ func (p *Platform) StartPost(
 		log.Debug().Msg("no idle scheduler; skipping arcade DB update")
 	}
 
-	// If the RBF cache loaded from disk but its directory mtimes drifted,
+	// If the RBF cache loaded from disk but its shallow manifest drifted,
 	// the persisted entries are still serving requests but a rescan is
 	// needed to pick up any added/removed cores. Defer the rescan to the
 	// idle scheduler so it doesn't compete with the launcher's first

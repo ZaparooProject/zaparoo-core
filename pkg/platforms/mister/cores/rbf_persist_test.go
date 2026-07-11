@@ -34,16 +34,16 @@ import (
 func sampleRBFs() []RBFInfo {
 	return []RBFInfo{
 		{
-			Path:      "/media/fat/_Console/SNES_20240101.rbf",
+			Path:      filepath.Join(string(filepath.Separator), "media", "fat", "_Console", "SNES_20240101.rbf"),
 			Filename:  "SNES_20240101.rbf",
 			ShortName: "SNES",
-			MglName:   "_Console/SNES",
+			MglName:   filepath.Join("_Console", "SNES"),
 		},
 		{
-			Path:      "/media/fat/_Console/NES_20240101.rbf",
+			Path:      filepath.Join(string(filepath.Separator), "media", "fat", "_Console", "NES_20240101.rbf"),
 			Filename:  "NES_20240101.rbf",
 			ShortName: "NES",
-			MglName:   "_Console/NES",
+			MglName:   filepath.Join("_Console", "NES"),
 		},
 	}
 }
@@ -54,13 +54,13 @@ func TestPersistedRBFCache_RoundTrip(t *testing.T) {
 	path := filepath.Join(dir, RBFCacheFileName)
 
 	rbfs := sampleRBFs()
-	mtimes := map[string]int64{
-		"/media/fat/_Console":  1234567891,
-		"/media/fat/_Computer": 1234567892,
+	manifest := []string{
+		filepath.Join("_Console", "NES_20240101.rbf"),
+		filepath.Join("_Console", "SNES_20240101.rbf"),
+		"MyCustomCore.rbf",
 	}
-	rootRBFs := []string{"MyCustomCore.rbf", "Userport.rbf"}
 
-	require.NoError(t, writePersistedRBFCache(path, rbfs, mtimes, rootRBFs))
+	require.NoError(t, writePersistedRBFCache(path, rbfs, manifest))
 
 	loaded, ok, err := loadPersistedRBFCache(path)
 	require.NoError(t, err)
@@ -69,8 +69,7 @@ func TestPersistedRBFCache_RoundTrip(t *testing.T) {
 	assert.Equal(t, rbfCacheFileMagic, loaded.Magic)
 	assert.Equal(t, rbfCacheFileVersion, loaded.Version)
 	assert.Equal(t, rbfs, loaded.Files)
-	assert.Equal(t, mtimes, loaded.DirMtimes)
-	assert.Equal(t, rootRBFs, loaded.RootRBFs)
+	assert.Equal(t, manifest, loaded.Manifest)
 }
 
 func TestPersistedRBFCache_MissingFile(t *testing.T) {
@@ -129,9 +128,10 @@ func TestPersistedRBFCache_TruncatedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, RBFCacheFileName)
 
-	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), map[string]int64{
-		"/media/fat/_Console": 1,
-	}, nil))
+	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), []string{
+		filepath.Join("_Console", "NES_20240101.rbf"),
+		filepath.Join("_Console", "SNES_20240101.rbf"),
+	}))
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
@@ -149,9 +149,10 @@ func TestPersistedRBFCache_OversizedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, RBFCacheFileName)
 
-	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), map[string]int64{
-		"/media/fat/_Console": 1,
-	}, nil))
+	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), []string{
+		filepath.Join("_Console", "NES_20240101.rbf"),
+		filepath.Join("_Console", "SNES_20240101.rbf"),
+	}))
 
 	originalCap := rbfCacheMaxBytes
 	rbfCacheMaxBytes = 16
@@ -168,23 +169,18 @@ func TestPersistedRBFCache_AtomicRenameOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, RBFCacheFileName)
 
-	require.NoError(t, writePersistedRBFCache(path, sampleRBFs()[:1], map[string]int64{
-		"/media/fat/_Console": 1,
-	}, []string{"first.rbf"}))
+	require.NoError(t, writePersistedRBFCache(path, sampleRBFs()[:1], []string{"first.rbf"}))
 	loaded, ok, err := loadPersistedRBFCache(path)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, loaded.Files, 1)
 
-	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), map[string]int64{
-		"/media/fat/_Console": 2,
-	}, []string{"second.rbf"}))
+	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), []string{"second.rbf"}))
 	loaded, ok, err = loadPersistedRBFCache(path)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Len(t, loaded.Files, 2, "second write should overwrite first")
-	assert.Equal(t, int64(2), loaded.DirMtimes["/media/fat/_Console"])
-	assert.Equal(t, []string{"second.rbf"}, loaded.RootRBFs)
+	assert.Equal(t, []string{"second.rbf"}, loaded.Manifest)
 }
 
 func TestDirMtimesMatch_EmptySnapshot(t *testing.T) {
@@ -245,16 +241,84 @@ func TestDiffDirMtimes_MissingPath(t *testing.T) {
 	assert.Zero(t, diffs[0].CurrentMtimeNs)
 }
 
-func TestSnapshotDirMtimes_IncludesRetroAchievementsCoreDir(t *testing.T) {
+func TestSnapshotDirMtimes_IncludesSpecialCoreDirs(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	lightGunDir := filepath.Join(root, "Light Gun")
 	require.NoError(t, os.MkdirAll(raCoreDir, 0o750))
+	require.NoError(t, os.MkdirAll(lightGunDir, 0o750))
 
 	snapshot, err := snapshotDirMtimesAt(root)
 	require.NoError(t, err)
 	assert.Contains(t, snapshot, raCoreDir)
+	assert.Contains(t, snapshot, lightGunDir)
+}
+
+func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	consoleDir := filepath.Join(root, "_Console")
+	customDir := filepath.Join(root, "_Custom")
+	lightGunDir := filepath.Join(root, "Light Gun")
+	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	ignoredDir := filepath.Join(root, "Games")
+	for _, dir := range []string{consoleDir, customDir, lightGunDir, raCoreDir, ignoredDir} {
+		require.NoError(t, os.MkdirAll(dir, 0o750))
+	}
+
+	writeRBF := func(path string) {
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+	}
+	writeRBF(filepath.Join(root, "Arcade.rbf"))
+	writeRBF(filepath.Join(consoleDir, "Saturn_20251003.rbf"))
+	writeRBF(filepath.Join(customDir, "Custom.rbf"))
+	writeRBF(filepath.Join(lightGunDir, "Sinden.rbf"))
+	writeRBF(filepath.Join(raCoreDir, "RASNES.rbf"))
+	writeRBF(filepath.Join(ignoredDir, "Ignored.rbf"))
+	require.NoError(t, os.MkdirAll(filepath.Join(consoleDir, "Nested"), 0o750))
+	writeRBF(filepath.Join(consoleDir, "Nested", "TooDeep.rbf"))
+	require.NoError(t, os.WriteFile(filepath.Join(consoleDir, "readme.txt"), nil, 0o600))
+
+	manifest, err := snapshotRBFManifestAt(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"Arcade.rbf",
+		filepath.Join("Light Gun", "Sinden.rbf"),
+		filepath.Join("_Console", "Saturn_20251003.rbf"),
+		filepath.Join("_Custom", "Custom.rbf"),
+		filepath.Join("_RA_Cores", "Cores", "RASNES.rbf"),
+	}, manifest)
+}
+
+func TestSnapshotRBFManifest_TracksSymlinkTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	consoleDir := filepath.Join(root, "_Console")
+	require.NoError(t, os.MkdirAll(consoleDir, 0o750))
+	require.NoError(t, os.Symlink("Saturn_20251003.rbf", filepath.Join(consoleDir, "Saturn.rbf")))
+
+	manifest, err := snapshotRBFManifestAt(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		filepath.Join("_Console", "Saturn.rbf") + " -> Saturn_20251003.rbf",
+	}, manifest)
+}
+
+func TestRBFManifestsMatch(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, rbfManifestsMatch(nil, nil))
+	saturn := filepath.Join("_Console", "Saturn.rbf")
+	assert.True(t, rbfManifestsMatch([]string{saturn}, []string{saturn}))
+	assert.False(t, rbfManifestsMatch(
+		[]string{filepath.Join("_Console", "Saturn_old.rbf")},
+		[]string{filepath.Join("_Console", "Saturn_new.rbf")},
+	))
+	assert.False(t, rbfManifestsMatch(nil, []string{saturn}))
 }
 
 func TestRootRBFsMatch_NoFilesEqualsEmptySnapshot(t *testing.T) {
@@ -287,17 +351,6 @@ func TestRootRBFsMatch_IgnoresNonRBFRootFiles(t *testing.T) {
 		"unrelated files at SD root must not invalidate the cache")
 }
 
-func TestDiffRootRBFs_AddedAndRemoved(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "Kept.rbf"), []byte{}, 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "Added.rbf"), []byte{}, 0o600))
-
-	diff := diffRootRBFsAt(root, []string{"Kept.rbf", "Removed.rbf"})
-	assert.Equal(t, []string{"Added.rbf"}, diff.Added)
-	assert.Equal(t, []string{"Removed.rbf"}, diff.Removed)
-}
-
 // TestRBFCache_NoPersistPath_ScanFlowsThrough verifies that with no persist
 // path the existing scan-only behaviour still works (regardless of whether
 // /media/fat exists on the test host).
@@ -309,7 +362,7 @@ func TestRBFCache_NoPersistPath_ScanFlowsThrough(t *testing.T) {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 	assert.True(t, cache.initialized, "Refresh must mark cache initialized")
-	assert.False(t, cache.needsRescan, "scan path resets needsRescan")
+	assert.True(t, cache.needsRescan, "unavailable manifest keeps scan marked stale")
 	assert.Empty(t, cache.persistPath, "no persist path was configured")
 }
 
@@ -325,30 +378,41 @@ func TestRBFCache_SetPersistPath(t *testing.T) {
 	assert.Equal(t, "/tmp/example.gob", got)
 }
 
-// TestRBFCache_LoadFromDisk_PopulatesMaps verifies that a persisted file is
-// decoded and BuildFromRBFs is run, populating bySystemID for known systems.
 func TestRBFCache_LoadFromDisk_PopulatesMaps(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, RBFCacheFileName)
+	tests := []struct {
+		name        string
+		rootExists  bool
+		storedMatch bool
+		needsRescan bool
+	}{
+		{name: "matching manifest", rootExists: true, storedMatch: true},
+		{name: "mismatching manifest", rootExists: true, needsRescan: true},
+		{name: "snapshot error", needsRescan: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			root := filepath.Join(dir, "sd")
+			manifest := []string(nil)
+			if tt.rootExists {
+				require.NoError(t, os.MkdirAll(root, 0o750))
+				if !tt.storedMatch {
+					manifest = []string{"missing.rbf"}
+				}
+			}
+			path := filepath.Join(dir, RBFCacheFileName)
+			require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), manifest))
 
-	rbfs := sampleRBFs()
-	require.NoError(t, writePersistedRBFCache(path, rbfs, map[string]int64{
-		"/this/path/does/not/exist": 1, // forces dirMtimesMatch=false → needsRescan=true
-	}, nil))
+			cache := &RBFCache{sdRoot: root}
+			cache.SetPersistPath(path)
+			cache.Refresh()
 
-	cache := &RBFCache{}
-	cache.SetPersistPath(path)
-	cache.Refresh()
-
-	// We don't assert specific systems — that depends on the Systems table
-	// containing entries with RBF "_Console/SNES" or "_Console/NES". What we
-	// CAN assert is that byShortName was populated from the persisted file
-	// and that the drift was detected.
-	rbf, ok := cache.GetByShortName("snes")
-	assert.True(t, ok, "SNES should be loaded from the persisted file")
-	assert.Equal(t, "_Console/SNES", rbf.MglName)
-
-	assert.True(t, cache.NeedsRescan(),
-		"bogus snapshot path must mark needsRescan=true")
+			rbf, ok := cache.GetByShortName("snes")
+			require.True(t, ok)
+			assert.Equal(t, filepath.Join("_Console", "SNES"), rbf.MglName)
+			assert.Equal(t, tt.needsRescan, cache.NeedsRescan())
+		})
+	}
 }
