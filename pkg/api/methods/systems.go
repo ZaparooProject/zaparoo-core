@@ -22,9 +22,9 @@ package methods
 import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/rs/zerolog/log"
 )
@@ -32,9 +32,16 @@ import (
 func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received systems request")
 
+	var params models.SystemsParams
+	if len(env.Params) > 0 {
+		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
+	}
+
 	indexed, err := env.Database.MediaDB.IndexedSystems()
 	if err != nil {
-		log.Error().Err(err).Msgf("error getting indexed systems")
+		log.Error().Err(err).Msg("error getting indexed systems")
 		indexed = []string{}
 	}
 
@@ -42,22 +49,44 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		log.Warn().Msg("no indexed systems found")
 	}
 
-	respSystems := make([]models.System, 0)
-
+	systemIDs := make([]string, 0, len(indexed))
+	seen := make(map[string]struct{}, len(indexed))
+	addSystemID := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		systemIDs = append(systemIDs, id)
+	}
 	for _, id := range indexed {
-		system, err := systemdefs.GetSystem(id)
-		if err != nil {
-			log.Error().Err(err).Msgf("error getting system: %s", id)
+		addSystemID(id)
+	}
+
+	if env.LauncherCache != nil {
+		launchers := env.LauncherCache.GetAllLaunchers()
+		for i := range launchers {
+			if !params.All && !launchers[i].Available {
+				continue
+			}
+			addSystemID(launchers[i].SystemID)
+		}
+	}
+
+	respSystems := make([]models.System, 0, len(systemIDs))
+	for _, id := range systemIDs {
+		system, systemErr := systemdefs.GetSystem(id)
+		if systemErr != nil {
+			log.Error().Err(systemErr).Msgf("error getting system: %s", id)
 			continue
 		}
 
-		sr := models.System{
-			ID: system.ID,
-		}
-
-		sm, err := assets.GetSystemMetadata(id)
-		if err != nil {
-			log.Error().Err(err).Msgf("error getting system metadata: %s", id)
+		sr := models.System{ID: system.ID}
+		sm, metadataErr := assets.GetSystemMetadata(id)
+		if metadataErr != nil {
+			log.Error().Err(metadataErr).Msgf("error getting system metadata: %s", id)
 		} else {
 			sr.Name = sm.Name
 			sr.Category = sm.Category
@@ -68,20 +97,24 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 				sr.Manufacturer = &sm.Manufacturer
 			}
 		}
-
 		respSystems = append(respSystems, sr)
 	}
 
-	for _, system := range helpers.GlobalLauncherCache.GetLaunchableSystems() {
-		respSystems = append(respSystems, models.System{
-			ID:        launchables.EncodeID(system.ID),
-			Name:      system.Name,
-			Category:  system.Category,
-			ZapScript: system.ZapScript(),
-		})
+	if env.LauncherCache != nil {
+		for _, system := range env.LauncherCache.GetLaunchableSystems() {
+			id := launchables.EncodeID(system.ID)
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			respSystems = append(respSystems, models.System{
+				ID:        id,
+				Name:      system.Name,
+				Category:  system.Category,
+				ZapScript: system.ZapScript(),
+			})
+		}
 	}
 
-	return models.SystemsResponse{
-		Systems: respSystems,
-	}, nil
+	return models.SystemsResponse{Systems: respSystems}, nil
 }

@@ -46,6 +46,10 @@ type BrowseParams struct {
 	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 }
 
+type SystemsParams struct {
+	All bool `json:"all,omitempty"`
+}
+
 type MediaIndexParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
