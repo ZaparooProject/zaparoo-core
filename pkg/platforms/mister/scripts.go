@@ -100,18 +100,9 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		}
 	}
 
-	// run it on-screen like a regular script
-	// Use background context with timeout since scripts are not launcher operations
-	scriptCtx, scriptCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer scriptCancel()
-	err := pl.ConsoleManager().Open(scriptCtx, scriptConsoleVT)
-	if err != nil {
-		return fmt.Errorf("failed to open console for script: %w", err)
-	}
-
 	scriptPath := misterScriptPath
 	runScript, widgetScript := scriptRunMode(bin, args)
-	vt := "2"
+	vt := scriptConsoleVT
 	log.Debug().Msgf("bin: %s", bin)
 	log.Debug().Msgf("args: %s", args)
 	if widgetScript {
@@ -119,7 +110,16 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		// to avoid the active script check (widgets handle this)
 		log.Debug().Msg("widget launched, changing params")
 		scriptPath = misterWidgetScriptPath
-		vt = launcherConsoleVT
+		vt = armLauncherVT
+	}
+
+	// Run it on-screen like a regular script. Use a background context with
+	// timeout since scripts are not launcher operations.
+	scriptCtx, scriptCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer scriptCancel()
+	err := pl.ConsoleManager().Open(scriptCtx, vt)
+	if err != nil {
+		return fmt.Errorf("failed to open console for script: %w", err)
 	}
 
 	// this is just to follow mister's convention, which reserves
@@ -166,16 +166,9 @@ cd $(dirname "%s")
 		if pl.activeMedia() != nil {
 			return
 		}
-		// exit console
-		err = pl.KeyboardPress("{f12}")
-		if err != nil {
-			return
+		if closeErr := pl.ConsoleManager().Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close script console")
 		}
-
-		// Clear console active flag
-		pl.consoleManager.mu.Lock()
-		pl.consoleManager.active = false
-		pl.consoleManager.mu.Unlock()
 	}
 
 	// Start script non-blocking

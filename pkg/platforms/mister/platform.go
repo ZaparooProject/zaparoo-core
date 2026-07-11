@@ -239,27 +239,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	p.stopMappingsWatcher = closeMappingsWatcher
 	p.platformMu.Unlock()
 
-	go p.deferredStartPre()
-
 	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
 		Msg("StartPre finished")
 	return nil
-}
-
-// deferredStartPre runs the StartPre work that does not need to complete
-// before the JSON-RPC API binds: only the picker directory bootstrap.
-// Runs once per process; failures are logged and tolerated. The initial
-// CSV mappings load and the mappings watcher both start synchronously
-// in StartPre so LookupMapping never sees nil maps and Stop() can never
-// race the watcher's stopper assignment.
-func (*Platform) deferredStartPre() {
-	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
-			log.Error().Err(err).Msg("failed to create picker directory")
-		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
-			log.Error().Err(err).Msg("failed to write picker selected file")
-		}
-	}
 }
 
 var configureTLSDefaults = tlsroots.ConfigureDefaults
@@ -617,9 +599,9 @@ func (p *Platform) ReturnToMenu() error {
 	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
 		log.Warn().Err(err).Msg("failed to restore tty1 cursor")
 	}
-	if launcherConsoleVT != f9ConsoleVT {
-		if err := p.consoleManager.Restore(launcherConsoleVT); err != nil {
-			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", launcherConsoleVT)
+	if armLauncherVT != f9ConsoleVT {
+		if err := p.consoleManager.Restore(armLauncherVT); err != nil {
+			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", armLauncherVT)
 		}
 	}
 
@@ -1395,8 +1377,7 @@ func (p *Platform) ShowNotice(
 	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
-		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
 	p.platformMu.Unlock()
 
 	if needsDelay {
@@ -1422,8 +1403,7 @@ func (p *Platform) ShowLoader(
 	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
-		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
 	p.platformMu.Unlock()
 
 	if needsDelay {

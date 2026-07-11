@@ -65,6 +65,28 @@ func (m *mockCoreNameGetter) GetCoreName() string {
 	return m.coreName
 }
 
+type mockConsoleLeaseController struct {
+	acquireErr  error
+	releaseErr  error
+	acquiredVT  string
+	releasedKey string
+	available   bool
+}
+
+func (m *mockConsoleLeaseController) Available() bool {
+	return m.available
+}
+
+func (m *mockConsoleLeaseController) Acquire(_ context.Context, vt string) (string, error) {
+	m.acquiredVT = vt
+	return "test-nonce", m.acquireErr
+}
+
+func (m *mockConsoleLeaseController) Release(_ context.Context, nonce string) error {
+	m.releasedKey = nonce
+	return m.releaseErr
+}
+
 func TestMiSTerConsoleManager_Open_CancelledContext(t *testing.T) {
 	t.Parallel()
 
@@ -135,6 +157,41 @@ func TestMiSTerConsoleManager_Open_AlreadyActive(t *testing.T) {
 	cm.mu.RLock()
 	assert.True(t, cm.active)
 	cm.mu.RUnlock()
+}
+
+func TestMiSTerConsoleManager_Open_UsesMainConsoleLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+
+	err := cm.Open(context.Background(), "3")
+	require.NoError(t, err)
+	assert.Equal(t, "3", lease.acquiredVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+	assert.Equal(t, "3", cm.activeVT)
+	assert.True(t, cm.active)
+}
+
+func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.active = true
+	cm.activeVT = "3"
+	cm.leaseNonce = "test-nonce"
+
+	// Avoid real TTY writes while testing lease release behavior.
+	cm.activeVT = ""
+	err := cm.Close()
+	require.NoError(t, err)
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
 }
 
 func TestMiSTerConsoleManager_Open_ChvtAfterTty1Confirmed(t *testing.T) {
@@ -307,6 +364,7 @@ func TestNewConsoleManager_DefaultDependencies(t *testing.T) {
 	assert.NotNil(t, cm.ttyReader)
 	assert.NotNil(t, cm.fbChecker)
 	assert.NotNil(t, cm.coreNameGetter)
+	assert.NotNil(t, cm.leaseController)
 	assert.NotNil(t, cm.executor)
 
 	// Verify they're the real implementations

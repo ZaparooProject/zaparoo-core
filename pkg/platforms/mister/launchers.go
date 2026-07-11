@@ -28,9 +28,9 @@ import (
 )
 
 const (
-	f9ConsoleVT       = "1"
-	launcherConsoleVT = "7"
-	scriptConsoleVT   = "3"
+	f9ConsoleVT     = "1"
+	armLauncherVT   = "3"
+	scriptConsoleVT = "2"
 )
 
 var mglIndexingSkippedLaunchers = map[string]struct{}{
@@ -746,7 +746,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 		cmd := buildFvpCommand(launcherCtx, path)
 
 		// Build cleanup function that will be called on completion/crash
-		restoreFunc := createConsoleRestoreFunc(pl, cm)
+		restoreFunc := createConsoleRestoreFunc(cm)
 
 		// Start process and manage lifecycle
 		return runTrackedProcess(pl, cmd, restoreFunc, "fvp")
@@ -830,7 +830,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.Launc
 		cmd := buildScummVMCommand(launcherCtx, scummvmBinary, targetID)
 
 		// Build cleanup function that will be called on completion/crash
-		restoreFunc := createConsoleRestoreFunc(pl, cm)
+		restoreFunc := createConsoleRestoreFunc(cm)
 
 		// Wrap restore to also stop MIDI if we started it
 		restoreWithMIDI := func() {
