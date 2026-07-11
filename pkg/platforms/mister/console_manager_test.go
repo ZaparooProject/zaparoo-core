@@ -87,6 +87,23 @@ func (m *mockConsoleLeaseController) Release(_ context.Context, nonce string) er
 	return m.releaseErr
 }
 
+type mockConsoleHardware struct {
+	cleanErr    error
+	restoreErr  error
+	cleanedVTs  []string
+	restoredVTs []string
+}
+
+func (m *mockConsoleHardware) Clean(vt string) error {
+	m.cleanedVTs = append(m.cleanedVTs, vt)
+	return m.cleanErr
+}
+
+func (m *mockConsoleHardware) Restore(vt string) error {
+	m.restoredVTs = append(m.restoredVTs, vt)
+	return m.restoreErr
+}
+
 func TestMiSTerConsoleManager_Open_CancelledContext(t *testing.T) {
 	t.Parallel()
 
@@ -175,23 +192,106 @@ func TestMiSTerConsoleManager_Open_UsesMainConsoleLease(t *testing.T) {
 	assert.True(t, cm.active)
 }
 
-func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
+func TestMiSTerConsoleManager_Open_LeaseFailure(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, acquireErr: assert.AnError}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorIs(t, err, assert.AnError)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
+	assert.Empty(t, lease.releasedKey)
+}
+
+func TestMiSTerConsoleManager_Open_LeaseContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, acquireErr: context.Canceled}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Open_FramebufferFailureReleasesLease(t *testing.T) {
 	t.Parallel()
 
 	lease := &mockConsoleLeaseController{available: true}
 	cm := newConsoleManager(&Platform{})
 	cm.leaseController = lease
+	cm.fbChecker = &mockFramebufferChecker{ready: false}
+	cm.framebufferWait = time.Millisecond
+
+	err := cm.Open(context.Background(), "3")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "framebuffer not ready")
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Open_FramebufferAndReleaseFailurePreservesLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.fbChecker = &mockFramebufferChecker{ready: false}
+	cm.framebufferWait = time.Millisecond
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "framebuffer not ready")
+	assert.True(t, cm.active)
+	assert.Equal(t, "3", cm.activeVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+}
+
+func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	hardware := &mockConsoleHardware{}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.hardware = hardware
 	cm.active = true
 	cm.activeVT = "3"
 	cm.leaseNonce = "test-nonce"
 
-	// Avoid real TTY writes while testing lease release behavior.
-	cm.activeVT = ""
 	err := cm.Close()
 	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "3"}, hardware.restoredVTs)
 	assert.Equal(t, "test-nonce", lease.releasedKey)
 	assert.False(t, cm.active)
+	assert.Empty(t, cm.activeVT)
 	assert.Empty(t, cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Close_ReleaseFailurePreservesRetryState(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.hardware = &mockConsoleHardware{}
+	cm.active = true
+	cm.activeVT = "3"
+	cm.leaseNonce = "test-nonce"
+
+	err := cm.Close()
+	require.ErrorIs(t, err, assert.AnError)
+	assert.True(t, cm.active)
+	assert.Equal(t, "3", cm.activeVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+	assert.Equal(t, "test-nonce", lease.releasedKey)
 }
 
 func TestMiSTerConsoleManager_Open_ChvtAfterTty1Confirmed(t *testing.T) {

@@ -27,6 +27,15 @@ const (
 	misterWidgetRunFlag     = "2"
 )
 
+var (
+	getScriptConsoleManager = func(pl *Platform) platforms.ConsoleManager { return pl.ConsoleManager() }
+	runScriptChvt           = func(ctx context.Context, vt string) error {
+		return exec.CommandContext(ctx, "chvt", vt).Run() //nolint:gosec // Fixed executable; VT is internal.
+	}
+	writeScriptLauncher = os.WriteFile
+	startScriptCommand  = func(cmd *exec.Cmd) error { return cmd.Start() }
+)
+
 func scriptIsActive() bool {
 	cmd := exec.CommandContext(context.Background(), "bash", "-c", misterScriptGrepCommand)
 	output, err := cmd.Output()
@@ -110,22 +119,31 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		// to avoid the active script check (widgets handle this)
 		log.Debug().Msg("widget launched, changing params")
 		scriptPath = misterWidgetScriptPath
-		vt = armLauncherVT
+		vt = frontendConsoleVT
 	}
 
 	// Run it on-screen like a regular script. Use a background context with
 	// timeout since scripts are not launcher operations.
 	scriptCtx, scriptCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer scriptCancel()
-	err := pl.ConsoleManager().Open(scriptCtx, vt)
+	cm := getScriptConsoleManager(pl)
+	err := cm.Open(scriptCtx, vt)
 	if err != nil {
 		return fmt.Errorf("failed to open console for script: %w", err)
 	}
+	consoleOwned := true
+	defer func() {
+		if consoleOwned {
+			if closeErr := cm.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close script console after setup error")
+			}
+		}
+	}()
 
 	// this is just to follow mister's convention, which reserves
 	// tty2 for scripts
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	err = exec.CommandContext(ctx, "chvt", vt).Run()
+	err = runScriptChvt(ctx, vt)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
@@ -141,16 +159,13 @@ cd $(dirname "%s")
 %s
 `, runScript, bin, bin+" "+args)
 
-	err = os.WriteFile(scriptPath, []byte(launcher), 0o750) //nolint:gosec // Script file needs execute permissions
+	err = writeScriptLauncher(scriptPath, []byte(launcher), 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to write script file: %w", err)
 	}
 
-	launcherCtx := pl.launcherManager.GetContext()
-
 	cmd := exec.CommandContext(
 		context.Background(),
-		"setsid",
 		"/sbin/agetty",
 		"-a",
 		"root",
@@ -161,6 +176,7 @@ cd $(dirname "%s")
 		"tty"+vt,
 		"linux",
 	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	exit := func() {
 		if pl.activeMedia() != nil {
@@ -172,58 +188,27 @@ cd $(dirname "%s")
 	}
 
 	// Start script non-blocking
-	if err := cmd.Start(); err != nil {
+	if err := startScriptCommand(cmd); err != nil {
 		return fmt.Errorf("failed to start script: %w", err)
 	}
 
-	// Track process so it can be killed by StopActiveLauncher
-	pl.SetTrackedProcess(cmd.Process)
+	done := make(chan struct{})
+	pl.setTrackedProcessWithCleanup(cmd.Process, done, true)
 
-	// Cleanup in goroutine (non-blocking)
+	// This goroutine exclusively owns cmd.Wait and console cleanup.
 	go func() {
+		defer close(done)
 		waitErr := cmd.Wait()
-
-		// Check if script was superseded by new launcher
-		if launcherCtx.Err() != nil {
-			log.Debug().Msg("script cleanup cancelled - launcher superseded")
-			return
-		}
-
-		// Handle different exit scenarios
+		killRemainingProcessGroup(cmd.Process, true)
 		if waitErr != nil {
-			// Check if process was killed by signal
-			isKilled := false
-			exitErr := &exec.ExitError{}
-			if errors.As(waitErr, &exitErr) {
-				if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-					sig := status.Signal()
-					if status.Signaled() && (sig == syscall.SIGKILL || sig == syscall.SIGTERM) {
-						isKilled = true
-					}
-				}
-			}
-
-			if isKilled {
-				// Process was killed (likely by StopActiveLauncher for new media)
-				log.Debug().Msg("script stopped by new media launch")
-				pl.SetTrackedProcess(nil)
-				return
-			}
-
-			// agetty exits with code 2 when it can't find the specified TTY,
-			// which can happen during shutdown or preemption
-			var exitError *exec.ExitError
-			if !errors.As(waitErr, &exitError) || exitError.ExitCode() != 2 {
-				log.Debug().Err(waitErr).Msg("script exited with error")
-				pl.SetTrackedProcess(nil)
-				exit()
-			}
+			log.Debug().Err(waitErr).Msg("script exited")
 		} else {
 			log.Debug().Msg("script completed normally")
-			pl.SetTrackedProcess(nil)
-			exit()
 		}
+		exit()
+		pl.clearTrackedProcess(cmd.Process)
 	}()
+	consoleOwned = false
 
 	return nil
 }

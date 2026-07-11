@@ -5,7 +5,6 @@ package mister
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 func preNoticeTime() time.Duration {
@@ -42,12 +42,8 @@ func showNotice(
 		Text:     text,
 		Complete: completePath,
 	}
-	argsJSON, err := json.Marshal(args)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling notice args: %w", err)
-	}
-	if err = os.WriteFile(argsPath, argsJSON, 0o600); err != nil {
-		return "", fmt.Errorf("error writing notice args: %w", err)
+	if writeErr := writeNoticeArgs(pl.filesystem(), argsPath, args); writeErr != nil {
+		return "", writeErr
 	}
 
 	scriptPath := filepath.Join(misterconfig.ScriptsDir, "zaparoo.sh")
@@ -63,11 +59,22 @@ func showNotice(
 	return argsPath, nil
 }
 
-func hideNotice(argsPath string) error {
-	if err := os.Remove(argsPath); err != nil {
+func writeNoticeArgs(fs afero.Fs, argsPath string, args widgetmodels.NoticeArgs) error {
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return fmt.Errorf("error marshalling notice args: %w", err)
+	}
+	if err = afero.WriteFile(fs, argsPath, argsJSON, 0o600); err != nil {
+		return fmt.Errorf("error writing notice args: %w", err)
+	}
+	return nil
+}
+
+func hideNotice(fs afero.Fs, argsPath string) error {
+	if err := fs.Remove(argsPath); err != nil {
 		return fmt.Errorf("error removing notice args: %w", err)
 	}
-	if err := os.WriteFile(argsPath+".complete", []byte{}, 0o600); err != nil {
+	if err := afero.WriteFile(fs, argsPath+".complete", []byte{}, 0o600); err != nil {
 		return fmt.Errorf("error writing notice complete: %w", err)
 	}
 	return nil
@@ -83,7 +90,7 @@ func showPicker(
 	if err != nil {
 		return fmt.Errorf("failed to marshal picker args: %w", err)
 	}
-	err = os.WriteFile(argsPath, argsJSON, 0o600)
+	err = afero.WriteFile(pl.filesystem(), argsPath, argsJSON, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to write picker args file: %w", err)
 	}

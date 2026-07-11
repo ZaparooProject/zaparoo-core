@@ -389,8 +389,10 @@ func TestBuildScummVMCommand(t *testing.T) {
 	assert.Contains(t, cmd.Args, "--opl-driver=db")
 	assert.Contains(t, cmd.Args, "--output-rate=48000")
 
-	// Verify working directory
+	// Verify working directory and isolated process group.
 	assert.Equal(t, scummvmBaseDir, cmd.Dir)
+	require.NotNil(t, cmd.SysProcAttr)
+	assert.True(t, cmd.SysProcAttr.Setsid)
 
 	// Verify environment variables - check that our custom ones are set
 	hasCustomHome := false

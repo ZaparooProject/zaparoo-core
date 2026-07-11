@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -28,9 +27,10 @@ import (
 )
 
 const (
-	f9ConsoleVT     = "1"
-	armLauncherVT   = "3"
-	scriptConsoleVT = "2"
+	f9ConsoleVT       = "1"
+	armLauncherVT     = "3"
+	scriptConsoleVT   = "2"
+	frontendConsoleVT = "7"
 )
 
 var mglIndexingSkippedLaunchers = map[string]struct{}{
@@ -765,6 +765,7 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 	)
 
 	// Set environment variables
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = append(os.Environ(),
 		"HOME="+scummvmBaseDir,
 		"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
@@ -855,42 +856,13 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,
 		Launch:             launchScummVM(pl),
-		// Kill uses keyboard input instead of signals to avoid VT lock issues.
-		// ScummVM's VT management doesn't handle SIGKILL properly and causes
-		// kernel-level VT locks requiring a reboot. Ctrl+q triggers clean exit.
-		// This function blocks until ScummVM exits (up to 5 seconds) to prevent
-		// new launches from starting during VT cleanup.
+		// ScummVM needs a keyboard-triggered graceful exit to avoid VT locks.
+		// Shared process lifecycle code owns waiting and timeout escalation.
 		Kill: func(_ *config.Instance) error {
-			// Send Ctrl+q to trigger ScummVM's clean exit
 			if err := pl.KeyboardPress("{ctrl+q}"); err != nil {
 				return fmt.Errorf("failed to send ctrl+q: %w", err)
 			}
-
-			// Wait for process to exit cleanly (up to 5 seconds)
-			pl.processMu.Lock()
-			proc := pl.trackedProcess
-			pl.processMu.Unlock()
-
-			if proc == nil {
-				// No tracked process, nothing to wait for
-				return nil
-			}
-
-			// Wait for process exit with timeout
-			done := make(chan error, 1)
-			go func() {
-				_, err := proc.Wait()
-				done <- err
-			}()
-
-			select {
-			case <-done:
-				log.Debug().Msg("ScummVM exited cleanly after ctrl+q")
-				return nil
-			case <-time.After(5 * time.Second):
-				log.Warn().Msg("ScummVM did not exit within 5 seconds")
-				return errors.New("timeout waiting for ScummVM to exit")
-			}
+			return nil
 		},
 	}
 }

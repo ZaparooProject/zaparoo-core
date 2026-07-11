@@ -173,8 +173,9 @@ func runTrackedProcess(
 		return nil, fmt.Errorf("failed to start %s: %w", logPrefix, err)
 	}
 
-	// Track process and completion channel together BEFORE cleanup goroutine starts
-	pl.setTrackedProcessWithCleanup(cmd.Process, done)
+	// Track process and completion channel together BEFORE cleanup goroutine starts.
+	processGroup := cmd.SysProcAttr != nil && (cmd.SysProcAttr.Setsid || cmd.SysProcAttr.Setpgid)
+	pl.setTrackedProcessWithCleanup(cmd.Process, done, processGroup)
 
 	// Cleanup in goroutine (non-blocking)
 	go func() {
@@ -182,6 +183,7 @@ func runTrackedProcess(
 		defer close(done)
 
 		waitErr := cmd.Wait()
+		killRemainingProcessGroup(cmd.Process, processGroup)
 		log.Debug().Msgf("%s: process exited, waitErr=%v", logPrefix, waitErr)
 
 		// Handle different exit scenarios
@@ -199,7 +201,7 @@ func runTrackedProcess(
 		restoreFunc()
 
 		// Clear tracked process after cleanup completes
-		pl.clearTrackedProcess()
+		pl.clearTrackedProcess(cmd.Process)
 	}()
 
 	return cmd.Process, nil

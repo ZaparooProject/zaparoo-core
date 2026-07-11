@@ -15,12 +15,12 @@ import (
 	"time"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/spf13/afero"
 )
 
-const (
-	consoleLeaseStatePath = "/tmp/zaparoo_console_state"
-	consoleLeaseVersion   = "1"
-)
+const consoleLeaseVersion = "1"
+
+var consoleLeaseStatePath = filepath.Join(string(filepath.Separator), "tmp", "zaparoo_console_state")
 
 type consoleLeaseController interface {
 	Available() bool
@@ -29,9 +29,11 @@ type consoleLeaseController interface {
 }
 
 type mainConsoleLeaseController struct {
-	statePath    string
-	commandPath  string
-	pollInterval time.Duration
+	fs             afero.Fs
+	statePath      string
+	commandPath    string
+	pollInterval   time.Duration
+	cleanupTimeout time.Duration
 }
 
 type consoleLeaseState struct {
@@ -41,11 +43,13 @@ type consoleLeaseState struct {
 	pid     int
 }
 
-func newMainConsoleLeaseController() *mainConsoleLeaseController {
+func newMainConsoleLeaseController(fs afero.Fs) *mainConsoleLeaseController {
 	return &mainConsoleLeaseController{
-		statePath:    consoleLeaseStatePath,
-		commandPath:  misterconfig.CmdInterface,
-		pollInterval: 20 * time.Millisecond,
+		fs:             fs,
+		statePath:      consoleLeaseStatePath,
+		commandPath:    misterconfig.CmdInterface,
+		pollInterval:   20 * time.Millisecond,
+		cleanupTimeout: 3 * time.Second,
 	}
 }
 
@@ -54,7 +58,7 @@ func (c *mainConsoleLeaseController) Available() bool {
 	if err != nil || state.version != consoleLeaseVersion || state.pid <= 0 {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(state.pid)))
+	_, err = c.fs.Stat(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(state.pid)))
 	return err == nil
 }
 
@@ -67,7 +71,14 @@ func (c *mainConsoleLeaseController) Acquire(ctx context.Context, vt string) (st
 		return "", err
 	}
 	if err := c.waitForState(ctx, "acquired", nonce); err != nil {
-		return "", fmt.Errorf("acquire Main console lease: %w", err)
+		acquireErr := fmt.Errorf("acquire Main console lease: %w", err)
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), c.cleanupTimeout)
+		releaseErr := c.Release(releaseCtx, nonce)
+		releaseCancel()
+		if releaseErr != nil {
+			return "", errors.Join(acquireErr, fmt.Errorf("clean up uncertain Main console lease: %w", releaseErr))
+		}
+		return "", acquireErr
 	}
 	return nonce, nil
 }
@@ -83,7 +94,7 @@ func (c *mainConsoleLeaseController) Release(ctx context.Context, nonce string) 
 }
 
 func (c *mainConsoleLeaseController) writeCommand(command string) error {
-	cmd, err := os.OpenFile(c.commandPath, os.O_RDWR, 0)
+	cmd, err := c.fs.OpenFile(c.commandPath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open Main command interface: %w", err)
 	}
@@ -119,7 +130,7 @@ func (c *mainConsoleLeaseController) waitForState(ctx context.Context, expected,
 }
 
 func (c *mainConsoleLeaseController) readState() (consoleLeaseState, error) {
-	contents, err := os.ReadFile(c.statePath)
+	contents, err := afero.ReadFile(c.fs, c.statePath)
 	if err != nil {
 		return consoleLeaseState{}, fmt.Errorf("read Main console state: %w", err)
 	}

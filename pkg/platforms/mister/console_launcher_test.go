@@ -35,19 +35,23 @@ import (
 
 // testConsoleManager is a simple mock console manager for testing
 type testConsoleManager struct {
-	openErr    error
-	closeErr   error
-	cleanErr   error
-	restoreErr error
-	openCalled bool
+	openErr     error
+	closeErr    error
+	cleanErr    error
+	restoreErr  error
+	openVT      string
+	openCalled  bool
+	closeCalled bool
 }
 
-func (m *testConsoleManager) Open(_ context.Context, _ string) error {
+func (m *testConsoleManager) Open(_ context.Context, vt string) error {
 	m.openCalled = true
+	m.openVT = vt
 	return m.openErr
 }
 
 func (m *testConsoleManager) Close() error {
+	m.closeCalled = true
 	return m.closeErr
 }
 

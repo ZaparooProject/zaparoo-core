@@ -27,6 +27,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -221,7 +224,16 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			if tt.customKillFunc != nil {
 				launcher.Kill = func(cfg *config.Instance) error {
 					killCalled = true
-					return tt.customKillFunc(cfg)
+					err := tt.customKillFunc(cfg)
+					if err == nil {
+						p.processMu.Lock()
+						proc := p.trackedProcess
+						p.processMu.Unlock()
+						if proc != nil {
+							_ = proc.Signal(syscall.SIGTERM)
+						}
+					}
+					return err
 				}
 			}
 			p.setLastLauncher(&launcher)
@@ -314,6 +326,45 @@ func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("StopActiveLauncher did not return after cleanup completed")
 	}
+}
+
+func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	cmd := exec.CommandContext( //nolint:gosec // Fixed test shell; only temp path is variable.
+		context.Background(),
+		"sh",
+		"-c",
+		`trap 'exit 0' TERM; sh -c 'trap "" TERM; while :; do sleep 1; done' & echo $! > "$1"; wait`,
+		"sh",
+		pidPath,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	restoreDone := make(chan struct{})
+	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test")
+	require.NoError(t, err)
+
+	var childPID int
+	require.Eventually(t, func() bool {
+		contents, readErr := os.ReadFile(pidPath) //nolint:gosec // Test-owned temporary file.
+		if readErr != nil {
+			return false
+		}
+		childPID, readErr = strconv.Atoi(strings.TrimSpace(string(contents)))
+		return readErr == nil
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("console cleanup did not complete before stop returned")
+	}
+
+	assert.ErrorIs(t, syscall.Kill(childPID, 0), syscall.ESRCH,
+		"descendant process survived console cleanup")
 }
 
 func TestArcadeCardLaunchCache(t *testing.T) {
