@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
@@ -22,7 +23,8 @@ import (
 )
 
 type testExecutor struct {
-	runs atomic.Int32
+	outputErr error
+	runs      atomic.Int32
 }
 
 func (e *testExecutor) Run(context.Context, string, ...string) error {
@@ -30,8 +32,10 @@ func (e *testExecutor) Run(context.Context, string, ...string) error {
 	return nil
 }
 
-func (*testExecutor) Output(context.Context, string, ...string) ([]byte, error) { return nil, nil }
-func (*testExecutor) Start(context.Context, string, ...string) error            { return nil }
+func (e *testExecutor) Output(context.Context, string, ...string) ([]byte, error) {
+	return nil, e.outputErr
+}
+func (*testExecutor) Start(context.Context, string, ...string) error { return nil }
 func (*testExecutor) StartWithOptions(context.Context, command.StartOptions, string, ...string) error {
 	return nil
 }
@@ -87,6 +91,53 @@ func TestManagersKeepIndependentFocusState(t *testing.T) {
 	assert.Zero(t, secondExecutor.runs.Load())
 	assert.Nil(t, first.activeFocusManager)
 	assert.NotNil(t, second.activeFocusManager)
+}
+
+func TestManagerRestoresFocusAfterWindowCloses(t *testing.T) {
+	executor := &testExecutor{outputErr: errors.New("window closed")}
+	manager := newManagerWithExecutor(SessionOptions{Enabled: true}, executor)
+	fm := &FocusManager{executor: executor, display: ":0", originalLayer: "769"}
+	manager.activeFocusManager = fm
+
+	go manager.revertFocusWhenWindowCloses(context.Background(), ":0", "0x1234", fm)
+
+	require.Eventually(t, func() bool {
+		manager.focusMu.Lock()
+		defer manager.focusMu.Unlock()
+		return manager.activeFocusManager == nil
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return executor.runs.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestClosedWindowDoesNotRestoreReplacementFocus(t *testing.T) {
+	executor := &testExecutor{outputErr: errors.New("window closed")}
+	manager := newManagerWithExecutor(SessionOptions{Enabled: true}, executor)
+	completed := &FocusManager{executor: executor, display: ":0", originalLayer: "769"}
+	replacement := &FocusManager{executor: executor, display: ":0", originalLayer: "10"}
+	manager.activeFocusManager = replacement
+
+	go manager.revertFocusWhenWindowCloses(context.Background(), ":0", "0x1234", completed)
+
+	time.Sleep(time.Duration(windowMissingLimit+1) * windowPollInterval)
+	assert.Same(t, replacement, manager.activeFocusManager)
+	assert.Zero(t, executor.runs.Load())
+}
+
+func TestWindowCloseWatcherStopsWhenCanceled(t *testing.T) {
+	executor := &testExecutor{outputErr: errors.New("window closed")}
+	manager := newManagerWithExecutor(SessionOptions{Enabled: true}, executor)
+	fm := &FocusManager{executor: executor, display: ":0", originalLayer: "769"}
+	manager.activeFocusManager = fm
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	go manager.revertFocusWhenWindowCloses(ctx, ":0", "0x1234", fm)
+
+	time.Sleep(time.Duration(windowMissingLimit+1) * windowPollInterval)
+	assert.Same(t, fm, manager.activeFocusManager)
+	assert.Zero(t, executor.runs.Load())
 }
 
 func TestManagerFocusStateConcurrentAccess(t *testing.T) {

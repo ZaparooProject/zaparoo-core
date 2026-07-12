@@ -150,26 +150,41 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 	}
 
 	defaults, ok := env.Cfg.LookupSystemDefaults(systemID)
-	if !ok || defaults.Launcher == "" {
-		return ""
-	}
-
-	launcherID, found := resolveLauncherRefForSystem(pl, env, defaults.Launcher, systemID)
-	if !found {
+	if ok && defaults.Launcher != "" {
+		launcherID, found := resolveLauncherRefForSystem(pl, env, defaults.Launcher, systemID)
+		if found {
+			log.Info().
+				Str("system", systemID).
+				Str("launcher", launcherID).
+				Str("ref", defaults.Launcher).
+				Msg("using system default launcher")
+			env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, launcherID)
+			return launcherID
+		}
 		log.Warn().
 			Str("system", systemID).
 			Str("launcher", defaults.Launcher).
 			Msg("system default launcher not found")
-		return ""
 	}
 
-	log.Info().
-		Str("system", systemID).
-		Str("launcher", launcherID).
-		Str("ref", defaults.Launcher).
-		Msg("using system default launcher")
-	env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, launcherID)
-	return launcherID
+	return applyGlobalLauncherPreference(pl, env, systemID)
+}
+
+func applyGlobalLauncherPreference(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
+	for _, ref := range env.Cfg.LauncherPreference() {
+		launcherID, found := resolveAvailableLauncherRefForSystem(pl, env, ref, systemID)
+		if !found {
+			continue
+		}
+		log.Info().
+			Str("system", systemID).
+			Str("launcher", launcherID).
+			Str("ref", ref).
+			Msg("using global launcher preference")
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, launcherID)
+		return launcherID
+	}
+	return ""
 }
 
 func resolveLauncherRefForSystem(
@@ -178,15 +193,38 @@ func resolveLauncherRefForSystem(
 	ref string,
 	systemID string,
 ) (string, bool) {
+	return resolveLauncherRefForSystemWithAvailability(pl, env, ref, systemID, false)
+}
+
+func resolveAvailableLauncherRefForSystem(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	ref string,
+	systemID string,
+) (string, bool) {
+	return resolveLauncherRefForSystemWithAvailability(pl, env, ref, systemID, true)
+}
+
+func resolveLauncherRefForSystemWithAvailability(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	ref string,
+	systemID string,
+	requireAvailable bool,
+) (string, bool) {
 	launchers := pl.Launchers(env.Cfg)
+	isEligible := func(launcher *platforms.Launcher) bool {
+		return !requireAvailable || launcher.Availability == nil || launcher.Availability(env.Cfg) == nil
+	}
 	for i := range launchers {
-		if strings.EqualFold(launchers[i].SystemID, systemID) && strings.EqualFold(launchers[i].ID, ref) {
+		if isEligible(&launchers[i]) && strings.EqualFold(launchers[i].SystemID, systemID) &&
+			strings.EqualFold(launchers[i].ID, ref) {
 			return launchers[i].ID, true
 		}
 	}
 
 	for i := range launchers {
-		if !strings.EqualFold(launchers[i].SystemID, systemID) {
+		if !isEligible(&launchers[i]) || !strings.EqualFold(launchers[i].SystemID, systemID) {
 			continue
 		}
 		for _, group := range launchers[i].Groups {
@@ -197,7 +235,7 @@ func resolveLauncherRefForSystem(
 	}
 
 	for i := range launchers {
-		if !strings.EqualFold(launchers[i].ID, ref) {
+		if !isEligible(&launchers[i]) || !strings.EqualFold(launchers[i].ID, ref) {
 			continue
 		}
 		if launchers[i].SystemID == "" || strings.EqualFold(launchers[i].SystemID, systemID) {
@@ -306,7 +344,8 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
-	launch := getLaunchClosure(pl, &env)
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
+	launch := getLaunchClosure(pl, &env, explicitLauncher)
 	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
@@ -328,9 +367,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
 
-		applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
-		applySystemDefaultLauncher(pl, &env, game.SystemID)
-		if launchErr := launch(game.Path); launchErr != nil {
+		if launchErr := launch(launchTarget{
+			path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
+		}); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to launch random game: %w", launchErr)
@@ -368,8 +407,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			if randomErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
 			}
-			applySystemDefaultLauncherForPath(pl, &env, file)
-			if launchErr := launch(file); launchErr != nil {
+			if launchErr := launch(launchTarget{path: file}); launchErr != nil {
 				return platforms.CmdResult{
 					MediaChanged: true,
 				}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
@@ -381,9 +419,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 
-		applyMediaLauncherOverride(pl, &env, searchResult.MediaID, searchResult.SystemID)
-		applySystemDefaultLauncher(pl, &env, searchResult.SystemID)
-		if launchErr := launch(searchResult.Path); launchErr != nil {
+		if launchErr := launch(launchTarget{
+			path: searchResult.Path, systemID: searchResult.SystemID, mediaID: searchResult.MediaID,
+		}); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to launch file '%s': %w", searchResult.Path, launchErr)
@@ -428,9 +466,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
 			}
 
-			applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
-			applySystemDefaultLauncher(pl, &env, game.SystemID)
-			if launchErr := launch(game.Path); launchErr != nil {
+			if launchErr := launch(launchTarget{
+				path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
+			}); launchErr != nil {
 				return platforms.CmdResult{
 					MediaChanged: true,
 				}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, launchErr)
@@ -455,9 +493,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				fmt.Errorf("failed to get random game matching '%s': %w", searchQuery, randomErr)
 		}
 
-		applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
-		applySystemDefaultLauncher(pl, &env, game.SystemID)
-		if launchErr := launch(game.Path); launchErr != nil {
+		if launchErr := launch(launchTarget{
+			path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
+		}); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to launch game '%s': %w", game.Path, launchErr)
@@ -495,9 +533,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
 
-	applyMediaLauncherOverride(pl, &env, game.MediaID, game.SystemID)
-	applySystemDefaultLauncher(pl, &env, game.SystemID)
-	if err := launch(game.Path); err != nil {
+	if err := launch(launchTarget{
+		path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
+	}); err != nil {
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, err)
@@ -520,11 +558,32 @@ func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID strin
 	return helpers.GlobalLauncherCache.GetLauncherByID(launcherID)
 }
 
+type launchTarget struct {
+	path               string
+	systemID           string
+	mediaID            int64
+	resolveMediaByPath bool
+}
+
 func getLaunchClosure(
 	pl platforms.Platform,
 	env *platforms.CmdEnv,
-) func(path string) error {
-	return func(path string) error {
+	explicitLauncher bool,
+) func(launchTarget) error {
+	return func(target launchTarget) error {
+		if !explicitLauncher {
+			if target.mediaID != 0 && target.systemID != "" {
+				applyMediaLauncherOverrideWithReplace(pl, env, target.mediaID, target.systemID, true)
+			} else if target.resolveMediaByPath {
+				applyMediaLauncherOverrideForPath(pl, env, target.path, true)
+			}
+			if target.systemID != "" {
+				applySystemDefaultLauncher(pl, env, target.systemID)
+			} else {
+				applySystemDefaultLauncherForPath(pl, env, target.path)
+			}
+		}
+
 		launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 		action := env.Cmd.AdvArgs.Get(zapscript.KeyAction)
 		setName := env.Cmd.AdvArgs.Get(zapscript.KeySetName)
@@ -550,10 +609,10 @@ func getLaunchClosure(
 				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
 			log.Info().Msgf("launching with launcher: %s", launcherID)
-			return pl.LaunchMedia(env.Cfg, path, launcher, env.Database, opts)
+			return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 		}
 
-		return pl.LaunchMedia(env.Cfg, path, nil, env.Database, opts)
+		return pl.LaunchMedia(env.Cfg, target.path, nil, env.Database, opts)
 	}
 }
 
@@ -609,36 +668,33 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		path = installPath
 	}
 
+	requestedSystemID := ""
 	if args.System != "" {
 		system, lookupErr := systemdefs.LookupSystem(args.System)
 		if lookupErr != nil {
 			log.Warn().Err(lookupErr).Str("system", args.System).
 				Msg("system arg provided but lookup failed - falling back to auto-detection")
 		} else {
-			applySystemDefaultLauncher(pl, &env, system.ID)
+			requestedSystemID = system.ID
 		}
 	}
 
-	launch := getLaunchClosure(pl, &env)
+	launch := getLaunchClosure(pl, &env, explicitLauncher)
 
 	// if it's an absolute path, just try launch it
 	if filepath.IsAbs(path) {
 		log.Debug().Msgf("launching absolute path: %s", path)
-		applyMediaLauncherOverrideForPath(pl, &env, path, !explicitLauncher)
-		applySystemDefaultLauncherForPath(pl, &env, path)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(path)
+		}, launch(launchTarget{path: path, systemID: requestedSystemID, resolveMediaByPath: true})
 	}
 
 	// match for uri style launch syntax
 	if helpers.ReURI.MatchString(path) {
 		log.Debug().Msgf("launching uri: %s", path)
-		applyMediaLauncherOverrideForPath(pl, &env, path, !explicitLauncher)
-		applySystemDefaultLauncherForPath(pl, &env, path)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(path)
+		}, launch(launchTarget{path: path, systemID: requestedSystemID, resolveMediaByPath: true})
 	}
 
 	// for relative paths, perform a basic check if the file exists in a games folder
@@ -647,11 +703,9 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var p string
 	if p, findErr = findFile(afero.NewOsFs(), pl, env.Cfg, path); findErr == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
-		applyMediaLauncherOverrideForPath(pl, &env, p, !explicitLauncher)
-		applySystemDefaultLauncherForPath(pl, &env, p)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(p)
+		}, launch(launchTarget{path: p, systemID: requestedSystemID, resolveMediaByPath: true})
 	}
 	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
@@ -674,8 +728,6 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
 	}
-
-	applySystemDefaultLauncher(pl, &env, system.ID)
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
@@ -712,11 +764,9 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		var fp string
 		if fp, systemFindErr = findFile(afero.NewOsFs(), pl, env.Cfg, systemPath); systemFindErr == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
-			applyMediaLauncherOverrideForPath(pl, &env, fp, !explicitLauncher)
-			applySystemDefaultLauncherForPath(pl, &env, fp)
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, launch(fp)
+			}, launch(launchTarget{path: fp, systemID: system.ID, resolveMediaByPath: true})
 		}
 		log.Debug().Err(systemFindErr).Msgf("error finding system file: %s", lookupPath)
 	}
@@ -747,11 +797,9 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		log.Info().Msgf("found result: %s", res[0].Path)
 
 		game := res[0]
-		applyMediaLauncherOverrideWithReplace(pl, &env, game.MediaID, game.SystemID, !explicitLauncher)
-		applySystemDefaultLauncher(pl, &env, game.SystemID)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(game.Path)
+		}, launch(launchTarget{path: game.Path, systemID: game.SystemID, mediaID: game.MediaID})
 	}
 
 	return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, path)
@@ -774,7 +822,8 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
-	launch := getLaunchClosure(pl, &env)
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
+	launch := getLaunchClosure(pl, &env, explicitLauncher)
 	tagFilters := args.Tags
 
 	query = strings.ToLower(query)
@@ -801,11 +850,11 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
 		}
 
-		applyMediaLauncherOverride(pl, &env, res[0].MediaID, res[0].SystemID)
-		applySystemDefaultLauncher(pl, &env, res[0].SystemID)
 		return platforms.CmdResult{
-			MediaChanged: true,
-		}, launch(res[0].Path)
+				MediaChanged: true,
+			}, launch(launchTarget{
+				path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID,
+			})
 	}
 
 	ps := strings.SplitN(query, "/", 2)
@@ -849,11 +898,11 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
 	}
 
-	applyMediaLauncherOverride(pl, &env, res[0].MediaID, res[0].SystemID)
-	applySystemDefaultLauncher(pl, &env, res[0].SystemID)
 	return platforms.CmdResult{
-		MediaChanged: true,
-	}, launch(res[0].Path)
+			MediaChanged: true,
+		}, launch(launchTarget{
+			path: res[0].Path, systemID: res[0].SystemID, mediaID: res[0].MediaID,
+		})
 }
 
 // getUniqueRecentMedia returns the Nth most recently played unique game from
@@ -920,9 +969,8 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 	}
 
 	mediaID := mediaIDForHistoryEntry(&env, &entry)
-	applyMediaLauncherOverride(pl, &env, mediaID, entry.SystemID)
-	applySystemDefaultLauncher(pl, &env, entry.SystemID)
-	launch := getLaunchClosure(pl, &env)
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
+	launch := getLaunchClosure(pl, &env, explicitLauncher)
 
 	log.Info().
 		Str("media", entry.MediaName).
@@ -930,7 +978,7 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 		Int("offset", offset).
 		Msgf("launching last played game")
 
-	if err := launch(path); err != nil {
+	if err := launch(launchTarget{path: path, systemID: entry.SystemID, mediaID: mediaID}); err != nil {
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, fmt.Errorf("failed to launch last played game '%s': %w", entry.MediaPath, err)

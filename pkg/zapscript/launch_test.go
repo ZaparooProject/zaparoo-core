@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -587,6 +588,112 @@ func TestResolveLauncherRefForSystem_SkipsWrongSystemIDMatch(t *testing.T) {
 
 	assert.False(t, found)
 	assert.Empty(t, launcherID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestApplySystemDefaultLauncher_UsesOrderedGlobalPreference(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Native", "RetroDECK"]
+`))
+	launchers := []platforms.Launcher{
+		{
+			ID: "NativeSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupNative},
+			Availability: func(*config.Instance) error { return errors.New("unavailable") },
+		},
+		{ID: "RetroDECKSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupRetroDECK}},
+	}
+	mockPlatform.On("Launchers", cfg).Twice().Return(launchers)
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+
+	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")
+
+	assert.Equal(t, "RetroDECKSNES", launcherID)
+	assert.Equal(t, "RetroDECKSNES", env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestApplySystemDefaultLauncher_SystemDefaultBeatsGlobalPreference(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Native"]
+
+[[systems.default]]
+system = "SNES"
+launcher = "RetroDECK"
+`))
+	launchers := []platforms.Launcher{
+		{ID: "NativeSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupNative}},
+		{ID: "RetroDECKSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupRetroDECK}},
+	}
+	mockPlatform.On("Launchers", cfg).Once().Return(launchers)
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+
+	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")
+
+	assert.Equal(t, "RetroDECKSNES", launcherID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestLaunchClosurePreservesExplicitLauncher(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	launcher := platforms.Launcher{ID: "ExplicitSNES", SystemID: "SNES"}
+	path := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Once().Return([]platforms.Launcher{launcher})
+	mockPlatform.On("LaunchMedia", cfg, path,
+		mock.MatchedBy(func(selected *platforms.Launcher) bool {
+			return selected != nil && selected.ID == launcher.ID
+		}), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(map[string]string{
+			string(zapscript.KeyLauncher): launcher.ID,
+		})},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, true)
+	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestLaunchClosureAppliesSystemDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "SNES"
+launcher = "Native"
+`))
+	launcher := platforms.Launcher{
+		ID: "NativeSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupNative},
+	}
+	path := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Twice().Return([]platforms.Launcher{launcher})
+	mockPlatform.On("LaunchMedia", cfg, path,
+		mock.MatchedBy(func(selected *platforms.Launcher) bool {
+			return selected != nil && selected.ID == launcher.ID
+		}), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, false)
+	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	assert.Equal(t, launcher.ID, env.Cmd.AdvArgs.Get(zapscript.KeyLauncher))
 	mockPlatform.AssertExpectations(t)
 }
 

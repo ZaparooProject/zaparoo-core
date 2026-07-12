@@ -4,7 +4,9 @@
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package gamescope provides opt-in integration with gamescope Gaming Mode sessions.
+// Package gamescope makes externally launched windows visible and focused in
+// gamescope Gaming Mode sessions. It does not register launches with Steam, so
+// it cannot provide Steam/QAM menus, overlay injection, or Steam Input ownership.
 package gamescope
 
 import (
@@ -16,7 +18,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -32,10 +33,12 @@ const (
 	detectTimeout       = 2 * time.Second
 	gamingModeCacheTTL  = time.Second
 	windowFindTimeout   = 5 * time.Second
+	windowFallbackDelay = 2 * time.Second
 	windowPollInterval  = 200 * time.Millisecond
+	windowMissingLimit  = 3
 	steamGameAtom       = "STEAM_GAME"
 	baselayerAtom       = "GAMESCOPECTRL_BASELAYER_APPID"
-	fakeAppID           = "1"
+	externalFocusAppID  = "1"
 	minGameWindowWidth  = 100
 	minGameWindowHeight = 100
 	windowPIDAtom       = "_NET_WM_PID"
@@ -52,6 +55,7 @@ type Manager struct {
 	executor           command.Executor
 	attemptCancel      context.CancelFunc
 	activeFocusManager *FocusManager
+	activeFocusCancel  context.CancelFunc
 	gamescopeDisplay   string
 	attemptID          uint64
 	cacheMu            syncutil.Mutex
@@ -185,7 +189,8 @@ func (m *Manager) hasGamescopeAtom(display string) bool {
 	return err == nil && strings.Contains(string(output), "CARDINAL")
 }
 
-// ManageFocus configures gamescope focus for proc when this manager is enabled.
+// ManageFocus makes proc's external window visible and focused by gamescope.
+// This is compositor focus only; it does not make Steam own the launch.
 func (m *Manager) ManageFocus(proc *os.Process) {
 	if !m.Enabled() || proc == nil {
 		return
@@ -211,17 +216,27 @@ func (m *Manager) ManageFocus(proc *os.Process) {
 	if err := m.setSteamGameProperty(display, windowID); err != nil {
 		return
 	}
-	if err := m.setBaselayerValue(display, fakeAppID, original); err != nil {
+	if err := m.setBaselayerValue(display, externalFocusAppID, original); err != nil {
 		return
 	}
 	fm := &FocusManager{executor: m.executor, display: display, originalLayer: original}
+	//nolint:gosec // Context is canceled on window close, focus replacement, or explicit revert.
+	watchCtx, watchCancel := context.WithCancel(context.Background())
 	m.focusMu.Lock()
 	previous := m.activeFocusManager
+	previousCancel := m.activeFocusCancel
 	m.activeFocusManager = fm
+	m.activeFocusCancel = watchCancel
 	m.focusMu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+	}
 	if previous != nil {
 		previous.Revert()
 	}
+	log.Debug().Int("pid", proc.Pid).Str("windowID", windowID).Str("display", display).
+		Msg("gamescope external window focus set")
+	go m.revertFocusWhenWindowCloses(watchCtx, display, windowID, fm)
 }
 
 func (m *Manager) beginFocusAttempt() (context.Context, context.CancelFunc, uint64) {
@@ -246,6 +261,47 @@ func (m *Manager) endFocusAttempt(id uint64) {
 	}
 }
 
+func (m *Manager) revertFocusWhenWindowCloses(
+	ctx context.Context, display, windowID string, fm *FocusManager,
+) {
+	ticker := time.NewTicker(windowPollInterval)
+	defer ticker.Stop()
+	missing := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		detectCtx, cancel := context.WithTimeout(ctx, detectTimeout)
+		_, err := m.executor.Output(detectCtx, "xprop", "-display", display, "-id", windowID, steamGameAtom)
+		cancel()
+		if err == nil {
+			missing = 0
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		missing++
+		if missing < windowMissingLimit {
+			continue
+		}
+
+		m.focusMu.Lock()
+		if m.activeFocusManager != fm {
+			m.focusMu.Unlock()
+			return
+		}
+		m.activeFocusManager = nil
+		m.activeFocusCancel = nil
+		m.focusMu.Unlock()
+		fm.Revert()
+		return
+	}
+}
+
 // RevertFocus cancels this manager's pending focus and restores its active baselayer state.
 func (m *Manager) RevertFocus() {
 	if m == nil {
@@ -260,8 +316,13 @@ func (m *Manager) RevertFocus() {
 	}
 	m.focusMu.Lock()
 	fm := m.activeFocusManager
+	focusCancel := m.activeFocusCancel
 	m.activeFocusManager = nil
+	m.activeFocusCancel = nil
 	m.focusMu.Unlock()
+	if focusCancel != nil {
+		focusCancel()
+	}
 	if fm != nil {
 		fm.Revert()
 	}
@@ -295,15 +356,14 @@ func (m *Manager) findGameWindow(parent context.Context, display string, pid int
 	defer cancel()
 	ticker := time.NewTicker(windowPollInterval)
 	defer ticker.Stop()
+	started := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return "", fmt.Errorf("timeout waiting for game window: %w", ctx.Err())
 		case <-ticker.C:
-			if pid > 0 && !processExists(pid) {
-				return "", fmt.Errorf("game process %d exited before its window appeared", pid)
-			}
-			id, err := m.findNonSteamWindowForProcess(ctx, display, pid)
+			allowFallback := time.Since(started) >= windowFallbackDelay
+			id, err := m.findNonSteamWindowForProcess(ctx, display, pid, allowFallback)
 			if err == nil && id != "" {
 				return id, nil
 			}
@@ -311,7 +371,12 @@ func (m *Manager) findGameWindow(parent context.Context, display string, pid int
 	}
 }
 
-func (m *Manager) findNonSteamWindowForProcess(ctx context.Context, display string, pid int) (string, error) {
+func (m *Manager) findNonSteamWindowForProcess(
+	ctx context.Context,
+	display string,
+	pid int,
+	allowFallback bool,
+) (string, error) {
 	output, err := m.executor.Output(ctx, "xwininfo", "-display", display, "-root", "-tree")
 	if err != nil {
 		return "", fmt.Errorf("xwininfo failed: %w", err)
@@ -322,7 +387,9 @@ func (m *Manager) findNonSteamWindowForProcess(ctx context.Context, display stri
 			return candidate.ID, nil
 		}
 	}
-	if len(candidates) > 0 {
+	// Flatpak windows report sandbox PIDs, which cannot match the host launcher PID.
+	// Wait for the emulator's final game window before using the topmost candidate.
+	if allowFallback && len(candidates) > 0 {
 		return candidates[0].ID, nil
 	}
 	return "", nil
@@ -365,11 +432,6 @@ func (m *Manager) windowMatchesProcess(ctx context.Context, display, windowID st
 	}
 	windowPID, ok := ParseWindowPIDOutput(string(output))
 	return ok && windowPID == pid
-}
-
-func processExists(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	return err == nil && proc.Signal(syscall.Signal(0)) == nil
 }
 
 // ParseWindowPIDOutput extracts owning PID from xprop output.

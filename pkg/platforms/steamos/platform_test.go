@@ -33,6 +33,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseSteamOSSessionEnv(t *testing.T) {
+	t.Parallel()
+
+	result := parseSteamOSSessionEnv("PATH=/usr/bin\nDISPLAY=:0\nWAYLAND_DISPLAY=wayland-0\n" +
+		"XDG_CURRENT_DESKTOP=KDE\nINVALID\n")
+
+	assert.Equal(t, []string{
+		"DISPLAY=:0",
+		"WAYLAND_DISPLAY=wayland-0",
+		"XDG_CURRENT_DESKTOP=KDE",
+	}, result)
+}
+
 func TestNewPlatform(t *testing.T) {
 	t.Parallel()
 

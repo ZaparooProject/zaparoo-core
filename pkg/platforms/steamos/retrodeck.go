@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/rs/zerolog/log"
@@ -91,6 +92,7 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 	// Use flatpak run with the RetroDECK app ID
 	//nolint:gosec // G204: romPath is the game to launch, launcher's purpose
 	cmd := exec.CommandContext(ctx, "flatpak", "run", RetroDECKFlatpakID, romPath)
+	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -111,6 +113,7 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 	return platforms.Launcher{
 		ID:                 "RetroDECK" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
+		Groups:             []string{platformshared.LauncherGroupRetroDECK},
 		Lifecycle:          platforms.LifecycleTracked,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
@@ -118,6 +119,7 @@ func launchStandaloneEmulator(
 
 	//nolint:gosec // Flatpak ID and arguments come from built-in mappings.
 	cmd := exec.CommandContext(ctx, "flatpak", args...)
+	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -148,6 +150,7 @@ func createEmuDeckLauncher(
 
 	launcher.ID = "EmuDeck" + systemInfo.GetLauncherID()
 	launcher.SystemID = systemInfo.SystemID
+	launcher.Groups = append(launcher.Groups, platformshared.LauncherGroupEmuDeck)
 	launcher.SkipFilesystemScan = true
 	launcher.Test = emuDeckPathTest(paths.RomsPath, systemFolder)
 	launcher.Scanner = func(

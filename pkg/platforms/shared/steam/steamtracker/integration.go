@@ -25,7 +25,6 @@ package steamtracker
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -106,9 +105,7 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 	}
 
 	if alreadyTracked {
-		// Find and track the actual game process for killing.
-		// Run in goroutine with retries since game may not have started yet.
-		go pi.findAndTrackGameProcess(appID, reaperPID, gamePath)
+		pi.trackReaperProcess(appID, reaperPID)
 		return
 	}
 
@@ -145,9 +142,7 @@ func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string
 		return
 	}
 
-	// Find and track the actual game process for killing after publishing
-	// ActiveMedia, so ownership checks see this external Steam launch.
-	go pi.findAndTrackGameProcess(appID, reaperPID, gamePath)
+	pi.trackReaperProcess(appID, reaperPID)
 }
 
 func (pi *PlatformIntegration) publishActiveMediaIfActive(
@@ -163,47 +158,25 @@ func (pi *PlatformIntegration) publishActiveMediaIfActive(
 	return true
 }
 
-// findAndTrackGameProcess attempts to find the game process with retries.
-func (pi *PlatformIntegration) findAndTrackGameProcess(appID, reaperPID int, gamePath string) {
-	const maxRetries = 10
-	const retryDelay = 500 * time.Millisecond
-
-	targets, installDir := resolveGameProcessTargets(pi.steamRoot, appID, gamePath)
-	if len(targets) == 0 && installDir == "" {
-		log.Debug().Int("appID", appID).Msg("no Steam process targets available")
+// trackReaperProcess uses Steam's per-game reaper as lifecycle root. Steam
+// runtime and Proton processes remain descendants even when launcher wrappers
+// replace themselves, so stopping this tree is more reliable than guessing one
+// game executable.
+func (pi *PlatformIntegration) trackReaperProcess(appID, reaperPID int) {
+	if pi.base == nil || !pi.gameIsActive(appID, reaperPID) {
 		return
 	}
 
-	for i := range maxRetries {
-		if !pi.gameIsActive(appID, reaperPID) {
-			log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
-				Msg("skipping stale Steam process lookup")
-			return
-		}
-
-		if gamePID, ok := findGamePIDWithPaths("/proc", targets, installDir); ok {
-			if !pi.gameIsActive(appID, reaperPID) {
-				log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
-					Msg("discarding stale Steam process match")
-				return
-			}
-			if !pi.canOwnActiveProcess(appID) {
-				log.Debug().Int("appID", appID).
-					Msg("discarding Steam process owned by another active launch")
-				return
-			}
-
-			log.Debug().Int("appID", appID).Int("gamePID", gamePID).
-				Int("attempt", i+1).Msg("found Steam game process")
-			if proc, err := os.FindProcess(gamePID); err == nil && pi.base != nil {
-				pi.base.SetTrackedProcess(proc)
-			}
-			return
-		}
-		time.Sleep(retryDelay)
+	proc, err := os.FindProcess(reaperPID)
+	if err != nil {
+		log.Warn().Err(err).Int("appID", appID).Int("reaperPID", reaperPID).
+			Msg("failed to open Steam reaper process")
+		return
 	}
-	log.Warn().Int("appID", appID).Str("gamePath", gamePath).
-		Msg("could not find Steam game process after retries")
+
+	pi.base.SetTrackedProcess(proc)
+	log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
+		Msg("tracking Steam reaper process")
 }
 
 func (pi *PlatformIntegration) gameIsActive(appID, reaperPID int) bool {
@@ -212,21 +185,16 @@ func (pi *PlatformIntegration) gameIsActive(appID, reaperPID int) bool {
 	return pi.activeGames[appID] == reaperPID
 }
 
-func (pi *PlatformIntegration) canOwnActiveProcess(appID int) bool {
-	current := pi.activeMedia()
-	if current == nil {
-		return true
-	}
-
-	currentAppID, ok := steam.ExtractAppIDFromPath(current.Path)
-	return ok && currentAppID == appID
-}
-
 // onGameStop is called when a Steam game exits (reaper process terminated).
 func (pi *PlatformIntegration) onGameStop(appID int) {
 	pi.mu.Lock()
-	defer pi.mu.Unlock()
+	reaperPID := pi.activeGames[appID]
 	delete(pi.activeGames, appID)
+	pi.mu.Unlock()
+
+	if pi.base != nil && reaperPID != 0 {
+		pi.base.ClearTrackedProcessPID(reaperPID)
+	}
 
 	log.Info().Int("appID", appID).Msg("detected Steam game exit")
 	current := pi.activeMedia()

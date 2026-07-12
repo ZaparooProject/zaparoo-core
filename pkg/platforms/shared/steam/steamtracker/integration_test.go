@@ -7,10 +7,18 @@
 package steamtracker
 
 import (
+	"errors"
+	"os/exec"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPlatformIntegrationOnGameStopPreservesOtherActiveMedia(t *testing.T) {
@@ -81,20 +89,42 @@ func TestPlatformIntegrationGameIsActive(t *testing.T) {
 	assert.False(t, integration.gameIsActive(456, 123))
 }
 
-func TestPlatformIntegrationCanOwnActiveProcess(t *testing.T) {
-	t.Parallel()
+func TestPlatformIntegrationTracksSteamReaperForStop(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sleep", "30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
-	current := &models.ActiveMedia{Path: "steam://123"}
+	base := linuxbase.NewBase(platformids.SteamOS)
 	integration := &PlatformIntegration{
-		activeMedia: func() *models.ActiveMedia { return current },
+		base:        base,
+		activeMedia: func() *models.ActiveMedia { return &models.ActiveMedia{Path: "steam://123"} },
+		activeGames: make(map[int]int),
 	}
 
-	assert.True(t, integration.canOwnActiveProcess(123))
-	assert.False(t, integration.canOwnActiveProcess(456))
+	integration.onGameStart(123, cmd.Process.Pid, "/game")
+	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
 
-	current.Path = "/home/user/roms/game.sfc"
-	assert.False(t, integration.canOwnActiveProcess(123))
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(cmd.Process.Pid, 0), syscall.ESRCH)
+	}, time.Second, 10*time.Millisecond)
+}
 
-	current = nil
-	assert.True(t, integration.canOwnActiveProcess(123))
+func TestPlatformIntegrationForgetsReaperAfterNormalExit(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sleep", "30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	base := linuxbase.NewBase(platformids.SteamOS)
+	integration := &PlatformIntegration{
+		base:           base,
+		activeMedia:    func() *models.ActiveMedia { return &models.ActiveMedia{Path: "steam://123"} },
+		setActiveMedia: func(*models.ActiveMedia) {},
+		activeGames:    make(map[int]int),
+	}
+
+	integration.onGameStart(123, cmd.Process.Pid, "/game")
+	integration.onGameStop(123)
+	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
+
+	assert.NoError(t, syscall.Kill(cmd.Process.Pid, 0))
 }
