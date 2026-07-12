@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,6 +92,7 @@ type arcadeCardLaunchCache struct {
 type Platform struct {
 	shared.LinuxInput
 	ctx                 context.Context
+	fs                  afero.Fs
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
@@ -111,6 +113,7 @@ type Platform struct {
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
+	trackedProcessGroup bool
 	processMu           syncutil.RWMutex
 	platformMu          syncutil.Mutex
 }
@@ -118,6 +121,7 @@ type Platform struct {
 func NewPlatform() *Platform {
 	p := &Platform{
 		platformMu:      syncutil.Mutex{},
+		fs:              afero.NewOsFs(),
 		launchShortCore: mgls.LaunchShortCore,
 	}
 	p.consoleManager = newConsoleManager(p)
@@ -239,27 +243,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	p.stopMappingsWatcher = closeMappingsWatcher
 	p.platformMu.Unlock()
 
-	go p.deferredStartPre()
-
 	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
 		Msg("StartPre finished")
 	return nil
-}
-
-// deferredStartPre runs the StartPre work that does not need to complete
-// before the JSON-RPC API binds: only the picker directory bootstrap.
-// Runs once per process; failures are logged and tolerated. The initial
-// CSV mappings load and the mappings watcher both start synchronously
-// in StartPre so LookupMapping never sees nil maps and Stop() can never
-// race the watcher's stopper assignment.
-func (*Platform) deferredStartPre() {
-	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
-			log.Error().Err(err).Msg("failed to create picker directory")
-		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
-			log.Error().Err(err).Msg("failed to write picker selected file")
-		}
-	}
 }
 
 var configureTLSDefaults = tlsroots.ConfigureDefaults
@@ -411,23 +397,32 @@ func (p *Platform) Stop() error {
 func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
+	if p.trackedProcess != proc {
+		p.processDone = nil
+		p.trackedProcessGroup = false
+	}
 	p.trackedProcess = proc
 }
 
-// setTrackedProcessWithCleanup sets the tracked process and its cleanup completion channel
-func (p *Platform) setTrackedProcessWithCleanup(proc *os.Process, done chan struct{}) {
+// setTrackedProcessWithCleanup sets tracked process lifecycle state.
+func (p *Platform) setTrackedProcessWithCleanup(proc *os.Process, done chan struct{}, processGroup bool) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
 	p.trackedProcess = proc
 	p.processDone = done
+	p.trackedProcessGroup = processGroup
 }
 
-// clearTrackedProcess clears both the tracked process and its cleanup channel
-func (p *Platform) clearTrackedProcess() {
+// clearTrackedProcess clears lifecycle state when proc is still current.
+func (p *Platform) clearTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
+	if p.trackedProcess != proc {
+		return
+	}
 	p.trackedProcess = nil
 	p.processDone = nil
+	p.trackedProcessGroup = false
 }
 
 func (p *Platform) ScanHook(token *tokens.Token) error {
@@ -463,6 +458,13 @@ func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return misterconfig.RootDirs(cfg)
 }
 
+func (p *Platform) filesystem() afero.Fs {
+	if p.fs != nil {
+		return p.fs
+	}
+	return afero.NewOsFs()
+}
+
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    misterconfig.DataDir,
@@ -473,153 +475,185 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
+func signalTrackedProcess(proc *os.Process, processGroup bool, signal syscall.Signal) error {
+	if processGroup {
+		if err := syscall.Kill(-proc.Pid, signal); err != nil {
+			return fmt.Errorf("signal process group: %w", err)
+		}
+		return nil
+	}
+	if err := proc.Signal(signal); err != nil {
+		return fmt.Errorf("signal process: %w", err)
+	}
+	return nil
+}
+
+func trackedProcessGroupAlive(proc *os.Process, processGroup bool) bool {
+	if !processGroup {
+		return false
+	}
+	return !errors.Is(syscall.Kill(-proc.Pid, 0), syscall.ESRCH)
+}
+
+func killRemainingProcessGroup(proc *os.Process, processGroup bool) {
+	if !trackedProcessGroupAlive(proc, processGroup) {
+		return
+	}
+
+	log.Warn().Msg("tracked process group still alive after leader exit, sending SIGKILL")
+	if err := signalTrackedProcess(proc, true, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		log.Warn().Err(err).Msg("failed to SIGKILL remaining process group")
+		return
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for trackedProcessGroupAlive(proc, true) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitForTrackedProcess(proc *os.Process, done chan struct{}) chan struct{} {
+	if done != nil {
+		return done
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		_, _ = proc.Wait()
+		close(waitDone)
+	}()
+	return waitDone
+}
+
+func stopTrackedProcess(proc *os.Process, done chan struct{}, processGroup bool, gracefulStop func() error) {
+	const (
+		gracefulTimeout = 5 * time.Second
+		termTimeout     = 2 * time.Second
+		killTimeout     = 500 * time.Millisecond
+	)
+
+	waitDone := waitForTrackedProcess(proc, done)
+	gracefulSent := false
+	if gracefulStop != nil {
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := gracefulStop(); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed, falling back to SIGTERM")
+		} else {
+			gracefulSent = true
+		}
+	}
+	if !gracefulSent {
+		log.Debug().Msg("sending SIGTERM to tracked process")
+		if err := signalTrackedProcess(proc, processGroup, syscall.SIGTERM); err != nil &&
+			!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Msg("failed to SIGTERM tracked process")
+		}
+	}
+
+	stopped := false
+	select {
+	case <-waitDone:
+		stopped = true
+		log.Debug().Msg("tracked process cleanup completed")
+	case <-time.After(gracefulTimeout):
+	}
+
+	if !stopped && gracefulSent {
+		log.Warn().Msg("custom graceful stop timed out, sending SIGTERM")
+		if err := signalTrackedProcess(proc, processGroup, syscall.SIGTERM); err != nil &&
+			!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Msg("failed to SIGTERM tracked process")
+		}
+		select {
+		case <-waitDone:
+			stopped = true
+			log.Debug().Msg("tracked process cleanup completed after SIGTERM")
+		case <-time.After(termTimeout):
+		}
+	}
+
+	if !stopped {
+		log.Warn().Msg("tracked process stop timed out, sending SIGKILL")
+		if err := signalTrackedProcess(proc, processGroup, syscall.SIGKILL); err != nil &&
+			!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Msg("failed to SIGKILL tracked process")
+		}
+		select {
+		case <-waitDone:
+			log.Debug().Msg("tracked process cleanup completed after SIGKILL")
+		case <-time.After(killTimeout):
+			log.Warn().Msg("tracked process cleanup timed out after SIGKILL")
+		}
+	}
+
+	killRemainingProcessGroup(proc, processGroup)
+}
+
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
-	// Store intent before cancelling context so cleanup goroutine can read it
 	p.processMu.Lock()
 	p.stopIntent = intent
+	proc := p.trackedProcess
+	done := p.processDone
+	processGroup := p.trackedProcessGroup
 	p.processMu.Unlock()
 
-	// Check if we have a tracked process before attempting to stop it
-	p.processMu.Lock()
-	hadTrackedProcess := p.trackedProcess != nil
-	p.processMu.Unlock()
-
-	// Invalidate old launcher context ONLY for preemption (new launcher starting)
-	// EXCEPT for console launchers which need cleanup goroutine to run
-	// For StopForMenu and StopForConsoleReset, we need cleanup to run to unlock VT
-	cancelContextNow := intent == platforms.StopForPreemption && !hadTrackedProcess
-
-	// Console launchers (video/ScummVM): delay context cancellation until after cleanup
-
-	if cancelContextNow {
-		if p.launcherManager != nil {
-			p.launcherManager.NewContext()
-		}
+	if proc == nil && intent == platforms.StopForPreemption && p.launcherManager != nil {
+		p.launcherManager.NewContext()
 	}
 
-	// Check if launcher has custom Kill function
+	// Capture the current launcher cleanup before clearing it. Script-tracked
+	// processes do not set lastLauncher and must not inherit a stale Kill hook.
 	p.platformMu.Lock()
 	customKill := p.lastLauncher.Kill
+	if proc != nil {
+		p.lastLauncher = platforms.Launcher{}
+	}
 	p.platformMu.Unlock()
 
-	// Use custom Kill if defined (e.g., keyboard input for ScummVM)
-	if customKill != nil {
-		log.Debug().Msg("using custom Kill function for launcher")
-		if err := customKill(&config.Instance{}); err != nil {
-			log.Warn().Err(err).Msg("custom Kill function failed")
-		}
-		// Custom Kill function used - skip signal-based termination entirely
-		// The process will exit on its own via the custom method
-	} else {
-		// Stop tracked process if it exists using signal-based termination
-		p.processMu.Lock()
-		if p.trackedProcess != nil {
-			proc := p.trackedProcess
-
-			// Staged termination approach:
-			// 1. Try SIGTERM first (allows SDL cleanup to run)
-			// 2. Wait 5 seconds
-			// 3. If still running, force kill with SIGKILL
-			// 4. After process dies, deallocate the VT to reset all state
-			log.Debug().Msg("sending SIGTERM to tracked process for graceful shutdown")
-			if err := proc.Signal(syscall.SIGTERM); err != nil {
-				log.Warn().Err(err).Msg("failed to send SIGTERM to tracked process")
-				p.trackedProcess = nil
-				p.processMu.Unlock()
-			} else {
-				p.trackedProcess = nil
-				p.processMu.Unlock()
-
-				// Wait for graceful exit with timeout
-				done := make(chan error, 1)
-				go func() {
-					_, err := proc.Wait()
-					done <- err
-				}()
-
-				select {
-				case err := <-done:
-					if err != nil {
-						log.Debug().Err(err).Msg("process exited after SIGTERM")
-					} else {
-						log.Debug().Msg("process exited gracefully after SIGTERM")
-					}
-				case <-time.After(5 * time.Second):
-					// SIGTERM didn't work within 5 seconds - force kill
-					log.Debug().Msg("SIGTERM timeout - sending SIGKILL")
-					if err := proc.Kill(); err != nil {
-						log.Warn().Err(err).Msg("failed to SIGKILL process")
-					} else {
-						// Wait for SIGKILL to complete (should be fast)
-						select {
-						case <-done:
-							log.Debug().Msg("process killed with SIGKILL")
-						case <-time.After(500 * time.Millisecond):
-							log.Warn().Msg("SIGKILL took too long")
-						}
-					}
-				}
+	if proc != nil {
+		var gracefulStop func() error
+		if customKill != nil {
+			gracefulStop = func() error {
+				return customKill(&config.Instance{})
 			}
-		} else {
-			p.processMu.Unlock()
+		}
+		stopTrackedProcess(proc, done, processGroup, gracefulStop)
+		if done == nil {
+			p.clearTrackedProcess(proc)
 		}
 	}
 
-	// Clear active media
 	p.setActiveMedia(nil)
 
-	// Return to menu if needed - but ONLY for launchers without tracked processes
-	// Console launchers (video/ScummVM) have cleanup goroutines that call ReturnToMenu
-	// FPGA/MGL launchers have no cleanup goroutine, so we must call it here
-	if intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset {
-		if !hadTrackedProcess {
-			// No cleanup goroutine will run - we must call ReturnToMenu ourselves
-			log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
-			if err := p.ReturnToMenu(); err != nil {
-				log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
-			}
-		} else {
-			log.Debug().Msg("tracked process existed - cleanup goroutine will call ReturnToMenu")
+	if proc == nil && (intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset) {
+		log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
+		if err := p.ReturnToMenu(); err != nil {
+			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
 		}
 	}
 
-	// For console launchers during preemption, wait for cleanup to complete
-	// before cancelling context. This ensures console state (VT, cursor, video mode)
-	// is properly cleaned up before the new launcher starts.
-	if intent == platforms.StopForPreemption && hadTrackedProcess {
-		// Get the cleanup completion channel
-		p.processMu.Lock()
-		done := p.processDone
-		p.processMu.Unlock()
-
-		if done != nil {
-			log.Debug().Msg("waiting for console launcher cleanup to complete")
-			select {
-			case <-done:
-				log.Debug().Msg("console launcher cleanup completed")
-			case <-time.After(2 * time.Second):
-				// Safety valve: don't hang if process becomes a zombie
-				log.Warn().Msg("timeout waiting for console cleanup (2s)")
-			}
-		}
-
-		// Now invalidate the launcher context to prevent any further operations
-		if p.launcherManager != nil {
-			p.launcherManager.NewContext()
-		}
+	if intent == platforms.StopForPreemption && proc != nil && p.launcherManager != nil {
+		p.launcherManager.NewContext()
 	}
 
 	return nil
 }
 
 func (p *Platform) ReturnToMenu() error {
+	p.processMu.Lock()
+	hasTrackedProcess := p.trackedProcess != nil
+	p.processMu.Unlock()
+	if hasTrackedProcess {
+		return p.StopActiveLauncher(platforms.StopForMenu)
+	}
+
 	// Restore console cursor state on both TTYs
 	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
 		log.Warn().Err(err).Msg("failed to restore tty1 cursor")
 	}
-	if launcherConsoleVT != f9ConsoleVT {
-		if err := p.consoleManager.Restore(launcherConsoleVT); err != nil {
-			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", launcherConsoleVT)
+	if armLauncherVT != f9ConsoleVT {
+		if err := p.consoleManager.Restore(armLauncherVT); err != nil {
+			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", armLauncherVT)
 		}
 	}
 
@@ -1395,8 +1429,7 @@ func (p *Platform) ShowNotice(
 	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
-		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
 	p.platformMu.Unlock()
 
 	if needsDelay {
@@ -1413,7 +1446,7 @@ func (p *Platform) ShowNotice(
 		p.platformMu.Lock()
 		defer p.platformMu.Unlock()
 		p.lastUIHidden = time.Now()
-		return hideNotice(completePath)
+		return hideNotice(p.filesystem(), completePath)
 	}, preNoticeTime(), nil
 }
 
@@ -1422,8 +1455,7 @@ func (p *Platform) ShowLoader(
 	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
-		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
 	p.platformMu.Unlock()
 
 	if needsDelay {
@@ -1440,7 +1472,7 @@ func (p *Platform) ShowLoader(
 		p.platformMu.Lock()
 		defer p.platformMu.Unlock()
 		p.lastUIHidden = time.Now()
-		return hideNotice(completePath)
+		return hideNotice(p.filesystem(), completePath)
 	}, nil
 }
 

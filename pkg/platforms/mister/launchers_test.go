@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -307,6 +308,59 @@ func TestLaunchScummVM_InvalidPath_NoTargetID(t *testing.T) {
 	}
 }
 
+func TestResolveFramebufferMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		renderResolution  string
+		defaultResolution string
+		renderScale       int
+		defaultScale      int
+		expect            framebufferMode
+		expectError       bool
+	}{
+		{name: "video default", defaultScale: 33, expect: framebufferMode{divisor: 3}},
+		{name: "ScummVM default", defaultResolution: "640x480", expect: framebufferMode{width: 640, height: 480}},
+		{name: "half scale", renderScale: 50, expect: framebufferMode{divisor: 2}},
+		{name: "exact override", renderResolution: "800x600", expect: framebufferMode{width: 800, height: 600}},
+		{name: "unsupported scale", renderScale: 75, expectError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var opts *platforms.LaunchOptions
+			if tt.renderScale != 0 || tt.renderResolution != "" {
+				opts = &platforms.LaunchOptions{RenderResolution: tt.renderResolution}
+				if tt.renderScale != 0 {
+					renderScale := tt.renderScale
+					opts.RenderScale = &renderScale
+				}
+			}
+			mode, err := resolveFramebufferMode(opts, tt.defaultScale, tt.defaultResolution)
+			if tt.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expect, mode)
+		})
+	}
+}
+
+func TestResolveFramebufferMode_RejectsConflictingOptions(t *testing.T) {
+	t.Parallel()
+
+	renderScale := 50
+	_, err := resolveFramebufferMode(&platforms.LaunchOptions{
+		RenderScale:      &renderScale,
+		RenderResolution: "640x480",
+	}, videoRenderScale, "")
+	require.Error(t, err)
+}
+
 func TestBuildFvpCommand(t *testing.T) {
 	t.Parallel()
 
@@ -368,6 +422,35 @@ func TestBuildFvpCommand_DifferentPaths(t *testing.T) {
 	}
 }
 
+func TestScummVMKill_SendsCtrlQWithoutWaiting(t *testing.T) {
+	t.Parallel()
+
+	pressed := make(chan string, 1)
+	kill := scummVMKill(func(keys string) error {
+		pressed <- keys
+		return nil
+	})
+
+	err := kill(&config.Instance{})
+	require.NoError(t, err)
+
+	select {
+	case keys := <-pressed:
+		assert.Equal(t, "{ctrl+q}", keys)
+	default:
+		t.Fatal("ScummVM Kill did not send ctrl+q")
+	}
+}
+
+func TestScummVMKill_PropagatesKeyboardError(t *testing.T) {
+	t.Parallel()
+
+	kill := scummVMKill(func(string) error { return assert.AnError })
+	err := kill(&config.Instance{})
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "failed to send ctrl+q")
+}
+
 func TestBuildScummVMCommand(t *testing.T) {
 	t.Parallel()
 
@@ -389,8 +472,11 @@ func TestBuildScummVMCommand(t *testing.T) {
 	assert.Contains(t, cmd.Args, "--opl-driver=db")
 	assert.Contains(t, cmd.Args, "--output-rate=48000")
 
-	// Verify working directory
+	// Verify process-group tracking without creating a new session.
 	assert.Equal(t, scummvmBaseDir, cmd.Dir)
+	require.NotNil(t, cmd.SysProcAttr)
+	assert.True(t, cmd.SysProcAttr.Setpgid)
+	assert.False(t, cmd.SysProcAttr.Setsid)
 
 	// Verify environment variables - check that our custom ones are set
 	hasCustomHome := false

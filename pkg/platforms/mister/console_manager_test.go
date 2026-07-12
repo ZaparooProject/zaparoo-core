@@ -65,6 +65,48 @@ func (m *mockCoreNameGetter) GetCoreName() string {
 	return m.coreName
 }
 
+type mockConsoleLeaseController struct {
+	acquireErr     error
+	releaseErr     error
+	acquiredVT     string
+	releasedKey    string
+	available      bool
+	availableAfter int
+	availableCalls int
+}
+
+func (m *mockConsoleLeaseController) Available() bool {
+	m.availableCalls++
+	return m.available || (m.availableAfter > 0 && m.availableCalls >= m.availableAfter)
+}
+
+func (m *mockConsoleLeaseController) Acquire(_ context.Context, vt string) (string, error) {
+	m.acquiredVT = vt
+	return "test-nonce", m.acquireErr
+}
+
+func (m *mockConsoleLeaseController) Release(_ context.Context, nonce string) error {
+	m.releasedKey = nonce
+	return m.releaseErr
+}
+
+type mockConsoleHardware struct {
+	cleanErr    error
+	restoreErr  error
+	cleanedVTs  []string
+	restoredVTs []string
+}
+
+func (m *mockConsoleHardware) Clean(vt string) error {
+	m.cleanedVTs = append(m.cleanedVTs, vt)
+	return m.cleanErr
+}
+
+func (m *mockConsoleHardware) Restore(vt string) error {
+	m.restoredVTs = append(m.restoredVTs, vt)
+	return m.restoreErr
+}
+
 func TestMiSTerConsoleManager_Open_CancelledContext(t *testing.T) {
 	t.Parallel()
 
@@ -135,6 +177,163 @@ func TestMiSTerConsoleManager_Open_AlreadyActive(t *testing.T) {
 	cm.mu.RLock()
 	assert.True(t, cm.active)
 	cm.mu.RUnlock()
+}
+
+func TestMiSTerConsoleManager_Open_UsesMainConsoleLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+
+	err := cm.Open(context.Background(), "3")
+	require.NoError(t, err)
+	assert.Equal(t, "3", lease.acquiredVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+	assert.Equal(t, "3", cm.activeVT)
+	assert.True(t, cm.active)
+}
+
+func TestMiSTerConsoleManager_Open_UsesLeasePublishedAfterMenuTransition(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{availableAfter: 2}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.coreNameGetter = &mockCoreNameGetter{coreName: "GAMEBOY"}
+	cm.fbChecker = &mockFramebufferChecker{ready: true}
+
+	err := cm.Open(context.Background(), "3")
+	require.NoError(t, err)
+	assert.Equal(t, 2, lease.availableCalls)
+	assert.Equal(t, "3", lease.acquiredVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Open_LeaseFailure(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, acquireErr: assert.AnError}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorIs(t, err, assert.AnError)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
+	assert.Empty(t, lease.releasedKey)
+}
+
+func TestMiSTerConsoleManager_Open_LeaseContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, acquireErr: context.Canceled}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Open_FramebufferFailureReleasesLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.fbChecker = &mockFramebufferChecker{ready: false}
+	cm.framebufferWait = time.Millisecond
+
+	err := cm.Open(context.Background(), "3")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "framebuffer not ready")
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Open_FramebufferAndReleaseFailurePreservesLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.fbChecker = &mockFramebufferChecker{ready: false}
+	cm.framebufferWait = time.Millisecond
+
+	err := cm.Open(context.Background(), "3")
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "framebuffer not ready")
+	assert.True(t, cm.active)
+	assert.Equal(t, "3", cm.activeVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+}
+
+func TestMiSTerConsoleManager_Close_ReleasesMainConsoleLease(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true}
+	hardware := &mockConsoleHardware{}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.hardware = hardware
+	cm.active = true
+	cm.activeVT = "3"
+	cm.leaseNonce = "test-nonce"
+
+	err := cm.Close()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "3"}, hardware.restoredVTs)
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+	assert.False(t, cm.active)
+	assert.Empty(t, cm.activeVT)
+	assert.Empty(t, cm.leaseNonce)
+}
+
+func TestMiSTerConsoleManager_Close_ReleaseFailurePreservesRetryState(t *testing.T) {
+	t.Parallel()
+
+	lease := &mockConsoleLeaseController{available: true, releaseErr: assert.AnError}
+	cm := newConsoleManager(&Platform{})
+	cm.leaseController = lease
+	cm.hardware = &mockConsoleHardware{}
+	cm.active = true
+	cm.activeVT = "3"
+	cm.leaseNonce = "test-nonce"
+
+	err := cm.Close()
+	require.ErrorIs(t, err, assert.AnError)
+	assert.True(t, cm.active)
+	assert.Equal(t, "3", cm.activeVT)
+	assert.Equal(t, "test-nonce", cm.leaseNonce)
+	assert.Equal(t, "test-nonce", lease.releasedKey)
+}
+
+func TestMiSTerConsoleManager_CleanAndRestoreUseHardwareBoundary(t *testing.T) {
+	t.Parallel()
+
+	hardware := &mockConsoleHardware{}
+	cm := newConsoleManager(&Platform{})
+	cm.hardware = hardware
+
+	require.NoError(t, cm.Clean("3"))
+	require.NoError(t, cm.Restore("3"))
+	assert.Equal(t, []string{"3"}, hardware.cleanedVTs)
+	assert.Equal(t, []string{"3"}, hardware.restoredVTs)
+}
+
+func TestMiSTerConsoleManager_CleanAndRestoreWrapHardwareErrors(t *testing.T) {
+	t.Parallel()
+
+	cm := newConsoleManager(&Platform{})
+	cm.hardware = &mockConsoleHardware{cleanErr: assert.AnError, restoreErr: assert.AnError}
+
+	require.ErrorIs(t, cm.Clean("3"), assert.AnError)
+	require.ErrorIs(t, cm.Restore("3"), assert.AnError)
 }
 
 func TestMiSTerConsoleManager_Open_ChvtAfterTty1Confirmed(t *testing.T) {
@@ -307,6 +506,7 @@ func TestNewConsoleManager_DefaultDependencies(t *testing.T) {
 	assert.NotNil(t, cm.ttyReader)
 	assert.NotNil(t, cm.fbChecker)
 	assert.NotNil(t, cm.coreNameGetter)
+	assert.NotNil(t, cm.leaseController)
 	assert.NotNil(t, cm.executor)
 
 	// Verify they're the real implementations
