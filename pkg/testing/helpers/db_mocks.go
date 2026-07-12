@@ -1604,6 +1604,14 @@ func (m *MockMediaDBI) TrackBackgroundOperation() {
 	m.Called()
 }
 
+func (m *MockMediaDBI) HasBackgroundOperations() bool {
+	if !m.hasExpectation("HasBackgroundOperations") {
+		return false
+	}
+	args := m.Called()
+	return args.Bool(0)
+}
+
 func (m *MockMediaDBI) SetIndexingConnBoost(active bool) {
 	m.Called(active)
 }

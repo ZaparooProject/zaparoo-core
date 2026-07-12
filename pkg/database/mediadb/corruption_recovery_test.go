@@ -193,6 +193,20 @@ func TestMediaDB_BrowseFiles_RoutesCorruptionToMarker(t *testing.T) {
 	assert.True(t, mediaDB.IsMarkedCorrupt(), "a malformed browse read must keep the DB marked corrupt")
 }
 
+func TestMediaDB_Recreate_FailsWhenCorruptMarkerCannotBeCleared(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	markerPath := database.CorruptMarkerPath(mediaDB.GetDBPath())
+	require.NoError(t, os.Mkdir(markerPath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(markerPath, "blocker"), []byte("x"), 0o600))
+
+	err := mediaDB.Recreate(false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear corrupt marker")
+	assert.True(t, mediaDB.IsMarkedCorrupt(), "failed marker removal must remain a pending recovery signal")
+}
+
 func TestMediaDB_Recreate_DeleteWhenNoBackup(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()

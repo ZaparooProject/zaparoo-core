@@ -31,6 +31,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUserDBRestoreBackupFailsWhenCorruptMarkerCannotBeCleared(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	backup, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+	markerPath := database.CorruptMarkerPath(userDB.GetDBPath())
+	require.NoError(t, os.Mkdir(markerPath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(markerPath, "blocker"), []byte("x"), 0o600))
+
+	_, err = userDB.RestoreBackup(backup.Name)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear user database corrupt marker")
+	assert.True(t, userDB.IsMarkedCorrupt(), "failed marker removal must remain a pending recovery signal")
+}
+
 func TestUserDBBackupRestoreRoundTrip(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()

@@ -299,11 +299,12 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	if err = db.MigrateUp(); err != nil {
 		return db.restoreFailed(fmt.Errorf("failed to migrate restored user database: %w", err))
 	}
+	result := database.RestoreInfo{RestoredFrom: backup, PreRestoreBackup: preRestore}
 	if err = db.ClearCorruptMarker(); err != nil {
-		log.Warn().Err(err).Msg("failed to clear user database corrupt marker after restore")
+		return result, fmt.Errorf("failed to clear user database corrupt marker after restore: %w", err)
 	}
 
-	return database.RestoreInfo{RestoredFrom: backup, PreRestoreBackup: preRestore}, nil
+	return result, nil
 }
 
 // restoreFailed leaves the user database connection usable after a restore step
@@ -360,7 +361,9 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 			return database.RestoreInfo{}, fmt.Errorf("failed to migrate restored user database: %w", err)
 		}
 		if err = db.ClearCorruptMarker(); err != nil {
-			log.Warn().Err(err).Msg("failed to clear user database corrupt marker after recovery")
+			return database.RestoreInfo{}, fmt.Errorf(
+				"failed to clear user database corrupt marker after recovery: %w", err,
+			)
 		}
 		log.Warn().Str("backup", backup.Path).Msg("restored user database from backup after corruption")
 		return database.RestoreInfo{RestoredFrom: backup}, nil
@@ -378,7 +381,9 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 		)
 	}
 	if err = db.ClearCorruptMarker(); err != nil {
-		log.Warn().Err(err).Msg("failed to clear user database corrupt marker after fresh recovery")
+		return database.RestoreInfo{}, fmt.Errorf(
+			"failed to clear user database corrupt marker after fresh recovery: %w", err,
+		)
 	}
 	log.Warn().Msg("created fresh user database after corruption; no valid backup was available")
 	return database.RestoreInfo{}, nil

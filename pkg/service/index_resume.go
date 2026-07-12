@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -50,6 +51,8 @@ import (
 const maxIndexNoProgressResumeAttempts = 5
 
 const indexResumeCheckpointPrefix = "last_indexed_system="
+
+const mediaDBRecoveryPollInterval = 5 * time.Second
 
 // mediaDBRecovering serializes media database recovery so the startup check and the
 // runtime watcher can never run a close/reopen rebuild concurrently.
@@ -230,15 +233,11 @@ func checkAndRecoverCorruptMediaDB(
 		return
 	}
 
-	// Never rebuild on top of an in-flight operation; the marker keeps recovery pending
-	// until the next safe point (this check runs again on the next startup pass).
-	if status, err := db.MediaDB.GetIndexingStatus(); err == nil &&
-		(status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending) {
-		log.Warn().Msg("media database flagged corrupt but indexing is in flight; deferring recovery")
-		return
-	}
-	if status, err := db.MediaDB.GetScrapingStatus(); err == nil && status == mediadb.IndexingStatusRunning {
-		log.Warn().Msg("media database flagged corrupt but scraping is in flight; deferring recovery")
+	// Persisted running statuses survive process crashes. Only treat them as proof of
+	// in-flight work when this process also owns a tracked background operation; otherwise
+	// an authoritative corrupt marker could be blocked forever by stale status.
+	if mediaDBCorruptionRecoveryBlocked(db.MediaDB) {
+		log.Warn().Msg("media database flagged corrupt but background work is in flight; deferring recovery")
 		return
 	}
 
@@ -281,12 +280,24 @@ func checkAndRecoverCorruptMediaDB(
 	}
 }
 
+func mediaDBCorruptionRecoveryBlocked(mediaDB database.MediaDBI) bool {
+	if !mediaDB.HasBackgroundOperations() {
+		return false
+	}
+	if status, err := mediaDB.GetIndexingStatus(); err == nil &&
+		(status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending) {
+		return true
+	}
+	if status, err := mediaDB.GetScrapingStatus(); err == nil && status == mediadb.IndexingStatusRunning {
+		return true
+	}
+	return false
+}
+
 // watchForCorruptMediaDBRecovery triggers recovery at runtime once an indexing or
-// optimization operation completes. Detection points set the durable corrupt marker
-// mid-operation; this watcher re-checks it at each operation boundary (a media-indexing
-// notification) so corruption found during a session self-heals without waiting for the
-// next service start. checkAndRecoverCorruptMediaDB is a cheap no-op when the marker is
-// absent or an operation is still in flight, and its CAS guard makes re-entry safe.
+// optimization operation completes. It also polls the durable marker so corruption first
+// observed by a foreground query self-heals without requiring an unrelated indexing event
+// or service restart. The marker check is a cheap stat when no corruption is present.
 func watchForCorruptMediaDBRecovery(
 	ctx context.Context,
 	b *broker.Broker,
@@ -296,8 +307,25 @@ func watchForCorruptMediaDBRecovery(
 	st *state.State,
 	pauser *syncutil.Pauser,
 ) {
+	watchForCorruptMediaDBRecoveryAtInterval(
+		ctx, b, pl, cfg, db, st, pauser, mediaDBRecoveryPollInterval,
+	)
+}
+
+func watchForCorruptMediaDBRecoveryAtInterval(
+	ctx context.Context,
+	b *broker.Broker,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+	pollInterval time.Duration,
+) {
 	notifChan, subID := b.Subscribe(32, models.NotificationMediaIndexing)
 	defer b.Unsubscribe(subID)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -307,6 +335,8 @@ func watchForCorruptMediaDBRecovery(
 			if !ok {
 				return
 			}
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
+		case <-ticker.C:
 			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
 		}
 	}

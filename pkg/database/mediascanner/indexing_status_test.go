@@ -21,11 +21,13 @@ package mediascanner
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,4 +81,20 @@ func TestNoteIndexingCorruption(t *testing.T) {
 	noteIndexingCorruption(mockDB, "persistent scan state load for nes: boom")
 
 	mockDB.AssertExpectations(t)
+}
+
+func TestFinalizeIndexingError_MarksGenericCorruptionAfterRollback(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	corruptErr := fmt.Errorf("failed to commit transaction: %w", sqlite3.Error{Code: sqlite3.ErrCorrupt})
+	reason := "media indexing failed: " + corruptErr.Error()
+	mockDB.On("IntegrityReport").Return([]string{"Page 9: malformed"})
+	mockDB.On("MarkCorrupt", reason).Return()
+	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil)
+	mockDB.On("SetLastIndexedSystem", "").Return(nil)
+
+	finalizeIndexingError(mockDB, corruptErr)
+
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "SetIndexingStatus", mediadb.IndexingStatusFailed)
 }

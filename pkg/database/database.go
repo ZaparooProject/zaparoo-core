@@ -829,6 +829,7 @@ type MediaDBI interface {
 	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
 	TrackBackgroundOperation()
+	HasBackgroundOperations() bool
 	SetIndexingConnBoost(active bool)
 	BackgroundOperationDone()
 
