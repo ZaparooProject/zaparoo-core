@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -454,42 +453,6 @@ func loadRecent(filename string) error {
 	return nil
 }
 
-func (tr *Tracker) runPickerSelection(name string) {
-	contents, err := os.ReadFile(name) //nolint:gosec // Internal picker selection file
-	switch {
-	case err != nil:
-		log.Error().Msgf("error reading main picker selected: %s", err)
-	case len(contents) == 0:
-		log.Error().Msgf("main picker selected is empty")
-	default:
-		path := strings.TrimSpace(string(contents))
-		path = misterconfig.SDRootDir + "/" + path
-		log.Info().Msgf("main picker selected path: %s", path)
-
-		pickerContents, err := os.ReadFile(path) //nolint:gosec // Internal picker content path
-		if err != nil {
-			log.Error().Msgf("error reading main picker selected path: %s", err)
-		} else {
-			_, err = client.LocalClient(context.Background(), tr.cfg, models.MethodRun, string(pickerContents))
-			if err != nil {
-				log.Error().Err(err).Msg("error running local client")
-			}
-		}
-
-		files, err := os.ReadDir(misterconfig.MainPickerDir)
-		if err != nil {
-			log.Error().Msgf("error reading picker items dir: %s", err)
-		} else {
-			for _, file := range files {
-				err := os.Remove(filepath.Join(misterconfig.MainPickerDir, file.Name()))
-				if err != nil {
-					log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
-				}
-			}
-		}
-	}
-}
-
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
@@ -522,9 +485,6 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 								log.Error().Msgf("error loading recent file: %s", err)
 							}
 						}
-					case event.Name == misterconfig.MainPickerSelected:
-						log.Info().Msgf("main picker selected: %s", event.Name)
-						tr.runPickerSelection(event.Name)
 					}
 				}
 			case watchErr, ok := <-watcher.Errors:
@@ -594,16 +554,6 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	err = watcher.Add(misterconfig.CurrentPathFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to watch current path file (%s): %w", misterconfig.CurrentPathFile, err)
-	}
-
-	_, pickerExists := os.Stat(misterconfig.MainPickerSelected)
-	if pickerExists == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		log.Debug().Msgf("adding watcher for picker selected file: %s", misterconfig.MainPickerSelected)
-		err = watcher.Add(misterconfig.MainPickerSelected)
-		if err != nil {
-			return nil, fmt.Errorf("failed to watch picker selected file (%s): %w",
-				misterconfig.MainPickerSelected, err)
-		}
 	}
 
 	elapsed := time.Since(startTime)

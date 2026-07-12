@@ -35,19 +35,23 @@ import (
 
 // testConsoleManager is a simple mock console manager for testing
 type testConsoleManager struct {
-	openErr    error
-	closeErr   error
-	cleanErr   error
-	restoreErr error
-	openCalled bool
+	openErr     error
+	closeErr    error
+	cleanErr    error
+	restoreErr  error
+	openVT      string
+	openCalled  bool
+	closeCalled bool
 }
 
-func (m *testConsoleManager) Open(_ context.Context, _ string) error {
+func (m *testConsoleManager) Open(_ context.Context, vt string) error {
 	m.openCalled = true
+	m.openVT = vt
 	return m.openErr
 }
 
 func (m *testConsoleManager) Close() error {
+	m.closeCalled = true
 	return m.closeErr
 }
 
@@ -190,6 +194,53 @@ func TestSetupConsoleEnvironment_CancelledContext(t *testing.T) {
 	// Should get context.Canceled error
 	require.Error(t, err)
 	assert.Nil(t, cm)
+}
+
+func TestSetupConsoleManager_UsesArmVTAndCentralizedClose(t *testing.T) {
+	t.Parallel()
+
+	cm := &testConsoleManager{}
+	configured, err := setupConsoleManager(context.Background(), cm)
+	require.NoError(t, err)
+	assert.Same(t, cm, configured)
+	assert.Equal(t, armLauncherVT, cm.openVT)
+
+	restore := createConsoleRestoreFunc(cm)
+	restore()
+	assert.True(t, cm.closeCalled)
+}
+
+func TestSetupConsoleManager_OpenFailure(t *testing.T) {
+	t.Parallel()
+
+	cm := &testConsoleManager{openErr: assert.AnError}
+	configured, err := setupConsoleManager(context.Background(), cm)
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, configured)
+	assert.False(t, cm.closeCalled)
+}
+
+func TestSetupConsoleManager_CleanFailureClosesConsole(t *testing.T) {
+	t.Parallel()
+
+	cm := &testConsoleManager{cleanErr: assert.AnError}
+	configured, err := setupConsoleManager(context.Background(), cm)
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, configured)
+	assert.True(t, cm.closeCalled)
+}
+
+func TestSetupConsoleManager_CleanAndCloseFailuresAreJoined(t *testing.T) {
+	t.Parallel()
+
+	cleanErr := errors.New("clean failed")
+	closeErr := errors.New("close failed")
+	cm := &testConsoleManager{cleanErr: cleanErr, closeErr: closeErr}
+	configured, err := setupConsoleManager(context.Background(), cm)
+	require.ErrorIs(t, err, cleanErr)
+	require.ErrorIs(t, err, closeErr)
+	assert.Nil(t, configured)
+	assert.True(t, cm.closeCalled)
 }
 
 func TestConsoleManager_ErrorPropagation(t *testing.T) {

@@ -381,13 +381,25 @@ func TestResolveAmigaVisionVirtualMGLPath(t *testing.T) {
 	amigaVisionMGLPaths = []string{realMGL}
 	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
 
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	routedVirtualMGL := filepath.Join(installPath, "Amiga.mgl")
+	require.NoError(t, os.MkdirAll(installPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(installPath, "AmigaVision.hdf"), []byte("test"), 0o600))
+
 	missingMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga 500.mgl")
 	nonMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Readme.txt")
+	mglWithoutAmigaVision := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga.mgl")
 
 	assert.Equal(t, realMGL, resolveAmigaVisionVirtualMGLPath(virtualMGL))
 	assert.Equal(t, realVirtualMGL, resolveAmigaVisionVirtualMGLPath(realVirtualMGL))
 	assert.Equal(t, missingMGL, resolveAmigaVisionVirtualMGLPath(missingMGL))
 	assert.Equal(t, nonMGL, resolveAmigaVisionVirtualMGLPath(nonMGL))
+	assert.True(t, isAmigaVisionVirtualMGLPath(routedVirtualMGL))
+	assert.False(t, isAmigaVisionVirtualMGLPath(mglWithoutAmigaVision))
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+	assert.True(t, amigaLauncher.Test(nil, routedVirtualMGL))
 }
 
 func TestAmigaLauncher_TestRequiresAmigaVisionVirtualPath(t *testing.T) {
@@ -517,6 +529,103 @@ func TestNeoGeoScanner_AddsNestedRomsetEntries(t *testing.T) {
 	assert.Contains(t, results, platforms.ScanResult{Path: nestedNeoPath})
 	assert.Contains(t, results, platforms.ScanResult{Path: zipPath, Name: "Metal Slug", NoExt: true})
 	assert.Contains(t, results, platforms.ScanResult{Path: folderPath, Name: "King of Fighters '98", NoExt: true})
+}
+
+func TestNeoGeoScanner_AddsRootRomsetEntries(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	folderPath := filepath.Join(neoGeoPath, "MSLUG")
+	zipPath := filepath.Join(neoGeoPath, "kof98.zip")
+
+	require.NoError(t, os.MkdirAll(folderPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(folderPath, "crom0"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+  <romset name="kof98" altname="King of Fighters '98"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", []platforms.ScanResult{
+		{Path: filepath.Join(folderPath, "crom0")},
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(folderPath, "crom0")})
+	assert.Contains(t, results, platforms.ScanResult{Path: folderPath, Name: "Metal Slug", NoExt: true})
+	assert.Contains(t, results, platforms.ScanResult{Path: zipPath, Name: "King of Fighters '98", NoExt: true})
+}
+
+func TestNeoGeoScanner_AddsRootSymlinkedRomsetFolder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	targetPath := filepath.Join(root, "romsets", "mslug")
+	linkPath := filepath.Join(neoGeoPath, "mslug")
+	require.NoError(t, os.MkdirAll(targetPath, 0o700))
+	require.NoError(t, os.MkdirAll(neoGeoPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(targetPath, "crom0"), []byte("test"), 0o600))
+	require.NoError(t, os.Symlink(targetPath, linkPath))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, results, platforms.ScanResult{Path: linkPath, Name: "Metal Slug", NoExt: true})
+}
+
+func TestNeoGeoScanner_HandlesMalformedRomsets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	folderPath := filepath.Join(neoGeoPath, "mslug")
+	contentPath := filepath.Join(folderPath, "crom0")
+	require.NoError(t, os.MkdirAll(folderPath, 0o700))
+	require.NoError(t, os.WriteFile(contentPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte("<romsets>"), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", []platforms.ScanResult{
+		{Path: contentPath},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []platforms.ScanResult{{Path: contentPath}}, results)
 }
 
 func TestCollectNeoGeoRomsetEntries_DeduplicatesOverlappingRoots(t *testing.T) {

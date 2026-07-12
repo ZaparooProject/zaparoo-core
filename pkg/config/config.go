@@ -304,6 +304,9 @@ func (c *Instance) applyTOML(data string) error {
 		nil,
 		"config.toml",
 	)
+	if err := validateLauncherDefaults(c.vals.Launchers.Default); err != nil {
+		return fmt.Errorf("invalid launcher defaults: %w", err)
+	}
 
 	// prepare allow files regexes
 	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))

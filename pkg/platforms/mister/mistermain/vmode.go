@@ -24,6 +24,7 @@ package mistermain
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 )
@@ -43,15 +44,30 @@ const (
 //   - Integer-scales to fit display
 //   - Centers with borders
 
-// SetVideoModeScaled sets a scaled video mode that fills the entire screen.
-// divisor controls resolution: 1=full, 2=half, 3=third, 4=quarter
-func SetVideoModeScaled(divisor int) error {
+func parseFramebufferFormat(format string) (pixelFormat string, rb int, err error) {
+	if len(format) < 2 {
+		return "", 0, fmt.Errorf("invalid framebuffer format %q", format)
+	}
+	rb, err = strconv.Atoi(format[:1])
+	if err != nil || (rb != 0 && rb != 1) {
+		return "", 0, fmt.Errorf("invalid framebuffer format %q", format)
+	}
+	return format[1:], rb, nil
+}
+
+// SetFramebufferScaled sets a framebuffer size relative to current display output.
+// divisor controls size: 1=full, 2=half, 3=third, 4=quarter.
+func SetFramebufferScaled(divisor int, format string) error {
 	if divisor < 1 || divisor > 4 {
 		return fmt.Errorf("divisor must be 1-4, got %d", divisor)
 	}
+	pixelFormat, rb, err := parseFramebufferFormat(format)
+	if err != nil {
+		return fmt.Errorf("parse scaled framebuffer format: %w", err)
+	}
 
-	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
+	if _, statErr := os.Stat(misterconfig.CmdInterface); statErr != nil {
+		return fmt.Errorf("command interface not accessible: %w", statErr)
 	}
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
@@ -65,8 +81,8 @@ func SetVideoModeScaled(divisor int) error {
 	// fb_cmd0 format: "fb_cmd0 format rb divisor"
 	cmdStr := fmt.Sprintf(
 		"fb_cmd0 %s %d %d",
-		VideoModeFormatRGB32[1:], // "8888"
-		VideoModeFormatRGB32[0],  // Rune '1' as int (49)
+		pixelFormat,
+		rb,
 		divisor,
 	)
 
@@ -78,15 +94,18 @@ func SetVideoModeScaled(divisor int) error {
 	return nil
 }
 
-// SetVideoModeExact sets an exact video mode with specific width and height.
-// The framebuffer is created at the exact dimensions and integer-scaled to fit the display.
-func SetVideoModeExact(width, height int, format string) error {
+// SetFramebufferExact sets exact framebuffer dimensions, integer-scaled to fit display output.
+func SetFramebufferExact(width, height int, format string) error {
 	if width < 1 || height < 1 {
 		return fmt.Errorf("width and height must be positive, got %dx%d", width, height)
 	}
+	pixelFormat, rb, err := parseFramebufferFormat(format)
+	if err != nil {
+		return fmt.Errorf("parse exact framebuffer format: %w", err)
+	}
 
-	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
+	if _, statErr := os.Stat(misterconfig.CmdInterface); statErr != nil {
+		return fmt.Errorf("command interface not accessible: %w", statErr)
 	}
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
@@ -102,8 +121,8 @@ func SetVideoModeExact(width, height int, format string) error {
 	// rb is '1' for RGBA order
 	cmdStr := fmt.Sprintf(
 		"fb_cmd1 %s %d %d %d",
-		format[1:], // "8888"
-		format[0],  // Rune '1' as int (49)
+		pixelFormat,
+		rb,
 		width,
 		height,
 	)

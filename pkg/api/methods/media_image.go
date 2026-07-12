@@ -67,8 +67,9 @@ const (
 	// so a new build invalidates the cache automatically (the old v<N-1> dir is
 	// reaped on start and thumbnails regenerate lazily) without users reindexing.
 	// Bump whenever the resized output changes: format, quality, or resize
-	// algorithm. v1 introduces lossy WebP output (was lossless PNG / JPEG q85).
-	mediaThumbCacheVersion = 1
+	// algorithm. v2 groups entries by system for targeted invalidation; v1
+	// introduced lossy WebP output (replacing lossless PNG / JPEG q85).
+	mediaThumbCacheVersion = 2
 	// mediaThumbWebPQuality and mediaThumbWebPMethod are the lossy VP8 settings
 	// used to re-encode resized thumbnails. q75/method2 was selected by
 	// benchmarking real covers as the best size/speed point: ~13x smaller than
@@ -106,15 +107,21 @@ var (
 // current version, so a version bump invalidates the cache and any directory
 // abandoned by a crash mid-wipe (v<N>.stale<gen>) or an older build is reaped.
 //
+// Each system has its own encoded-name directory for targeted invalidation.
 // Keys are SHA-256 hashes of the logical identity string; values are stored as
-// <hash>.<ext> to encode the content-type implicitly.
+// <system>/<hash>.<ext> to encode the content-type implicitly.
 //
-// resolvedTypes is an in-memory map from early key (identity+prefs+maxSize) to
+// resolvedTypes maps an early key (identity+prefs+maxSize) to its system and
 // resolved typeTag. It enables a pre-semaphore cache hit that skips the entire
 // image-load pipeline for warm repeat requests.
+type resolvedThumb struct {
+	typeTag string
+	system  string
+}
+
 type mediaThumbCache struct {
 	fs            afero.Fs
-	resolvedTypes map[string]string
+	resolvedTypes map[string]resolvedThumb
 	dir           string
 	resolvedMu    syncutil.RWMutex
 }
@@ -134,12 +141,13 @@ func mediaThumbCacheVersionDir() string {
 // density, grid-size preferences). The ladder is the middle ground: clients
 // request their true ideal size and it snaps up to the nearest tier.
 //
-// Powers of two are the conventional thumbnail-cache ladder. Steps are denser at
-// the large end (768 = 512×1.5) because wasted bytes grow with size, and the
-// ladder tops out near the ~680px native cover dimension — larger requests would
-// only upscale. 128 ≈ list/CRT, 256 ≈ small grid, 512 ≈ grid @2x / detail @1x,
-// 768 ≈ detail @2x. Keep ascending.
-var mediaThumbSizeTiers = []int32{128, 256, 512, 768}
+// Powers of two are the conventional thumbnail-cache ladder. The 32/64 tiers
+// support cheap low-quality placeholders on software-rendered displays. Steps
+// are denser at the large end (768 = 512×1.5) because wasted bytes grow with
+// size, and the ladder tops out near the ~680px native cover dimension — larger
+// requests would only upscale. 128 ≈ list/CRT, 256 ≈ small grid, 512 ≈ grid @2x
+// / detail @1x, 768 ≈ detail @2x. Keep ascending.
+var mediaThumbSizeTiers = []int32{32, 64, 128, 256, 512, 768}
 
 // snapThumbMaxSize maps a requested max_size to the smallest standard tier that
 // is >= the request, capping at the largest tier. This bounds the number of
@@ -167,7 +175,7 @@ func newMediaThumbCacheWithFS(pl platforms.Platform, fs afero.Fs) *mediaThumbCac
 		fs = afero.NewOsFs()
 	}
 	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName, mediaThumbCacheVersionDir())
-	return &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]string)}
+	return &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]resolvedThumb)}
 }
 
 // reapStaleVersions ensures the live versioned directory exists and removes
@@ -197,6 +205,21 @@ func (c *mediaThumbCache) reapStaleVersions() {
 			log.Debug().Str("dir", stale).Msg("media.image: thumb cache: reaped stale dir")
 		}
 	}
+	if err := afero.Walk(c.fs, c.dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() || !strings.HasPrefix(info.Name(), ".thumb-") || !strings.HasSuffix(info.Name(), ".tmp") {
+			return nil
+		}
+		if err := c.fs.Remove(path); err != nil {
+			log.Warn().Err(err).Str("path", path).
+				Msg("media.image: thumb cache: failed to reap temporary file")
+		}
+		return nil
+	}); err != nil {
+		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to reap temporary files")
+	}
 }
 
 // earlyThumbKey returns a cache key derived only from request-time parameters
@@ -211,20 +234,35 @@ func earlyThumbKey(ref mediaRefParam, prefs []string, maxSize int) string {
 	return fmt.Sprintf("early:%s:[%s]:%d", identity, strings.Join(prefs, ","), maxSize)
 }
 
-// getResolvedTypeTag returns the previously resolved typeTag for this request,
-// or "" and false when not yet memoised.
-func (c *mediaThumbCache) getResolvedTypeTag(ref mediaRefParam, prefs []string, maxSize int) (string, bool) {
+// getResolvedThumb returns the previously resolved system and typeTag for this
+// request, or false when not yet memoized.
+func (c *mediaThumbCache) getResolvedThumb(
+	ref mediaRefParam, prefs []string, maxSize int,
+) (resolvedThumb, bool) {
 	c.resolvedMu.RLock()
 	defer c.resolvedMu.RUnlock()
-	tag, ok := c.resolvedTypes[earlyThumbKey(ref, prefs, maxSize)]
-	return tag, ok
+	resolved, ok := c.resolvedTypes[earlyThumbKey(ref, prefs, maxSize)]
+	return resolved, ok
 }
 
-// setResolvedTypeTag records the resolved typeTag for future pre-semaphore hits.
-func (c *mediaThumbCache) setResolvedTypeTag(ref mediaRefParam, prefs []string, maxSize int, typeTag string) {
+// setResolvedThumb records the resolved system and typeTag for future
+// pre-semaphore hits.
+func (c *mediaThumbCache) setResolvedThumb(
+	ref mediaRefParam, prefs []string, maxSize int, system, typeTag string,
+) {
 	c.resolvedMu.Lock()
 	defer c.resolvedMu.Unlock()
-	c.resolvedTypes[earlyThumbKey(ref, prefs, maxSize)] = typeTag
+	c.resolvedTypes[earlyThumbKey(ref, prefs, maxSize)] = resolvedThumb{system: system, typeTag: typeTag}
+}
+
+func (c *mediaThumbCache) clearResolvedSystems(systems map[string]struct{}) {
+	c.resolvedMu.Lock()
+	defer c.resolvedMu.Unlock()
+	for key, resolved := range c.resolvedTypes {
+		if _, ok := systems[resolved.system]; ok {
+			delete(c.resolvedTypes, key)
+		}
+	}
 }
 
 // thumbKey returns the cache key string for a resize request. The key encodes
@@ -247,6 +285,14 @@ func thumbKey(ref mediaRefParam, typeTag string, maxSize int) string {
 func hashThumbKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+func thumbSystemDirName(system string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(system))
+}
+
+func (c *mediaThumbCache) systemDir(system string) string {
+	return filepath.Join(c.dir, thumbSystemDirName(system))
 }
 
 type thumbCacheFormat struct {
@@ -277,12 +323,12 @@ func thumbCacheExtension(contentType string, data []byte) string {
 // get looks up a cached resized image. Returns (data, contentType, true) on
 // hit, or (nil, "", false) on miss or any I/O error.
 func (c *mediaThumbCache) get(
-	ref mediaRefParam, typeTag string, maxSize int,
+	ref mediaRefParam, system, typeTag string, maxSize int,
 ) (data []byte, contentType string, found bool) {
 	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
 	for _, format := range thumbCacheFormats {
-		//nolint:gosec // path is constructed from a controlled dir + SHA-256 hash + fixed extension
-		b, err := afero.ReadFile(c.fs, filepath.Join(c.dir, hash+format.ext))
+		//nolint:gosec // path is constructed from controlled dirs + SHA-256 hash + fixed extension
+		b, err := afero.ReadFile(c.fs, filepath.Join(c.systemDir(system), hash+format.ext))
 		if err == nil {
 			return b, format.contentType, true
 		}
@@ -290,22 +336,47 @@ func (c *mediaThumbCache) get(
 	return nil, "", false
 }
 
-// set writes resized image bytes to the disk cache. Failures are logged and
-// ignored — the caller always has the bytes in memory and must not fail on a
-// cache write error.
-func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, data []byte, contentType string) {
+// set writes resized image bytes to the disk cache through a same-directory
+// temporary file and atomic rename. Failures are logged and ignored — the
+// caller always has the bytes in memory and must not fail on a cache write.
+func (c *mediaThumbCache) set(
+	ref mediaRefParam, system, typeTag string, maxSize int, data []byte, contentType string,
+) {
 	ext := thumbCacheExtension(contentType, data)
 	if ext == "" {
 		return
 	}
-	if err := c.fs.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
-		log.Debug().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to create dir")
+	dir := c.systemDir(system)
+	if err := c.fs.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
+		log.Debug().Err(err).Str("dir", dir).Msg("media.image: thumb cache: failed to create dir")
 		return
 	}
 	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
-	path := filepath.Join(c.dir, hash+ext)
-	if err := afero.WriteFile(c.fs, path, data, 0o600); err != nil { //nolint:gosec // cache file, 0o600 is intentional
-		log.Debug().Err(err).Str("path", path).Msg("media.image: thumb cache: failed to write")
+	path := filepath.Join(dir, hash+ext)
+	tmp, err := afero.TempFile(c.fs, dir, ".thumb-*.tmp")
+	if err != nil {
+		log.Debug().Err(err).Str("dir", dir).Msg("media.image: thumb cache: failed to create temporary file")
+		return
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = c.fs.Remove(tmpPath)
+	}()
+	if err := c.fs.Chmod(tmpPath, 0o600); err != nil { //nolint:gosec // cache file, 0o600 is intentional
+		log.Debug().Err(err).Str("path", tmpPath).Msg("media.image: thumb cache: failed to set permissions")
+		return
+	}
+	if _, err := tmp.Write(data); err != nil {
+		log.Debug().Err(err).Str("path", tmpPath).Msg("media.image: thumb cache: failed to write temporary file")
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		log.Debug().Err(err).Str("path", tmpPath).Msg("media.image: thumb cache: failed to close temporary file")
+		return
+	}
+	if err := c.fs.Rename(tmpPath, path); err != nil {
+		log.Debug().Err(err).Str("path", path).Msg("media.image: thumb cache: failed to replace file")
 	}
 }
 
@@ -342,8 +413,29 @@ func (c *mediaThumbCache) wipe() {
 	}
 	log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped")
 	c.resolvedMu.Lock()
-	c.resolvedTypes = make(map[string]string)
+	c.resolvedTypes = make(map[string]resolvedThumb)
 	c.resolvedMu.Unlock()
+}
+
+func (c *mediaThumbCache) wipeSystems(systemIDs []string) {
+	systems := make(map[string]struct{}, len(systemIDs))
+	for _, systemID := range systemIDs {
+		if systemID == "" {
+			continue
+		}
+		systems[systemID] = struct{}{}
+	}
+	for systemID := range systems {
+		dir := c.systemDir(systemID)
+		if err := c.fs.RemoveAll(dir); err != nil {
+			log.Warn().Err(err).Str("dir", dir).Str("system", systemID).
+				Msg("media.image: failed to wipe system thumb cache")
+		} else {
+			log.Info().Str("dir", dir).Str("system", systemID).
+				Msg("media.image: system thumb cache wiped")
+		}
+	}
+	c.clearResolvedSystems(systems)
 }
 
 // InitMediaThumbCache creates or replaces the process-wide thumb cache for the
@@ -362,6 +454,14 @@ func InitMediaThumbCache(pl platforms.Platform) {
 func WipeMediaThumbCache() {
 	if cache := mediaThumbCachePointer.Load(); cache != nil {
 		cache.wipe()
+	}
+}
+
+// WipeMediaThumbCacheSystems removes cached thumbnails only for the supplied
+// systems. Other system directories and resolved request memos remain warm.
+func WipeMediaThumbCacheSystems(systemIDs []string) {
+	if cache := mediaThumbCachePointer.Load(); cache != nil {
+		cache.wipeSystems(systemIDs)
 	}
 }
 
@@ -392,6 +492,7 @@ type rawMediaImage struct {
 	contentType string
 	text        string // original file path, for extension derivation fallback
 	typeTag     string
+	system      string
 	binary      []byte
 }
 
@@ -703,13 +804,13 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if ref.MaxSize != nil && *ref.MaxSize > 0 {
 		maxSize := int(*ref.MaxSize)
 		if tc := mediaThumbCachePointer.Load(); tc != nil {
-			if resolvedTag, ok := tc.getResolvedTypeTag(ref, prefs, maxSize); ok {
-				if cached, cachedCT, cacheHit := tc.get(ref, resolvedTag, maxSize); cacheHit {
+			if resolved, ok := tc.getResolvedThumb(ref, prefs, maxSize); ok {
+				if cached, cachedCT, cacheHit := tc.get(ref, resolved.system, resolved.typeTag, maxSize); cacheHit {
 					return models.MediaImageResponse{
 						Extension:   mediaContentExtension(cachedCT, ""),
 						ContentType: cachedCT,
 						Data:        base64.StdEncoding.EncodeToString(cached),
-						TypeTag:     resolvedTag,
+						TypeTag:     resolved.typeTag,
 					}, nil
 				}
 			}
@@ -759,11 +860,11 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		// Record the resolved typeTag so the pre-semaphore path can find the
 		// disk file on the next request without loading the original image.
 		if tc != nil {
-			tc.setResolvedTypeTag(ref, prefs, maxSize, raw.typeTag)
+			tc.setResolvedThumb(ref, prefs, maxSize, raw.system, raw.typeTag)
 		}
 		// Check the disk thumb cache before doing the expensive decode+resize.
 		if tc != nil {
-			if cached, cachedCT, ok := tc.get(ref, raw.typeTag, maxSize); ok {
+			if cached, cachedCT, ok := tc.get(ref, raw.system, raw.typeTag, maxSize); ok {
 				return models.MediaImageResponse{
 					Extension:   mediaContentExtension(cachedCT, raw.text),
 					ContentType: cachedCT,
@@ -775,7 +876,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		binary, ct = resizeImageIfNeeded(binary, ct, maxSize)
 		// Write to the disk cache on a miss so future requests skip the resize.
 		if tc != nil {
-			tc.set(ref, raw.typeTag, maxSize, binary, ct)
+			tc.set(ref, raw.system, raw.typeTag, maxSize, binary, ct)
 		}
 	}
 	return models.MediaImageResponse{
@@ -1043,6 +1144,7 @@ func loadRawMediaImageProperty(
 		contentType: contentType,
 		text:        prop.Text,
 		typeTag:     typeTag,
+		system:      row.System.SystemID,
 	}, false, nil
 }
 

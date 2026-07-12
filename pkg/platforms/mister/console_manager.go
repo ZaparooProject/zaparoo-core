@@ -14,6 +14,7 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // TTYReader provides an interface for reading the active TTY.
@@ -25,6 +26,13 @@ type TTYReader interface {
 type FramebufferChecker interface {
 	IsReady() bool
 }
+
+type consoleHardware interface {
+	Clean(vt string) error
+	Restore(vt string) error
+}
+
+type realConsoleHardware struct{}
 
 // CoreNameGetter provides an interface for getting the active core name.
 type CoreNameGetter interface {
@@ -70,22 +78,30 @@ func (realFramebufferChecker) IsReady() bool {
 
 // MiSTerConsoleManager manages console/TTY switching for MiSTer platform.
 type MiSTerConsoleManager struct {
-	ttyReader      TTYReader
-	fbChecker      FramebufferChecker
-	coreNameGetter CoreNameGetter
-	executor       command.Executor
-	platform       *Platform
-	mu             syncutil.RWMutex
-	active         bool
+	ttyReader       TTYReader
+	fbChecker       FramebufferChecker
+	coreNameGetter  CoreNameGetter
+	hardware        consoleHardware
+	leaseController consoleLeaseController
+	executor        command.Executor
+	platform        *Platform
+	activeVT        string
+	leaseNonce      string
+	framebufferWait time.Duration
+	mu              syncutil.RWMutex
+	active          bool
 }
 
 func newConsoleManager(p *Platform) *MiSTerConsoleManager {
 	return &MiSTerConsoleManager{
-		platform:       p,
-		ttyReader:      realTTYReader{},
-		fbChecker:      realFramebufferChecker{},
-		coreNameGetter: realCoreNameGetter{},
-		executor:       &command.RealExecutor{},
+		platform:        p,
+		ttyReader:       realTTYReader{},
+		fbChecker:       realFramebufferChecker{},
+		coreNameGetter:  realCoreNameGetter{},
+		hardware:        realConsoleHardware{},
+		leaseController: newMainConsoleLeaseController(afero.NewOsFs()),
+		executor:        &command.RealExecutor{},
+		framebufferWait: 2 * time.Second,
 	}
 }
 
@@ -105,6 +121,14 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 
 	if isActive {
 		log.Debug().Msg("console already active, skipping F9 sequence")
+		return nil
+	}
+
+	acquired, err := m.tryAcquireLease(ctx, vt)
+	if err != nil {
+		return err
+	}
+	if acquired {
 		return nil
 	}
 
@@ -137,6 +161,16 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 	maxBackoff := 500 * time.Millisecond
 
 	for time.Now().Before(deadline) {
+		// Main may restart and publish its lease capability while returning
+		// from an FPGA core to the menu. Prefer that protocol once available.
+		acquired, err := m.tryAcquireLease(ctx, vt)
+		if err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+
 		// Check if launcher context was cancelled
 		if ctx.Err() != nil {
 			log.Debug().Err(ctx.Err()).Msg("launcher context cancelled during F9 loop")
@@ -144,7 +178,7 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 		}
 
 		// Press F9 to signal MiSTer_Main to release framebuffer
-		err := m.platform.KeyboardPress("{f9}")
+		err = m.platform.KeyboardPress("{f9}")
 		if err != nil {
 			return fmt.Errorf("failed to press F9 key: %w", err)
 		}
@@ -181,6 +215,7 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 			// Set console active flag
 			m.mu.Lock()
 			m.active = true
+			m.activeVT = vt
 			m.mu.Unlock()
 
 			return nil
@@ -195,6 +230,46 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 	return errors.New("timeout waiting for console switch after 5s")
 }
 
+func (m *MiSTerConsoleManager) tryAcquireLease(ctx context.Context, vt string) (bool, error) {
+	if !m.leaseController.Available() {
+		return false, nil
+	}
+
+	leaseCtx, leaseCancel := context.WithTimeout(ctx, 3*time.Second)
+	nonce, err := m.leaseController.Acquire(leaseCtx, vt)
+	leaseCancel()
+	if err != nil {
+		return false, fmt.Errorf("failed to acquire Main console lease: %w", err)
+	}
+
+	m.mu.Lock()
+	m.active = true
+	m.activeVT = vt
+	m.leaseNonce = nonce
+	m.mu.Unlock()
+
+	if framebufferErr := m.waitForFramebuffer(m.framebufferWait); framebufferErr != nil {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		releaseErr := m.leaseController.Release(releaseCtx, nonce)
+		releaseCancel()
+		if releaseErr != nil {
+			wrappedReleaseErr := fmt.Errorf(
+				"release Main console lease after framebuffer failure: %w", releaseErr,
+			)
+			return false, errors.Join(framebufferErr, wrappedReleaseErr)
+		}
+
+		m.mu.Lock()
+		m.active = false
+		m.activeVT = ""
+		m.leaseNonce = ""
+		m.mu.Unlock()
+		return false, framebufferErr
+	}
+	log.Debug().Str("vt", vt).Msg("Main console lease acquired")
+	return true, nil
+}
+
 // Close exits console mode and returns to normal display.
 func (m *MiSTerConsoleManager) Close() error {
 	// Check if console is already inactive (for FPGA/MGL transitions)
@@ -207,22 +282,36 @@ func (m *MiSTerConsoleManager) Close() error {
 		return nil
 	}
 
+	m.mu.RLock()
+	activeVT := m.activeVT
+	leaseNonce := m.leaseNonce
+	m.mu.RUnlock()
+
 	// Restore console cursor state on both TTYs
 	if err := m.Restore(f9ConsoleVT); err != nil {
 		log.Debug().Err(err).Msg("failed to restore tty1 state")
 	}
-	if err := m.Restore(launcherConsoleVT); err != nil {
-		log.Debug().Err(err).Msgf("failed to restore tty%s state", launcherConsoleVT)
+	if activeVT != "" && activeVT != f9ConsoleVT {
+		if err := m.Restore(activeVT); err != nil {
+			log.Debug().Err(err).Msgf("failed to restore tty%s state", activeVT)
+		}
 	}
 
-	// Press F12 to return to FPGA framebuffer
-	if err := m.platform.KeyboardPress("{f12}"); err != nil {
+	if leaseNonce != "" {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := m.leaseController.Release(releaseCtx, leaseNonce)
+		releaseCancel()
+		if err != nil {
+			return fmt.Errorf("failed to release Main console lease: %w", err)
+		}
+	} else if err := m.platform.KeyboardPress("{f12}"); err != nil {
 		return fmt.Errorf("failed to press F12 key: %w", err)
 	}
 
-	// Clear console active flag
 	m.mu.Lock()
 	m.active = false
+	m.activeVT = ""
+	m.leaseNonce = ""
 	m.mu.Unlock()
 
 	log.Debug().Msg("console closed, returned to FPGA mode")
@@ -231,7 +320,14 @@ func (m *MiSTerConsoleManager) Close() error {
 
 // Clean prepares a console for use (clears screen, hides cursor).
 // This is public to allow launchers to clean specific TTYs.
-func (*MiSTerConsoleManager) Clean(vt string) error {
+func (m *MiSTerConsoleManager) Clean(vt string) error {
+	if err := m.hardware.Clean(vt); err != nil {
+		return fmt.Errorf("clean console tty%s: %w", vt, err)
+	}
+	return nil
+}
+
+func (realConsoleHardware) Clean(vt string) error {
 	// Clear screen and reset
 	err := writeTty(vt, "\033[2J\033[H")
 	if err != nil {
@@ -250,7 +346,14 @@ func (*MiSTerConsoleManager) Clean(vt string) error {
 
 // Restore restores console cursor state.
 // This is public to allow launchers to restore specific TTYs.
-func (*MiSTerConsoleManager) Restore(vt string) error {
+func (m *MiSTerConsoleManager) Restore(vt string) error {
+	if err := m.hardware.Restore(vt); err != nil {
+		return fmt.Errorf("restore console tty%s: %w", vt, err)
+	}
+	return nil
+}
+
+func (realConsoleHardware) Restore(vt string) error {
 	err := writeTty(vt, "\033[?25h")
 	if err != nil {
 		return err

@@ -129,8 +129,8 @@ type MediaDB struct {
 	clock                   clockwork.Clock
 	ctx                     context.Context
 	pl                      platforms.Platform
-	batchInsertMedia        *BatchInserter
-	batchInsertSystem       *BatchInserter
+	batchInsertScanStage    *BatchInserter
+	batchInsertScanProperty *BatchInserter
 	stmtInsertMedia         *sql.Stmt
 	tx                      *sql.Tx
 	stmtInsertSystem        *sql.Stmt
@@ -144,23 +144,26 @@ type MediaDB struct {
 	stmtInsertMediaTag      *sql.Stmt
 	batchInsertMediaTitle   *BatchInserter
 	stmtInsertMediaTitle    *sql.Stmt
-	batchInsertScanStage    *BatchInserter
+	batchInsertMedia        *BatchInserter
+	batchInsertSystem       *BatchInserter
 	batchInsertScanTag      *BatchInserter
-	batchInsertScanProperty *BatchInserter
 	slugSearchCache         atomic.Pointer[SlugSearchCache]
+	scrapeImageSystems      map[string]struct{}
 	dbPath                  string
 	backgroundOps           sync.WaitGroup
 	vacuumRetryDelay        time.Duration
 	analyzeRetryDelay       time.Duration
 	batchSize               int
 	sqlMu                   syncutil.RWMutex
-	isOptimizing            atomic.Bool
+	scrapeImageChangesMu    syncutil.Mutex
+	recreating              atomic.Bool
 	browseCacheRebuilding   atomic.Bool
 	needsIndexRebuild       atomic.Bool
-	recreating              atomic.Bool
+	isOptimizing            atomic.Bool
 	inTransaction           bool
 	browseCacheDirty        bool
 	utilityTagCacheDirty    bool
+	scrapeImageChangesAll   bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.

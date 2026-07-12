@@ -1680,7 +1680,7 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 
 Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
-Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
+Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
 
 #### Result
 
@@ -2087,17 +2087,21 @@ Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`,
 
 ### systems
 
-List all currently indexed systems.
+List systems currently indexed or supported by an available launcher on the running platform. Virtual systems are also included.
+
+Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index.
 
 #### Parameters
 
-None.
+| Key | Type    | Required | Description                                                                                     |
+| :-- | :------ | :------- | :---------------------------------------------------------------------------------------------- |
+| all | boolean | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 
 #### Result
 
-| Key     | Type                       | Required | Description                    |
-| :------ | :------------------------- | :------- | :----------------------------- |
-| systems | [System](#system-object)[] | Yes      | A list of all indexed systems. |
+| Key     | Type                       | Required | Description                                                        |
+| :------ | :------------------------- | :------- | :----------------------------------------------------------------- |
+| systems | [System](#system-object)[] | Yes      | Indexed, available, and optionally unavailable platform systems.   |
 
 See [System object](#system-object).
 
@@ -2109,7 +2113,10 @@ See [System object](#system-object).
 {
   "jsonrpc": "2.0",
   "id": "dbd312f3-7a5f-11ef-8f29-020304050607",
-  "method": "systems"
+  "method": "systems",
+  "params": {
+    "all": true
+  }
 }
 ```
 

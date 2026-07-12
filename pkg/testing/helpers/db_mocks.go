@@ -667,11 +667,13 @@ func (m *MockUserDBI) RecoverFromCorruption() (database.RestoreInfo, error) {
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock
+	ScrapeImageSystems    []string
 	TransactionCount      int
 	OperationsOutsideTxn  int
 	ActiveTransaction     bool
 	Optimizing            bool
 	BrowseCacheRebuilding bool
+	ScrapeImageChangesAll bool
 }
 
 // trackDatabaseOperation tracks whether operations happen inside or outside transactions
@@ -2725,6 +2727,22 @@ func (m *MockMediaDBI) ApplyScrapeResult(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) ConsumeScrapeImageChanges() ([]string, bool) {
+	if m.hasExpectedCall("ConsumeScrapeImageChanges") {
+		args := m.Called()
+		systems, ok := args.Get(0).([]string)
+		if !ok {
+			return nil, args.Bool(1)
+		}
+		return systems, args.Bool(1)
+	}
+	systems := m.ScrapeImageSystems
+	all := m.ScrapeImageChangesAll
+	m.ScrapeImageSystems = nil
+	m.ScrapeImageChangesAll = false
+	return systems, all
 }
 
 func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(

@@ -21,6 +21,7 @@ package platforms
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,6 +125,22 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	}
 	if params.Options.Action == "" {
 		params.Options.Action = action
+	}
+	if params.Config != nil && params.Options.RenderScale == nil && params.Options.RenderResolution == "" {
+		defaults := params.Config.LookupLauncherDefaults(params.Launcher.ID, params.Launcher.Groups)
+		params.Options.RenderScale = defaults.RenderScale
+		params.Options.RenderResolution = defaults.RenderResolution
+	}
+	if params.Options.RenderScale != nil && params.Options.RenderResolution != "" {
+		return errors.New("render_scale and render_resolution are mutually exclusive")
+	}
+	if params.Options.RenderScale != nil && *params.Options.RenderScale <= 0 {
+		return errors.New("render_scale must be positive")
+	}
+	if params.Options.RenderResolution != "" {
+		if _, _, renderErr := config.ValidateRenderResolution(params.Options.RenderResolution); renderErr != nil {
+			return fmt.Errorf("validate render_resolution: %w", renderErr)
+		}
 	}
 
 	slot, slotErr := mediaslot.Normalize(params.Options.Slot)

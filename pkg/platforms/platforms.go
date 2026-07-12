@@ -206,10 +206,16 @@ type ScanResult struct {
 
 // LaunchOptions contains optional parameters that can be passed to launchers.
 type LaunchOptions struct {
+	// RenderScale is the preferred internal rendering size as a percentage of
+	// available output dimensions. It does not change physical display mode.
+	RenderScale *int
 	// Action specifies the launch action. Common values:
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
 	Action string
+	// RenderResolution is the preferred fixed internal rendering size in
+	// WIDTHxHEIGHT form. It is mutually exclusive with RenderScale.
+	RenderResolution string
 	// SetName specifies a platform-defined launch profile/core name override.
 	// On MiSTer this maps to the MGL <setname> tag.
 	SetName string

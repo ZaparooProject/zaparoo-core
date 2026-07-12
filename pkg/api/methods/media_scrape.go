@@ -284,6 +284,15 @@ func scrapeCountStatusContext(parent context.Context) (context.Context, context.
 	return context.WithTimeout(parent, scrapeTotalScrapedStatusTimeout)
 }
 
+func invalidateChangedScrapeThumbnails(mediaDB database.MediaDBI) {
+	systems, all := mediaDB.ConsumeScrapeImageChanges()
+	if all {
+		WipeMediaThumbCache()
+		return
+	}
+	WipeMediaThumbCacheSystems(systems)
+}
+
 func queryScrapedMediaCount(ctx context.Context, db *database.Database, scraperID string) (int, bool) {
 	if db == nil || db.MediaDB == nil {
 		return 0, false
@@ -577,8 +586,6 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 			}
 			if update.Done {
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
-				mediaImageNoImages.clear()
-				WipeMediaThumbCache()
 			} else {
 				populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
 			}
@@ -588,6 +595,10 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		if scrapeCtx.Err() != nil {
 			finalStatus = mediadb.IndexingStatusCancelled
 		}
+		// Scrape writes commit incrementally, so changed artwork must be
+		// invalidated on every terminal outcome, including failure/cancellation.
+		mediaImageNoImages.clear()
+		invalidateChangedScrapeThumbnails(db.MediaDB)
 
 		// Only synthesize a completed notification if the channel closed without
 		// a Done=true update and no failure/cancel status was observed.
@@ -602,8 +613,6 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 			terminalStatus.Paused = false
 			terminalStatus.State = scrapeStateCompleted
 			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
-			mediaImageNoImages.clear()
-			WipeMediaThumbCache()
 			publishScrapingStatus(ns, &terminalStatus)
 		}
 		if err := db.MediaDB.SetScrapingStatus(finalStatus); err != nil {

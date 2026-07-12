@@ -1701,10 +1701,12 @@ func sqlBrowseRouteCountsFromMedia(
 		}
 
 		// The exact COUNT timed out for this route. Degrade, don't die: probe
-		// cheaply whether the route has any media. If it does, include it with
-		// an unknown count so the root still browses; if the probe finds nothing
-		// (or itself times out), drop the route and keep browsing the rest.
-		hasMedia, probeErr := sqlBrowseRouteHasMedia(ctx, db, prefix, systemClause, systemArgs)
+		// cheaply whether the filtered systems have any media. Candidate routes
+		// come from those systems' configured and indexed roots, so a positive
+		// result keeps the route browsable without another path-prefix scan. If
+		// the probe finds nothing (or itself times out), drop the route and keep
+		// browsing the rest.
+		hasMedia, probeErr := sqlBrowseRouteHasMedia(ctx, db, systemClause, systemArgs)
 		if probeErr != nil {
 			log.Warn().Err(probeErr).Str("route", route).
 				Msg("browse route count timed out and presence probe failed; skipping route")
@@ -1733,29 +1735,28 @@ func sqlBrowseRouteCountsFromMedia(
 }
 
 // sqlBrowseRouteHasMedia is the cheap presence probe used when an exact route
-// COUNT(*) exceeds its sub-timeout. It stops at the first matching row, so for a
-// non-empty route it returns almost immediately even though the case-insensitive
-// LIKE cannot use an index. It has its own short sub-timeout so an empty route
-// (which forces a full partition scan) degrades to "unknown" rather than
-// blocking the whole browse.
+// COUNT(*) exceeds its sub-timeout. Candidate routes are already scoped to the
+// requested systems, so this probes those systems through Media.SystemDBID and
+// avoids the case-insensitive path LIKE scan that caused the exact count to time
+// out. It has its own short sub-timeout so a slow database still cannot block the
+// whole browse.
 func sqlBrowseRouteHasMedia(
 	ctx context.Context,
 	db sqlQueryable,
-	prefix, systemClause string,
+	systemClause string,
 	systemArgs []any,
 ) (bool, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, browseRouteProbeSubTimeout)
 	defer cancel()
 
-	args := append([]any{prefix}, systemArgs...)
 	var one int
 	err := db.QueryRowContext(probeCtx,
 		`SELECT 1
 		 FROM Media m
 		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
-		 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause+`
+		 WHERE m.IsMissing = 0 AND `+systemClause+`
 		 LIMIT 1`,
-		args...,
+		systemArgs...,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
