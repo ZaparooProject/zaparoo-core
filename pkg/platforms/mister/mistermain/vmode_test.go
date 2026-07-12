@@ -12,15 +12,31 @@ import (
 func TestParseFramebufferFormat(t *testing.T) {
 	t.Parallel()
 
-	pixelFormat, rb, err := parseFramebufferFormat(VideoModeFormatRGB16)
-	require.NoError(t, err)
-	assert.Equal(t, "565", pixelFormat)
-	assert.Equal(t, 1, rb)
-}
+	tests := []struct {
+		name        string
+		input       string
+		wantFormat  string
+		wantRB      int
+		expectError bool
+	}{
+		{name: "rb disabled", input: "08888", wantFormat: "8888", wantRB: 0},
+		{name: "rb enabled", input: VideoModeFormatRGB16, wantFormat: "565", wantRB: 1},
+		{name: "too short", input: "1", expectError: true},
+		{name: "invalid rb", input: "28888", expectError: true},
+	}
 
-func TestParseFramebufferFormatRejectsInvalidValue(t *testing.T) {
-	t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, _, err := parseFramebufferFormat("rgb16")
-	require.Error(t, err)
+			pixelFormat, rb, err := parseFramebufferFormat(tt.input)
+			if tt.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFormat, pixelFormat)
+			assert.Equal(t, tt.wantRB, rb)
+		})
+	}
 }

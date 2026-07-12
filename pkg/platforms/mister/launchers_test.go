@@ -472,9 +472,11 @@ func TestBuildScummVMCommand(t *testing.T) {
 	assert.Contains(t, cmd.Args, "--opl-driver=db")
 	assert.Contains(t, cmd.Args, "--output-rate=48000")
 
-	// Verify working directory and inherited session required by SDL VT handling.
+	// Verify process-group tracking without creating a new session.
 	assert.Equal(t, scummvmBaseDir, cmd.Dir)
-	assert.Nil(t, cmd.SysProcAttr)
+	require.NotNil(t, cmd.SysProcAttr)
+	assert.True(t, cmd.SysProcAttr.Setpgid)
+	assert.False(t, cmd.SysProcAttr.Setsid)
 
 	// Verify environment variables - check that our custom ones are set
 	hasCustomHome := false

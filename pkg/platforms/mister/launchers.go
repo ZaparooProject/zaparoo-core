@@ -821,7 +821,9 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 	)
 
 	// ScummVM's SDL VT backend requires the inherited session. Unlike FVP,
-	// starting it in a new session causes an immediate SIGHUP on MiSTer.
+	// starting it in a new session causes an immediate SIGHUP on MiSTer. A
+	// separate process group preserves that session while allowing descendant cleanup.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(),
 		"HOME="+scummvmBaseDir,
 		"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
