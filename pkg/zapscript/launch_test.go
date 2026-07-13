@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -1248,6 +1249,62 @@ func TestCmdSearch_AppliesMediaLauncherOverride(t *testing.T) {
 	assert.True(t, result.MediaChanged)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestRandomGameBySystemTier_TriesFallbackAfterPrimaryMiss(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmigaCD32
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows).Once()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmiga
+		}),
+	).Return(database.SearchResult{SystemID: systemdefs.SystemAmiga, Path: "fallback.adf"}, nil).Once()
+
+	result, err := randomGameBySystemTier(
+		context.Background(), mockMediaDB, &database.MediaQuery{}, orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, systemdefs.SystemAmiga, result.SystemID)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestSearchMediaBySystemTier_DoesNotCombineFallback(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32
+		}),
+	).Return([]database.SearchResultWithCursor{{SystemID: systemdefs.SystemAmigaCD32, Path: "primary.iso"}}, nil).Once()
+
+	results, err := searchMediaBySystemTier(
+		context.Background(), mockMediaDB, &database.SearchFilters{Query: "primary"},
+		orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, systemdefs.SystemAmigaCD32, results[0].SystemID)
+	mockMediaDB.AssertNotCalled(t, "SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmiga
+		}),
+	)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {

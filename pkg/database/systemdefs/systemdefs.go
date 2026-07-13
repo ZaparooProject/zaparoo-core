@@ -418,45 +418,54 @@ const (
 
 // Other
 const (
-	SystemAndroid     = "Android"
-	SystemArcade      = "Arcade"
-	SystemAtomiswave  = "Atomiswave"
-	SystemArduboy     = "Arduboy"
-	SystemChip8       = "Chip8"
-	SystemCPS1        = "CPS1"
-	SystemCPS2        = "CPS2"
-	SystemCPS3        = "CPS3"
-	SystemDAPHNE      = "DAPHNE"
-	SystemDICE        = "DICE"
-	SystemSinge       = "Singe"
-	SystemModel1      = "Model1"
-	SystemModel2      = "Model2"
-	SystemNamco2X6    = "Namco2X6"
-	SystemNamco22     = "Namco22"
-	SystemTriforce    = "Triforce"
-	SystemLindbergh   = "Lindbergh"
-	SystemChihiro     = "Chihiro"
-	SystemGaelco      = "Gaelco"
-	SystemHikaru      = "Hikaru"
-	SystemIOS         = "iOS"
-	SystemModel3      = "Model3"
-	SystemNAOMI       = "NAOMI"
-	SystemNAOMI2      = "NAOMI2"
-	SystemPico8       = "Pico8"
-	SystemTIC80       = "TIC80"
-	SystemVideo       = "Video"
-	SystemAudio       = "Audio"
-	SystemMovie       = "Movie"
-	SystemTVEpisode   = "TVEpisode"
-	SystemTVShow      = "TVShow"
-	SystemMusicTrack  = "MusicTrack"
-	SystemMusicArtist = "MusicArtist"
-	SystemMusicAlbum  = "MusicAlbum"
-	SystemImage       = "Image"
-	SystemJ2ME        = "J2ME"
-	SystemGroovy      = "Groovy"
-	SystemPlugNPlay   = "PlugNPlay"
-	SystemDevErr      = "DevErr"
+	SystemAndroid           = "Android"
+	SystemArcade            = "Arcade"
+	SystemAtomiswave        = "Atomiswave"
+	SystemArduboy           = "Arduboy"
+	SystemChip8             = "Chip8"
+	SystemCPS1              = "CPS1"
+	SystemCPS2              = "CPS2"
+	SystemCPS3              = "CPS3"
+	SystemIremM72           = "IremM72"
+	SystemIremM92           = "IremM92"
+	SystemJalecoMegaSystem1 = "JalecoMegaSystem1"
+	SystemNamcoSystem1      = "NamcoSystem1"
+	SystemPGM               = "PGM"
+	SystemSegaSTV           = "SegaSTV"
+	SystemSegaSystem16      = "SegaSystem16"
+	SystemSegaSystem18      = "SegaSystem18"
+	SystemTaitoF2           = "TaitoF2"
+	SystemDAPHNE            = "DAPHNE"
+	SystemDICE              = "DICE"
+	SystemSinge             = "Singe"
+	SystemModel1            = "Model1"
+	SystemModel2            = "Model2"
+	SystemNamco2X6          = "Namco2X6"
+	SystemNamco22           = "Namco22"
+	SystemTriforce          = "Triforce"
+	SystemLindbergh         = "Lindbergh"
+	SystemChihiro           = "Chihiro"
+	SystemGaelco            = "Gaelco"
+	SystemHikaru            = "Hikaru"
+	SystemIOS               = "iOS"
+	SystemModel3            = "Model3"
+	SystemNAOMI             = "NAOMI"
+	SystemNAOMI2            = "NAOMI2"
+	SystemPico8             = "Pico8"
+	SystemTIC80             = "TIC80"
+	SystemVideo             = "Video"
+	SystemAudio             = "Audio"
+	SystemMovie             = "Movie"
+	SystemTVEpisode         = "TVEpisode"
+	SystemTVShow            = "TVShow"
+	SystemMusicTrack        = "MusicTrack"
+	SystemMusicArtist       = "MusicArtist"
+	SystemMusicAlbum        = "MusicAlbum"
+	SystemImage             = "Image"
+	SystemJ2ME              = "J2ME"
+	SystemGroovy            = "Groovy"
+	SystemPlugNPlay         = "PlugNPlay"
+	SystemDevErr            = "DevErr"
 )
 
 var Systems = map[string]System{
@@ -1242,16 +1251,59 @@ var Systems = map[string]System{
 		Slugs: []string{"javame", "javamobile", "mobilephone"},
 	},
 	SystemCPS1: {
-		ID:    SystemCPS1,
-		Slugs: []string{"cpsystem1", "capcomsystem1", "capcomplay1"},
+		ID:        SystemCPS1,
+		Slugs:     []string{"cpsystem1", "capcomsystem1", "capcomplay1"},
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemCPS2: {
-		ID:    SystemCPS2,
-		Slugs: []string{"cpsystem2", "capcomsystem2", "capcomplay2"},
+		ID:        SystemCPS2,
+		Slugs:     []string{"cpsystem2", "capcomsystem2", "capcomplay2"},
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemCPS3: {
-		ID:    SystemCPS3,
-		Slugs: []string{"cpsystem3", "capcomsystem3", "capcomplay3"},
+		ID:        SystemCPS3,
+		Slugs:     []string{"cpsystem3", "capcomsystem3", "capcomplay3"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemIremM72: {
+		ID:        SystemIremM72,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemIremM92: {
+		ID:        SystemIremM92,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemJalecoMegaSystem1: {
+		ID:        SystemJalecoMegaSystem1,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemNamcoSystem1: {
+		ID:        SystemNamcoSystem1,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemPGM: {
+		ID:        SystemPGM,
+		Slugs:     []string{"igs", "igspgm", "polygamemaster"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSegaSTV: {
+		ID:        SystemSegaSTV,
+		Slugs:     []string{"stv"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSegaSystem16: {
+		ID:        SystemSegaSystem16,
+		Slugs:     []string{"system16"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSegaSystem18: {
+		ID:        SystemSegaSystem18,
+		Slugs:     []string{"system18"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemTaitoF2: {
+		ID:        SystemTaitoF2,
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemAtariST: {
 		ID:    SystemAtariST,
