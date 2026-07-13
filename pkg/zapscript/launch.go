@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -439,9 +440,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if len(ps) == 2 {
 		systemID, searchQuery := ps[0], ps[1]
 
-		var systems []systemdefs.System
+		var systemTiers [][]systemdefs.System
 		if strings.EqualFold(systemID, "all") {
-			systems = systemdefs.AllSystems()
+			systemTiers = [][]systemdefs.System{systemdefs.AllSystems()}
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
@@ -449,46 +450,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			} else if system == nil {
 				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
-			systems = systemdefs.SystemsWithFallbacks([]systemdefs.System{*system})
+			systemTiers = orderedSystemTiers([]systemdefs.System{*system})
 		}
 
-		// Handle the special case of /* pattern - use RandomGameWithQuery
-		if searchQuery == "*" {
-			systemIDs := make([]string, len(systems))
-			for i, sys := range systems {
-				systemIDs[i] = sys.ID
-			}
-			mediaQuery := database.MediaQuery{
-				Systems: systemIDs,
-				Tags:    tagFilters,
-			}
-			game, randomErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
-			if randomErr != nil {
-				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
-			}
-
-			if launchErr := launch(launchTarget{
-				path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
-			}); launchErr != nil {
-				return platforms.CmdResult{
-					MediaChanged: true,
-				}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, launchErr)
-			}
-			return platforms.CmdResult{
-				MediaChanged: true,
-			}, nil
-		}
-
-		systemIDs := make([]string, len(systems))
-		for i, sys := range systems {
-			systemIDs[i] = sys.ID
-		}
 		mediaQuery := database.MediaQuery{
-			Systems:  systemIDs,
 			PathGlob: searchQuery,
 			Tags:     tagFilters,
 		}
-		game, randomErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
+		if searchQuery == "*" {
+			mediaQuery.PathGlob = ""
+		}
+		game, randomErr := randomGameBySystemTier(ctx, gamesdb, &mediaQuery, systemTiers)
 		if randomErr != nil {
 			return platforms.CmdResult{},
 				fmt.Errorf("failed to get random game matching '%s': %w", searchQuery, randomErr)
@@ -519,17 +491,8 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		systems = append(systems, *system)
 	}
 
-	systems = systemdefs.SystemsWithFallbacks(systems)
-
-	systemIDs := make([]string, len(systems))
-	for i, sys := range systems {
-		systemIDs[i] = sys.ID
-	}
-	mediaQuery := database.MediaQuery{
-		Systems: systemIDs,
-		Tags:    tagFilters,
-	}
-	game, err := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
+	mediaQuery := database.MediaQuery{Tags: tagFilters}
+	game, err := randomGameBySystemTier(ctx, gamesdb, &mediaQuery, orderedSystemTiers(systems))
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
@@ -544,6 +507,85 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, nil
+}
+
+func orderedSystemTiers(systems []systemdefs.System) [][]systemdefs.System {
+	if len(systems) == 0 {
+		return nil
+	}
+
+	primary := make([]systemdefs.System, 0, len(systems))
+	seen := make(map[string]struct{}, len(systems)*2)
+	for i := range systems {
+		if _, ok := seen[systems[i].ID]; ok {
+			continue
+		}
+		seen[systems[i].ID] = struct{}{}
+		primary = append(primary, systems[i])
+	}
+	tiers := [][]systemdefs.System{primary}
+	for i := range primary {
+		for _, fallbackID := range primary[i].Fallbacks {
+			if _, ok := seen[fallbackID]; ok {
+				continue
+			}
+			fallback, err := systemdefs.GetSystem(fallbackID)
+			if err != nil {
+				continue
+			}
+			seen[fallbackID] = struct{}{}
+			tiers = append(tiers, []systemdefs.System{*fallback})
+		}
+	}
+	return tiers
+}
+
+func systemIDs(systems []systemdefs.System) []string {
+	ids := make([]string, len(systems))
+	for i := range systems {
+		ids[i] = systems[i].ID
+	}
+	return ids
+}
+
+func randomGameBySystemTier(
+	ctx context.Context,
+	gamesDB database.MediaDBI,
+	query *database.MediaQuery,
+	tiers [][]systemdefs.System,
+) (database.SearchResult, error) {
+	for i := range tiers {
+		tierQuery := *query
+		tierQuery.Systems = systemIDs(tiers[i])
+		result, err := gamesDB.RandomGameWithQuery(ctx, &tierQuery)
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return database.SearchResult{}, fmt.Errorf("failed to query random media tier: %w", err)
+		}
+	}
+	return database.SearchResult{}, sql.ErrNoRows
+}
+
+func searchMediaBySystemTier(
+	ctx context.Context,
+	gamesDB database.MediaDBI,
+	filters *database.SearchFilters,
+	tiers [][]systemdefs.System,
+) ([]database.SearchResultWithCursor, error) {
+	for i := range tiers {
+		tierFilters := *filters
+		tierFilters.Systems = tiers[i]
+		results, err := gamesDB.SearchMediaWithFilters(ctx, &tierFilters)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search media tier: %w", err)
+		}
+		if len(results) > 0 {
+			return results, nil
+		}
+	}
+	return nil, nil
 }
 
 func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID string) *platforms.Launcher {
@@ -869,28 +911,30 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, errors.New("no query specified")
 	}
 
-	var systems []systemdefs.System
+	var systemTiers [][]systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
-		systems = systemdefs.AllSystems()
+		systemTiers = [][]systemdefs.System{systemdefs.AllSystems()}
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, lookupErr)
 		}
+		if system == nil {
+			return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
+		}
 
-		systems = systemdefs.SystemsWithFallbacks([]systemdefs.System{*system})
+		systemTiers = orderedSystemTiers([]systemdefs.System{*system})
 	}
 
 	searchFilters := database.SearchFilters{
-		Systems: systems,
-		Query:   searchQuery,
-		Tags:    tagFilters,
-		Limit:   1,
+		Query: searchQuery,
+		Tags:  tagFilters,
+		Limit: 1,
 	}
 	ctx, cancel := mediaDBLookupContext(&env)
 	defer cancel()
-	res, searchErr := gamesdb.SearchMediaWithFilters(ctx, &searchFilters)
+	res, searchErr := searchMediaBySystemTier(ctx, gamesdb, &searchFilters, systemTiers)
 	if searchErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", searchQuery, searchErr)
 	}

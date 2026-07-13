@@ -1417,8 +1417,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	ls := CreateLaunchers(p)
-	ls = append(ls, amiga, neogeo, createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher())
+	neogeo, neogeoMVS := addNeoGeoMVSLauncher(p, &neogeo)
+	ls := addArcadeSystemLaunchers(p, CreateLaunchers(p))
+	ls = append(
+		ls, amiga, neogeo, neogeoMVS,
+		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
+	)
 
 	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
 	return append(custom, ls...)
