@@ -31,9 +31,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,6 +92,7 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 	// Use flatpak run with the RetroDECK app ID
 	//nolint:gosec // G204: romPath is the game to launch, launcher's purpose
 	cmd := exec.CommandContext(ctx, "flatpak", "run", RetroDECKFlatpakID, romPath)
+	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -109,9 +110,10 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 
 // createRetroDECKLauncher creates a launcher for a specific RetroDECK system.
 func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, paths RetroDECKPaths) platforms.Launcher {
-	return platforms.Launcher{
+	launcher := platforms.Launcher{
 		ID:                 "RetroDECK" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
+		Groups:             []string{platformshared.LauncherGroupRetroDECK},
 		Lifecycle:          platforms.LifecycleTracked,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner
 
@@ -140,20 +142,10 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 		},
 
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			proc, err := LaunchViaRetroDECK(context.Background(), path)
-			if err != nil {
-				return nil, err
-			}
-			// Set up gamescope focus management in Gaming Mode
-			if proc != nil {
-				go gamescope.ManageFocus(proc)
-			}
-			return proc, nil
+			return LaunchViaRetroDECK(context.Background(), path)
 		},
 
 		Kill: func(_ *config.Instance) error {
-			// Revert gamescope focus properties
-			gamescope.RevertFocus()
 			log.Debug().Msg("kill requested for RetroDECK launcher")
 			return nil
 		},
@@ -171,6 +163,8 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			})
 		},
 	}
+	withGamescopeFocus(&launcher)
+	return launcher
 }
 
 // GetRetroDECKLaunchers returns all available RetroDECK launchers.

@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/spf13/afero"
 )
@@ -72,7 +73,11 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 
 		//nolint:gosec // command argv comes from built-in platform configuration
 		cmd := exec.CommandContext(context.Background(), spec.Name, spec.Args...)
-		cmd.Env = append(os.Environ(), spec.Env...)
+		env := helpers.MergeEnviron(os.Environ(), spec.Env)
+		if opts.LaunchEnv != nil {
+			env = helpers.MergeEnviron(env, opts.LaunchEnv())
+		}
+		cmd.Env = env
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {

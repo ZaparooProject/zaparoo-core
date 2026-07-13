@@ -48,6 +48,42 @@ import (
 // testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
 var testLauncherCacheMutex syncutil.Mutex
 
+func TestCoalesceScanResults(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("roms", "SNES", "Game.sfc")
+	files := []platforms.ScanResult{
+		{Path: path, Name: "Game"},
+		{Path: filepath.Join("roms", "snes", ".", "game.sfc"), NoExt: true},
+		{Path: filepath.Join("other", "snes", "Game.sfc"), Name: "Game"},
+	}
+
+	result := coalesceScanResults("SNES", files)
+
+	require.Len(t, result, 2)
+	assert.Equal(t, path, result[0].Path)
+	assert.Equal(t, "Game", result[0].Name)
+	assert.True(t, result[0].NoExt)
+	assert.Equal(t, files[2], result[1])
+}
+
+func TestCoalesceScanResultsFillsMissingName(t *testing.T) {
+	t.Parallel()
+
+	files := []platforms.ScanResult{
+		{Path: "steam://123"},
+		{Path: "STEAM://123", Name: "Game"},
+		{Path: "steam://124", Name: "Other"},
+	}
+
+	result := coalesceScanResults("PC", files)
+
+	require.Len(t, result, 2)
+	assert.Equal(t, "Game", result[0].Name)
+	assert.Equal(t, "steam://123", result[0].Path)
+	assert.Equal(t, files[2], result[1])
+}
+
 // TestMultipleScannersForSameSystemID tests that multiple launchers with the same SystemID
 // both have their scanners executed. This reproduces the bug where only one scanner
 // per system ID gets run.

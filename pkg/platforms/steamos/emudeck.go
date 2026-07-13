@@ -16,10 +16,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 	"github.com/rs/zerolog/log"
 )
 
@@ -119,6 +119,7 @@ func launchStandaloneEmulator(
 
 	//nolint:gosec // Flatpak ID and arguments come from built-in mappings.
 	cmd := exec.CommandContext(ctx, "flatpak", args...)
+	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -149,6 +150,7 @@ func createEmuDeckLauncher(
 
 	launcher.ID = "EmuDeck" + systemInfo.GetLauncherID()
 	launcher.SystemID = systemInfo.SystemID
+	launcher.Groups = append(launcher.Groups, platformshared.LauncherGroupEmuDeck)
 	launcher.SkipFilesystemScan = true
 	launcher.Test = emuDeckPathTest(paths.RomsPath, systemFolder)
 	launcher.Scanner = func(
@@ -170,7 +172,7 @@ func standaloneEmuDeckLauncher(
 	systemInfo esde.SystemInfo,
 	emulator EmulatorConfig,
 ) platforms.Launcher {
-	return platforms.Launcher{
+	launcher := platforms.Launcher{
 		ID:        "EmuDeck" + systemInfo.GetLauncherID(),
 		SystemID:  systemInfo.SystemID,
 		Lifecycle: platforms.LifecycleTracked,
@@ -181,20 +183,11 @@ func standaloneEmuDeckLauncher(
 			return nil
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			proc, err := launchStandaloneEmulator(context.Background(), emulator, path, systemFolder)
-			if err != nil {
-				return nil, err
-			}
-			if proc != nil {
-				go gamescope.ManageFocus(proc)
-			}
-			return proc, nil
-		},
-		Kill: func(_ *config.Instance) error {
-			gamescope.RevertFocus()
-			return nil
+			return launchStandaloneEmulator(context.Background(), emulator, path, systemFolder)
 		},
 	}
+	withGamescopeFocus(&launcher)
+	return launcher
 }
 
 func emuDeckPathTest(romsPath, systemFolder string) func(*config.Instance, string) bool {

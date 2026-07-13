@@ -17,26 +17,34 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package shared
+package helpers
 
-// Kodi launcher IDs
-const (
-	LauncherKodiLocalVideo = "KodiLocalVideo"
-	LauncherKodiLocalAudio = "KodiLocalAudio"
-	LauncherKodiMovie      = "KodiMovie"
-	LauncherKodiTVEpisode  = "KodiTVEpisode"
-	LauncherKodiTVShow     = "KodiTVShow"
-	LauncherKodiSong       = "KodiSong"
-	LauncherKodiAlbum      = "KodiAlbum"
-	LauncherKodiArtist     = "KodiArtist"
-)
+import "strings"
 
-// Launcher groups used as stable configuration references.
-const (
-	LauncherGroupNative    = "Native"
-	LauncherGroupEmuDeck   = "EmuDeck"
-	LauncherGroupRetroDECK = "RetroDECK"
-	LauncherGroupKodi      = "Kodi"
-	LauncherGroupKodiTV    = "KodiTV"
-	LauncherGroupKodiMusic = "KodiMusic"
-)
+// MergeEnviron merges environment entries by variable name. Later entries
+// override earlier values while each variable retains its first-seen position.
+func MergeEnviron(base, overrides []string) []string {
+	values := make(map[string]string, len(base)+len(overrides))
+	order := make([]string, 0, len(base)+len(overrides))
+	set := func(entry string) {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			return
+		}
+		if _, exists := values[key]; !exists {
+			order = append(order, key)
+		}
+		values[key] = entry
+	}
+	for _, entry := range base {
+		set(entry)
+	}
+	for _, entry := range overrides {
+		set(entry)
+	}
+	result := make([]string, 0, len(order))
+	for _, key := range order {
+		result = append(result, values[key])
+	}
+	return result
+}

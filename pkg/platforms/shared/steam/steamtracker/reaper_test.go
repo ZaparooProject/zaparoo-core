@@ -268,6 +268,7 @@ func TestAppIDRegex(t *testing.T) {
 		want  string
 	}{
 		{"AppId=12345", "12345"},
+		{"appid=12345", "12345"},
 		{"AppId=0", "0"},
 		{"AppId=999999999", "999999999"},
 		{"something AppId=123 else", "123"},
@@ -312,6 +313,14 @@ func TestParseGamePathFromCmdline(t *testing.T) {
 			want: "/games/game.exe",
 		},
 		{
+			name: "proton_runtime_separator_before_game",
+			cmdline: "/home/user/.steam/steamrt64/reaper\x00SteamLaunch\x00AppId=1962700\x00--\x00" +
+				"/home/user/SteamLinuxRuntime/_v2-entry-point\x00--verb=waitforexitandrun\x00--\x00" +
+				"/home/user/Proton Hotfix/proton\x00waitforexitandrun\x00" +
+				"/home/user/steamapps/common/Subnautica2/Subnautica2.exe",
+			want: "/home/user/steamapps/common/Subnautica2/Subnautica2.exe",
+		},
+		{
 			name:    "no_double_dash",
 			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=12345\x00game.exe",
 			want:    "",
@@ -348,6 +357,61 @@ func TestParseGamePathFromCmdline(t *testing.T) {
 			assert.Equal(t, tc.want, result)
 		})
 	}
+}
+
+func TestPathWithin(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("games", "steam")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "same path", path: root, want: true},
+		{name: "child", path: filepath.Join(root, "game", "game.exe"), want: true},
+		{name: "sibling prefix", path: filepath.Join("games", "steam-old", "game.exe")},
+		{name: "parent", path: filepath.Dir(root)},
+		{name: "empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, pathWithin(tt.path, root))
+		})
+	}
+}
+
+func TestFindGamePIDForAppIDWithProcPath(t *testing.T) {
+	t.Parallel()
+
+	procDir := t.TempDir()
+	steamDir := t.TempDir()
+	steamAppsDir := filepath.Join(steamDir, "steamapps")
+	//nolint:gosec // G301: test directory permissions are fine
+	require.NoError(t, os.MkdirAll(steamAppsDir, 0o755))
+	manifest := `"AppState"
+{
+	"appid" "1962700"
+	"name" "Subnautica 2"
+	"installdir" "Subnautica2"
+}`
+	//nolint:gosec // G306: test file permissions are fine
+	require.NoError(t, os.WriteFile(
+		filepath.Join(steamAppsDir, "appmanifest_1962700.acf"), []byte(manifest), 0o644,
+	))
+
+	gamePath := filepath.Join(steamAppsDir, "common", "Subnautica2", "Subnautica2.exe")
+	createMockProcess(t, procDir, 12345, "wine64",
+		"/home/user/Proton Hotfix/proton\x00waitforexitandrun\x00"+gamePath)
+
+	pid, found := FindGamePIDForAppIDWithProcPath(
+		procDir, steamDir, 1962700,
+		"/home/user/SteamLinuxRuntime/_v2-entry-point",
+	)
+
+	require.True(t, found)
+	assert.Equal(t, 12345, pid)
 }
 
 func TestFindGamePIDWithProcPath(t *testing.T) {

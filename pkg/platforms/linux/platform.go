@@ -99,6 +99,7 @@ func (p *Platform) StartPost(
 	// Only start Steam tracker if Steam is installed
 	steamClient := steam.NewClient(steam.DefaultLinuxOptions())
 	if steamClient.IsSteamInstalled(cfg) {
+		steamRoot := steamClient.FindSteamDir(cfg)
 		p.procScanner = procscanner.New()
 		if err := p.procScanner.Start(); err != nil {
 			log.Warn().Err(err).Msg("process scanner failed to start")
@@ -110,6 +111,7 @@ func (p *Platform) StartPost(
 			p.Base,
 			activeMedia,
 			setActiveMedia,
+			steamRoot,
 		)
 		p.steamTracker.Start()
 	} else {

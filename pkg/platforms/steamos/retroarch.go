@@ -13,29 +13,34 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 )
 
 const (
-	RetroArchFlatpakID     = "org.libretro.RetroArch"
-	retroArchNetworkAddr   = "127.0.0.1:55355"
-	retroArchNetworkConfig = "retroarch-network.cfg"
+	RetroArchFlatpakID    = "org.libretro.RetroArch"
+	retroArchNetworkAddr  = "127.0.0.1:55355"
+	retroArchNativeConfig = "retroarch-native.cfg"
 )
 
 func defaultRetroArchAppendConfigPath() string {
-	return filepath.Join(linuxbase.Settings().ConfigDir, retroArchNetworkConfig)
+	return filepath.Join(linuxbase.Settings().ConfigDir, retroArchNativeConfig)
+}
+
+func defaultRetroArchConfigDir() string {
+	return filepath.Join(
+		launchers.FlatpakAppPath(RetroArchFlatpakID),
+		"config", "retroarch",
+	)
 }
 
 func steamOSRetroArchOptions(appendConfigPath string) sharedretroarch.Options {
-	return sharedretroarch.Options{
-		Exec: []string{"flatpak", "run", RetroArchFlatpakID},
-		CoresDir: filepath.Join(
-			launchers.FlatpakAppPath(RetroArchFlatpakID),
-			"config", "retroarch", "cores",
-		),
+	opts := sharedretroarch.Options{
+		Exec:             []string{"flatpak", "run", RetroArchFlatpakID},
+		CoresDir:         filepath.Join(defaultRetroArchConfigDir(), "cores"),
 		AppendConfigPath: appendConfigPath,
 		NetworkCmdAddr:   retroArchNetworkAddr,
 		Preflight: sharedretroarch.MemoizePreflight(func(_ string) error {
@@ -45,15 +50,26 @@ func steamOSRetroArchOptions(appendConfigPath string) sharedretroarch.Options {
 			return nil
 		}),
 	}
+	opts.LaunchEnv = steamOSLaunchEnvOverrides
+	return opts
 }
 
 func nativeRetroArchLaunchers(opts *sharedretroarch.Options) []platforms.Launcher {
-	result := sharedretroarch.NewLaunchers(*opts, sharedretroarch.CoreLaunches(sharedretroarch.ProfileDesktop))
-	for i := range result {
-		withGamescopeFocus(&result[i])
+	cores := sharedretroarch.CoreLaunches(sharedretroarch.ProfileDesktop)
+	result := make([]platforms.Launcher, 0, len(cores))
+	configDir := filepath.Dir(opts.AppendConfigPath)
+	for i := range cores {
+		coreOpts := *opts
+		coreOpts.AppendConfigPath = nativeRetroArchSystemConfigPath(configDir, cores[i].SystemID)
+		launcher := sharedretroarch.NewLauncher(coreOpts, cores[i])
+		launcher.Groups = append(launcher.Groups, platformshared.LauncherGroupNative)
+		withGamescopeFocus(&launcher)
+		result = append(result, launcher)
 	}
 	return result
 }
+
+var steamOSGameMode = gamescope.NewManager(gamescope.SessionOptions{Enabled: true})
 
 func withGamescopeFocus(launcher *platforms.Launcher) {
 	launch := launcher.Launch
@@ -68,12 +84,12 @@ func withGamescopeFocus(launcher *platforms.Launcher) {
 			return nil, err
 		}
 		if proc != nil {
-			go gamescope.ManageFocus(proc)
+			go steamOSGameMode.ManageFocus(proc)
 		}
 		return proc, nil
 	}
 	launcher.Kill = func(cfg *config.Instance) error {
-		gamescope.RevertFocus()
+		steamOSGameMode.RevertFocus()
 		if kill == nil {
 			return nil
 		}

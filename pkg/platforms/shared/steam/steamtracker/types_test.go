@@ -17,26 +17,23 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package shared
+package steamtracker
 
-// Kodi launcher IDs
-const (
-	LauncherKodiLocalVideo = "KodiLocalVideo"
-	LauncherKodiLocalAudio = "KodiLocalAudio"
-	LauncherKodiMovie      = "KodiMovie"
-	LauncherKodiTVEpisode  = "KodiTVEpisode"
-	LauncherKodiTVShow     = "KodiTVShow"
-	LauncherKodiSong       = "KodiSong"
-	LauncherKodiAlbum      = "KodiAlbum"
-	LauncherKodiArtist     = "KodiArtist"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// Launcher groups used as stable configuration references.
-const (
-	LauncherGroupNative    = "Native"
-	LauncherGroupEmuDeck   = "EmuDeck"
-	LauncherGroupRetroDECK = "RetroDECK"
-	LauncherGroupKodi      = "Kodi"
-	LauncherGroupKodiTV    = "KodiTV"
-	LauncherGroupKodiMusic = "KodiMusic"
-)
+func TestLaunchOwnershipRejectsStaleLifecycle(t *testing.T) {
+	t.Parallel()
+
+	var ownership launchOwnership
+	ownership.set(123, 10)
+	ownership.set(123, 20)
+
+	assert.False(t, ownership.clearIfMatches(123, 10))
+	assert.False(t, ownership.clearIfMatches(456, 20))
+	assert.True(t, ownership.clearIfMatches(123, 20))
+	assert.False(t, ownership.clearIfMatches(123, 20))
+}
