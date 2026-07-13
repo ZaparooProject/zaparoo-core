@@ -34,6 +34,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const mediaSearchPrefetchThreshold = 10
+
 // writeTagForMedia is a helper for writing media search results to tags.
 func writeTagForMedia(
 	pages *tview.Pages,
@@ -87,6 +89,9 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 
 	searching := false
 	var resultPaths []string
+	var nextCursor *string
+	var activeSearchName, activeSearchSystem string
+	var loadNextPage func()
 
 	scrollList := NewScrollIndicatorList()
 	mediaList := scrollList.GetList()
@@ -96,6 +101,9 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 			frame.SetInfoText(fmt.Sprintf("[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[index]))
 		} else {
 			frame.SetInfoText("")
+		}
+		if nextCursor != nil && loadNextPage != nil && index >= len(resultPaths)-mediaSearchPrefetchThreshold {
+			loadNextPage()
 		}
 	})
 
@@ -173,45 +181,13 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		app.SetFocus(selector)
 	}
 
-	search := func() {
-		if searching {
-			return
-		}
+	var executeSearch func(cursor *string, appendPage bool)
 
-		searchName := session.GetSearchMediaName()
-		params := models.SearchParams{
-			Query: &searchName,
-		}
-
-		searchSystem := session.GetSearchMediaSystem()
-		if searchSystem != "" {
-			systemsFilter := []string{searchSystem}
-			params.Systems = &systemsFilter
-		}
-
-		frame.SetHelpText("Searching...")
-		searching = true
-		app.ForceDraw()
-		defer func() {
-			searching = false
-		}()
-
-		searchCtx, searchCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout)
-		results, err := svc.SearchMedia(searchCtx, params)
-		searchCancel()
-		if err != nil {
-			log.Warn().Err(err).Msg("error executing search query")
-			frame.SetHelpText("An error occurred during search")
-			return
-		}
-
-		mediaList.Clear()
-		mediaList.SetCurrentItem(0)
-		resultPaths = make([]string, len(results.Results))
+	appendResults := func(results []models.SearchResultMedia) {
 		tuiCfg := config.GetTUIConfig()
-		for i := range results.Results {
-			result := &results.Results[i]
-			resultPaths[i] = result.Path
+		for i := range results {
+			result := &results[i]
+			resultPaths = append(resultPaths, result.Path)
 			var displayName, writeValue string
 			if tuiCfg.WriteFormat == "path" {
 				// Check if path is a virtual path (contains ://)
@@ -240,21 +216,110 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 				writeTagForMedia(pages, app, svc, value, mediaList)
 			})
 		}
-		// Update info text for first result
-		if len(resultPaths) > 0 {
-			frame.SetInfoText(fmt.Sprintf("[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[0]))
-		} else {
-			frame.SetInfoText("")
+	}
+
+	executeSearch = func(cursor *string, appendPage bool) {
+		if searching {
+			return
 		}
 
-		resultWord := "results"
-		if len(results.Results) == 1 {
-			resultWord = "result"
+		searchName := session.GetSearchMediaName()
+		searchSystem := session.GetSearchMediaSystem()
+		if appendPage {
+			searchName = activeSearchName
+			searchSystem = activeSearchSystem
 		}
-		frame.SetHelpText(fmt.Sprintf("Found %d %s. Select to write token", len(results.Results), resultWord))
-		if results.Total > 0 {
-			app.SetFocus(mediaList)
+		params := models.SearchParams{
+			Query:  &searchName,
+			Cursor: cursor,
 		}
+
+		if searchSystem != "" {
+			systemsFilter := []string{searchSystem}
+			params.Systems = &systemsFilter
+		}
+
+		if appendPage {
+			frame.SetHelpText("Loading more results...")
+		} else {
+			frame.SetHelpText("Searching...")
+		}
+		// Search state and widgets stay confined to the tview event loop. The
+		// worker only performs the blocking request and queues its result here.
+		searching = true
+		app.ForceDraw()
+
+		go func() {
+			searchCtx, searchCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout)
+			results, err := svc.SearchMedia(searchCtx, params)
+			searchCancel()
+			if err != nil {
+				log.Warn().Err(err).Msg("error executing search query")
+			}
+
+			app.QueueUpdateDraw(func() {
+				if err != nil {
+					searching = false
+					if appendPage {
+						frame.SetHelpText("Error loading more results")
+					} else {
+						nextCursor = nil
+						activeSearchName = ""
+						activeSearchSystem = ""
+						frame.SetHelpText("An error occurred during search")
+					}
+					return
+				}
+
+				selectedIndex := mediaList.GetCurrentItem()
+				if !appendPage {
+					activeSearchName = searchName
+					activeSearchSystem = searchSystem
+					mediaList.Clear()
+					resultPaths = nil
+					selectedIndex = 0
+				}
+				appendResults(results.Results)
+
+				nextCursor = nil
+				if results.Pagination != nil &&
+					results.Pagination.HasNextPage && results.Pagination.NextCursor != nil {
+					nextCursor = results.Pagination.NextCursor
+				}
+
+				if len(resultPaths) > 0 {
+					if selectedIndex >= len(resultPaths) {
+						selectedIndex = len(resultPaths) - 1
+					}
+					mediaList.SetCurrentItem(selectedIndex)
+					frame.SetInfoText(fmt.Sprintf(
+						"[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[selectedIndex]))
+					app.SetFocus(mediaList)
+				} else {
+					frame.SetInfoText("")
+				}
+
+				resultWord := "results"
+				if len(resultPaths) == 1 {
+					resultWord = "result"
+				}
+				frame.SetHelpText(fmt.Sprintf(
+					"Loaded %d %s. Select to write token", len(resultPaths), resultWord))
+				searching = false
+			})
+		}()
+	}
+
+	loadNextPage = func() {
+		if nextCursor == nil {
+			return
+		}
+		cursor := *nextCursor
+		executeSearch(&cursor, true)
+	}
+
+	search := func() {
+		executeSearch(nil, false)
 	}
 
 	var lastLeftFocus tview.Primitive = searchInput
@@ -356,6 +421,9 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		systemButton.SetLabel(truncateSystemName("All"))
 		mediaList.Clear()
 		resultPaths = nil
+		nextCursor = nil
+		activeSearchName = ""
+		activeSearchSystem = ""
 		frame.SetInfoText("")
 		frame.SetHelpText("Type query in Name and press Search")
 		app.SetFocus(searchInput)
