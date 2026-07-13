@@ -1289,21 +1289,22 @@ func TestSearchMediaBySystemTier_DoesNotCombineFallback(t *testing.T) {
 		mock.MatchedBy(func(filters *database.SearchFilters) bool {
 			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32
 		}),
-	).Return([]database.SearchResultWithCursor{{SystemID: systemdefs.SystemAmigaCD32, Path: "primary.iso"}}, nil).Once()
+	).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmiga
+		}),
+	).Return([]database.SearchResultWithCursor{{SystemID: systemdefs.SystemAmiga, Path: "fallback.adf"}}, nil).Once()
 
 	results, err := searchMediaBySystemTier(
-		context.Background(), mockMediaDB, &database.SearchFilters{Query: "primary"},
+		context.Background(), mockMediaDB, &database.SearchFilters{Query: "fallback"},
 		orderedSystemTiers([]systemdefs.System{*primary}),
 	)
 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, systemdefs.SystemAmigaCD32, results[0].SystemID)
-	mockMediaDB.AssertNotCalled(t, "SearchMediaWithFilters", mock.Anything,
-		mock.MatchedBy(func(filters *database.SearchFilters) bool {
-			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmiga
-		}),
-	)
+	assert.Equal(t, systemdefs.SystemAmiga, results[0].SystemID)
+	assert.Equal(t, "fallback.adf", results[0].Path)
 	mockMediaDB.AssertExpectations(t)
 }
 

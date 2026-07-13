@@ -27,6 +27,7 @@ type arcadeSystemSpec struct {
 var misterArcadeSystemSpecs = []arcadeSystemSpec{
 	{systemID: systemdefs.SystemCPS1, platforms: []string{"Capcom CPS-1", "Capcom CPS-1.5"}},
 	{systemID: systemdefs.SystemCPS2, platforms: []string{"Capcom CPS-2"}},
+	{systemID: systemdefs.SystemCPS3, platforms: []string{"Capcom CPS-3"}},
 	{systemID: systemdefs.SystemIremM72, platforms: []string{"Irem M72"}},
 	{systemID: systemdefs.SystemIremM92, platforms: []string{"Irem M92"}},
 	{systemID: systemdefs.SystemJalecoMegaSystem1, platforms: []string{"Jaleco Mega System 1"}},
@@ -39,14 +40,17 @@ var misterArcadeSystemSpecs = []arcadeSystemSpec{
 }
 
 type arcadeSystemCache struct {
-	platform *Platform
-	results  map[string][]platforms.ScanResult
-	mu       syncutil.Mutex
-	loaded   bool
+	platform        *Platform
+	scanArcadeFiles func(context.Context, *config.Instance) ([]platforms.ScanResult, error)
+	results         map[string][]platforms.ScanResult
+	mu              syncutil.Mutex
+	loaded          bool
 }
 
 func newArcadeSystemCache(platform *Platform) *arcadeSystemCache {
-	return &arcadeSystemCache{platform: platform}
+	cache := &arcadeSystemCache{platform: platform}
+	cache.scanArcadeFiles = cache.scanFiles
+	return cache
 }
 
 func (c *arcadeSystemCache) captureScanner(
@@ -55,7 +59,9 @@ func (c *arcadeSystemCache) captureScanner(
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	c.load(ctx, cfg, results)
+	if err := c.load(ctx, cfg, results); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 
@@ -68,7 +74,9 @@ func (c *arcadeSystemCache) scanner(systemID string) func(
 		_ string,
 		_ []platforms.ScanResult,
 	) ([]platforms.ScanResult, error) {
-		c.load(ctx, cfg, nil)
+		if err := c.load(ctx, cfg, nil); err != nil {
+			return nil, err
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		return append([]platforms.ScanResult(nil), c.results[systemID]...), nil
@@ -79,28 +87,38 @@ func (c *arcadeSystemCache) load(
 	ctx context.Context,
 	cfg *config.Instance,
 	files []platforms.ScanResult,
-) {
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.loaded {
-		return
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if len(files) == 0 {
-		files = c.scanArcadeFiles(ctx, cfg)
+		var err error
+		files, err = c.scanArcadeFiles(ctx, cfg)
+		if err != nil {
+			return err
+		}
 	}
 
 	entries, err := arcadedb.ReadArcadeDb(c.platform)
 	if err != nil {
 		log.Warn().Err(err).Msg("unable to classify MiSTer arcade systems")
 		c.loaded = true
-		return
+		return nil
 	}
 
 	setSystems := arcadeSetSystems(entries)
 
-	c.results = make(map[string][]platforms.ScanResult, len(misterArcadeSystemSpecs))
+	classified := make(map[string][]platforms.ScanResult, len(misterArcadeSystemSpecs))
 	for i := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !strings.EqualFold(filepath.Ext(files[i].Path), ".mra") {
 			continue
 		}
@@ -110,10 +128,12 @@ func (c *arcadeSystemCache) load(
 			continue
 		}
 		if systemID := setSystems[strings.ToLower(mra.SetName)]; systemID != "" {
-			c.results[systemID] = append(c.results[systemID], files[i])
+			classified[systemID] = append(classified[systemID], files[i])
 		}
 	}
+	c.results = classified
 	c.loaded = true
+	return nil
 }
 
 func arcadeSetSystems(entries []arcadedb.ArcadeDbEntry) map[string]string {
@@ -132,26 +152,32 @@ func arcadeSetSystems(entries []arcadedb.ArcadeDbEntry) map[string]string {
 	return setSystems
 }
 
-func (c *arcadeSystemCache) scanArcadeFiles(
+func (c *arcadeSystemCache) scanFiles(
 	ctx context.Context,
 	cfg *config.Instance,
-) []platforms.ScanResult {
+) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 	for _, root := range c.platform.RootDirs(cfg) {
 		select {
 		case <-ctx.Done():
-			return results
+			return nil, ctx.Err()
 		default:
 		}
 
 		arcadePath, err := mediascanner.FindPath(ctx, filepath.Join(root, "_Arcade"))
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			continue
 		}
 		walkErr := afero.Walk(
 			c.platform.filesystem(),
 			arcadePath,
 			func(path string, info os.FileInfo, walkEntryErr error) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if walkEntryErr != nil {
 					return walkEntryErr
 				}
@@ -166,10 +192,13 @@ func (c *arcadeSystemCache) scanArcadeFiles(
 			},
 		)
 		if walkErr != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			log.Warn().Err(walkErr).Str("path", arcadePath).Msg("unable to scan MiSTer arcade files for classification")
 		}
 	}
-	return results
+	return results, nil
 }
 
 func addNeoGeoMVSLauncher(
