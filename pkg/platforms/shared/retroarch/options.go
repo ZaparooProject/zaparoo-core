@@ -48,6 +48,9 @@ const (
 // PreflightFunc performs consumer-specific launch validation.
 type PreflightFunc func(corePath string) error
 
+// EnvFunc returns launch-time environment overrides.
+type EnvFunc func() []string
+
 // Options describes how to invoke RetroArch and where its files live.
 type Options struct {
 	FS               afero.Fs
@@ -61,6 +64,7 @@ type Options struct {
 	Exec             []string
 	VTWrap           []string
 	ExtraEnv         []string
+	LaunchEnv        EnvFunc
 	ExtraArgs        []string
 }
 

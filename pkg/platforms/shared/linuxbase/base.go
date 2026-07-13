@@ -123,6 +123,12 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 	b.processMu.Lock()
 	defer b.processMu.Unlock()
 
+	// Process handles may be recreated for the same PID when a tracker restarts.
+	// Keep existing lifecycle state instead of signaling the live process.
+	if b.trackedProcess != nil && proc != nil && b.trackedProcess.Pid == proc.Pid {
+		return
+	}
+
 	// Kill any existing tracked process before setting new one.
 	if b.trackedProcess != nil && b.trackedProcess != proc {
 		if err := b.trackedProcess.Kill(); err != nil {
@@ -139,6 +145,24 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 		b.trackedProcessDone = make(chan struct{})
 	}
 	log.Debug().Msgf("set tracked process: %v", proc)
+}
+
+// ClearTrackedProcessPID forgets a completed externally-owned process without
+// signaling it. The PID check prevents an older lifecycle event from clearing
+// a newer tracked process.
+func (b *Base) ClearTrackedProcessPID(pid int) bool {
+	b.processMu.Lock()
+	defer b.processMu.Unlock()
+
+	if b.trackedProcess == nil || b.trackedProcess.Pid != pid {
+		return false
+	}
+
+	b.trackedProcess = nil
+	b.completedTrackedProcess = nil
+	b.trackedProcessDone = nil
+	b.processWaitClaimed = false
+	return true
 }
 
 // WaitTrackedProcess waits for and reaps proc. StopActiveLauncher coordinates

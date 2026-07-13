@@ -17,26 +17,26 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package shared
+package helpers
 
-// Kodi launcher IDs
-const (
-	LauncherKodiLocalVideo = "KodiLocalVideo"
-	LauncherKodiLocalAudio = "KodiLocalAudio"
-	LauncherKodiMovie      = "KodiMovie"
-	LauncherKodiTVEpisode  = "KodiTVEpisode"
-	LauncherKodiTVShow     = "KodiTVShow"
-	LauncherKodiSong       = "KodiSong"
-	LauncherKodiAlbum      = "KodiAlbum"
-	LauncherKodiArtist     = "KodiArtist"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// Launcher groups used as stable configuration references.
-const (
-	LauncherGroupNative    = "Native"
-	LauncherGroupEmuDeck   = "EmuDeck"
-	LauncherGroupRetroDECK = "RetroDECK"
-	LauncherGroupKodi      = "Kodi"
-	LauncherGroupKodiTV    = "KodiTV"
-	LauncherGroupKodiMusic = "KodiMusic"
-)
+func TestMergeEnviron(t *testing.T) {
+	t.Parallel()
+
+	result := MergeEnviron(
+		[]string{"PATH=/usr/bin", "DISPLAY=:1", "INVALID", "XDG_CURRENT_DESKTOP=gamescope"},
+		[]string{"DISPLAY=:0", "XDG_CURRENT_DESKTOP=KDE", "WAYLAND_DISPLAY=wayland-0"},
+	)
+
+	assert.Equal(t, []string{
+		"PATH=/usr/bin",
+		"DISPLAY=:0",
+		"XDG_CURRENT_DESKTOP=KDE",
+		"WAYLAND_DISPLAY=wayland-0",
+	}, result)
+}

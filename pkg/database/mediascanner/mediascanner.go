@@ -81,6 +81,45 @@ func batchCommitLimit(pauser *syncutil.Pauser) int {
 // only the file-limit path can still commit mid-system.
 var maxReconcileRowsPerTransaction int64 = 50000
 
+func scanResultIdentity(path string) string {
+	if schemeEnd := strings.Index(path, "://"); schemeEnd > 0 {
+		return strings.ToLower(path[:schemeEnd]) + path[schemeEnd:]
+	}
+	return helpers.NormalizePathForComparison(path)
+}
+
+func coalesceScanResults(systemID string, files []platforms.ScanResult) []platforms.ScanResult {
+	if len(files) < 2 {
+		return files
+	}
+
+	result := files[:0]
+	positions := make(map[string]int, len(files))
+	for _, file := range files {
+		key := scanResultIdentity(file.Path)
+		position, found := positions[key]
+		if !found {
+			positions[key] = len(result)
+			result = append(result, file)
+			continue
+		}
+
+		existing := &result[position]
+		if existing.Name == "" {
+			existing.Name = file.Name
+		} else if file.Name != "" && file.Name != existing.Name {
+			log.Debug().
+				Str("system", systemID).
+				Str("path", existing.Path).
+				Str("keptName", existing.Name).
+				Str("ignoredName", file.Name).
+				Msg("coalesced scan result with conflicting name")
+		}
+		existing.NoExt = existing.NoExt || file.NoExt
+	}
+	return result
+}
+
 func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, minFiles int) browseprefix.Policy {
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
@@ -1224,6 +1263,8 @@ func NewNamesIndex(
 				NoExt: true,
 			})
 		}
+
+		files = coalesceScanResults(systemID, files)
 
 		if len(files) == 0 {
 			log.Debug().Msgf("no files found for system: %s", systemID)

@@ -38,6 +38,7 @@ import (
 
 type Launchers struct {
 	IndexRoot        []string `toml:"index_root,omitempty,multiline"`
+	Preference       []string `toml:"preference,omitempty,multiline"`
 	AllowFile        []string `toml:"allow_file,omitempty,multiline"`
 	allowFileRe      []*regexp.Regexp
 	MediaDir         string             `toml:"media_dir,omitempty"`
@@ -87,6 +88,12 @@ type LaunchersCustom struct {
 	Groups     []string          `toml:"groups,omitempty"`
 	Schemes    []string          `toml:"schemes,omitempty"`
 	Restricted bool              `toml:"restricted,omitempty"`
+}
+
+func (c *Instance) LauncherPreference() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]string(nil), c.vals.Launchers.Preference...)
 }
 
 func (c *Instance) DefaultMediaDir() string {

@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/stretchr/testify/assert"
@@ -133,6 +134,7 @@ func TestCreateEmuDeckLauncherTest(t *testing.T) {
 	}
 
 	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
+	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupEmuDeck)
 
 	tests := []struct {
 		name     string
@@ -204,6 +206,7 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 	}
 
 	launcher := createRetroDECKLauncher("snes", systemInfo, paths)
+	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupRetroDECK)
 
 	tests := []struct {
 		name     string

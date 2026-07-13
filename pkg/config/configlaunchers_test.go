@@ -792,6 +792,21 @@ execute = "echo good"
 	assert.Equal(t, "GoodLauncher", customs[0].ID)
 }
 
+func TestLauncherPreferenceReturnsOwnedCopy(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Native", "RetroDECK"]
+`))
+
+	preference := cfg.LauncherPreference()
+	assert.Equal(t, []string{"Native", "RetroDECK"}, preference)
+	preference[0] = "changed"
+	assert.Equal(t, []string{"Native", "RetroDECK"}, cfg.LauncherPreference())
+}
+
 func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {
 	t.Parallel()
 

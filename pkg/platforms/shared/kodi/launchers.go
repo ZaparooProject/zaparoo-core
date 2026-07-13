@@ -82,7 +82,7 @@ func kodiControls(
 // NewKodiLocalLauncher creates a standard KodiLocalVideo launcher for direct video file playback
 func NewKodiLocalLauncher() platforms.Launcher {
 	id := shared.LauncherKodiLocalVideo
-	groups := []string{shared.GroupKodi}
+	groups := []string{shared.LauncherGroupKodi}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -105,7 +105,7 @@ func NewKodiLocalLauncher() platforms.Launcher {
 // NewKodiMovieLauncher creates a standard KodiMovie launcher for library movie playback
 func NewKodiMovieLauncher() platforms.Launcher {
 	id := shared.LauncherKodiMovie
-	groups := []string{shared.GroupKodi}
+	groups := []string{shared.LauncherGroupKodi}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -133,7 +133,7 @@ func NewKodiMovieLauncher() platforms.Launcher {
 // NewKodiTVLauncher creates a standard KodiTVEpisode launcher for library TV episode playback
 func NewKodiTVLauncher() platforms.Launcher {
 	id := shared.LauncherKodiTVEpisode
-	groups := []string{shared.GroupKodi, shared.GroupKodiTV}
+	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiTV}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -161,7 +161,7 @@ func NewKodiTVLauncher() platforms.Launcher {
 // NewKodiMusicLauncher creates a KodiLocalAudio launcher for local music files
 func NewKodiMusicLauncher() platforms.Launcher {
 	id := shared.LauncherKodiLocalAudio
-	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
+	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -182,7 +182,7 @@ func NewKodiMusicLauncher() platforms.Launcher {
 // NewKodiAlbumLauncher creates a KodiAlbum launcher for album collection playback
 func NewKodiAlbumLauncher() platforms.Launcher {
 	id := shared.LauncherKodiAlbum
-	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
+	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -210,7 +210,7 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 // NewKodiArtistLauncher creates a KodiArtist launcher for artist collection playback
 func NewKodiArtistLauncher() platforms.Launcher {
 	id := shared.LauncherKodiArtist
-	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
+	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -238,7 +238,7 @@ func NewKodiArtistLauncher() platforms.Launcher {
 // NewKodiTVShowLauncher creates a KodiTVShow launcher for TV show collection playback
 func NewKodiTVShowLauncher() platforms.Launcher {
 	id := shared.LauncherKodiTVShow
-	groups := []string{shared.GroupKodi, shared.GroupKodiTV}
+	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiTV}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,
@@ -266,7 +266,7 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 // NewKodiSongLauncher creates a KodiSong launcher for individual song playback
 func NewKodiSongLauncher() platforms.Launcher {
 	id := shared.LauncherKodiSong
-	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
+	groups := []string{shared.LauncherGroupKodi, shared.LauncherGroupKodiMusic}
 	return platforms.Launcher{
 		Controls:            kodiControls(id, groups),
 		ID:                  id,

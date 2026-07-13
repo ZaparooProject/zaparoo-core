@@ -193,6 +193,18 @@ func LookupAppNameInLibraries(steamAppsDir string, appID int) (string, bool) {
 	return result, result != ""
 }
 
+// LookupAppNameInSteamDir searches a Steam installation and all configured
+// library folders for an app name.
+func LookupAppNameInSteamDir(steamDir string, appID int) (string, bool) {
+	return LookupAppNameInLibraries(FindSteamAppsDir(steamDir), appID)
+}
+
+// FindInstallDirByAppIDInSteamDir searches a Steam installation and all
+// configured library folders for an app's install directory.
+func FindInstallDirByAppIDInSteamDir(steamDir string, appID int) (string, bool) {
+	return lookupInstallDirInLibraries(FindSteamAppsDir(steamDir), appID)
+}
+
 // DefaultSteamAppsDirs returns default locations for Steam's steamapps directory.
 // These are platform-specific paths where Steam is commonly installed.
 func DefaultSteamAppsDirs() []string {

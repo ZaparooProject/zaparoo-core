@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	testinghelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -25,7 +26,7 @@ import (
 func TestSteamOSRetroArchOptions(t *testing.T) {
 	t.Parallel()
 
-	appendPath := filepath.Join("config", retroArchNetworkConfig)
+	appendPath := filepath.Join("config", retroArchNativeConfig)
 	opts := steamOSRetroArchOptions(appendPath)
 
 	assert.Equal(t, []string{"flatpak", "run", RetroArchFlatpakID}, opts.Exec)
@@ -34,6 +35,7 @@ func TestSteamOSRetroArchOptions(t *testing.T) {
 	), opts.CoresDir)
 	assert.Equal(t, appendPath, opts.AppendConfigPath)
 	assert.Equal(t, retroArchNetworkAddr, opts.NetworkCmdAddr)
+	assert.NotNil(t, opts.LaunchEnv)
 	assert.NotNil(t, opts.Preflight)
 }
 
@@ -41,7 +43,7 @@ func TestEnsureSharedRetroArchNetworkConfig(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	path := filepath.Join("config", "zaparoo", retroArchNetworkConfig)
+	path := filepath.Join("config", "zaparoo", retroArchNativeConfig)
 
 	require.NoError(t, sharedretroarch.EnsureNetworkCommandConfig(fs, path))
 	data, err := afero.ReadFile(fs, path)
@@ -56,15 +58,17 @@ func TestPlatformStartPreWritesRetroArchConfig(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	path := filepath.Join("config", retroArchNetworkConfig)
+	path := filepath.Join("config", retroArchNativeConfig)
 	platform := NewPlatform()
 	platform.fs = fs
 	platform.retroArchAppendConfigPath = path
 
 	require.NoError(t, platform.StartPre(nil))
-	exists, err := afero.Exists(fs, path)
+	data, err := afero.ReadFile(fs, path)
 	require.NoError(t, err)
-	assert.True(t, exists)
+	expected, err := sharedretroarch.ConfigForProfile(sharedretroarch.ConfigProfileLowLatency)
+	require.NoError(t, err)
+	assert.Equal(t, expected, string(data))
 }
 
 func TestNativeRetroArchLaunchers(t *testing.T) {
@@ -76,6 +80,7 @@ func TestNativeRetroArchLaunchers(t *testing.T) {
 	require.NotEmpty(t, nativeLaunchers)
 	assert.Equal(t, platforms.LifecycleBlocking, nativeLaunchers[0].Lifecycle)
 	assert.Len(t, nativeLaunchers[0].Controls, 8)
+	assert.Contains(t, nativeLaunchers[0].Groups, platformshared.LauncherGroupNative)
 	assert.NotNil(t, nativeLaunchers[0].Kill)
 }
 

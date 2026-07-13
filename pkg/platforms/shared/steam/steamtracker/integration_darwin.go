@@ -40,6 +40,7 @@ type DarwinPlatformIntegration struct {
 	setTrackedProc func(*os.Process)
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	activeLaunch   launchOwnership
 }
 
 // NewDarwinPlatformIntegration creates a new platform integration for macOS.
@@ -71,7 +72,8 @@ func (pi *DarwinPlatformIntegration) Stop() {
 }
 
 // onGameStart is called when a Steam game starts (detected via process scanning).
-func (pi *DarwinPlatformIntegration) onGameStart(appID, _ int, _ string) {
+func (pi *DarwinPlatformIntegration) onGameStart(appID, pid int, _ string) {
+	pi.activeLaunch.set(appID, pid)
 	alreadyTracked := false
 	current := pi.activeMedia()
 	if current != nil {
@@ -133,7 +135,19 @@ func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID int) {
 }
 
 // onGameStop is called when a Steam game exits (process no longer found).
-func (pi *DarwinPlatformIntegration) onGameStop(appID int) {
-	log.Info().Int("appID", appID).Msg("detected Steam game exit")
+func (pi *DarwinPlatformIntegration) onGameStop(appID, pid int) {
+	if !pi.activeLaunch.clearIfMatches(appID, pid) {
+		log.Debug().Int("appID", appID).Int("pid", pid).Msg("ignoring stale Steam game exit")
+		return
+	}
+	current := pi.activeMedia()
+	if current == nil {
+		return
+	}
+	currentAppID, ok := steam.ExtractAppIDFromPath(current.Path)
+	if !ok || currentAppID != appID {
+		return
+	}
+	log.Info().Int("appID", appID).Int("pid", pid).Msg("detected Steam game exit")
 	pi.setActiveMedia(nil)
 }
