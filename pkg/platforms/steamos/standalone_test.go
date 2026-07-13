@@ -144,6 +144,34 @@ func TestInstalledTitleArgs(t *testing.T) {
 	assert.Equal(t, []string{"--no-gui", ps3Target}, args)
 }
 
+func TestReadLauncherTargetRejectsInvalidContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "empty"},
+		{name: "multiline", content: "TITLE0001\nTITLE0002"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(dir, tt.name+".psvita")
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+
+			_, err := readLauncherTarget(path, ".psvita")
+			require.ErrorContains(t, err, "invalid launcher target")
+		})
+	}
+
+	_, err := readLauncherTarget(filepath.Join(dir, "missing.psvita"), ".psvita")
+	require.ErrorContains(t, err, "read launcher target")
+	_, err = readLauncherTarget(filepath.Join(dir, "wrong.txt"), ".psvita")
+	require.ErrorContains(t, err, "launcher target requires a .psvita file")
+}
+
 func TestScummVMArgs(t *testing.T) {
 	t.Parallel()
 

@@ -130,6 +130,29 @@ func TestSetTrackedProcess(t *testing.T) {
 	})
 }
 
+func TestClearTrackedProcessPIDGuardsReplacement(t *testing.T) {
+	t.Parallel()
+
+	tracked := &os.Process{Pid: 1002}
+	base := NewBase("test")
+	base.trackedProcess = tracked
+	base.completedTrackedProcess = &os.Process{Pid: 1001}
+	base.trackedProcessDone = make(chan struct{})
+	base.processWaitClaimed = true
+
+	assert.False(t, base.ClearTrackedProcessPID(1001))
+	assert.Same(t, tracked, base.trackedProcess)
+	assert.NotNil(t, base.trackedProcessDone)
+	assert.True(t, base.processWaitClaimed)
+
+	assert.True(t, base.ClearTrackedProcessPID(1002))
+	assert.Nil(t, base.trackedProcess)
+	assert.Nil(t, base.completedTrackedProcess)
+	assert.Nil(t, base.trackedProcessDone)
+	assert.False(t, base.processWaitClaimed)
+	assert.False(t, base.ClearTrackedProcessPID(1002))
+}
+
 func TestClearTrackedProcessMediaDoesNotClearReplacement(t *testing.T) {
 	t.Parallel()
 

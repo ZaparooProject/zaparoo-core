@@ -18,7 +18,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -174,6 +176,78 @@ func TestDisabledManagerDoesNotWrapLauncher(t *testing.T) {
 	NewManager(SessionOptions{}).WrapLauncher(&launcher)
 
 	assert.Nil(t, launcher.Kill)
+}
+
+func TestFindNonSteamWindowForProcess(t *testing.T) {
+	t.Parallel()
+
+	executor := &mocks.MockCommandExecutor{}
+	manager := newManagerWithExecutor(SessionOptions{Enabled: true}, executor)
+	windowOutput := []byte(`
+     0x1234 "Launcher": ("launcher" "Launcher") 1280x720+0+0
+     0x5678 "Game": ("game" "Game") 1280x720+0+0
+`)
+	executor.On("Output", mock.Anything, "xwininfo",
+		[]string{"-display", ":0", "-root", "-tree"}).Return(windowOutput, nil).Once()
+	executor.On("Output", mock.Anything, "xprop",
+		[]string{"-display", ":0", "-id", "0x1234", windowPIDAtom}).
+		Return([]byte("_NET_WM_PID(CARDINAL) = 100"), nil).Once()
+	executor.On("Output", mock.Anything, "xprop",
+		[]string{"-display", ":0", "-id", "0x5678", windowPIDAtom}).
+		Return([]byte("_NET_WM_PID(CARDINAL) = 200"), nil).Once()
+
+	windowID, err := manager.findNonSteamWindowForProcess(t.Context(), ":0", 200, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, "0x5678", windowID)
+	executor.AssertExpectations(t)
+}
+
+func TestFindNonSteamWindowFallsBackForSandboxPID(t *testing.T) {
+	t.Parallel()
+
+	executor := &mocks.MockCommandExecutor{}
+	manager := newManagerWithExecutor(SessionOptions{Enabled: true}, executor)
+	windowOutput := []byte(`
+     0x1234 "Game": ("game" "Game") 1280x720+0+0
+`)
+	executor.On("Output", mock.Anything, "xwininfo",
+		[]string{"-display", ":0", "-root", "-tree"}).Return(windowOutput, nil).Once()
+	executor.On("Output", mock.Anything, "xprop", mock.Anything).
+		Return([]byte("_NET_WM_PID(CARDINAL) = 999"), nil).Once()
+
+	windowID, err := manager.findNonSteamWindowForProcess(t.Context(), ":0", 200, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, "0x1234", windowID)
+	executor.AssertExpectations(t)
+}
+
+func TestGamescopePropertyCommands(t *testing.T) {
+	t.Parallel()
+
+	executor := &mocks.MockCommandExecutor{}
+	manager := newManagerWithExecutor(SessionOptions{Enabled: true}, executor)
+	executor.On("Output", mock.Anything, "xprop",
+		[]string{"-display", ":0", "-root", gamescopeAtom}).
+		Return([]byte("GAMESCOPE_XWAYLAND_SERVER_ID(CARDINAL) = 1"), nil).Once()
+	executor.On("Output", mock.Anything, "xprop",
+		[]string{"-display", ":0", "-root", baselayerAtom}).
+		Return([]byte("GAMESCOPECTRL_BASELAYER_APPID(CARDINAL) = 769, 0"), nil).Once()
+	executor.On("Run", mock.Anything, "xprop",
+		[]string{"-display", ":0", "-id", "0x1234", "-f", steamGameAtom, "32c", "-set", steamGameAtom, "1"}).
+		Return(nil).Once()
+	executor.On("Run", mock.Anything, "xprop",
+		[]string{"-display", ":0", "-root", "-format", baselayerAtom, "32co", "-set", baselayerAtom, "1, 769, 0"}).
+		Return(nil).Once()
+
+	assert.True(t, manager.hasGamescopeAtom(":0"))
+	original, err := manager.getBaselayerValue(":0")
+	require.NoError(t, err)
+	assert.Equal(t, "769, 0", original)
+	require.NoError(t, manager.setSteamGameProperty(":0", "0x1234"))
+	require.NoError(t, manager.setBaselayerValue(":0", externalFocusAppID, original))
+	executor.AssertExpectations(t)
 }
 
 func TestParseWindowCandidates(t *testing.T) {
