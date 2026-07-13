@@ -408,12 +408,16 @@ func launchAltCoreWithSetNameSameDir(
 
 func retroAchievementsSetName(launcherID string) (string, bool) {
 	switch launcherID {
-	case "RAAtari2600":
+	case "RAAtari2600", "RAAtari7800":
 		return "RA_Atari7800", true
+	case "RAFDS":
+		return "RA_FDS", true
 	case "RAGameboy":
 		return "RA_Gameboy", true
 	case "RAGameboyColor":
 		return "RA_GBC", true
+	case "RAGameGear":
+		return "RA_GameGear", true
 	case "RASuperGameboy":
 		return "RA_SGB", true
 	case "RAGBA":
@@ -424,6 +428,8 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 		return "RA_MegaDrive", true
 	case "RANeoGeo":
 		return "RA_NeoGeo", true
+	case "RANeoGeoCD":
+		return "RA_NeoGeoCD", true
 	case "RANES":
 		return "RA_NES", true
 	case "RANintendo64":
@@ -436,8 +442,12 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 		return "RA_SMS", true
 	case "RASNES":
 		return "RA_SNES", true
+	case "RASaturn":
+		return "RA_Saturn", true
 	case "RATurboGrafx16":
 		return "RA_TurboGrafx16", true
+	case "RATurboGrafx16CD":
+		return "RA_TurboGrafx16CD", true
 	default:
 		return "", false
 	}
@@ -1081,6 +1091,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemAtari7800),
 		},
 		{
+			ID:       "RAAtari7800",
+			SystemID: systemdefs.SystemAtari7800,
+			Launch: launchRetroAchievementsCore(
+				"RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800",
+			),
+		},
+		{
 			ID:       "DB9Atari7800",
 			SystemID: systemdefs.SystemAtari7800,
 			Launch:   launchDB9Core("DB9Atari7800", systemdefs.SystemAtari7800, "Atari7800"),
@@ -1165,6 +1182,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemFDS),
 		},
 		{
+			ID:       "RAFDS",
+			SystemID: systemdefs.SystemFDS,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RAFDS", systemdefs.SystemFDS, "_RA_Cores/Cores/NES",
+			),
+		},
+		{
 			ID:         systemdefs.SystemGamate,
 			SystemID:   systemdefs.SystemGamate,
 			Folders:    []string{"Gamate"},
@@ -1227,6 +1251,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"SMS", "GameGear"},
 			Extensions: []string{".gg"},
 			Launch:     launch(pl, systemdefs.SystemGameGear),
+		},
+		{
+			ID:       "RAGameGear",
+			SystemID: systemdefs.SystemGameGear,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RAGameGear", systemdefs.SystemGameGear, "_RA_Cores/Cores/SMS",
+			),
 		},
 		{
 			ID:         systemdefs.SystemGameGear2P,
@@ -1451,6 +1482,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"NeoGeo-CD", "NEOGEO"},
 			Extensions: []string{".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.SystemNeoGeoCD),
+		},
+		{
+			ID:       "RANeoGeoCD",
+			SystemID: systemdefs.SystemNeoGeoCD,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RANeoGeoCD", systemdefs.SystemNeoGeoCD, "_RA_Cores/Cores/NeoGeo",
+			),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoPocket,
@@ -1689,6 +1727,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemSaturn),
 		},
 		{
+			ID:       "RASaturn",
+			SystemID: systemdefs.SystemSaturn,
+			Launch: launchRetroAchievementsCore(
+				"RASaturn", systemdefs.SystemSaturn, "_RA_Cores/Cores/Saturn",
+			),
+		},
+		{
 			ID:       "LLAPISaturn",
 			SystemID: systemdefs.SystemSaturn,
 			Launch:   launchAltCore("LLAPISaturn", systemdefs.SystemSaturn, "_LLAPI/Saturn_LLAPI"),
@@ -1789,6 +1834,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"TGFX16-CD"},
 			Extensions: []string{".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.SystemTurboGrafx16CD),
+		},
+		{
+			ID:       "RATurboGrafx16CD",
+			SystemID: systemdefs.SystemTurboGrafx16CD,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RATurboGrafx16CD", systemdefs.SystemTurboGrafx16CD, "_RA_Cores/Cores/TurboGrafx16",
+			),
 		},
 		{
 			ID:         systemdefs.SystemVC4000,

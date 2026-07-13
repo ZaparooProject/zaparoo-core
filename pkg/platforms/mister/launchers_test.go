@@ -698,21 +698,27 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"RANES":          "RA_NES",
-		"RASNES":         "RA_SNES",
-		"RAGameboy":      "RA_Gameboy",
-		"RAGameboyColor": "RA_GBC",
-		"RASuperGameboy": "RA_SGB",
-		"RAGBA":          "RA_GBA",
-		"RANintendo64":   "RA_N64",
-		"RAPSX":          "RA_PSX",
-		"RAMegaDrive":    "RA_MegaDrive",
-		"RAMegaCD":       "RA_MegaCD",
-		"RASMS":          "RA_SMS",
-		"RANeoGeo":       "RA_NeoGeo",
-		"RATurboGrafx16": "RA_TurboGrafx16",
-		"RAAtari2600":    "RA_Atari7800",
-		"RAS32X":         "RA_S32X",
+		"RANES":            "RA_NES",
+		"RAFDS":            "RA_FDS",
+		"RASNES":           "RA_SNES",
+		"RAGameboy":        "RA_Gameboy",
+		"RAGameboyColor":   "RA_GBC",
+		"RAGameGear":       "RA_GameGear",
+		"RASuperGameboy":   "RA_SGB",
+		"RAGBA":            "RA_GBA",
+		"RANintendo64":     "RA_N64",
+		"RAPSX":            "RA_PSX",
+		"RAMegaDrive":      "RA_MegaDrive",
+		"RAMegaCD":         "RA_MegaCD",
+		"RASMS":            "RA_SMS",
+		"RANeoGeo":         "RA_NeoGeo",
+		"RANeoGeoCD":       "RA_NeoGeoCD",
+		"RATurboGrafx16":   "RA_TurboGrafx16",
+		"RATurboGrafx16CD": "RA_TurboGrafx16CD",
+		"RAAtari2600":      "RA_Atari7800",
+		"RAAtari7800":      "RA_Atari7800",
+		"RAS32X":           "RA_S32X",
+		"RASaturn":         "RA_Saturn",
 	}
 
 	for launcherID, want := range cases {
@@ -746,9 +752,15 @@ func TestRetroAchievementsSetNameSameDirRegression(t *testing.T) {
 		{launcherID: "RANeoGeo", wantSetName: "RA_NeoGeo", wantSameDir: true},
 		{launcherID: "RATurboGrafx16", wantSetName: "RA_TurboGrafx16", wantSameDir: true},
 		{launcherID: "RAAtari2600", wantSetName: "RA_Atari7800", wantSameDir: true},
+		{launcherID: "RAAtari7800", wantSetName: "RA_Atari7800", wantSameDir: true},
 		{launcherID: "RAS32X", wantSetName: "RA_S32X", wantSameDir: true},
+		{launcherID: "RASaturn", wantSetName: "RA_Saturn", wantSameDir: true},
+		{launcherID: "RAFDS", wantSetName: "RA_FDS", wantSameDir: false},
 		{launcherID: "RAGameboyColor", wantSetName: "RA_GBC", wantSameDir: false},
+		{launcherID: "RAGameGear", wantSetName: "RA_GameGear", wantSameDir: false},
+		{launcherID: "RANeoGeoCD", wantSetName: "RA_NeoGeoCD", wantSameDir: false},
 		{launcherID: "RASuperGameboy", wantSetName: "RA_SGB", wantSameDir: false},
+		{launcherID: "RATurboGrafx16CD", wantSetName: "RA_TurboGrafx16CD", wantSameDir: false},
 	}
 
 	for _, tc := range cases {
@@ -900,9 +912,11 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 		systemID string
 	}{
 		{"RANES", "NES"},
+		{"RAFDS", "FDS"},
 		{"RASNES", "SNES"},
 		{"RAGameboy", "Gameboy"},
 		{"RAGameboyColor", "GameboyColor"},
+		{"RAGameGear", "GameGear"},
 		{"RASuperGameboy", "SuperGameboy"},
 		{"RAGBA", "GBA"},
 		{"RANintendo64", "Nintendo64"},
@@ -911,9 +925,13 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 		{"RAMegaCD", "MegaCD"},
 		{"RASMS", "MasterSystem"},
 		{"RANeoGeo", "NeoGeo"},
+		{"RANeoGeoCD", "NeoGeoCD"},
 		{"RATurboGrafx16", "TurboGrafx16"},
+		{"RATurboGrafx16CD", "TurboGrafx16CD"},
 		{"RAAtari2600", "Atari2600"},
+		{"RAAtari7800", "Atari7800"},
 		{"RAS32X", "Sega32X"},
+		{"RASaturn", "Saturn"},
 	}
 
 	for _, tc := range cases {
@@ -1013,15 +1031,4 @@ func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid set_name")
-}
-
-func TestRetroAchievementsAtari7800LauncherRemoved(t *testing.T) {
-	t.Parallel()
-
-	pl := NewPlatform()
-	launchers := CreateLaunchers(pl)
-
-	for i := range launchers {
-		assert.NotEqual(t, "RAAtari7800", launchers[i].ID)
-	}
 }
