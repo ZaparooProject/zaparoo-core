@@ -260,6 +260,31 @@ func copyFileSync(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
+func replaceDatabaseFromBackup(backupPath, dbPath string) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(dbPath), ".userdb-restore-*")
+	if err != nil {
+		return fmt.Errorf("failed to create staged restore file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if closeErr := tmp.Close(); closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to close staged restore file: %w", closeErr)
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err = copyFileSync(backupPath, tmpPath, 0o600); err != nil {
+		return fmt.Errorf("failed to stage user database backup: %w", err)
+	}
+	if err = os.Remove(dbPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to remove user database before restore: %w", err)
+	}
+	database.RemoveSidecars(dbPath)
+	if err = os.Rename(tmpPath, dbPath); err != nil {
+		return fmt.Errorf("failed to install staged user database backup: %w", err)
+	}
+	return nil
+}
+
 func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	backupPath, err := db.resolveBackupPath(name)
 	if err != nil {
@@ -289,8 +314,7 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	if closeErr := db.Close(); closeErr != nil {
 		return database.RestoreInfo{}, closeErr
 	}
-	database.RemoveSidecars(db.GetDBPath())
-	if err = copyFileSync(backupPath, db.GetDBPath(), 0o600); err != nil {
+	if err = replaceDatabaseFromBackup(backupPath, db.GetDBPath()); err != nil {
 		return db.restoreFailed(fmt.Errorf("failed to restore user database backup: %w", err))
 	}
 	if err = db.Open(); err != nil {

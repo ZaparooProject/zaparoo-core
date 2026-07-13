@@ -152,6 +152,7 @@ type MediaDB struct {
 	dbPath                  string
 	backgroundOps           sync.WaitGroup
 	backgroundOpsCount      atomic.Int64
+	backgroundOpsMu         syncutil.RWMutex
 	vacuumRetryDelay        time.Duration
 	analyzeRetryDelay       time.Duration
 	batchSize               int
@@ -3634,10 +3635,24 @@ func (db *MediaDB) SetIndexingConnBoost(active bool) {
 	}
 }
 
+// BeginRecovery prevents new background operations from registering, then waits
+// for operations already registered to drain. EndRecovery must follow it.
+func (db *MediaDB) BeginRecovery() {
+	db.backgroundOpsMu.Lock()
+	db.backgroundOps.Wait()
+}
+
+// EndRecovery allows background operations to register after recovery completes.
+func (db *MediaDB) EndRecovery() {
+	db.backgroundOpsMu.Unlock()
+}
+
 // TrackBackgroundOperation increments the background operations counter.
 // Call BackgroundOperationDone when the operation completes.
 // This allows external code (like the indexing goroutine) to be tracked.
 func (db *MediaDB) TrackBackgroundOperation() {
+	db.backgroundOpsMu.RLock()
+	defer db.backgroundOpsMu.RUnlock()
 	db.backgroundOps.Add(1)
 	db.backgroundOpsCount.Add(1)
 }

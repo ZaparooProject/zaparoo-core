@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
@@ -66,6 +67,72 @@ func TestMediaDB_WALCheckpoint_NoOpDuringTransaction(t *testing.T) {
 	// leaves the transaction intact.
 	require.NoError(t, mediaDB.WALCheckpoint())
 	assert.NotNil(t, mediaDB.tx, "transaction should still be open after a no-op checkpoint")
+}
+
+func TestMediaDB_BackgroundOperationTracking(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	assert.False(t, mediaDB.HasBackgroundOperations())
+	mediaDB.TrackBackgroundOperation()
+	assert.True(t, mediaDB.HasBackgroundOperations())
+	mediaDB.BackgroundOperationDone()
+	assert.False(t, mediaDB.HasBackgroundOperations())
+}
+
+func TestMediaDB_RecoveryGateDrainsAndBlocksBackgroundOperations(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	mediaDB.TrackBackgroundOperation()
+	gateHeld := make(chan struct{})
+	go func() {
+		mediaDB.BeginRecovery()
+		close(gateHeld)
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-gateHeld:
+			return true
+		default:
+			return false
+		}
+	}, 20*time.Millisecond, time.Millisecond)
+
+	mediaDB.BackgroundOperationDone()
+	require.Eventually(t, func() bool {
+		select {
+		case <-gateHeld:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	tracked := make(chan struct{})
+	go func() {
+		mediaDB.TrackBackgroundOperation()
+		close(tracked)
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-tracked:
+			return true
+		default:
+			return false
+		}
+	}, 20*time.Millisecond, time.Millisecond)
+
+	mediaDB.EndRecovery()
+	require.Eventually(t, func() bool {
+		select {
+		case <-tracked:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	mediaDB.BackgroundOperationDone()
 }
 
 func TestMediaDB_CorruptMarkerLifecycle(t *testing.T) {

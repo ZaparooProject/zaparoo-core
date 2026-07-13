@@ -166,6 +166,9 @@ func finalizeIndexingError(db database.MediaDBI, err error) {
 	switch {
 	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return
+	case err.Error() == mediaDatabaseCorruptMessage:
+		// Preserve corruption status discovered before this run.
+		return
 	case isSQLiteDatabaseCorrupt(err):
 		noteIndexingCorruption(db, fmt.Sprintf("media indexing failed: %v", err))
 	default:
@@ -832,6 +835,17 @@ func NewNamesIndex(
 	allSystemIDs := systemIDsFromDefs(systemdefs.AllSystems())
 	fullRun := helpers.EqualStringSlices(requestedSystemIDs, allSystemIDs)
 
+	// Register terminal classification before readiness reads so corruption from
+	// either status query is persisted after transaction cleanup.
+	defer func() {
+		terminalErr := err
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to rollback indexing transaction: %w", rbErr))
+			log.Error().Err(rbErr).Msg("failed to rollback transaction after indexing")
+		}
+		finalizeIndexingError(db, terminalErr)
+	}()
+
 	// 1. Check for database locks or issues before starting
 	log.Info().Msg("checking database readiness for indexing")
 	// Quick database health check - try to read a simple value
@@ -989,27 +1003,6 @@ func NewNamesIndex(
 			}
 		}
 	}
-
-	// Ensure transaction cleanup and status update on completion or error.
-	// Register before persisting run metadata and seeding tags so early
-	// initialization failures still leave a terminal failed status.
-	defer func() {
-		// Always attempt to rollback any dangling transaction, whether success or failure
-		// On success, this should be a no-op (tx == nil), but ensures cleanup if
-		// the last transaction was never committed due to batchStarted being false
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			if err != nil {
-				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
-			} else {
-				log.Debug().Err(rbErr).Msg("no transaction to rollback (expected)")
-			}
-		}
-
-		// Persist terminal state only after rollback. Corruption can surface from any
-		// database operation, including transaction begin/commit and finalization paths,
-		// so classify the returned error centrally instead of relying on selected callers.
-		finalizeIndexingError(db, err)
-	}()
 
 	// 3. Record the requested system set and exact runnable plan for resume validation.
 	if setErr := db.SetIndexingSystems(requestedSystemIDs); setErr != nil {

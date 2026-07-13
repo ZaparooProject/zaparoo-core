@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -30,7 +31,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	testmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -80,6 +83,8 @@ func TestCheckAndRecoverCorruptMediaDB_RecreateFailureKeepsRecoveryPending(t *te
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("IsMarkedCorrupt").Return(true)
 	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return()
+	mockDB.On("EndRecovery").Return()
 	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
 	mockDB.On("Recreate", mock.Anything).Return(errors.New("storage unavailable"))
 
@@ -87,6 +92,35 @@ func TestCheckAndRecoverCorruptMediaDB_RecreateFailureKeepsRecoveryPending(t *te
 
 	mockDB.AssertExpectations(t)
 	assert.Equal(t, int32(1), mediaDBRecoveryAttempts.Load())
+}
+
+func TestCheckAndRecoverCorruptMediaDB_RecreateFailureFinishesNotification(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return()
+	mockDB.On("EndRecovery").Return()
+	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
+	mockDB.On("Recreate", mock.Anything).Return(errors.New("storage unavailable"))
+
+	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, st, nil)
+
+	started := <-ns
+	finished := <-ns
+	var startedStatus, finishedStatus models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(started.Params, &startedStatus))
+	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
+	assert.True(t, startedStatus.Indexing)
+	assert.False(t, finishedStatus.Indexing)
 }
 
 func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {
@@ -100,6 +134,8 @@ func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("IsMarkedCorrupt").Return(true)
 	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return().Twice()
+	mockDB.On("EndRecovery").Return().Twice()
 
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
@@ -221,9 +257,11 @@ func TestWatchForCorruptMediaDBRecovery_PollsForegroundMarker(t *testing.T) {
 	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	source := make(chan models.Notification, 1)
 	b := broker.NewBroker(ctx, source)
 	b.Start()
+	t.Cleanup(b.Stop)
 
 	done := make(chan struct{})
 	go func() {
@@ -244,7 +282,6 @@ func TestWatchForCorruptMediaDBRecovery_PollsForegroundMarker(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("watcher did not exit after context cancellation")
 	}
-	b.Stop()
 }
 
 func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
@@ -259,9 +296,11 @@ func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
 	mockDB.On("GetIndexingStatus").Return("", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	source := make(chan models.Notification, 10)
 	b := broker.NewBroker(ctx, source)
 	b.Start()
+	t.Cleanup(b.Stop)
 
 	done := make(chan struct{})
 	go func() {
@@ -290,5 +329,4 @@ func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("watcher did not exit after context cancellation")
 	}
-	b.Stop()
 }

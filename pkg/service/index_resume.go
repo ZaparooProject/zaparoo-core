@@ -262,13 +262,19 @@ func checkAndRecoverCorruptMediaDB(
 		return
 	}
 
+	// Close the race between the active-work check and Recreate: once this gate is
+	// held, new tracked work waits until the replacement database is ready.
+	db.MediaDB.BeginRecovery()
+	defer db.MediaDB.EndRecovery()
+
 	attempt, allowed := claimMediaDBRecoveryAttempt()
 	if !allowed {
 		if mediaDBRecoveryLimitReported.CompareAndSwap(false, true) {
 			log.Error().Int32("attempts", attempt).Int("limit", maxMediaDBRecoveryAttempts).
 				Msg("media database automatic recovery limit reached; check storage")
 			addMediaDBRecoveryFailureInbox(st, "Automatic recovery was stopped after repeated corruption. "+
-				"Safely shut down, check free space, and replace or reimage the storage device before trying again.")
+				"Safely shut down, check free space, and replace or reimage the storage device before trying again.",
+				inboxservice.CategoryMediaDBCorruptionRecoveryLimit)
 		}
 		return
 	}
@@ -286,7 +292,9 @@ func checkAndRecoverCorruptMediaDB(
 		log.Error().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "recreate_failed").
 			Msg("failed to recreate media database after corruption")
 		addMediaDBRecoveryFailureInbox(st, "Automatic media database recovery failed. Safely shut down, "+
-			"check free space, and inspect or replace the storage device before trying again.")
+			"check free space, and inspect or replace the storage device before trying again.",
+			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
+		finishMediaDBRecoveryNotification(st)
 		return
 	}
 	log.Info().Int32("recovery_attempt", attempt).Str("recovery_outcome", "verified_recreate").
@@ -325,18 +333,30 @@ func checkAndRecoverCorruptMediaDB(
 				Msg("failed to start reindex after media database recovery")
 		}
 		addMediaDBRecoveryFailureInbox(st, "Media database was rebuilt, but reindexing could not start. "+
-			"Restart Zaparoo after checking available storage space.")
+			"Restart Zaparoo after checking available storage space.",
+			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
+		finishMediaDBRecoveryNotification(st)
 	}
 }
 
-func addMediaDBRecoveryFailureInbox(st *state.State, body string) {
+func finishMediaDBRecoveryNotification(st *state.State) {
+	if st == nil {
+		return
+	}
+	notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
+		Exists:   true,
+		Indexing: false,
+	})
+}
+
+func addMediaDBRecoveryFailureInbox(st *state.State, body, category string) {
 	if st == nil || st.Inbox() == nil {
 		return
 	}
 	if err := st.Inbox().Add("Media database recovery needs attention",
 		inboxservice.WithBody(body),
 		inboxservice.WithSeverity(inboxservice.SeverityError),
-		inboxservice.WithCategory(inboxservice.CategoryMediaDBCorruptionRecoveryLimit),
+		inboxservice.WithCategory(category),
 	); err != nil {
 		log.Warn().Err(err).Msg("failed to add inbox message about media database recovery failure")
 	}

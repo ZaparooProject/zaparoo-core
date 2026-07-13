@@ -828,6 +828,8 @@ type MediaDBI interface {
 	EndBrowseCacheRebuild()
 	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
+	BeginRecovery()
+	EndRecovery()
 	TrackBackgroundOperation()
 	HasBackgroundOperations() bool
 	SetIndexingConnBoost(active bool)

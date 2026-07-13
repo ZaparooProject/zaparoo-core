@@ -1600,6 +1600,14 @@ func (m *MockMediaDBI) WaitForBackgroundOperations() {
 	m.Called()
 }
 
+func (m *MockMediaDBI) BeginRecovery() {
+	m.Called()
+}
+
+func (m *MockMediaDBI) EndRecovery() {
+	m.Called()
+}
+
 func (m *MockMediaDBI) TrackBackgroundOperation() {
 	m.Called()
 }

@@ -47,6 +47,36 @@ func TestUserDBRestoreBackupFailsWhenCorruptMarkerCannotBeCleared(t *testing.T) 
 	assert.True(t, userDB.IsMarkedCorrupt(), "failed marker removal must remain a pending recovery signal")
 }
 
+func TestUserDBRecoverFromCorruption_BackupCleanupFailureRetainsMarker(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	_, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+	markerPath := database.CorruptMarkerPath(userDB.GetDBPath())
+	require.NoError(t, os.Mkdir(markerPath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(markerPath, "blocker"), []byte("x"), 0o600))
+
+	_, err = userDB.RecoverFromCorruption()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear user database corrupt marker after recovery")
+	assert.True(t, userDB.IsMarkedCorrupt())
+}
+
+func TestUserDBRecoverFromCorruption_FreshCleanupFailureRetainsMarker(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	markerPath := database.CorruptMarkerPath(userDB.GetDBPath())
+	require.NoError(t, os.Mkdir(markerPath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(markerPath, "blocker"), []byte("x"), 0o600))
+
+	_, err := userDB.RecoverFromCorruption()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear user database corrupt marker after fresh recovery")
+	assert.True(t, userDB.IsMarkedCorrupt())
+}
+
 func TestUserDBBackupRestoreRoundTrip(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
