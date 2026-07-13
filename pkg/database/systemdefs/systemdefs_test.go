@@ -184,8 +184,9 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 				"Other":    true,
 				"Media":    true,
 				"Handheld": true,
+				"Software": true,
 			}
-			expectedCategories := "Console, Computer, Arcade, Other, Media, Handheld"
+			expectedCategories := "Console, Computer, Arcade, Other, Media, Handheld, Software"
 			assert.True(t, validCategories[metadata.Category],
 				"System %s has invalid category '%s', expected one of: %s",
 				systemID, metadata.Category, expectedCategories)
@@ -690,16 +691,17 @@ func TestAllSystemsHaveMediaType(t *testing.T) {
 
 			// MediaType should be one of the defined constants
 			validTypes := map[MediaType]bool{
-				MediaTypeGame:   true,
-				MediaTypeMovie:  true,
-				MediaTypeTVShow: true,
-				MediaTypeMusic:  true,
-				MediaTypeImage:  true,
-				MediaTypeAudio:  true,
-				MediaTypeVideo:  true,
+				MediaTypeGame:        true,
+				MediaTypeMovie:       true,
+				MediaTypeTVShow:      true,
+				MediaTypeMusic:       true,
+				MediaTypeImage:       true,
+				MediaTypeAudio:       true,
+				MediaTypeVideo:       true,
+				MediaTypeApplication: true,
 			}
 			assert.True(t, validTypes[mediaType],
-				"System %s has invalid MediaType %q, must be one of: Game, Movie, TVShow, Music, Image, Audio, Video",
+				"System %s has invalid MediaType %q; expected a supported media type",
 				systemID, mediaType)
 		})
 	}
@@ -715,12 +717,18 @@ func TestMediaTypeSystems(t *testing.T) {
 	}{
 		{SystemVideo, MediaTypeVideo},
 		{SystemAudio, MediaTypeAudio},
+		{SystemApplication, MediaTypeApplication},
 		{SystemMovie, MediaTypeMovie},
 		{SystemTVEpisode, MediaTypeTVShow},
+		{SystemTVSeason, MediaTypeTVShow},
 		{SystemTVShow, MediaTypeTVShow},
 		{SystemMusicTrack, MediaTypeMusic},
 		{SystemMusicArtist, MediaTypeMusic},
 		{SystemMusicAlbum, MediaTypeMusic},
+		{SystemMusicVideo, MediaTypeMusic},
+		{SystemPodcastSeries, MediaTypeAudio},
+		{SystemPodcastEpisode, MediaTypeAudio},
+		{SystemAudiobook, MediaTypeAudio},
 		{SystemImage, MediaTypeImage},
 	}
 
