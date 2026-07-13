@@ -54,9 +54,30 @@ const indexResumeCheckpointPrefix = "last_indexed_system="
 
 const mediaDBRecoveryPollInterval = 5 * time.Second
 
+// maxMediaDBRecoveryAttempts bounds rebuild loops within one process lifetime. A restart
+// permits another attempt, while repeated failures in one session strongly indicate bad
+// storage that automatic rebuilds would only keep rewriting.
+const maxMediaDBRecoveryAttempts = 3
+
 // mediaDBRecovering serializes media database recovery so the startup check and the
 // runtime watcher can never run a close/reopen rebuild concurrently.
 var mediaDBRecovering atomic.Bool
+
+var mediaDBRecoveryAttempts atomic.Int32
+
+var mediaDBRecoveryLimitReported atomic.Bool
+
+func claimMediaDBRecoveryAttempt() (int32, bool) {
+	for {
+		attempts := mediaDBRecoveryAttempts.Load()
+		if attempts >= maxMediaDBRecoveryAttempts {
+			return attempts, false
+		}
+		if mediaDBRecoveryAttempts.CompareAndSwap(attempts, attempts+1) {
+			return attempts + 1, true
+		}
+	}
+}
 
 func currentIndexResumeCheckpoint(mediaDB database.MediaDBI) (string, error) {
 	lastIndexedSystem, err := mediaDB.GetLastIndexedSystem()
@@ -241,42 +262,83 @@ func checkAndRecoverCorruptMediaDB(
 		return
 	}
 
-	log.Error().Strs("integrity", db.MediaDB.IntegrityReport()).
-		Msg("media database is corrupt; rebuilding from scratch")
-	notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
-		Exists:   false,
-		Indexing: true,
-	})
-
-	if err := db.MediaDB.Recreate(config.IsDevelopmentVersion()); err != nil {
-		log.Error().Err(err).Msg("failed to recreate media database after corruption")
+	attempt, allowed := claimMediaDBRecoveryAttempt()
+	if !allowed {
+		if mediaDBRecoveryLimitReported.CompareAndSwap(false, true) {
+			log.Error().Int32("attempts", attempt).Int("limit", maxMediaDBRecoveryAttempts).
+				Msg("media database automatic recovery limit reached; check storage")
+			addMediaDBRecoveryFailureInbox(st, "Automatic recovery was stopped after repeated corruption. "+
+				"Safely shut down, check free space, and replace or reimage the storage device before trying again.")
+		}
 		return
 	}
-	log.Info().Msg("media database recreated after corruption; starting full reindex")
+
+	log.Error().Int32("recovery_attempt", attempt).Strs("integrity", db.MediaDB.IntegrityReport()).
+		Msg("media database is corrupt; rebuilding from scratch")
+	if st != nil {
+		notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
+			Exists:   false,
+			Indexing: true,
+		})
+	}
+
+	if err := db.MediaDB.Recreate(config.IsDevelopmentVersion()); err != nil {
+		log.Error().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "recreate_failed").
+			Msg("failed to recreate media database after corruption")
+		addMediaDBRecoveryFailureInbox(st, "Automatic media database recovery failed. Safely shut down, "+
+			"check free space, and inspect or replace the storage device before trying again.")
+		return
+	}
+	log.Info().Int32("recovery_attempt", attempt).Str("recovery_outcome", "verified_recreate").
+		Msg("media database recreated and verified after corruption; starting full reindex")
 
 	// Tell the user persistently: the rebuild discards scraped metadata (it lived in the
 	// corrupt cache), so artwork returns only after a re-scrape. The inbox lives in UserDB,
 	// which is unaffected by the media database corruption. Category dedups repeat events.
-	if inbox := st.Inbox(); inbox != nil {
-		if inboxErr := inbox.Add("Media database was corrupted and rebuilt",
-			inboxservice.WithBody("Your media database was corrupted (likely a storage write "+
-				"error) and has been rebuilt automatically. Re-scrape your library to restore "+
-				"box art and metadata."),
-			inboxservice.WithSeverity(inboxservice.SeverityWarning),
-			inboxservice.WithCategory(inboxservice.CategoryMediaDBCorruptionRecovery),
-		); inboxErr != nil {
-			log.Warn().Err(inboxErr).Msg("failed to add inbox message about media database recovery")
+	if st != nil {
+		if inbox := st.Inbox(); inbox != nil {
+			if inboxErr := inbox.Add("Media database was corrupted and rebuilt",
+				inboxservice.WithBody("Your media database was corrupted (likely a storage write "+
+					"error) and has been rebuilt automatically. Re-scrape your library to restore "+
+					"box art and metadata."),
+				inboxservice.WithSeverity(inboxservice.SeverityWarning),
+				inboxservice.WithCategory(inboxservice.CategoryMediaDBCorruptionRecovery),
+			); inboxErr != nil {
+				log.Warn().Err(inboxErr).Msg("failed to add inbox message about media database recovery")
+			}
 		}
 	}
 
+	if st == nil {
+		log.Error().Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_unavailable").
+			Msg("media database recreated but service state is unavailable for reindex")
+		return
+	}
 	if err := methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications,
 		systemdefs.AllSystems(), db, pauser); err != nil {
 		var clientErr *models.ClientError
 		if errors.As(err, &clientErr) {
-			log.Warn().Err(err).Msg("skipping reindex after media database recovery")
+			log.Warn().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_skipped").
+				Msg("skipping reindex after media database recovery")
 		} else {
-			log.Error().Err(err).Msg("failed to start reindex after media database recovery")
+			log.Error().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_failed").
+				Msg("failed to start reindex after media database recovery")
 		}
+		addMediaDBRecoveryFailureInbox(st, "Media database was rebuilt, but reindexing could not start. "+
+			"Restart Zaparoo after checking available storage space.")
+	}
+}
+
+func addMediaDBRecoveryFailureInbox(st *state.State, body string) {
+	if st == nil || st.Inbox() == nil {
+		return
+	}
+	if err := st.Inbox().Add("Media database recovery needs attention",
+		inboxservice.WithBody(body),
+		inboxservice.WithSeverity(inboxservice.SeverityError),
+		inboxservice.WithCategory(inboxservice.CategoryMediaDBCorruptionRecoveryLimit),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to add inbox message about media database recovery failure")
 	}
 }
 

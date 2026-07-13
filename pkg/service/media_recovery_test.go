@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -66,6 +67,47 @@ func TestCheckAndRecoverCorruptMediaDB_NilDatabaseIsNoOp(_ *testing.T) {
 	// Must not panic with a nil database or nil MediaDB.
 	checkAndRecoverCorruptMediaDB(nil, nil, nil, nil, nil)
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{}, nil, nil)
+}
+
+func TestCheckAndRecoverCorruptMediaDB_RecreateFailureKeepsRecoveryPending(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
+	mockDB.On("Recreate", mock.Anything).Return(errors.New("storage unavailable"))
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertExpectations(t)
+	assert.Equal(t, int32(1), mediaDBRecoveryAttempts.Load())
+}
+
+func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(maxMediaDBRecoveryAttempts)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertNotCalled(t, "IntegrityReport")
+	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)
+	assert.Equal(t, int32(maxMediaDBRecoveryAttempts), mediaDBRecoveryAttempts.Load(),
+		"suppressed polls must not keep increasing the attempt counter")
 }
 
 // TestCheckAndResumeOptimization_FailedCorruptMarksAndSkips verifies the quick_check gate:

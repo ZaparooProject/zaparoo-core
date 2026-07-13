@@ -929,8 +929,17 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 		log.Warn().Err(err).Msg("failed to stamp disambiguation version on recreated media database")
 	}
 
-	// Clear the marker only after the fresh database opens, so a failed reopen leaves
-	// the durable corrupt signal in place for the next recovery attempt.
+	// Verify the replacement before clearing the marker. Open succeeding only proves
+	// SQLite could read the schema; quick_check catches malformed pages or sidecars
+	// before recovery starts writing a full index into another bad database.
+	if ok, err := db.QuickCheck(); err != nil {
+		return fmt.Errorf("failed to verify recreated media database: %w", err)
+	} else if !ok {
+		return errors.New("recreated media database failed quick_check")
+	}
+
+	// Clear the marker only after the fresh database opens and passes verification,
+	// so a failed replacement leaves the durable signal for the next recovery attempt.
 	if err := db.ClearCorruptMarker(); err != nil {
 		return fmt.Errorf("failed to clear corrupt marker after media database recreate: %w", err)
 	}
