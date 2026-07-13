@@ -42,6 +42,7 @@ var misterArcadeSystemSpecs = []arcadeSystemSpec{
 type arcadeSystemCache struct {
 	platform        *Platform
 	scanArcadeFiles func(context.Context, *config.Instance) ([]platforms.ScanResult, error)
+	readArcadeDB    func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error)
 	results         map[string][]platforms.ScanResult
 	mu              syncutil.Mutex
 	loaded          bool
@@ -50,6 +51,7 @@ type arcadeSystemCache struct {
 func newArcadeSystemCache(platform *Platform) *arcadeSystemCache {
 	cache := &arcadeSystemCache{platform: platform}
 	cache.scanArcadeFiles = cache.scanFiles
+	cache.readArcadeDB = arcadedb.ReadArcadeDb
 	return cache
 }
 
@@ -105,7 +107,7 @@ func (c *arcadeSystemCache) load(
 		}
 	}
 
-	entries, err := arcadedb.ReadArcadeDb(c.platform)
+	entries, err := c.readArcadeDB(c.platform)
 	if err != nil {
 		log.Warn().Err(err).Msg("unable to classify MiSTer arcade systems")
 		c.loaded = true
@@ -211,21 +213,23 @@ func addNeoGeoMVSLauncher(
 	var cached []platforms.ScanResult
 	var loaded bool
 
-	updatedNeoGeo.Scanner = func(
+	scanAndCache := func(
 		ctx context.Context,
 		cfg *config.Instance,
 		systemID string,
 		results []platforms.ScanResult,
 	) ([]platforms.ScanResult, error) {
 		scanned, err := baseScanner(ctx, cfg, systemID, results)
-		if err == nil {
-			mu.Lock()
-			cached = append([]platforms.ScanResult(nil), scanned...)
-			loaded = true
-			mu.Unlock()
+		if err != nil {
+			return scanned, err
 		}
-		return scanned, err
+		mu.Lock()
+		cached = append([]platforms.ScanResult(nil), scanned...)
+		loaded = true
+		mu.Unlock()
+		return scanned, nil
 	}
+	updatedNeoGeo.Scanner = scanAndCache
 
 	neoGeoMVS = platforms.Launcher{
 		ID:         systemdefs.SystemNeoGeoMVS,
@@ -250,7 +254,7 @@ func addNeoGeoMVSLauncher(
 			if wasLoaded {
 				return results, nil
 			}
-			return baseScanner(ctx, cfg, systemdefs.SystemNeoGeo, nil)
+			return scanAndCache(ctx, cfg, systemdefs.SystemNeoGeo, nil)
 		},
 	}
 	return updatedNeoGeo, neoGeoMVS
@@ -261,18 +265,23 @@ func launchNeoGeoMVS(platform *Platform) func(
 ) (*os.Process, error) {
 	baseLaunch := launch(platform, systemdefs.SystemNeoGeo)
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
-		launchOpts := platforms.LaunchOptions{}
-		if opts != nil {
-			launchOpts = *opts
-		}
-		if launchOpts.SetName == "" {
-			launchOpts.SetName = systemdefs.SystemNeoGeoMVS
-		}
-		if launchOpts.SetNameSameDir == "" {
-			launchOpts.SetNameSameDir = "true"
-		}
+		launchOpts := neoGeoMVSLaunchOptions(opts)
 		return baseLaunch(cfg, path, &launchOpts)
 	}
+}
+
+func neoGeoMVSLaunchOptions(opts *platforms.LaunchOptions) platforms.LaunchOptions {
+	launchOpts := platforms.LaunchOptions{}
+	if opts != nil {
+		launchOpts = *opts
+	}
+	if launchOpts.SetName == "" {
+		launchOpts.SetName = systemdefs.SystemNeoGeoMVS
+	}
+	if launchOpts.SetNameSameDir == "" {
+		launchOpts.SetNameSameDir = "true"
+	}
+	return launchOpts
 }
 
 func addArcadeSystemLaunchers(platform *Platform, launchers []platforms.Launcher) []platforms.Launcher {

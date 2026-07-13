@@ -1251,6 +1251,23 @@ func TestCmdSearch_AppliesMediaLauncherOverride(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestOrderedSystemTiersPreservesFallbackOrder(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemNeoGeoMVS)
+	require.NoError(t, err)
+
+	tiers := orderedSystemTiers([]systemdefs.System{*primary, *primary})
+	require.Len(t, tiers, 3)
+	require.Len(t, tiers[0], 1)
+	assert.Equal(t, systemdefs.SystemNeoGeoMVS, tiers[0][0].ID)
+	require.Len(t, tiers[1], 1)
+	assert.Equal(t, systemdefs.SystemNeoGeo, tiers[1][0].ID)
+	require.Len(t, tiers[2], 1)
+	assert.Equal(t, systemdefs.SystemNeoGeoAES, tiers[2][0].ID)
+	assert.Nil(t, orderedSystemTiers(nil))
+}
+
 func TestRandomGameBySystemTier_TriesFallbackAfterPrimaryMiss(t *testing.T) {
 	t.Parallel()
 
@@ -1275,6 +1292,29 @@ func TestRandomGameBySystemTier_TriesFallbackAfterPrimaryMiss(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, systemdefs.SystemAmiga, result.SystemID)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRandomGameBySystemTierStopsOnDatabaseError(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	dbErr := errors.New("database unavailable")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmigaCD32
+		}),
+	).Return(database.SearchResult{}, dbErr).Once()
+
+	_, err = randomGameBySystemTier(
+		context.Background(), mockMediaDB, &database.MediaQuery{}, orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.ErrorIs(t, err, dbErr)
+	mockMediaDB.AssertNumberOfCalls(t, "RandomGameWithQuery", 1)
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -1306,6 +1346,112 @@ func TestSearchMediaBySystemTier_DoesNotCombineFallback(t *testing.T) {
 	assert.Equal(t, systemdefs.SystemAmiga, results[0].SystemID)
 	assert.Equal(t, "fallback.adf", results[0].Path)
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestSearchMediaBySystemTierReturnsDatabaseError(t *testing.T) {
+	t.Parallel()
+
+	primary, err := systemdefs.GetSystem(systemdefs.SystemAmigaCD32)
+	require.NoError(t, err)
+
+	dbErr := errors.New("database unavailable")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32
+		}),
+	).Return(nil, dbErr).Once()
+
+	_, err = searchMediaBySystemTier(
+		context.Background(), mockMediaDB, &database.SearchFilters{Query: "game"},
+		orderedSystemTiers([]systemdefs.System{*primary}),
+	)
+
+	require.ErrorIs(t, err, dbErr)
+	mockMediaDB.AssertNumberOfCalls(t, "SearchMediaWithFilters", 1)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCmdRandomSystemWildcardUsesOrderedFallback(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	amigaLauncher := platforms.Launcher{
+		ID: systemdefs.SystemAmiga, SystemID: systemdefs.SystemAmiga, Extensions: []string{".adf"},
+	}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{amigaLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "Amiga", "Fallback.adf")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmigaCD32 &&
+				query.PathGlob == ""
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows).Once()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything,
+		mock.MatchedBy(func(query *database.MediaQuery) bool {
+			return len(query.Systems) == 1 && query.Systems[0] == systemdefs.SystemAmiga &&
+				query.PathGlob == ""
+		}),
+	).Return(database.SearchResult{SystemID: systemdefs.SystemAmiga, Path: romPath}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch.random", Args: []string{systemdefs.SystemAmigaCD32 + "/*"}},
+		Cfg: cfg, Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdSearchUsesOrderedFallback(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	amigaLauncher := platforms.Launcher{
+		ID: systemdefs.SystemAmiga, SystemID: systemdefs.SystemAmiga, Extensions: []string{".adf"},
+	}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{amigaLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "Amiga", "Fallback.adf")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmigaCD32 &&
+				filters.Query == "fallback"
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == systemdefs.SystemAmiga &&
+				filters.Query == "fallback"
+		}),
+	).Return([]database.SearchResultWithCursor{{SystemID: systemdefs.SystemAmiga, Path: romPath}}, nil).Once()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	result, err := cmdSearch(mockPlatform, platforms.CmdEnv{
+		Cmd: zapscript.Command{Name: "launch.search", Args: []string{systemdefs.SystemAmigaCD32 + "/fallback"}},
+		Cfg: cfg, Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {
