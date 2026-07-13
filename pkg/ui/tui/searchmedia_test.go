@@ -135,6 +135,31 @@ func TestTruncateSystemName(t *testing.T) {
 	}
 }
 
+func psxFirstPageResult(nextCursor string) *models.SearchResults {
+	return &models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Game One",
+				Path:      "game-one.chd",
+				ZapScript: "@PlayStation/Game One",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+			{
+				Name:      "Game Two",
+				Path:      "game-two.chd",
+				ZapScript: "@PlayStation/Game Two",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+		},
+		Total: 2,
+		Pagination: &models.PaginationInfo{
+			NextCursor:  &nextCursor,
+			HasNextPage: true,
+			PageSize:    2,
+		},
+	}
+}
+
 func TestBuildSearchMedia_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -249,28 +274,7 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 	nextCursor := "next-page"
 	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor == nil
-	})).Return(&models.SearchResults{
-		Results: []models.SearchResultMedia{
-			{
-				Name:      "Game One",
-				Path:      "game-one.chd",
-				ZapScript: "@PlayStation/Game One",
-				System:    models.System{ID: "psx", Name: "PlayStation"},
-			},
-			{
-				Name:      "Game Two",
-				Path:      "game-two.chd",
-				ZapScript: "@PlayStation/Game Two",
-				System:    models.System{ID: "psx", Name: "PlayStation"},
-			},
-		},
-		Total: 2,
-		Pagination: &models.PaginationInfo{
-			NextCursor:  &nextCursor,
-			HasNextPage: true,
-			PageSize:    2,
-		},
-	}, nil).Once()
+	})).Return(psxFirstPageResult(nextCursor), nil).Once()
 	releaseNextPage := make(chan time.Time)
 	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor != nil && *params.Cursor == nextCursor &&
@@ -347,28 +351,7 @@ func TestBuildSearchMedia_AutoloadErrorCanRetry_Integration(t *testing.T) {
 	nextCursor := "next-page"
 	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor == nil
-	})).Return(&models.SearchResults{
-		Results: []models.SearchResultMedia{
-			{
-				Name:      "Game One",
-				Path:      "game-one.chd",
-				ZapScript: "@PlayStation/Game One",
-				System:    models.System{ID: "psx", Name: "PlayStation"},
-			},
-			{
-				Name:      "Game Two",
-				Path:      "game-two.chd",
-				ZapScript: "@PlayStation/Game Two",
-				System:    models.System{ID: "psx", Name: "PlayStation"},
-			},
-		},
-		Total: 2,
-		Pagination: &models.PaginationInfo{
-			NextCursor:  &nextCursor,
-			HasNextPage: true,
-			PageSize:    2,
-		},
-	}, nil).Once()
+	})).Return(psxFirstPageResult(nextCursor), nil).Once()
 	moreParams := mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor != nil && *params.Cursor == nextCursor
 	})
@@ -430,28 +413,7 @@ func TestBuildSearchMedia_FreshSearchErrorClearsPagination_Integration(t *testin
 	nextCursor := "stale-cursor"
 	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor == nil && params.Query != nil && *params.Query == ""
-	})).Return(&models.SearchResults{
-		Results: []models.SearchResultMedia{
-			{
-				Name:      "Game One",
-				Path:      "game-one.chd",
-				ZapScript: "@PlayStation/Game One",
-				System:    models.System{ID: "psx", Name: "PlayStation"},
-			},
-			{
-				Name:      "Game Two",
-				Path:      "game-two.chd",
-				ZapScript: "@PlayStation/Game Two",
-				System:    models.System{ID: "psx", Name: "PlayStation"},
-			},
-		},
-		Total: 2,
-		Pagination: &models.PaginationInfo{
-			NextCursor:  &nextCursor,
-			HasNextPage: true,
-			PageSize:    2,
-		},
-	}, nil).Once()
+	})).Return(psxFirstPageResult(nextCursor), nil).Once()
 	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor == nil && params.Query != nil && *params.Query == "new query"
 	})).Return(nil, errors.New("fresh search failed")).Once()
