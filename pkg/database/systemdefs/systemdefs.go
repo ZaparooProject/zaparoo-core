@@ -455,12 +455,18 @@ const (
 	SystemTIC80             = "TIC80"
 	SystemVideo             = "Video"
 	SystemAudio             = "Audio"
+	SystemApplication       = "Application"
 	SystemMovie             = "Movie"
 	SystemTVEpisode         = "TVEpisode"
+	SystemTVSeason          = "TVSeason"
 	SystemTVShow            = "TVShow"
 	SystemMusicTrack        = "MusicTrack"
 	SystemMusicArtist       = "MusicArtist"
 	SystemMusicAlbum        = "MusicAlbum"
+	SystemMusicVideo        = "MusicVideo"
+	SystemPodcastSeries     = "PodcastSeries"
+	SystemPodcastEpisode    = "PodcastEpisode"
+	SystemAudiobook         = "Audiobook"
 	SystemImage             = "Image"
 	SystemJ2ME              = "J2ME"
 	SystemGroovy            = "Groovy"
@@ -1203,6 +1209,11 @@ var Systems = map[string]System{
 		Slugs:     []string{"audiofile"},
 		MediaType: MediaTypeAudio,
 	},
+	SystemApplication: {
+		ID:        SystemApplication,
+		Aliases:   []string{"App", "Apps", "Software"},
+		MediaType: MediaTypeApplication,
+	},
 	SystemMovie: {
 		ID:        SystemMovie,
 		Slugs:     []string{"movies", "film", "cinema"},
@@ -1213,6 +1224,12 @@ var Systems = map[string]System{
 		ID:        SystemTVEpisode,
 		Aliases:   []string{"TV"},
 		Slugs:     []string{"television", "tvchannel"},
+		MediaType: MediaTypeTVShow,
+		Fallbacks: []string{SystemVideo},
+	},
+	SystemTVSeason: {
+		ID:        SystemTVSeason,
+		Slugs:     []string{"tvseasons", "televisionseason", "televisionseasons"},
 		MediaType: MediaTypeTVShow,
 		Fallbacks: []string{SystemVideo},
 	},
@@ -1239,6 +1256,30 @@ var Systems = map[string]System{
 		ID:        SystemMusicAlbum,
 		Slugs:     []string{"lp", "album", "albums"},
 		MediaType: MediaTypeMusic,
+		Fallbacks: []string{SystemAudio},
+	},
+	SystemMusicVideo: {
+		ID:        SystemMusicVideo,
+		Slugs:     []string{"musicvideos"},
+		MediaType: MediaTypeMusic,
+		Fallbacks: []string{SystemVideo},
+	},
+	SystemPodcastSeries: {
+		ID:        SystemPodcastSeries,
+		Slugs:     []string{"podcastshow", "podcastshows"},
+		MediaType: MediaTypeAudio,
+		Fallbacks: []string{SystemAudio},
+	},
+	SystemPodcastEpisode: {
+		ID:        SystemPodcastEpisode,
+		Slugs:     []string{"podcastepisodes"},
+		MediaType: MediaTypeAudio,
+		Fallbacks: []string{SystemAudio},
+	},
+	SystemAudiobook: {
+		ID:        SystemAudiobook,
+		Slugs:     []string{"audiobooks"},
+		MediaType: MediaTypeAudio,
 		Fallbacks: []string{SystemAudio},
 	},
 	SystemImage: {
