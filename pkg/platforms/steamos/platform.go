@@ -235,6 +235,8 @@ func (*Platform) onEmulatorStop(name string, pid int) {
 
 // Stop stops the platform and cleans up resources.
 func (p *Platform) Stop() error {
+	steamOSGameMode.RevertFocus()
+
 	// Stop trackers first (they reference the scanner)
 	if p.emuTracker != nil {
 		p.emuTracker.Stop()

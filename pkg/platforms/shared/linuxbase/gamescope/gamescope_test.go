@@ -122,8 +122,11 @@ func TestClosedWindowDoesNotRestoreReplacementFocus(t *testing.T) {
 
 	go manager.revertFocusWhenWindowCloses(context.Background(), ":0", "0x1234", completed)
 
-	time.Sleep(time.Duration(windowMissingLimit+1) * windowPollInterval)
-	assert.Same(t, replacement, manager.activeFocusManager)
+	assert.Never(t, func() bool {
+		manager.focusMu.Lock()
+		defer manager.focusMu.Unlock()
+		return manager.activeFocusManager != replacement
+	}, time.Duration(windowMissingLimit+1)*windowPollInterval, 10*time.Millisecond)
 	assert.Zero(t, executor.runs.Load())
 }
 
@@ -137,8 +140,11 @@ func TestWindowCloseWatcherStopsWhenCanceled(t *testing.T) {
 
 	go manager.revertFocusWhenWindowCloses(ctx, ":0", "0x1234", fm)
 
-	time.Sleep(time.Duration(windowMissingLimit+1) * windowPollInterval)
-	assert.Same(t, fm, manager.activeFocusManager)
+	assert.Never(t, func() bool {
+		manager.focusMu.Lock()
+		defer manager.focusMu.Unlock()
+		return manager.activeFocusManager != fm
+	}, time.Duration(windowMissingLimit+1)*windowPollInterval, 10*time.Millisecond)
 	assert.Zero(t, executor.runs.Load())
 }
 

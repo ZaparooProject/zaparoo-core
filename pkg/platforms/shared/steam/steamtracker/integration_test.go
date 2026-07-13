@@ -36,7 +36,7 @@ func TestPlatformIntegrationOnGameStopPreservesOtherActiveMedia(t *testing.T) {
 		activeGames: map[int]int{456: 10},
 	}
 
-	integration.onGameStop(456)
+	integration.onGameStop(456, 10)
 
 	assert.False(t, cleared)
 	assert.Same(t, expectedActive, active)
@@ -55,10 +55,26 @@ func TestPlatformIntegrationOnGameStopClearsOwnedActiveMedia(t *testing.T) {
 		activeGames: map[int]int{123: 10},
 	}
 
-	integration.onGameStop(123)
+	integration.onGameStop(123, 10)
 
 	assert.Nil(t, active)
 	assert.Empty(t, integration.activeGames)
+}
+
+func TestPlatformIntegrationOnGameStopIgnoresStalePID(t *testing.T) {
+	t.Parallel()
+
+	active := &models.ActiveMedia{Path: "steam://123"}
+	integration := &PlatformIntegration{
+		activeMedia:    func() *models.ActiveMedia { return active },
+		setActiveMedia: func(media *models.ActiveMedia) { active = media },
+		activeGames:    map[int]int{123: 20},
+	}
+
+	integration.onGameStop(123, 10)
+
+	assert.Equal(t, 20, integration.activeGames[123])
+	assert.NotNil(t, active)
 }
 
 func TestPlatformIntegrationPublishActiveMediaIfActive(t *testing.T) {
@@ -123,7 +139,7 @@ func TestPlatformIntegrationForgetsReaperAfterNormalExit(t *testing.T) {
 	}
 
 	integration.onGameStart(123, cmd.Process.Pid, "/game")
-	integration.onGameStop(123)
+	integration.onGameStop(123, cmd.Process.Pid)
 	require.NoError(t, base.StopActiveLauncher(platforms.StopForPreemption))
 
 	assert.NoError(t, syscall.Kill(cmd.Process.Pid, 0))

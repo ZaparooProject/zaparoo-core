@@ -174,7 +174,7 @@ func TestPlatformLaunchersHaveHeroicWithFlatpak(t *testing.T) {
 	require.NotNil(t, heroicLauncher, "Heroic launcher should be present")
 }
 
-func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {
+func TestPlatformReturnToMenuWithoutActiveMedia(t *testing.T) {
 	t.Parallel()
 
 	p := NewPlatform()

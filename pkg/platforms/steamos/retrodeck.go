@@ -110,7 +110,7 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 
 // createRetroDECKLauncher creates a launcher for a specific RetroDECK system.
 func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, paths RetroDECKPaths) platforms.Launcher {
-	return platforms.Launcher{
+	launcher := platforms.Launcher{
 		ID:                 "RetroDECK" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
 		Groups:             []string{platformshared.LauncherGroupRetroDECK},
@@ -142,20 +142,10 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 		},
 
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			proc, err := LaunchViaRetroDECK(context.Background(), path)
-			if err != nil {
-				return nil, err
-			}
-			// Set up gamescope focus management in Gaming Mode
-			if proc != nil {
-				go steamOSGameMode.ManageFocus(proc)
-			}
-			return proc, nil
+			return LaunchViaRetroDECK(context.Background(), path)
 		},
 
 		Kill: func(_ *config.Instance) error {
-			// Revert gamescope focus properties
-			steamOSGameMode.RevertFocus()
 			log.Debug().Msg("kill requested for RetroDECK launcher")
 			return nil
 		},
@@ -173,6 +163,8 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			})
 		},
 	}
+	withGamescopeFocus(&launcher)
+	return launcher
 }
 
 // GetRetroDECKLaunchers returns all available RetroDECK launchers.

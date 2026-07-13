@@ -114,6 +114,7 @@ func (p *Platform) StartPost(
 
 // Stop stops the platform and cleans up resources.
 func (p *Platform) Stop() error {
+	p.gameMode.RevertFocus()
 	if p.steamTracker != nil {
 		p.steamTracker.Stop()
 	}

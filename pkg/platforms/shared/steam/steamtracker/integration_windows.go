@@ -133,7 +133,7 @@ func (pi *WindowsPlatformIntegration) findAndTrackGameProcess(appID int) {
 }
 
 // onGameStop is called when a Steam game exits (registry cleared).
-func (pi *WindowsPlatformIntegration) onGameStop(appID int) {
+func (pi *WindowsPlatformIntegration) onGameStop(appID, _ int) {
 	log.Info().Int("appID", appID).Msg("detected Steam game exit")
 	pi.setActiveMedia(nil)
 }

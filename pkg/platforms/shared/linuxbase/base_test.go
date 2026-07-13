@@ -118,6 +118,21 @@ func TestSetTrackedProcess(t *testing.T) {
 		_ = cmd2.Process.Kill()
 	})
 
+	t.Run("preserves_same_pid_handle", func(t *testing.T) {
+		t.Parallel()
+
+		original := &os.Process{Pid: 1001}
+		replacementHandle := &os.Process{Pid: 1001}
+		base := NewBase("test")
+		base.SetTrackedProcess(original)
+		done := base.trackedProcessDone
+
+		base.SetTrackedProcess(replacementHandle)
+
+		assert.Same(t, original, base.trackedProcess)
+		assert.Equal(t, done, base.trackedProcessDone)
+	})
+
 	t.Run("handles_nil_process", func(t *testing.T) {
 		t.Parallel()
 
@@ -140,8 +155,10 @@ func TestClearTrackedProcessPIDGuardsReplacement(t *testing.T) {
 	base.trackedProcessDone = make(chan struct{})
 	base.processWaitClaimed = true
 
+	completed := base.completedTrackedProcess
 	assert.False(t, base.ClearTrackedProcessPID(1001))
 	assert.Same(t, tracked, base.trackedProcess)
+	assert.Same(t, completed, base.completedTrackedProcess)
 	assert.NotNil(t, base.trackedProcessDone)
 	assert.True(t, base.processWaitClaimed)
 

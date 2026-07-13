@@ -172,7 +172,7 @@ func standaloneEmuDeckLauncher(
 	systemInfo esde.SystemInfo,
 	emulator EmulatorConfig,
 ) platforms.Launcher {
-	return platforms.Launcher{
+	launcher := platforms.Launcher{
 		ID:        "EmuDeck" + systemInfo.GetLauncherID(),
 		SystemID:  systemInfo.SystemID,
 		Lifecycle: platforms.LifecycleTracked,
@@ -183,20 +183,11 @@ func standaloneEmuDeckLauncher(
 			return nil
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			proc, err := launchStandaloneEmulator(context.Background(), emulator, path, systemFolder)
-			if err != nil {
-				return nil, err
-			}
-			if proc != nil {
-				go steamOSGameMode.ManageFocus(proc)
-			}
-			return proc, nil
-		},
-		Kill: func(_ *config.Instance) error {
-			steamOSGameMode.RevertFocus()
-			return nil
+			return launchStandaloneEmulator(context.Background(), emulator, path, systemFolder)
 		},
 	}
+	withGamescopeFocus(&launcher)
+	return launcher
 }
 
 func emuDeckPathTest(romsPath, systemFolder string) func(*config.Instance, string) bool {

@@ -133,7 +133,7 @@ func (pi *DarwinPlatformIntegration) findAndTrackGameProcess(appID int) {
 }
 
 // onGameStop is called when a Steam game exits (process no longer found).
-func (pi *DarwinPlatformIntegration) onGameStop(appID int) {
+func (pi *DarwinPlatformIntegration) onGameStop(appID, _ int) {
 	log.Info().Int("appID", appID).Msg("detected Steam game exit")
 	pi.setActiveMedia(nil)
 }

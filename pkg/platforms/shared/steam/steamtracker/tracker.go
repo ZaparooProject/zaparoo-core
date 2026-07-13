@@ -174,6 +174,6 @@ func (t *Tracker) handleProcessStop(pid int) {
 
 	// Call callback
 	if t.onGameStop != nil {
-		go t.onGameStop(appID)
+		go t.onGameStop(appID, pid)
 	}
 }

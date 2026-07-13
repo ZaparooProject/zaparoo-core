@@ -97,7 +97,7 @@ func (t *Tracker) onAppIDChange(appID int) {
 		for id := range t.tracked {
 			log.Info().Int("appID", id).Msg("detected Steam game exit")
 			if t.onGameStop != nil {
-				go t.onGameStop(id)
+				go t.onGameStop(id, 0)
 			}
 			delete(t.tracked, id)
 		}

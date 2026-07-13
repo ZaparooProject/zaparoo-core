@@ -135,7 +135,7 @@ func (t *Tracker) scanForGames() {
 					Msg("detected Steam game stop")
 
 				if t.onGameStop != nil {
-					go t.onGameStop(appID)
+					go t.onGameStop(appID, 0)
 				}
 				delete(t.tracked, appID)
 			}

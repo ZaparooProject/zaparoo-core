@@ -171,8 +171,9 @@ func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, sy
 }
 
 func applyGlobalLauncherPreference(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
+	launchers := pl.Launchers(env.Cfg)
 	for _, ref := range env.Cfg.LauncherPreference() {
-		launcherID, found := resolveAvailableLauncherRefForSystem(pl, env, ref, systemID)
+		launcherID, found := resolveLauncherRefInList(env, launchers, ref, systemID, true)
 		if !found {
 			continue
 		}
@@ -196,15 +197,6 @@ func resolveLauncherRefForSystem(
 	return resolveLauncherRefForSystemWithAvailability(pl, env, ref, systemID, false)
 }
 
-func resolveAvailableLauncherRefForSystem(
-	pl platforms.Platform,
-	env *platforms.CmdEnv,
-	ref string,
-	systemID string,
-) (string, bool) {
-	return resolveLauncherRefForSystemWithAvailability(pl, env, ref, systemID, true)
-}
-
 func resolveLauncherRefForSystemWithAvailability(
 	pl platforms.Platform,
 	env *platforms.CmdEnv,
@@ -212,7 +204,16 @@ func resolveLauncherRefForSystemWithAvailability(
 	systemID string,
 	requireAvailable bool,
 ) (string, bool) {
-	launchers := pl.Launchers(env.Cfg)
+	return resolveLauncherRefInList(env, pl.Launchers(env.Cfg), ref, systemID, requireAvailable)
+}
+
+func resolveLauncherRefInList(
+	env *platforms.CmdEnv,
+	launchers []platforms.Launcher,
+	ref string,
+	systemID string,
+	requireAvailable bool,
+) (string, bool) {
 	isEligible := func(launcher *platforms.Launcher) bool {
 		return !requireAvailable || launcher.Availability == nil || launcher.Availability(env.Cfg) == nil
 	}

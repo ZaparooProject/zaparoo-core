@@ -607,7 +607,7 @@ preference = ["Native", "RetroDECK"]
 		},
 		{ID: "RetroDECKSNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupRetroDECK}},
 	}
-	mockPlatform.On("Launchers", cfg).Twice().Return(launchers)
+	mockPlatform.On("Launchers", cfg).Once().Return(launchers)
 	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
 
 	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")

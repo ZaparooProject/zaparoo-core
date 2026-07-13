@@ -359,6 +359,29 @@ func TestParseGamePathFromCmdline(t *testing.T) {
 	}
 }
 
+func TestPathWithin(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("games", "steam")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "same path", path: root, want: true},
+		{name: "child", path: filepath.Join(root, "game", "game.exe"), want: true},
+		{name: "sibling prefix", path: filepath.Join("games", "steam-old", "game.exe")},
+		{name: "parent", path: filepath.Dir(root)},
+		{name: "empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, pathWithin(tt.path, root))
+		})
+	}
+}
+
 func TestFindGamePIDForAppIDWithProcPath(t *testing.T) {
 	t.Parallel()
 

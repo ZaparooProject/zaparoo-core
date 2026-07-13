@@ -123,6 +123,12 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 	b.processMu.Lock()
 	defer b.processMu.Unlock()
 
+	// Process handles may be recreated for the same PID when a tracker restarts.
+	// Keep existing lifecycle state instead of signaling the live process.
+	if b.trackedProcess != nil && proc != nil && b.trackedProcess.Pid == proc.Pid {
+		return
+	}
+
 	// Kill any existing tracked process before setting new one.
 	if b.trackedProcess != nil && b.trackedProcess != proc {
 		if err := b.trackedProcess.Kill(); err != nil {

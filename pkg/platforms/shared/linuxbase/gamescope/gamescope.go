@@ -209,31 +209,38 @@ func (m *Manager) ManageFocus(proc *os.Process) {
 		log.Warn().Err(err).Int("pid", proc.Pid).Msg("failed to find game window for focus")
 		return
 	}
-	original, err := m.getBaselayerValue(display)
-	if err != nil {
-		original = ""
-	}
-	if err := m.setSteamGameProperty(display, windowID); err != nil {
-		return
-	}
-	if err := m.setBaselayerValue(display, externalFocusAppID, original); err != nil {
-		return
-	}
-	fm := &FocusManager{executor: m.executor, display: display, originalLayer: original}
-	//nolint:gosec // Context is canceled on window close, focus replacement, or explicit revert.
-	watchCtx, watchCancel := context.WithCancel(context.Background())
+	// Serialize baselayer transitions so overlapping launches cannot capture or
+	// restore another focus manager's temporary external app layer.
 	m.focusMu.Lock()
 	previous := m.activeFocusManager
 	previousCancel := m.activeFocusCancel
-	m.activeFocusManager = fm
-	m.activeFocusCancel = watchCancel
-	m.focusMu.Unlock()
+	m.activeFocusManager = nil
+	m.activeFocusCancel = nil
 	if previousCancel != nil {
 		previousCancel()
 	}
 	if previous != nil {
 		previous.Revert()
 	}
+
+	original, err := m.getBaselayerValue(display)
+	if err != nil {
+		original = ""
+	}
+	if err := m.setSteamGameProperty(display, windowID); err != nil {
+		m.focusMu.Unlock()
+		return
+	}
+	if err := m.setBaselayerValue(display, externalFocusAppID, original); err != nil {
+		m.focusMu.Unlock()
+		return
+	}
+	fm := &FocusManager{executor: m.executor, display: display, originalLayer: original}
+	//nolint:gosec // Context is canceled on window close, focus replacement, or explicit revert.
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	m.activeFocusManager = fm
+	m.activeFocusCancel = watchCancel
+	m.focusMu.Unlock()
 	log.Debug().Int("pid", proc.Pid).Str("windowID", windowID).Str("display", display).
 		Msg("gamescope external window focus set")
 	go m.revertFocusWhenWindowCloses(watchCtx, display, windowID, fm)

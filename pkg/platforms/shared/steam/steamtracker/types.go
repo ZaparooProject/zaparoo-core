@@ -32,8 +32,8 @@ const DefaultPollInterval = 2 * time.Second
 type GameStartCallback func(appID int, pid int, gamePath string)
 
 // GameStopCallback is called when a Steam game exits.
-// appID is the Steam App ID that was running.
-type GameStopCallback func(appID int)
+// pid identifies the stopped process when available, or is zero otherwise.
+type GameStopCallback func(appID, pid int)
 
 // TrackedGame represents a currently tracked Steam game.
 type TrackedGame struct {

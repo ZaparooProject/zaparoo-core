@@ -186,9 +186,14 @@ func (pi *PlatformIntegration) gameIsActive(appID, reaperPID int) bool {
 }
 
 // onGameStop is called when a Steam game exits (reaper process terminated).
-func (pi *PlatformIntegration) onGameStop(appID int) {
+func (pi *PlatformIntegration) onGameStop(appID, reaperPID int) {
 	pi.mu.Lock()
-	reaperPID := pi.activeGames[appID]
+	if pi.activeGames[appID] != reaperPID {
+		pi.mu.Unlock()
+		log.Debug().Int("appID", appID).Int("reaperPID", reaperPID).
+			Msg("ignoring stale Steam game exit")
+		return
+	}
 	delete(pi.activeGames, appID)
 	pi.mu.Unlock()
 
