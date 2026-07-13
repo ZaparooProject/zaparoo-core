@@ -21,12 +21,16 @@ package mediascanner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,4 +83,49 @@ func TestNoteIndexingCorruption(t *testing.T) {
 	noteIndexingCorruption(mockDB, "persistent scan state load for nes: boom")
 
 	mockDB.AssertExpectations(t)
+}
+
+func TestFinalizeIndexingError_PreservesTerminalStates(t *testing.T) {
+	t.Parallel()
+
+	for name, terminalErr := range map[string]error{
+		"nil":                 nil,
+		"cancelled":           context.Canceled,
+		"deadline":            context.DeadlineExceeded,
+		"preexisting corrupt": errors.New(mediaDatabaseCorruptMessage),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mockDB := testhelpers.NewMockMediaDBI()
+			finalizeIndexingError(mockDB, terminalErr)
+			mockDB.AssertNotCalled(t, "SetIndexingStatus", mock.Anything)
+			mockDB.AssertNotCalled(t, "MarkCorrupt", mock.Anything)
+		})
+	}
+}
+
+func TestFinalizeIndexingError_MarksFailure(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusFailed).Return(nil)
+
+	finalizeIndexingError(mockDB, errors.New("indexing failed"))
+
+	mockDB.AssertExpectations(t)
+}
+
+func TestFinalizeIndexingError_MarksGenericCorruptionAfterRollback(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	corruptErr := fmt.Errorf("failed to commit transaction: %w", sqlite3.Error{Code: sqlite3.ErrCorrupt})
+	reason := "media indexing failed: " + corruptErr.Error()
+	mockDB.On("IntegrityReport").Return([]string{"Page 9: malformed"})
+	mockDB.On("MarkCorrupt", reason).Return()
+	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil)
+	mockDB.On("SetLastIndexedSystem", "").Return(nil)
+
+	finalizeIndexingError(mockDB, corruptErr)
+
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "SetIndexingStatus", mediadb.IndexingStatusFailed)
 }

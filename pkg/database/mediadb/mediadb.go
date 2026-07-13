@@ -151,6 +151,8 @@ type MediaDB struct {
 	scrapeImageSystems      map[string]struct{}
 	dbPath                  string
 	backgroundOps           sync.WaitGroup
+	backgroundOpsCount      atomic.Int64
+	backgroundOpsMu         syncutil.RWMutex
 	vacuumRetryDelay        time.Duration
 	analyzeRetryDelay       time.Duration
 	batchSize               int
@@ -928,10 +930,19 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 		log.Warn().Err(err).Msg("failed to stamp disambiguation version on recreated media database")
 	}
 
-	// Clear the marker only after the fresh database opens, so a failed reopen leaves
-	// the durable corrupt signal in place for the next recovery attempt.
+	// Verify the replacement before clearing the marker. Open succeeding only proves
+	// SQLite could read the schema; quick_check catches malformed pages or sidecars
+	// before recovery starts writing a full index into another bad database.
+	if ok, err := db.QuickCheck(); err != nil {
+		return fmt.Errorf("failed to verify recreated media database: %w", err)
+	} else if !ok {
+		return errors.New("recreated media database failed quick_check")
+	}
+
+	// Clear the marker only after the fresh database opens and passes verification,
+	// so a failed replacement leaves the durable signal for the next recovery attempt.
 	if err := db.ClearCorruptMarker(); err != nil {
-		log.Warn().Err(err).Msg("failed to clear corrupt marker during recreate")
+		return fmt.Errorf("failed to clear corrupt marker after media database recreate: %w", err)
 	}
 	return nil
 }
@@ -1903,6 +1914,7 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	if checkpointAfterCommit {
 		beforeSize := db.mediaWALSizeForLog()
 		if chkErr := db.runWALCheckpointForLog("transaction_commit_forced", beforeSize); chkErr != nil {
+			db.NoteCorruption(chkErr)
 			log.Warn().Err(chkErr).Msg("failed to run WAL checkpoint after transaction commit")
 		}
 	} else {
@@ -1964,6 +1976,7 @@ func (db *MediaDB) checkpointLargeWAL() {
 		return
 	}
 	if chkErr := db.runWALCheckpointForLog("indexing_batch_threshold", beforeSize); chkErr != nil {
+		db.NoteCorruption(chkErr)
 		log.Warn().
 			Err(chkErr).
 			Str("path", db.dbPath+"-wal").
@@ -3622,16 +3635,38 @@ func (db *MediaDB) SetIndexingConnBoost(active bool) {
 	}
 }
 
+// BeginRecovery prevents new background operations from registering, then waits
+// for operations already registered to drain. EndRecovery must follow it.
+func (db *MediaDB) BeginRecovery() {
+	db.backgroundOpsMu.Lock()
+	db.backgroundOps.Wait()
+}
+
+// EndRecovery allows background operations to register after recovery completes.
+func (db *MediaDB) EndRecovery() {
+	db.backgroundOpsMu.Unlock()
+}
+
 // TrackBackgroundOperation increments the background operations counter.
 // Call BackgroundOperationDone when the operation completes.
 // This allows external code (like the indexing goroutine) to be tracked.
 func (db *MediaDB) TrackBackgroundOperation() {
+	db.backgroundOpsMu.RLock()
+	defer db.backgroundOpsMu.RUnlock()
 	db.backgroundOps.Add(1)
+	db.backgroundOpsCount.Add(1)
+}
+
+// HasBackgroundOperations reports whether this process currently owns media database
+// background work. Persisted running statuses cannot answer this after a crash.
+func (db *MediaDB) HasBackgroundOperations() bool {
+	return db.backgroundOpsCount.Load() > 0
 }
 
 // BackgroundOperationDone decrements the background operations counter.
 // This should be called when an operation started with TrackBackgroundOperation completes.
 func (db *MediaDB) BackgroundOperationDone() {
+	db.backgroundOpsCount.Add(-1)
 	db.backgroundOps.Done()
 }
 

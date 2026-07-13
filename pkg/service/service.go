@@ -345,6 +345,9 @@ func Start(
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
+	// Recover before resuming persisted media work. A running status may be stale after
+	// a crash, while the sidecar marker remains authoritative and must win.
+	checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 	checkAndResumeScraping(pl, cfg, db, st, scrapePauser)
 
 	idleSched.Schedule(

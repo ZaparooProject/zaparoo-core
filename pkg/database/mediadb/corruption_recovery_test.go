@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
@@ -66,6 +67,74 @@ func TestMediaDB_WALCheckpoint_NoOpDuringTransaction(t *testing.T) {
 	// leaves the transaction intact.
 	require.NoError(t, mediaDB.WALCheckpoint())
 	assert.NotNil(t, mediaDB.tx, "transaction should still be open after a no-op checkpoint")
+}
+
+func TestMediaDB_BackgroundOperationTracking(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	assert.False(t, mediaDB.HasBackgroundOperations())
+	mediaDB.TrackBackgroundOperation()
+	assert.True(t, mediaDB.HasBackgroundOperations())
+	mediaDB.BackgroundOperationDone()
+	assert.False(t, mediaDB.HasBackgroundOperations())
+}
+
+func TestMediaDB_RecoveryGateDrainsAndBlocksBackgroundOperations(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	mediaDB.TrackBackgroundOperation()
+	gateHeld := make(chan struct{})
+	go func() {
+		mediaDB.BeginRecovery()
+		close(gateHeld)
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-gateHeld:
+			return true
+		default:
+			return false
+		}
+	}, 20*time.Millisecond, time.Millisecond)
+
+	mediaDB.BackgroundOperationDone()
+	require.Eventually(t, func() bool {
+		select {
+		case <-gateHeld:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	assert.False(t, mediaDB.HasBackgroundOperations(),
+		"background-operation count must be drained when recovery acquires the gate")
+
+	tracked := make(chan struct{})
+	go func() {
+		mediaDB.TrackBackgroundOperation()
+		close(tracked)
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-tracked:
+			return true
+		default:
+			return false
+		}
+	}, 20*time.Millisecond, time.Millisecond)
+
+	mediaDB.EndRecovery()
+	require.Eventually(t, func() bool {
+		select {
+		case <-tracked:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	mediaDB.BackgroundOperationDone()
 }
 
 func TestMediaDB_CorruptMarkerLifecycle(t *testing.T) {
@@ -191,6 +260,20 @@ func TestMediaDB_BrowseFiles_RoutesCorruptionToMarker(t *testing.T) {
 	_, err := mediaDB.BrowseFiles(context.Background(), &database.BrowseFilesOptions{})
 	require.Error(t, err)
 	assert.True(t, mediaDB.IsMarkedCorrupt(), "a malformed browse read must keep the DB marked corrupt")
+}
+
+func TestMediaDB_Recreate_FailsWhenCorruptMarkerCannotBeCleared(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	markerPath := database.CorruptMarkerPath(mediaDB.GetDBPath())
+	require.NoError(t, os.Mkdir(markerPath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(markerPath, "blocker"), []byte("x"), 0o600))
+
+	err := mediaDB.Recreate(false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear corrupt marker")
+	assert.True(t, mediaDB.IsMarkedCorrupt(), "failed marker removal must remain a pending recovery signal")
 }
 
 func TestMediaDB_Recreate_DeleteWhenNoBackup(t *testing.T) {

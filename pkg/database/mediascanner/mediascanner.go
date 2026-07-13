@@ -148,7 +148,8 @@ func isSQLiteDatabaseCorrupt(err error) bool {
 // noteIndexingCorruption flags the media database corrupt during indexing so the
 // recovery flow rebuilds it: it logs an integrity fingerprint, writes the durable
 // corrupt marker, persists the corrupt status, and clears the last-indexed-system
-// pointer. Callers return the corruption error after invoking it.
+// pointer. It must run after any active transaction has been rolled back so the
+// terminal status is not rolled back with the failed indexing transaction.
 func noteIndexingCorruption(db database.MediaDBI, reason string) {
 	log.Error().Strs("integrity", db.IntegrityReport()).
 		Msg("media database integrity check after corruption detected during indexing")
@@ -158,6 +159,22 @@ func noteIndexingCorruption(db database.MediaDBI, reason string) {
 	}
 	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+	}
+}
+
+func finalizeIndexingError(db database.MediaDBI, err error) {
+	switch {
+	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return
+	case err.Error() == mediaDatabaseCorruptMessage:
+		// Preserve corruption status discovered before this run.
+		return
+	case isSQLiteDatabaseCorrupt(err):
+		noteIndexingCorruption(db, fmt.Sprintf("media indexing failed: %v", err))
+	default:
+		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+			logMaintenanceError(setErr, "failed to set indexing status to failed after error")
+		}
 	}
 }
 
@@ -818,6 +835,17 @@ func NewNamesIndex(
 	allSystemIDs := systemIDsFromDefs(systemdefs.AllSystems())
 	fullRun := helpers.EqualStringSlices(requestedSystemIDs, allSystemIDs)
 
+	// Register terminal classification before readiness reads so corruption from
+	// either status query is persisted after transaction cleanup.
+	defer func() {
+		terminalErr := err
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			terminalErr = errors.Join(terminalErr, fmt.Errorf("failed to rollback indexing transaction: %w", rbErr))
+			log.Error().Err(rbErr).Msg("failed to rollback transaction after indexing")
+		}
+		finalizeIndexingError(db, terminalErr)
+	}()
+
 	// 1. Check for database locks or issues before starting
 	log.Info().Msg("checking database readiness for indexing")
 	// Quick database health check - try to read a simple value
@@ -976,32 +1004,6 @@ func NewNamesIndex(
 		}
 	}
 
-	// Ensure transaction cleanup and status update on completion or error.
-	// Register before persisting run metadata and seeding tags so early
-	// initialization failures still leave a terminal failed status.
-	defer func() {
-		// Always attempt to rollback any dangling transaction, whether success or failure
-		// On success, this should be a no-op (tx == nil), but ensures cleanup if
-		// the last transaction was never committed due to batchStarted being false
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			if err != nil {
-				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
-			} else {
-				log.Debug().Err(rbErr).Msg("no transaction to rollback (expected)")
-			}
-		}
-
-		// Mark indexing as failed on a genuine error. Cancellation (handleCancellation sets
-		// Cancelled and returns ctx.Err()) and corruption (noteIndexingCorruption sets Corrupt)
-		// already persist their own terminal status, so they must not be overwritten here.
-		if err != nil && !errors.Is(err, context.Canceled) &&
-			!errors.Is(err, context.DeadlineExceeded) && !isSQLiteDatabaseCorrupt(err) {
-			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
-				logMaintenanceError(setErr, "failed to set indexing status to failed after error")
-			}
-		}
-	}()
-
 	// 3. Record the requested system set and exact runnable plan for resume validation.
 	if setErr := db.SetIndexingSystems(requestedSystemIDs); setErr != nil {
 		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
@@ -1020,8 +1022,7 @@ func NewNamesIndex(
 			return handleCancellation(ctx, db, "Media indexing cancelled during canonical tag seeding")
 		}
 		if isSQLiteDatabaseCorrupt(err) {
-			noteIndexingCorruption(db, fmt.Sprintf("canonical tag seeding: %v", err))
-			return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, err)
+			return 0, fmt.Errorf("%s during canonical tag seeding: %w", mediaDatabaseCorruptMessage, err)
 		}
 		return 0, fmt.Errorf("failed to seed canonical tags: %w", err)
 	}
@@ -1143,8 +1144,8 @@ func NewNamesIndex(
 		// makes staged rows durable); this system re-stages from scratch.
 		if clearErr := db.ClearScanStage(); clearErr != nil {
 			if isSQLiteDatabaseCorrupt(clearErr) {
-				noteIndexingCorruption(db, fmt.Sprintf("scan stage clear for %s: %v", systemID, clearErr))
-				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, clearErr)
+				return 0, fmt.Errorf("%s while clearing scan stage for %s: %w",
+					mediaDatabaseCorruptMessage, systemID, clearErr)
 			}
 			return 0, fmt.Errorf("failed to clear scan staging tables for %s: %w", systemID, clearErr)
 		}
@@ -1348,8 +1349,8 @@ func NewNamesIndex(
 			insertDur += time.Since(insertStart)
 			if addErr != nil {
 				if isSQLiteDatabaseCorrupt(addErr) {
-					noteIndexingCorruption(db, fmt.Sprintf("media staging for %s: %v", systemID, addErr))
-					return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, addErr)
+					return 0, fmt.Errorf("%s while staging media for %s: %w",
+						mediaDatabaseCorruptMessage, systemID, addErr)
 				}
 				return 0, fmt.Errorf("unrecoverable error staging media path %q: %w", file.Path, addErr)
 			}
@@ -1444,8 +1445,8 @@ func NewNamesIndex(
 				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during system reconcile")
 			}
 			if isSQLiteDatabaseCorrupt(reconcileErr) {
-				noteIndexingCorruption(db, fmt.Sprintf("staged reconcile for %s: %v", systemID, reconcileErr))
-				return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, reconcileErr)
+				return 0, fmt.Errorf("%s while reconciling staged system %s: %w",
+					mediaDatabaseCorruptMessage, systemID, reconcileErr)
 			}
 			return 0, fmt.Errorf("failed to reconcile staged system %s: %w", systemID, reconcileErr)
 		}

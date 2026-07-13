@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -51,9 +52,32 @@ const maxIndexNoProgressResumeAttempts = 5
 
 const indexResumeCheckpointPrefix = "last_indexed_system="
 
+const mediaDBRecoveryPollInterval = 5 * time.Second
+
+// maxMediaDBRecoveryAttempts bounds rebuild loops within one process lifetime. A restart
+// permits another attempt, while repeated failures in one session strongly indicate bad
+// storage that automatic rebuilds would only keep rewriting.
+const maxMediaDBRecoveryAttempts = 3
+
 // mediaDBRecovering serializes media database recovery so the startup check and the
 // runtime watcher can never run a close/reopen rebuild concurrently.
 var mediaDBRecovering atomic.Bool
+
+var mediaDBRecoveryAttempts atomic.Int32
+
+var mediaDBRecoveryLimitReported atomic.Bool
+
+func claimMediaDBRecoveryAttempt() (int32, bool) {
+	for {
+		attempts := mediaDBRecoveryAttempts.Load()
+		if attempts >= maxMediaDBRecoveryAttempts {
+			return attempts, false
+		}
+		if mediaDBRecoveryAttempts.CompareAndSwap(attempts, attempts+1) {
+			return attempts + 1, true
+		}
+	}
+}
 
 func currentIndexResumeCheckpoint(mediaDB database.MediaDBI) (string, error) {
 	lastIndexedSystem, err := mediaDB.GetLastIndexedSystem()
@@ -196,6 +220,16 @@ func checkAndResumeIndexing(
 	return true
 }
 
+type mediaDBGenerateFunc func(
+	context.Context,
+	platforms.Platform,
+	*config.Instance,
+	chan<- models.Notification,
+	[]systemdefs.System,
+	*database.Database,
+	*syncutil.Pauser,
+) error
+
 // checkAndRecoverCorruptMediaDB rebuilds the media database from scratch when corruption
 // has been detected. MediaDB is a disposable, rebuildable cache (user-owned data lives in
 // UserDB), so recovery discards the corrupt file rather than attempting an unreliable
@@ -207,6 +241,17 @@ func checkAndRecoverCorruptMediaDB(
 	db *database.Database,
 	st *state.State,
 	pauser *syncutil.Pauser,
+) {
+	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDB)
+}
+
+func checkAndRecoverCorruptMediaDBWithGenerator(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+	generate mediaDBGenerateFunc,
 ) {
 	if db == nil || db.MediaDB == nil {
 		return
@@ -230,63 +275,132 @@ func checkAndRecoverCorruptMediaDB(
 		return
 	}
 
-	// Never rebuild on top of an in-flight operation; the marker keeps recovery pending
-	// until the next safe point (this check runs again on the next startup pass).
-	if status, err := db.MediaDB.GetIndexingStatus(); err == nil &&
-		(status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending) {
-		log.Warn().Msg("media database flagged corrupt but indexing is in flight; deferring recovery")
-		return
-	}
-	if status, err := db.MediaDB.GetScrapingStatus(); err == nil && status == mediadb.IndexingStatusRunning {
-		log.Warn().Msg("media database flagged corrupt but scraping is in flight; deferring recovery")
+	// Persisted running statuses survive process crashes. Only treat them as proof of
+	// in-flight work when this process also owns a tracked background operation; otherwise
+	// an authoritative corrupt marker could be blocked forever by stale status.
+	if mediaDBCorruptionRecoveryBlocked(db.MediaDB) {
+		log.Warn().Msg("media database flagged corrupt but background work is in flight; deferring recovery")
 		return
 	}
 
-	log.Error().Strs("integrity", db.MediaDB.IntegrityReport()).
+	// Close the race between the active-work check and Recreate: once this gate is
+	// held, new tracked work waits until the replacement database is ready.
+	db.MediaDB.BeginRecovery()
+	defer db.MediaDB.EndRecovery()
+
+	attempt, allowed := claimMediaDBRecoveryAttempt()
+	if !allowed {
+		if mediaDBRecoveryLimitReported.CompareAndSwap(false, true) {
+			log.Error().Int32("attempts", attempt).Int("limit", maxMediaDBRecoveryAttempts).
+				Msg("media database automatic recovery limit reached; check storage")
+			addMediaDBRecoveryFailureInbox(st, "Automatic recovery was stopped after repeated corruption. "+
+				"Safely shut down, check free space, and replace or reimage the storage device before trying again.",
+				inboxservice.CategoryMediaDBCorruptionRecoveryLimit)
+		}
+		return
+	}
+
+	log.Error().Int32("recovery_attempt", attempt).Strs("integrity", db.MediaDB.IntegrityReport()).
 		Msg("media database is corrupt; rebuilding from scratch")
-	notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
-		Exists:   false,
-		Indexing: true,
-	})
+	if st != nil {
+		notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
+			Exists:   false,
+			Indexing: true,
+		})
+	}
 
 	if err := db.MediaDB.Recreate(config.IsDevelopmentVersion()); err != nil {
-		log.Error().Err(err).Msg("failed to recreate media database after corruption")
+		log.Error().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "recreate_failed").
+			Msg("failed to recreate media database after corruption")
+		addMediaDBRecoveryFailureInbox(st, "Automatic media database recovery failed. Safely shut down, "+
+			"check free space, and inspect or replace the storage device before trying again.",
+			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
+		finishMediaDBRecoveryNotification(st)
 		return
 	}
-	log.Info().Msg("media database recreated after corruption; starting full reindex")
+	log.Info().Int32("recovery_attempt", attempt).Str("recovery_outcome", "verified_recreate").
+		Msg("media database recreated and verified after corruption; starting full reindex")
 
 	// Tell the user persistently: the rebuild discards scraped metadata (it lived in the
 	// corrupt cache), so artwork returns only after a re-scrape. The inbox lives in UserDB,
 	// which is unaffected by the media database corruption. Category dedups repeat events.
-	if inbox := st.Inbox(); inbox != nil {
-		if inboxErr := inbox.Add("Media database was corrupted and rebuilt",
-			inboxservice.WithBody("Your media database was corrupted (likely a storage write "+
-				"error) and has been rebuilt automatically. Re-scrape your library to restore "+
-				"box art and metadata."),
-			inboxservice.WithSeverity(inboxservice.SeverityWarning),
-			inboxservice.WithCategory(inboxservice.CategoryMediaDBCorruptionRecovery),
-		); inboxErr != nil {
-			log.Warn().Err(inboxErr).Msg("failed to add inbox message about media database recovery")
+	if st != nil {
+		if inbox := st.Inbox(); inbox != nil {
+			if inboxErr := inbox.Add("Media database was corrupted and rebuilt",
+				inboxservice.WithBody("Your media database was corrupted (likely a storage write "+
+					"error) and has been rebuilt automatically. Re-scrape your library to restore "+
+					"box art and metadata."),
+				inboxservice.WithSeverity(inboxservice.SeverityWarning),
+				inboxservice.WithCategory(inboxservice.CategoryMediaDBCorruptionRecovery),
+			); inboxErr != nil {
+				log.Warn().Err(inboxErr).Msg("failed to add inbox message about media database recovery")
+			}
 		}
 	}
 
-	if err := methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications,
+	if st == nil {
+		log.Error().Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_unavailable").
+			Msg("media database recreated but service state is unavailable for reindex")
+		return
+	}
+	if err := generate(st.GetContext(), pl, cfg, st.Notifications,
 		systemdefs.AllSystems(), db, pauser); err != nil {
 		var clientErr *models.ClientError
 		if errors.As(err, &clientErr) {
-			log.Warn().Err(err).Msg("skipping reindex after media database recovery")
+			log.Warn().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_skipped").
+				Msg("skipping reindex after media database recovery")
 		} else {
-			log.Error().Err(err).Msg("failed to start reindex after media database recovery")
+			log.Error().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_failed").
+				Msg("failed to start reindex after media database recovery")
 		}
+		addMediaDBRecoveryFailureInbox(st, "Media database was rebuilt, but reindexing could not start. "+
+			"Restart Zaparoo after checking available storage space.",
+			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
+		finishMediaDBRecoveryNotification(st)
 	}
 }
 
+func finishMediaDBRecoveryNotification(st *state.State) {
+	if st == nil {
+		return
+	}
+	notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
+		Exists:   true,
+		Indexing: false,
+	})
+}
+
+func addMediaDBRecoveryFailureInbox(st *state.State, body, category string) {
+	if st == nil || st.Inbox() == nil {
+		return
+	}
+	if err := st.Inbox().Add("Media database recovery needs attention",
+		inboxservice.WithBody(body),
+		inboxservice.WithSeverity(inboxservice.SeverityError),
+		inboxservice.WithCategory(category),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to add inbox message about media database recovery failure")
+	}
+}
+
+func mediaDBCorruptionRecoveryBlocked(mediaDB database.MediaDBI) bool {
+	if !mediaDB.HasBackgroundOperations() {
+		return false
+	}
+	if status, err := mediaDB.GetIndexingStatus(); err == nil &&
+		(status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending) {
+		return true
+	}
+	if status, err := mediaDB.GetScrapingStatus(); err == nil && status == mediadb.IndexingStatusRunning {
+		return true
+	}
+	return false
+}
+
 // watchForCorruptMediaDBRecovery triggers recovery at runtime once an indexing or
-// optimization operation completes. Detection points set the durable corrupt marker
-// mid-operation; this watcher re-checks it at each operation boundary (a media-indexing
-// notification) so corruption found during a session self-heals without waiting for the
-// next service start. checkAndRecoverCorruptMediaDB is a cheap no-op when the marker is
-// absent or an operation is still in flight, and its CAS guard makes re-entry safe.
+// optimization operation completes. It also polls the durable marker so corruption first
+// observed by a foreground query self-heals without requiring an unrelated indexing event
+// or service restart. The marker check is a cheap stat when no corruption is present.
 func watchForCorruptMediaDBRecovery(
 	ctx context.Context,
 	b *broker.Broker,
@@ -296,8 +410,25 @@ func watchForCorruptMediaDBRecovery(
 	st *state.State,
 	pauser *syncutil.Pauser,
 ) {
+	watchForCorruptMediaDBRecoveryAtInterval(
+		ctx, b, pl, cfg, db, st, pauser, mediaDBRecoveryPollInterval,
+	)
+}
+
+func watchForCorruptMediaDBRecoveryAtInterval(
+	ctx context.Context,
+	b *broker.Broker,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+	pollInterval time.Duration,
+) {
 	notifChan, subID := b.Subscribe(32, models.NotificationMediaIndexing)
 	defer b.Unsubscribe(subID)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -307,6 +438,8 @@ func watchForCorruptMediaDBRecovery(
 			if !ok {
 				return
 			}
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
+		case <-ticker.C:
 			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
 		}
 	}

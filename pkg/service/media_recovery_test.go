@@ -21,15 +21,22 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	testmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -53,6 +60,7 @@ func TestCheckAndRecoverCorruptMediaDB_NoMarkerIsNoOp(t *testing.T) {
 func TestCheckAndRecoverCorruptMediaDB_DefersWhenIndexingInFlight(t *testing.T) {
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(true)
 	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
 
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
@@ -65,6 +73,118 @@ func TestCheckAndRecoverCorruptMediaDB_NilDatabaseIsNoOp(_ *testing.T) {
 	// Must not panic with a nil database or nil MediaDB.
 	checkAndRecoverCorruptMediaDB(nil, nil, nil, nil, nil)
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{}, nil, nil)
+}
+
+func TestCheckAndRecoverCorruptMediaDB_RecreateFailureKeepsRecoveryPending(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return()
+	mockDB.On("EndRecovery").Return()
+	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
+	mockDB.On("Recreate", mock.Anything).Return(errors.New("storage unavailable"))
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertExpectations(t)
+	assert.Equal(t, int32(1), mediaDBRecoveryAttempts.Load())
+}
+
+func TestCheckAndRecoverCorruptMediaDB_RecreateFailureFinishesNotification(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return()
+	mockDB.On("EndRecovery").Return()
+	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
+	mockDB.On("Recreate", mock.Anything).Return(errors.New("storage unavailable"))
+
+	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, st, nil)
+
+	started := <-ns
+	finished := <-ns
+	var startedStatus, finishedStatus models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(started.Params, &startedStatus))
+	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
+	assert.True(t, startedStatus.Indexing)
+	assert.False(t, finishedStatus.Indexing)
+}
+
+func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return()
+	mockDB.On("EndRecovery").Return()
+	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
+	mockDB.On("Recreate", mock.Anything).Return(nil)
+
+	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	generateCalled := false
+	checkAndRecoverCorruptMediaDBWithGenerator(nil, nil, &database.Database{MediaDB: mockDB}, st, nil,
+		func(context.Context, platforms.Platform, *config.Instance, chan<- models.Notification,
+			[]systemdefs.System, *database.Database, *syncutil.Pauser,
+		) error {
+			generateCalled = true
+			return errors.New("injected reindex failure")
+		})
+
+	started := <-ns
+	finished := <-ns
+	var startedStatus, finishedStatus models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(started.Params, &startedStatus))
+	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
+	assert.True(t, generateCalled)
+	assert.True(t, startedStatus.Indexing)
+	assert.False(t, finishedStatus.Indexing)
+	mockDB.AssertExpectations(t)
+}
+
+func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(maxMediaDBRecoveryAttempts)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return().Twice()
+	mockDB.On("EndRecovery").Return().Twice()
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+
+	mockDB.AssertNotCalled(t, "IntegrityReport")
+	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)
+	assert.Equal(t, int32(maxMediaDBRecoveryAttempts), mediaDBRecoveryAttempts.Load(),
+		"suppressed polls must not keep increasing the attempt counter")
 }
 
 // TestCheckAndResumeOptimization_FailedCorruptMarksAndSkips verifies the quick_check gate:
@@ -120,6 +240,7 @@ func TestCheckAndResumeOptimization_NoResumeNeeded(t *testing.T) {
 func TestCheckAndRecoverCorruptMediaDB_DefersWhenScrapingInFlight(t *testing.T) {
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(true)
 	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
 	mockDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil)
 
@@ -136,6 +257,7 @@ func TestCheckAndRecoverCorruptMediaDB_StatusBackstopWithoutMarker(t *testing.T)
 	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil)
 	// Corruption is detected via the status backstop; a running scrape then defers recovery,
 	// keeping the test off the heavy reindex path.
+	mockDB.On("HasBackgroundOperations").Return(true)
 	mockDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil)
 
 	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
@@ -146,6 +268,63 @@ func TestCheckAndRecoverCorruptMediaDB_StatusBackstopWithoutMarker(t *testing.T)
 
 // TestWatchForCorruptMediaDBRecovery verifies the watcher runs a recovery check when a
 // media-indexing notification arrives and shuts down cleanly on context cancellation.
+func TestMediaDBCorruptionRecoveryBlocked_IgnoresStalePersistedStatus(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("HasBackgroundOperations").Return(false)
+
+	assert.False(t, mediaDBCorruptionRecoveryBlocked(mockDB))
+	mockDB.AssertNotCalled(t, "GetIndexingStatus")
+	mockDB.AssertNotCalled(t, "GetScrapingStatus")
+}
+
+func TestMediaDBCorruptionRecoveryBlocked_UsesStatusForActiveWork(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("HasBackgroundOperations").Return(true)
+	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
+
+	assert.True(t, mediaDBCorruptionRecoveryBlocked(mockDB))
+}
+
+func TestWatchForCorruptMediaDBRecovery_PollsForegroundMarker(t *testing.T) {
+	mockDB := helpers.NewMockMediaDBI()
+	checked := make(chan struct{}, 1)
+	mockDB.On("IsMarkedCorrupt").Return(true).Run(func(mock.Arguments) {
+		select {
+		case checked <- struct{}{}:
+		default:
+		}
+	})
+	mockDB.On("HasBackgroundOperations").Return(true)
+	mockDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	source := make(chan models.Notification, 1)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	done := make(chan struct{})
+	go func() {
+		watchForCorruptMediaDBRecoveryAtInterval(
+			ctx, b, nil, nil, &database.Database{MediaDB: mockDB}, nil, nil, 10*time.Millisecond,
+		)
+		close(done)
+	}()
+
+	select {
+	case <-checked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery watcher did not poll foreground corruption marker")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not exit after context cancellation")
+	}
+}
+
 func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
 	mockDB := helpers.NewMockMediaDBI()
 	checked := make(chan struct{}, 1)
@@ -158,9 +337,11 @@ func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
 	mockDB.On("GetIndexingStatus").Return("", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	source := make(chan models.Notification, 10)
 	b := broker.NewBroker(ctx, source)
 	b.Start()
+	t.Cleanup(b.Stop)
 
 	done := make(chan struct{})
 	go func() {
@@ -189,5 +370,4 @@ func TestWatchForCorruptMediaDBRecovery(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("watcher did not exit after context cancellation")
 	}
-	b.Stop()
 }

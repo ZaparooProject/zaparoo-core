@@ -33,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -260,6 +261,45 @@ func copyFileSync(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
+func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err error) {
+	tmp, err := afero.TempFile(fs, filepath.Dir(dbPath), ".userdb-restore-*")
+	if err != nil {
+		return fmt.Errorf("failed to create staged restore file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if closeErr := tmp.Close(); closeErr != nil {
+		_ = fs.Remove(tmpPath)
+		return fmt.Errorf("failed to close staged restore file: %w", closeErr)
+	}
+	defer func() { _ = fs.Remove(tmpPath) }()
+
+	if err = copyFileSync(backupPath, tmpPath, 0o600); err != nil {
+		return fmt.Errorf("failed to stage user database backup: %w", err)
+	}
+
+	rollbackPath := dbPath + ".restore-rollback"
+	_ = fs.Remove(rollbackPath)
+	if err = fs.Rename(dbPath, rollbackPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to preserve user database before restore: %w", err)
+	}
+	originalPreserved := err == nil
+
+	database.RemoveSidecars(dbPath)
+	if err = fs.Rename(tmpPath, dbPath); err != nil {
+		if originalPreserved {
+			if rollbackErr := fs.Rename(rollbackPath, dbPath); rollbackErr != nil {
+				return errors.Join(
+					fmt.Errorf("failed to install staged user database backup: %w", err),
+					fmt.Errorf("failed to restore original user database: %w", rollbackErr),
+				)
+			}
+		}
+		return fmt.Errorf("failed to install staged user database backup: %w", err)
+	}
+	_ = fs.Remove(rollbackPath)
+	return nil
+}
+
 func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	backupPath, err := db.resolveBackupPath(name)
 	if err != nil {
@@ -289,8 +329,7 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	if closeErr := db.Close(); closeErr != nil {
 		return database.RestoreInfo{}, closeErr
 	}
-	database.RemoveSidecars(db.GetDBPath())
-	if err = copyFileSync(backupPath, db.GetDBPath(), 0o600); err != nil {
+	if err = replaceDatabaseFromBackup(afero.NewOsFs(), backupPath, db.GetDBPath()); err != nil {
 		return db.restoreFailed(fmt.Errorf("failed to restore user database backup: %w", err))
 	}
 	if err = db.Open(); err != nil {
@@ -299,11 +338,12 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	if err = db.MigrateUp(); err != nil {
 		return db.restoreFailed(fmt.Errorf("failed to migrate restored user database: %w", err))
 	}
+	result := database.RestoreInfo{RestoredFrom: backup, PreRestoreBackup: preRestore}
 	if err = db.ClearCorruptMarker(); err != nil {
-		log.Warn().Err(err).Msg("failed to clear user database corrupt marker after restore")
+		return result, fmt.Errorf("failed to clear user database corrupt marker after restore: %w", err)
 	}
 
-	return database.RestoreInfo{RestoredFrom: backup, PreRestoreBackup: preRestore}, nil
+	return result, nil
 }
 
 // restoreFailed leaves the user database connection usable after a restore step
@@ -360,7 +400,9 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 			return database.RestoreInfo{}, fmt.Errorf("failed to migrate restored user database: %w", err)
 		}
 		if err = db.ClearCorruptMarker(); err != nil {
-			log.Warn().Err(err).Msg("failed to clear user database corrupt marker after recovery")
+			return database.RestoreInfo{}, fmt.Errorf(
+				"failed to clear user database corrupt marker after recovery: %w", err,
+			)
 		}
 		log.Warn().Str("backup", backup.Path).Msg("restored user database from backup after corruption")
 		return database.RestoreInfo{RestoredFrom: backup}, nil
@@ -378,7 +420,9 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 		)
 	}
 	if err = db.ClearCorruptMarker(); err != nil {
-		log.Warn().Err(err).Msg("failed to clear user database corrupt marker after fresh recovery")
+		return database.RestoreInfo{}, fmt.Errorf(
+			"failed to clear user database corrupt marker after fresh recovery: %w", err,
+		)
 	}
 	log.Warn().Msg("created fresh user database after corruption; no valid backup was available")
 	return database.RestoreInfo{}, nil

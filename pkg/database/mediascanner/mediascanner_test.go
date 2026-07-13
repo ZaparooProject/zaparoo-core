@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -481,6 +482,7 @@ func TestNewNamesIndex_PreexistingCorruptFastFail(t *testing.T) {
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil).Twice()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Once()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
 		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
@@ -792,6 +794,13 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	// Mock indexing state methods with database error
 	// The health check now fails fast if GetIndexingStatus returns an error
 	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError).Once()
+	mockMediaDB.On("RollbackTransaction").Return(sqlite3.Error{Code: sqlite3.ErrCorrupt}).Once()
+	mockMediaDB.On("IntegrityReport").Return([]string{"Page 3: malformed"}).Once()
+	mockMediaDB.On("MarkCorrupt", mock.MatchedBy(func(reason string) bool {
+		return strings.Contains(reason, "failed to rollback indexing transaction")
+	})).Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
