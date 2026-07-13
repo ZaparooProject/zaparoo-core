@@ -31,11 +31,12 @@ import (
 
 // Tracker monitors Steam game lifecycle events on Windows via registry notifications.
 type Tracker struct {
-	onGameStart GameStartCallback
-	onGameStop  GameStopCallback
-	watcher     *RegistryWatcher
-	tracked     map[int]*TrackedGame
-	mu          syncutil.Mutex
+	onGameStart     GameStartCallback
+	onGameStop      GameStopCallback
+	watcher         *RegistryWatcher
+	tracked         map[int]*TrackedGame
+	mu              syncutil.Mutex
+	nextLifecycleID int
 }
 
 // Option configures a Tracker.
@@ -94,10 +95,10 @@ func (t *Tracker) onAppIDChange(appID int) {
 
 	if appID == 0 {
 		// No game running - notify for all tracked games
-		for id := range t.tracked {
+		for id, game := range t.tracked {
 			log.Info().Int("appID", id).Msg("detected Steam game exit")
 			if t.onGameStop != nil {
-				go t.onGameStop(id, 0)
+				go t.onGameStop(id, game.PID)
 			}
 			delete(t.tracked, id)
 		}
@@ -109,9 +110,12 @@ func (t *Tracker) onAppIDChange(appID int) {
 		return
 	}
 
-	// New game detected
+	// RunningAppID does not expose a process ID. Use a monotonic lifecycle
+	// identifier so delayed stop callbacks cannot clear a same-AppID relaunch.
+	t.nextLifecycleID++
 	game := &TrackedGame{
 		AppID:     appID,
+		PID:       t.nextLifecycleID,
 		StartTime: time.Now(),
 	}
 	t.tracked[appID] = game
@@ -119,6 +123,6 @@ func (t *Tracker) onAppIDChange(appID int) {
 	log.Info().Int("appID", appID).Msg("detected Steam game start")
 
 	if t.onGameStart != nil {
-		go t.onGameStart(appID, 0, "")
+		go t.onGameStart(appID, game.PID, "")
 	}
 }
