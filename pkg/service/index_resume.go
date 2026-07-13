@@ -220,6 +220,16 @@ func checkAndResumeIndexing(
 	return true
 }
 
+type mediaDBGenerateFunc func(
+	context.Context,
+	platforms.Platform,
+	*config.Instance,
+	chan<- models.Notification,
+	[]systemdefs.System,
+	*database.Database,
+	*syncutil.Pauser,
+) error
+
 // checkAndRecoverCorruptMediaDB rebuilds the media database from scratch when corruption
 // has been detected. MediaDB is a disposable, rebuildable cache (user-owned data lives in
 // UserDB), so recovery discards the corrupt file rather than attempting an unreliable
@@ -231,6 +241,17 @@ func checkAndRecoverCorruptMediaDB(
 	db *database.Database,
 	st *state.State,
 	pauser *syncutil.Pauser,
+) {
+	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDB)
+}
+
+func checkAndRecoverCorruptMediaDBWithGenerator(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+	generate mediaDBGenerateFunc,
 ) {
 	if db == nil || db.MediaDB == nil {
 		return
@@ -322,7 +343,7 @@ func checkAndRecoverCorruptMediaDB(
 			Msg("media database recreated but service state is unavailable for reindex")
 		return
 	}
-	if err := methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications,
+	if err := generate(st.GetContext(), pl, cfg, st.Notifications,
 		systemdefs.AllSystems(), db, pauser); err != nil {
 		var clientErr *models.ClientError
 		if errors.As(err, &clientErr) {

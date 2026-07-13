@@ -108,6 +108,8 @@ func TestMediaDB_RecoveryGateDrainsAndBlocksBackgroundOperations(t *testing.T) {
 			return false
 		}
 	}, time.Second, time.Millisecond)
+	assert.False(t, mediaDB.HasBackgroundOperations(),
+		"background-operation count must be drained when recovery acquires the gate")
 
 	tracked := make(chan struct{})
 	go func() {

@@ -20,16 +20,80 @@
 package userdb
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failStagedInstallFs struct {
+	afero.Fs
+	dbPath       string
+	failRollback bool
+}
+
+func (fs failStagedInstallFs) Rename(oldPath, newPath string) error {
+	if newPath == fs.dbPath {
+		switch {
+		case strings.HasPrefix(filepath.Base(oldPath), ".userdb-restore-"):
+			return errors.New("injected staged install failure")
+		case fs.failRollback && strings.HasSuffix(oldPath, ".restore-rollback"):
+			return errors.New("injected rollback failure")
+		}
+	}
+	if err := fs.Fs.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("rename test path: %w", err)
+	}
+	return nil
+}
+
+func TestReplaceDatabaseFromBackup_RestoresOriginalAfterInstallFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "user.db")
+	backupPath := filepath.Join(dir, "backup.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("original"), 0o600))
+	require.NoError(t, os.WriteFile(backupPath, []byte("replacement"), 0o600))
+
+	fs := failStagedInstallFs{Fs: afero.NewOsFs(), dbPath: dbPath}
+	err := replaceDatabaseFromBackup(fs, backupPath, dbPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to install staged user database backup")
+	contents, readErr := afero.ReadFile(fs, dbPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("original"), contents)
+	_, rollbackErr := os.Stat(dbPath + ".restore-rollback")
+	assert.True(t, os.IsNotExist(rollbackErr))
+}
+
+func TestReplaceDatabaseFromBackup_RetainsRollbackAfterRestoreFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "user.db")
+	backupPath := filepath.Join(dir, "backup.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("original"), 0o600))
+	require.NoError(t, os.WriteFile(backupPath, []byte("replacement"), 0o600))
+
+	fs := failStagedInstallFs{Fs: afero.NewOsFs(), dbPath: dbPath, failRollback: true}
+	err := replaceDatabaseFromBackup(fs, backupPath, dbPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to install staged user database backup")
+	assert.Contains(t, err.Error(), "failed to restore original user database")
+	rollbackContents, readErr := afero.ReadFile(fs, dbPath+".restore-rollback")
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("original"), rollbackContents)
+}
 
 func TestUserDBRestoreBackupFailsWhenCorruptMarkerCannotBeCleared(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)

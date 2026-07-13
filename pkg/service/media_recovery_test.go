@@ -27,9 +27,12 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -121,6 +124,44 @@ func TestCheckAndRecoverCorruptMediaDB_RecreateFailureFinishesNotification(t *te
 	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
 	assert.True(t, startedStatus.Indexing)
 	assert.False(t, finishedStatus.Indexing)
+}
+
+func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IsMarkedCorrupt").Return(true)
+	mockDB.On("HasBackgroundOperations").Return(false)
+	mockDB.On("BeginRecovery").Return()
+	mockDB.On("EndRecovery").Return()
+	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
+	mockDB.On("Recreate", mock.Anything).Return(nil)
+
+	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	generateCalled := false
+	checkAndRecoverCorruptMediaDBWithGenerator(nil, nil, &database.Database{MediaDB: mockDB}, st, nil,
+		func(context.Context, platforms.Platform, *config.Instance, chan<- models.Notification,
+			[]systemdefs.System, *database.Database, *syncutil.Pauser,
+		) error {
+			generateCalled = true
+			return errors.New("injected reindex failure")
+		})
+
+	started := <-ns
+	finished := <-ns
+	var startedStatus, finishedStatus models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(started.Params, &startedStatus))
+	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
+	assert.True(t, generateCalled)
+	assert.True(t, startedStatus.Indexing)
+	assert.False(t, finishedStatus.Indexing)
+	mockDB.AssertExpectations(t)
 }
 
 func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {

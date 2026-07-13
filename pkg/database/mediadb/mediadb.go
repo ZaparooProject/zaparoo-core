@@ -3666,8 +3666,8 @@ func (db *MediaDB) HasBackgroundOperations() bool {
 // BackgroundOperationDone decrements the background operations counter.
 // This should be called when an operation started with TrackBackgroundOperation completes.
 func (db *MediaDB) BackgroundOperationDone() {
-	db.backgroundOps.Done()
 	db.backgroundOpsCount.Add(-1)
+	db.backgroundOps.Done()
 }
 
 // GetLaunchCommandForMedia generates a title-based launch command for the given media.
