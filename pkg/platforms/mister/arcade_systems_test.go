@@ -78,10 +78,11 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 		{Path: malformedPath},
 		{Path: mglPath},
 	}
+	inputBefore := append([]platforms.ScanResult(nil), input...)
 
 	unchanged, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, input)
 	require.NoError(t, err)
-	assert.Equal(t, input, unchanged)
+	assert.Equal(t, inputBefore, unchanged)
 
 	results, err := cache.scanner(systemdefs.SystemCPS1)(
 		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
@@ -246,7 +247,8 @@ func TestNeoGeoMVSLaunchOptions(t *testing.T) {
 func TestArcadeSystemLaunchersPreserveArcadeAndAddGranularSystems(t *testing.T) {
 	t.Parallel()
 
-	launchers := addArcadeSystemLaunchers(NewPlatform(), CreateLaunchers(NewPlatform()))
+	platform := NewPlatform()
+	launchers := addArcadeSystemLaunchers(platform, CreateLaunchers(platform))
 	byID := make(map[string]platforms.Launcher, len(launchers))
 	for i := range launchers {
 		byID[launchers[i].ID] = launchers[i]
@@ -255,7 +257,23 @@ func TestArcadeSystemLaunchersPreserveArcadeAndAddGranularSystems(t *testing.T) 
 	arcade, ok := byID[systemdefs.SystemArcade]
 	require.True(t, ok)
 	assert.False(t, arcade.SkipFilesystemScan)
-	assert.NotNil(t, arcade.Scanner)
+	require.NotNil(t, arcade.Scanner)
+
+	dir := t.TempDir()
+	classifiedPath := filepath.Join(dir, "classified.mra")
+	unclassifiedPath := filepath.Join(dir, "unclassified.mra")
+	require.NoError(t, os.WriteFile(classifiedPath, []byte(
+		"<misterromdescription><setname>1941</setname></misterromdescription>",
+	), 0o600))
+	require.NoError(t, os.WriteFile(unclassifiedPath, []byte(
+		"<misterromdescription><setname>unknown</setname></misterromdescription>",
+	), 0o600))
+	arcadeInput := []platforms.ScanResult{{Path: classifiedPath}, {Path: unclassifiedPath}}
+	arcadeResults, err := arcade.Scanner(
+		context.Background(), &config.Instance{}, systemdefs.SystemArcade, arcadeInput,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, arcadeInput, arcadeResults)
 
 	for _, spec := range misterArcadeSystemSpecs {
 		launcher, found := byID[spec.systemID]
