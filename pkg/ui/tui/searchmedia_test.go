@@ -271,6 +271,7 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 			PageSize:    2,
 		},
 	}, nil).Once()
+	releaseNextPage := make(chan time.Time)
 	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
 		return params.Cursor != nil && *params.Cursor == nextCursor &&
 			params.Query != nil && *params.Query == ""
@@ -288,7 +289,7 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 			HasNextPage: false,
 			PageSize:    2,
 		},
-	}, nil).Once()
+	}, nil).WaitUntil(releaseNextPage).Once()
 
 	runner.Start(pages)
 	runner.Draw()
@@ -302,12 +303,26 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 	runner.SimulateTab()
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
 	assert.Equal(t, 1, mockSvc.SearchMediaCallCount(), "initial selection should not immediately prefetch")
 
 	// Editing the input must not combine the previous page's cursor with a new query.
 	session.SetSearchMediaName("different query")
-	runner.SimulateArrowDown()
+	scrollDone := make(chan struct{})
+	go func() {
+		runner.SimulateArrowDown()
+		close(scrollDone)
+	}()
+	select {
+	case <-scrollDone:
+	case <-time.After(100 * time.Millisecond):
+		close(releaseNextPage)
+		<-scrollDone
+		t.Fatal("scrolling blocked while the next page loaded")
+	}
 	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loading more results", 100*time.Millisecond))
+	close(releaseNextPage)
 
 	assert.True(t, runner.WaitForText("Game Three", 100*time.Millisecond))
 	assert.True(t, runner.ContainsText("Game One"), "first page should remain visible")
@@ -386,6 +401,7 @@ func TestBuildSearchMedia_AutoloadErrorCanRetry_Integration(t *testing.T) {
 	runner.SimulateTab()
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
 	runner.SimulateArrowDown()
 	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
 
@@ -396,6 +412,78 @@ func TestBuildSearchMedia_AutoloadErrorCanRetry_Integration(t *testing.T) {
 	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
 	assert.True(t, runner.WaitForText("Game Three", 100*time.Millisecond))
 	assert.True(t, runner.ContainsText("Game One"), "retry should preserve first page")
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBuildSearchMedia_FreshSearchErrorClearsPagination_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{{ID: "psx", Name: "PlayStation"}})
+
+	nextCursor := "stale-cursor"
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor == nil && params.Query != nil && *params.Query == ""
+	})).Return(&models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Game One",
+				Path:      "game-one.chd",
+				ZapScript: "@PlayStation/Game One",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+			{
+				Name:      "Game Two",
+				Path:      "game-two.chd",
+				ZapScript: "@PlayStation/Game Two",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+		},
+		Total: 2,
+		Pagination: &models.PaginationInfo{
+			NextCursor:  &nextCursor,
+			HasNextPage: true,
+			PageSize:    2,
+		},
+	}, nil).Once()
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor == nil && params.Query != nil && *params.Query == "new query"
+	})).Return(nil, errors.New("fresh search failed")).Once()
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor != nil && *params.Cursor == nextCursor
+	})).Return(&models.SearchResults{}, nil).Maybe()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	session := NewSession()
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
+	})
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+
+	runner.SimulateTab()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+
+	runner.SimulateArrowLeft()
+	session.SetSearchMediaName("new query")
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("An error occurred during search", 100*time.Millisecond))
+
+	runner.SimulateTab()
+	runner.SimulateArrowDown()
+	assert.Never(t, func() bool {
+		return mockSvc.SearchMediaCallCount() > 2
+	}, 50*time.Millisecond, 5*time.Millisecond, "failed fresh search should discard the old cursor")
 	mockSvc.AssertExpectations(t)
 }
 

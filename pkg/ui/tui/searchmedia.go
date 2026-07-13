@@ -244,58 +244,70 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		} else {
 			frame.SetHelpText("Searching...")
 		}
+		// Search state and widgets stay confined to the tview event loop. The
+		// worker only performs the blocking request and queues its result here.
 		searching = true
 		app.ForceDraw()
-		defer func() {
-			searching = false
+
+		go func() {
+			searchCtx, searchCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout)
+			results, err := svc.SearchMedia(searchCtx, params)
+			searchCancel()
+			if err != nil {
+				log.Warn().Err(err).Msg("error executing search query")
+			}
+
+			app.QueueUpdateDraw(func() {
+				if err != nil {
+					searching = false
+					if appendPage {
+						frame.SetHelpText("Error loading more results")
+					} else {
+						nextCursor = nil
+						activeSearchName = ""
+						activeSearchSystem = ""
+						frame.SetHelpText("An error occurred during search")
+					}
+					return
+				}
+
+				selectedIndex := mediaList.GetCurrentItem()
+				if !appendPage {
+					activeSearchName = searchName
+					activeSearchSystem = searchSystem
+					mediaList.Clear()
+					resultPaths = nil
+					selectedIndex = 0
+				}
+				appendResults(results.Results)
+
+				nextCursor = nil
+				if results.Pagination != nil &&
+					results.Pagination.HasNextPage && results.Pagination.NextCursor != nil {
+					nextCursor = results.Pagination.NextCursor
+				}
+
+				if len(resultPaths) > 0 {
+					if selectedIndex >= len(resultPaths) {
+						selectedIndex = len(resultPaths) - 1
+					}
+					mediaList.SetCurrentItem(selectedIndex)
+					frame.SetInfoText(fmt.Sprintf(
+						"[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[selectedIndex]))
+					app.SetFocus(mediaList)
+				} else {
+					frame.SetInfoText("")
+				}
+
+				resultWord := "results"
+				if len(resultPaths) == 1 {
+					resultWord = "result"
+				}
+				frame.SetHelpText(fmt.Sprintf(
+					"Loaded %d %s. Select to write token", len(resultPaths), resultWord))
+				searching = false
+			})
 		}()
-
-		searchCtx, searchCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout)
-		results, err := svc.SearchMedia(searchCtx, params)
-		searchCancel()
-		if err != nil {
-			log.Warn().Err(err).Msg("error executing search query")
-			if appendPage {
-				frame.SetHelpText("Error loading more results")
-			} else {
-				frame.SetHelpText("An error occurred during search")
-			}
-			return
-		}
-
-		selectedIndex := mediaList.GetCurrentItem()
-		if !appendPage {
-			activeSearchName = searchName
-			activeSearchSystem = searchSystem
-			mediaList.Clear()
-			resultPaths = nil
-			selectedIndex = 0
-		}
-		appendResults(results.Results)
-
-		nextCursor = nil
-		if results.Pagination != nil && results.Pagination.HasNextPage && results.Pagination.NextCursor != nil {
-			nextCursor = results.Pagination.NextCursor
-		}
-
-		if len(resultPaths) > 0 {
-			if selectedIndex >= len(resultPaths) {
-				selectedIndex = len(resultPaths) - 1
-			}
-			mediaList.SetCurrentItem(selectedIndex)
-			frame.SetInfoText(fmt.Sprintf(
-				"[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[selectedIndex]))
-			app.SetFocus(mediaList)
-		} else {
-			frame.SetInfoText("")
-		}
-
-		resultWord := "results"
-		if len(resultPaths) == 1 {
-			resultWord = "result"
-		}
-		frame.SetHelpText(fmt.Sprintf(
-			"Loaded %d %s. Select to write token", len(resultPaths), resultWord))
 	}
 
 	loadNextPage = func() {
