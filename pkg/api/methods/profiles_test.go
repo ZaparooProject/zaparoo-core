@@ -362,6 +362,24 @@ func TestHandleProfilesVerify(t *testing.T) {
 	env.Params = json.RawMessage(`{}`)
 	_, err = HandleProfilesVerify(env)
 	require.Error(t, err)
+
+	// Both selectors is an ambiguous request, rejected rather than
+	// silently preferring one.
+	env.Params = json.RawMessage(`{"profileId": "profile-1", "switchId": "corn-arm-truck", "pin": "1234"}`)
+	_, err = HandleProfilesVerify(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one")
+}
+
+func TestHandleProfilesSwitch_RejectsBothSelectors(t *testing.T) {
+	t.Parallel()
+	env, _, st := newProfilesEnv(t)
+
+	env.Params = json.RawMessage(`{"profileId": "profile-1", "switchId": "corn-arm-truck", "pin": "1234"}`)
+	_, err := HandleProfilesSwitch(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one")
+	assert.Nil(t, st.ActiveProfile())
 }
 
 func TestHandleProfilesVerify_SharesRateLimiterWithSwitch(t *testing.T) {

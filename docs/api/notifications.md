@@ -419,7 +419,7 @@ Sent when the device's active profile changes, including deactivation.
 
 | Key     | Type   | Required | Description                                                        |
 | :------ | :----- | :------- | :------------------------------------------------------------------ |
-| profile | object | Yes      | The new active profile, or null when the device deactivated.       |
+| profile | object \| null | Yes | The new active profile, or null when the device deactivated.       |
 
 The profile object contains `profileId`, `name`, `hasPin` and any playtime limit overrides (`limitsEnabled`, `dailyLimit`, `sessionLimit`).
 

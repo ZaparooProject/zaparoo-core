@@ -47,6 +47,7 @@ func newTestClient() *database.Client {
 		ClientID:   "client-uuid-1",
 		ClientName: "Test App",
 		AuthToken:  "auth-token-uuid",
+		Role:       "admin",
 		PairingKey: []byte("0123456789abcdef0123456789abcdef"),
 		CreatedAt:  1700000000,
 		LastSeenAt: 1700000100,
@@ -123,6 +124,7 @@ func TestSqlGetClientByToken_Success(t *testing.T) {
 	assert.Equal(t, c.ClientID, got.ClientID)
 	assert.Equal(t, c.ClientName, got.ClientName)
 	assert.Equal(t, c.AuthToken, got.AuthToken)
+	assert.Equal(t, c.Role, got.Role)
 	assert.Equal(t, c.PairingKey, got.PairingKey)
 	assert.Equal(t, c.CreatedAt, got.CreatedAt)
 	assert.Equal(t, c.LastSeenAt, got.LastSeenAt)
@@ -164,7 +166,9 @@ func TestSqlListClients_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "id-1", got[0].ClientID)
+	assert.Equal(t, "admin", got[0].Role)
 	assert.Equal(t, "id-2", got[1].ClientID)
+	assert.Equal(t, "member", got[1].Role)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

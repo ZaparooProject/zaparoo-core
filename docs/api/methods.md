@@ -2623,7 +2623,7 @@ A profile's **switch ID is a bearer credential**: presenting it — by scanning 
 
 **Trust model.** Profiles are a household convenience boundary, comparable to TV parental controls — not account security. They protect against: gaming playtime limits through a member-role paired client (profile management needs the admin role), through cards (switch IDs are bearer secrets, protected by physical card control), or through rescans (re-activating the active profile does not reset session limits). They do NOT protect against anyone with OS access to the device, an admin-role client, or — while `service.encryption` is off — any unpaired client on the network, which retains full API access for compatibility. Enforcement against app users starts when `service.encryption` requires clients to pair.
 
-##### Profile object
+### Profile object
 
 | Key           | Type    | Required | Description                                                                                              |
 | :------------ | :------ | :------- | :------------------------------------------------------------------------------------------------------- |
@@ -2719,7 +2719,7 @@ The active profile (a subset of the [profile object](#profile-object) without `s
 
 ### profiles.switch
 
-Switch the device's active profile. Switching by `profileId` requires the profile's PIN when one is set. Switching by `switchId` never requires a PIN: the switch ID is a bearer credential, and presenting it is equivalent to scanning the profile's card. Calling with neither `profileId` nor `switchId` switches to the shared profile (deactivates), which never requires a PIN.
+Switch the device's active profile. Switching by `profileId` requires the profile's PIN when one is set. Switching by `switchId` never requires a PIN: the switch ID is a bearer credential, and presenting it is equivalent to scanning the profile's card. Calling with neither `profileId` nor `switchId` switches to the shared profile (deactivates), which never requires a PIN. Providing both is an error.
 
 If a game is running when the profile changes, its playtime keeps counting against the profile that launched it: switching to another profile starts a fresh limit session for the new person, while deactivating leaves the launch profile's limits in force until the media stops.
 

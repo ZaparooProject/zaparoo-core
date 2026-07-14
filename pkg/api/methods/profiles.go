@@ -216,6 +216,9 @@ func HandleProfilesVerify(env requests.RequestEnv) (any, error) {
 	var p *database.Profile
 	var err error
 	switch {
+	case params.ProfileID != nil && *params.ProfileID != "" &&
+		params.SwitchID != nil && *params.SwitchID != "":
+		return nil, models.ClientErrf("provide exactly one of profileId or switchId")
 	case params.ProfileID != nil && *params.ProfileID != "":
 		p, err = env.Profiles.VerifyByID(*params.ProfileID, pin)
 	case params.SwitchID != nil && *params.SwitchID != "":
@@ -263,6 +266,9 @@ func HandleProfilesSwitch(env requests.RequestEnv) (any, error) {
 	}
 
 	switch {
+	case params.ProfileID != nil && *params.ProfileID != "" &&
+		params.SwitchID != nil && *params.SwitchID != "":
+		return nil, models.ClientErrf("provide exactly one of profileId or switchId")
 	case params.ProfileID != nil && *params.ProfileID != "":
 		active, err := env.Profiles.ActivateByID(*params.ProfileID, pin)
 		if err != nil {
