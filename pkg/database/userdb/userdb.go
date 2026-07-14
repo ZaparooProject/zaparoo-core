@@ -42,14 +42,14 @@ const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=500
 	"&_cache_size=-512&_mmap_size=0"
 
 type UserDB struct {
-	sql    *sql.DB
 	pl     platforms.Platform
 	ctx    context.Context
+	sql    database.Conn
 	dbPath string
 }
 
 func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
-	db := &UserDB{sql: nil, pl: pl, ctx: ctx}
+	db := &UserDB{pl: pl, ctx: ctx}
 	err := db.Open()
 	return db, err
 }
@@ -75,7 +75,19 @@ func (db *UserDB) Open() error {
 	if err != nil {
 		return fmt.Errorf("failed to open user database: %w", err)
 	}
-	db.sql = sqlInstance
+	db.sql.Store(sqlInstance)
+	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
+		if database.IsCorruptionError(err) {
+			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
+			log.Warn().Err(err).Msg("user database cell size check failed during open")
+		} else {
+			// cell_size_check is a best-effort safety pragma; a non-corruption failure
+			// (e.g. a transient "database is locked" while another connection is active
+			// during a restore) must not disconnect an otherwise-usable database. Keep the
+			// connection and re-attempt the pragma on the next open.
+			log.Warn().Err(err).Msg("failed to enable user database cell size checks; continuing without")
+		}
+	}
 
 	if !exists {
 		log.Debug().Msg("user database is new, allocating schema")
@@ -93,28 +105,28 @@ func (db *UserDB) GetDBPath() string {
 }
 
 func (db *UserDB) UnsafeGetSQLDb() *sql.DB {
-	return db.sql
+	return db.sql.Load()
 }
 
 func (db *UserDB) Truncate() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlTruncate(db.ctx, db.sql)
+	return sqlTruncate(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) Allocate() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlAllocate(db.sql, db.dbPathForSidecar())
+	return sqlAllocate(db.sql.Load(), db.dbPathForSidecar())
 }
 
 func (db *UserDB) MigrateUp() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlMigrateUp(db.sql, db.dbPathForSidecar())
+	return sqlMigrateUp(db.sql.Load(), db.dbPathForSidecar())
 }
 
 // dbPathForSidecar returns the on-disk DB path for sidecar lookup, or ""
@@ -124,24 +136,24 @@ func (db *UserDB) dbPathForSidecar() string {
 }
 
 func (db *UserDB) Vacuum() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlVacuum(db.ctx, db.sql)
+	return sqlVacuum(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) CleanupHistory(retentionDays int) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlCleanupHistory(db.ctx, db.sql, retentionDays)
+	return sqlCleanupHistory(db.ctx, db.sql.Load(), retentionDays)
 }
 
 func (db *UserDB) Close() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil
 	}
-	err := db.sql.Close()
+	err := db.sql.Load().Close()
 	if err != nil {
 		return fmt.Errorf("failed to close database: %w", err)
 	}
@@ -151,7 +163,7 @@ func (db *UserDB) Close() error {
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
 // This method should only be used in tests to set up in-memory databases.
 func (db *UserDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
-	db.sql = sqlDB
+	db.sql.Store(sqlDB)
 	db.pl = platform
 	db.ctx = ctx
 
@@ -163,33 +175,33 @@ func (db *UserDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform 
 // TODO: metadata
 
 func (db *UserDB) AddHistory(entry *database.HistoryEntry) error {
-	return sqlAddHistory(db.ctx, db.sql, *entry)
+	return sqlAddHistory(db.ctx, db.sql.Load(), *entry)
 }
 
 func (db *UserDB) GetHistory(lastID int64) ([]database.HistoryEntry, error) {
-	return sqlGetHistoryWithOffset(db.ctx, db.sql, lastID)
+	return sqlGetHistoryWithOffset(db.ctx, db.sql.Load(), lastID)
 }
 
 func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
-	return sqlUpdateZapLinkHost(db.ctx, db.sql, host, zapscript)
+	return sqlUpdateZapLinkHost(db.ctx, db.sql.Load(), host, zapscript)
 }
 
 func (db *UserDB) GetZapLinkHost(host string) (found, zapScript bool, err error) {
-	return sqlGetZapLinkHost(db.ctx, db.sql, host)
+	return sqlGetZapLinkHost(db.ctx, db.sql.Load(), host)
 }
 
 func (db *UserDB) GetSupportedZapLinkHosts() ([]string, error) {
-	return sqlGetSupportedZapLinkHosts(db.ctx, db.sql)
+	return sqlGetSupportedZapLinkHosts(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error) {
-	return sqlPruneExpiredZapLinkHosts(db.ctx, db.sql, olderThan)
+	return sqlPruneExpiredZapLinkHosts(db.ctx, db.sql.Load(), olderThan)
 }
 
 func (db *UserDB) UpdateZapLinkCache(url, zapscript string) error {
-	return sqlUpdateZapLinkCache(db.ctx, db.sql, url, zapscript)
+	return sqlUpdateZapLinkCache(db.ctx, db.sql.Load(), url, zapscript)
 }
 
 func (db *UserDB) GetZapLinkCache(url string) (string, error) {
-	return sqlGetZapLinkCache(db.ctx, db.sql, url)
+	return sqlGetZapLinkCache(db.ctx, db.sql.Load(), url)
 }

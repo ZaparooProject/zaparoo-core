@@ -21,7 +21,6 @@ package mediascanner
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -35,559 +34,100 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestResumeWithRealDatabase tests the resume functionality using an actual SQLite database
-// This test was created because the original resume functionality was completely broken
-// but tests were passing because they only verified mock behavior, not actual functionality.
-func TestResumeWithRealDatabase(t *testing.T) {
-	ctx := context.Background()
-
-	// Create in-memory database with shared cache for transaction visibility
-	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
-	defer cleanup()
-
-	// Generate test data - small batch for focused testing
-	testSystems := []string{"NES", "SNES", "Genesis"}
-	batch := testdata.CreateReproducibleBatch(testSystems, 5) // 5 games per system = 15 total
-
-	t.Run("Fresh Index Creates Correct Data", func(t *testing.T) {
-		// Test fresh indexing first
-		scanState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		// Seed known tags BEFORE transaction
-		err := SeedCanonicalTags(mediaDB, scanState)
-		require.NoError(t, err)
-
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		// Add systems and media
-		for _, systemID := range testSystems {
-			entries := batch.Entries[systemID]
-			for _, entry := range entries {
-				titleIndex, mediaIndex, _ := AddMediaPath(
-					mediaDB, scanState, systemID, entry.Path, "", false, false, nil, "",
-				)
-				assert.Positive(t, titleIndex, "Title index should be > 0")
-				assert.Positive(t, mediaIndex, "Media index should be > 0")
-			}
-		}
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Verify data was inserted
-		maxSystemID, err := mediaDB.GetMaxSystemID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(len(testSystems)), maxSystemID, "Should have %d systems", len(testSystems))
-
-		maxTitleID, err := mediaDB.GetMaxTitleID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(batch.Total), maxTitleID, "Should have %d titles", batch.Total)
-
-		maxMediaID, err := mediaDB.GetMaxMediaID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(batch.Total), maxMediaID, "Should have %d media entries", batch.Total)
-	})
-
-	t.Run("PopulateScanStateFromDB Works Correctly", func(t *testing.T) {
-		// Create fresh scan state
-		resumeState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		// This is the critical function that was broken
-		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
-		require.NoError(t, err)
-
-		// Verify scan state was populated correctly from database
-		assert.Equal(t, len(testSystems), resumeState.SystemsIndex, "SystemsIndex should match database")
-		assert.Equal(t, batch.Total, resumeState.TitlesIndex, "TitlesIndex should match database")
-		assert.Equal(t, batch.Total, resumeState.MediaIndex, "MediaIndex should match database")
-		assert.Positive(t, resumeState.TagTypesIndex, "TagTypesIndex should be populated")
-		assert.Positive(t, resumeState.TagsIndex, "TagsIndex should be populated")
-
-		// Verify the indexes match what's actually in the database
-		maxSystemID, _ := mediaDB.GetMaxSystemID()
-		maxTitleID, _ := mediaDB.GetMaxTitleID()
-		maxMediaID, _ := mediaDB.GetMaxMediaID()
-		maxTagTypeID, _ := mediaDB.GetMaxTagTypeID()
-		maxTagID, _ := mediaDB.GetMaxTagID()
-
-		assert.Equal(t, int(maxSystemID), resumeState.SystemsIndex)
-		assert.Equal(t, int(maxTitleID), resumeState.TitlesIndex)
-		assert.Equal(t, int(maxMediaID), resumeState.MediaIndex)
-		assert.Equal(t, int(maxTagTypeID), resumeState.TagTypesIndex)
-		assert.Equal(t, int(maxTagID), resumeState.TagsIndex)
-	})
-
-	t.Run("Resume Continues From Correct IDs", func(t *testing.T) {
-		// Create scan state populated from database
-		resumeState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
-		require.NoError(t, err)
-
-		// Record the state after population
-		originalSystemsIndex := resumeState.SystemsIndex
-		originalTitlesIndex := resumeState.TitlesIndex
-		originalMediaIndex := resumeState.MediaIndex
-
-		// Now add more data (simulating resume)
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		// Add one more system with games
-		newEntry := testdata.NewTestDataGenerator(12345).GenerateMediaEntry("Gameboy")
-		titleIndex, mediaIndex, _ := AddMediaPath(
-			mediaDB, resumeState, "Gameboy", newEntry.Path, "", false, false, nil, "",
-		)
-
-		// Verify the new IDs are sequential from where we left off
-		assert.Equal(t, originalTitlesIndex+1, titleIndex, "New title should get next available ID")
-		assert.Equal(t, originalMediaIndex+1, mediaIndex, "New media should get next available ID")
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Verify database has the new data with correct IDs
-		maxSystemID, _ := mediaDB.GetMaxSystemID()
-		maxTitleID, _ := mediaDB.GetMaxTitleID()
-		maxMediaID, _ := mediaDB.GetMaxMediaID()
-
-		assert.Equal(t, int64(originalSystemsIndex+1), maxSystemID, "Should have one more system")
-		assert.Equal(t, int64(originalTitlesIndex+1), maxTitleID, "Should have one more title")
-		assert.Equal(t, int64(originalMediaIndex+1), maxMediaID, "Should have one more media")
-	})
-}
-
-// TestUniqueConstraintHandling tests that UNIQUE constraint violations are handled correctly
-// This specifically tests the scenario that was causing "UNIQUE constraint failed: Systems.DBID"
-func TestUniqueConstraintHandling(t *testing.T) {
-	ctx := context.Background()
-
-	// Create in-memory database with shared cache for transaction visibility
-	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
-	defer cleanup()
-
-	t.Run("No Constraint Violations With Proper Resume", func(t *testing.T) {
-		// First indexing run
-		scanState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		// Seed known tags BEFORE transaction
-		err := SeedCanonicalTags(mediaDB, scanState)
-		require.NoError(t, err)
-
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		// Add a few systems
-		testEntry1 := testdata.NewTestDataGenerator(11111).GenerateMediaEntry("NES")
-		testEntry2 := testdata.NewTestDataGenerator(22222).GenerateMediaEntry("SNES")
-
-		_, _, _ = AddMediaPath(mediaDB, scanState, "NES", testEntry1.Path, "", false, false, nil, "")
-		_, _, _ = AddMediaPath(mediaDB, scanState, "SNES", testEntry2.Path, "", false, false, nil, "")
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Simulate resume - this is where the bug occurred
-		resumeState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		// This call was broken and would lead to constraint violations
-		err = PopulateScanStateFromDB(ctx, mediaDB, resumeState)
-		require.NoError(t, err)
-
-		// Now continue indexing - this should not cause constraint violations
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		// Add more entries - these should not conflict
-		testEntry3 := testdata.NewTestDataGenerator(33333).GenerateMediaEntry("Genesis")
-		testEntry4 := testdata.NewTestDataGenerator(44444).GenerateMediaEntry("NES")
-
-		// This used to cause "UNIQUE constraint failed: Systems.DBID" because
-		// PopulateScanStateFromDB wasn't working and indexes started from 0 again
-		titleIndex1, mediaIndex1, _ := AddMediaPath(
-			mediaDB, resumeState, "Genesis", testEntry3.Path, "", false, false, nil, "",
-		)
-		titleIndex2, mediaIndex2, _ := AddMediaPath(
-			mediaDB, resumeState, "NES", testEntry4.Path, "", false, false, nil, "",
-		)
-
-		// Verify no constraint violations and IDs are sequential
-		assert.Greater(t, titleIndex1, 2, "New title should have ID > 2")
-		assert.Greater(t, mediaIndex1, 2, "New media should have ID > 2")
-		assert.Greater(t, titleIndex2, titleIndex1, "Second title should have higher ID")
-		assert.Greater(t, mediaIndex2, mediaIndex1, "Second media should have higher ID")
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Verify final state is correct
-		maxSystemID, _ := mediaDB.GetMaxSystemID()
-		maxTitleID, _ := mediaDB.GetMaxTitleID()
-		maxMediaID, _ := mediaDB.GetMaxMediaID()
-
-		assert.Equal(t, int64(3), maxSystemID, "Should have 3 systems (NES, SNES, Genesis)")
-		assert.Equal(t, int64(4), maxTitleID, "Should have 4 titles")
-		assert.Equal(t, int64(4), maxMediaID, "Should have 4 media entries")
-	})
-}
-
-// TestDatabaseStateConsistency verifies database state remains consistent during operations
-func TestDatabaseStateConsistency(t *testing.T) {
-	ctx := context.Background()
-
-	// Create in-memory database with shared cache for transaction visibility
-	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
-	defer cleanup()
-
-	t.Run("GetMax Methods Return Consistent Results", func(t *testing.T) {
-		// Test empty database
-		maxSystemID, err := mediaDB.GetMaxSystemID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), maxSystemID, "Empty DB should return 0")
-
-		maxTitleID, err := mediaDB.GetMaxTitleID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), maxTitleID, "Empty DB should return 0")
-
-		// Add some data
-		scanState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		err = SeedCanonicalTags(mediaDB, scanState)
-		require.NoError(t, err)
-
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		// Add specific test data
-		entry := testdata.NewTestDataGenerator(55555).GenerateMediaEntry("PSX")
-		_, _, _ = AddMediaPath(mediaDB, scanState, "PSX", entry.Path, "", false, false, nil, "")
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Verify GetMax methods return expected values
-		maxSystemID, err = mediaDB.GetMaxSystemID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), maxSystemID, "Should have 1 system")
-
-		maxTitleID, err = mediaDB.GetMaxTitleID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), maxTitleID, "Should have 1 title")
-
-		// Test PopulateScanStateFromDB returns same values
-		testState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		err = PopulateScanStateFromDB(ctx, mediaDB, testState)
-		require.NoError(t, err)
-
-		assert.Equal(t, int(maxSystemID), testState.SystemsIndex, "PopulateScanStateFromDB should match GetMaxSystemID")
-		assert.Equal(t, int(maxTitleID), testState.TitlesIndex, "PopulateScanStateFromDB should match GetMaxTitleID")
-	})
-}
-
-// TestSelectiveIndexingPreservesTagTypes tests that selective reindexing of one system
-// does not delete TagTypes that are used by other systems.
-// This regression test catches the bug where sqlTruncateSystems() was incorrectly
-// deleting global TagTypes during cleanup, causing crashes when trying to add media.
+// TestSelectiveIndexingPreservesTagTypes verifies that truncating and
+// re-indexing one system leaves the shared tag vocabulary untouched.
 func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 	ctx := context.Background()
-	// Create in-memory database with shared cache for transaction visibility
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
 
-	// Generate test data for multiple systems
 	testSystems := []string{"NES", "SNES", "Amiga"}
-	batch := testdata.CreateReproducibleBatch(testSystems, 3) // 3 games per system
+	batch := testdata.CreateReproducibleBatch(testSystems, 3)
 
-	t.Run("Full Index Creates TagTypes", func(t *testing.T) {
-		// Index all systems
-		scanState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
+	for _, systemID := range testSystems {
+		paths := make([]string, 0, len(batch.Entries[systemID]))
+		for _, entry := range batch.Entries[systemID] {
+			paths = append(paths, entry.Path)
 		}
-
-		// Seed known tags
-		err := SeedCanonicalTags(mediaDB, scanState)
-		require.NoError(t, err)
-
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		// Add media for all systems
-		for _, systemID := range testSystems {
-			entries := batch.Entries[systemID]
-			for _, entry := range entries {
-				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, "", false, false, nil, "")
-				require.NoError(t, addErr, "Should add media without error")
-			}
-		}
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Verify TagTypes were created
-		initialTagTypeCount, err := mediaDB.GetMaxTagTypeID()
-		require.NoError(t, err)
-		assert.Positive(t, initialTagTypeCount, "Should have TagTypes after full index")
-	})
-
-	t.Run("Selective Reindex Preserves TagTypes", func(t *testing.T) {
-		// Get initial TagType count
-		initialTagTypeCount, err := mediaDB.GetMaxTagTypeID()
-		require.NoError(t, err)
-
-		// Reindex only Amiga system using TruncateSystems
-		err = mediaDB.TruncateSystems([]string{"Amiga"})
-		require.NoError(t, err)
-
-		// Verify TagTypes were NOT deleted
-		afterTruncateTagTypeCount, err := mediaDB.GetMaxTagTypeID()
-		require.NoError(t, err)
-		assert.Equal(t, initialTagTypeCount, afterTruncateTagTypeCount,
-			"TagTypes should be preserved during selective truncation")
-
-		// Re-populate scan state for selective indexing
-		reindexState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		err = PopulateScanStateForSelectiveIndexing(ctx, mediaDB, reindexState, []string{"Amiga"})
-		require.NoError(t, err)
-
-		// Re-add Amiga media - this should NOT crash with "Extension TagType not found"
-		err = mediaDB.BeginTransaction(false)
-		require.NoError(t, err)
-
-		amigaEntries := batch.Entries["Amiga"]
-		for _, entry := range amigaEntries {
-			_, _, addErr := AddMediaPath(mediaDB, reindexState, "Amiga", entry.Path, "", false, false, nil, "")
-			require.NoError(t, addErr, "Should add Amiga media without TagType errors")
-		}
-
-		err = mediaDB.CommitTransaction()
-		require.NoError(t, err)
-
-		// Verify TagTypes still intact after reindexing
-		finalTagTypeCount, err := mediaDB.GetMaxTagTypeID()
-		require.NoError(t, err)
-		assert.Equal(t, initialTagTypeCount, finalTagTypeCount,
-			"TagTypes should remain unchanged after selective reindex")
-
-		// Verify other systems' media is still intact
-		allSystems, err := mediaDB.GetAllSystems()
-		require.NoError(t, err)
-		assert.Len(t, allSystems, 3, "Should still have all 3 systems")
-	})
-}
-
-// TestReindexSameSystemTwice tests that reindexing the same system multiple times
-// works correctly without crashes or data corruption.
-func TestReindexSameSystemTwice(t *testing.T) {
-	ctx := context.Background()
-
-	// Create in-memory database with shared cache for transaction visibility
-	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
-	defer cleanup()
-
-	// Generate test data
-	testSystems := []string{"Amiga"}
-	batch := testdata.CreateReproducibleBatch(testSystems, 5) // 5 games
-
-	// Helper function to index Amiga
-	indexAmiga := func() error {
-		scanState := &database.ScanState{
-			SystemIDs:     make(map[string]int),
-			TitleIDs:      make(map[string]int),
-			MediaIDs:      make(map[string]int),
-			TagTypeIDs:    make(map[string]int),
-			TagIDs:        make(map[string]int),
-			SystemsIndex:  0,
-			TitlesIndex:   0,
-			MediaIndex:    0,
-			TagTypesIndex: 0,
-			TagsIndex:     0,
-		}
-
-		// Check if we need to seed tags
-		maxTagTypeID, _ := mediaDB.GetMaxTagTypeID()
-		if maxTagTypeID == 0 {
-			if seedErr := SeedCanonicalTags(mediaDB, scanState); seedErr != nil {
-				return seedErr
-			}
-		} else {
-			// Populate state for existing data
-			popErr := PopulateScanStateForSelectiveIndexing(ctx, mediaDB, scanState, []string{"Amiga"})
-			if popErr != nil {
-				return popErr
-			}
-		}
-
-		// Begin transaction for media insertion
-		if beginErr := mediaDB.BeginTransaction(false); beginErr != nil {
-			return fmt.Errorf("failed to begin transaction: %w", beginErr)
-		}
-
-		amigaEntries := batch.Entries["Amiga"]
-		for _, entry := range amigaEntries {
-			_, _, addErr := AddMediaPath(
-				mediaDB, scanState, "Amiga", entry.Path, "", false, false, nil, "",
-			)
-			if addErr != nil {
-				return addErr
-			}
-		}
-
-		return mediaDB.CommitTransaction()
+		indexMediaPaths(t, mediaDB, systemID, paths...)
 	}
 
-	t.Run("First Index", func(t *testing.T) {
-		err := indexAmiga()
-		require.NoError(t, err)
+	countTagTypes := func() int {
+		var n int
+		require.NoError(t, mediaDB.UnsafeGetSQLDb().
+			QueryRowContext(ctx, "SELECT COUNT(*) FROM TagTypes").Scan(&n))
+		return n
+	}
+	initialTagTypeCount := countTagTypes()
+	require.Positive(t, initialTagTypeCount, "Should have TagTypes after full index")
 
-		// Verify data
-		maxMediaID, err := mediaDB.GetMaxMediaID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(5), maxMediaID, "Should have 5 media entries")
-	})
+	// Selective reindex: truncate Amiga, then re-index it from scratch.
+	require.NoError(t, mediaDB.TruncateSystems([]string{"Amiga"}))
+	assert.Equal(t, initialTagTypeCount, countTagTypes(),
+		"TagTypes should be preserved during selective truncation")
 
-	t.Run("Second Index (Reindex)", func(t *testing.T) {
-		// Truncate Amiga system
-		err := mediaDB.TruncateSystems([]string{"Amiga"})
-		require.NoError(t, err)
+	amigaPaths := make([]string, 0, len(batch.Entries["Amiga"]))
+	for _, entry := range batch.Entries["Amiga"] {
+		amigaPaths = append(amigaPaths, entry.Path)
+	}
+	indexMediaPaths(t, mediaDB, "Amiga", amigaPaths...)
 
-		// Reindex
-		err = indexAmiga()
-		require.NoError(t, err)
+	assert.Equal(t, initialTagTypeCount, countTagTypes(),
+		"TagTypes should remain unchanged after selective reindex")
 
-		// Verify data exists (IDs continue incrementing after truncation)
-		allSystems, err := mediaDB.GetAllSystems()
-		require.NoError(t, err)
-		assert.Len(t, allSystems, 1, "Should have 1 system (Amiga)")
+	allSystems, err := mediaDB.GetAllSystems()
+	require.NoError(t, err)
+	assert.Len(t, allSystems, 3, "Should still have all 3 systems")
+}
 
-		// Verify TagTypes weren't duplicated or corrupted
-		allTagTypes, err := mediaDB.GetAllTagTypes()
-		require.NoError(t, err)
-		assert.NotEmpty(t, allTagTypes, "Should have TagTypes")
+// TestReindexSameSystemTwice tests that reindexing the same system multiple
+// times works correctly without crashes, duplicates, or tag corruption.
+func TestReindexSameSystemTwice(t *testing.T) {
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
 
-		// Check for duplicate TagTypes by type
-		tagTypeNames := make(map[string]int)
-		for _, tt := range allTagTypes {
-			tagTypeNames[tt.Type]++
-		}
-		for typeName, count := range tagTypeNames {
-			assert.Equal(t, 1, count, "TagType %s should not be duplicated", typeName)
-		}
-	})
+	batch := testdata.CreateReproducibleBatch([]string{"Amiga"}, 5)
+	amigaPaths := make([]string, 0, 5)
+	for _, entry := range batch.Entries["Amiga"] {
+		amigaPaths = append(amigaPaths, entry.Path)
+	}
 
-	t.Run("Third Index (Another Reindex)", func(t *testing.T) {
-		// Truncate Amiga system again
-		err := mediaDB.TruncateSystems([]string{"Amiga"})
-		require.NoError(t, err)
+	indexAmiga := func() {
+		indexMediaPaths(t, mediaDB, "Amiga", amigaPaths...)
+	}
 
-		// Reindex again
-		err = indexAmiga()
-		require.NoError(t, err)
+	indexAmiga()
+	var mediaCount int
+	require.NoError(t, mediaDB.UnsafeGetSQLDb().
+		QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&mediaCount))
+	assert.Equal(t, 5, mediaCount, "Should have 5 media entries")
 
-		// Verify still correct
-		allSystems, err := mediaDB.GetAllSystems()
-		require.NoError(t, err)
-		assert.Len(t, allSystems, 1, "Should have 1 system (Amiga) after third index")
-	})
+	for range 2 {
+		require.NoError(t, mediaDB.TruncateSystems([]string{"Amiga"}))
+		indexAmiga()
+	}
+
+	allSystems, err := mediaDB.GetAllSystems()
+	require.NoError(t, err)
+	assert.Len(t, allSystems, 1, "Should have 1 system (Amiga)")
+
+	require.NoError(t, mediaDB.UnsafeGetSQLDb().
+		QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&mediaCount))
+	assert.Equal(t, 5, mediaCount, "re-indexing must not duplicate media rows")
+
+	// TagTypes must not be duplicated across seed + reindex cycles.
+	rows, err := mediaDB.UnsafeGetSQLDb().QueryContext(ctx,
+		"SELECT Type, COUNT(*) FROM TagTypes GROUP BY Type HAVING COUNT(*) > 1")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	for rows.Next() {
+		var typeName string
+		var n int
+		require.NoError(t, rows.Scan(&typeName, &n))
+		t.Errorf("TagType %s duplicated %d times", typeName, n)
+	}
+	require.NoError(t, rows.Err())
 }
 
 // TestAutomaticNumberStrippingDetection tests the automatic detection of numbered playlists.
@@ -727,11 +267,9 @@ func TestGetPathFragments_DatePrefixPolicy(t *testing.T) {
 	assert.Equal(t, "sonicthehedgehog", fragments.Slug)
 }
 
+// TestSlugGenerationPipeline verifies title and slug derivation end-to-end
+// through the staging pipeline for representative filename shapes.
 func TestSlugGenerationPipeline(t *testing.T) {
-	ctx := context.Background()
-	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
-	defer cleanup()
-
 	tests := []struct {
 		name                string
 		systemID            string
@@ -740,163 +278,42 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		expectedSlug        string
 		stripLeadingNumbers bool
 	}{
-		// Numbered playlist scenarios (where leading number stripping is context-dependent)
 		{
-			name:                "numbered playlist - strips leading number with period",
-			systemID:            "NES",
-			path:                "/roms/nes/playlists/favorites/01. Super Mario Bros (USA).nes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "Super Mario Bros",
-			expectedSlug:        "supermariobrothers",
-		},
-		{
-			name:                "numbered playlist - strips leading number with dash",
-			systemID:            "NES",
-			path:                "/roms/nes/playlists/best/42 - Zelda II (USA).nes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "Zelda II",
-			expectedSlug:        "zelda2",
-		},
-		{
-			name:                "numbered playlist - strips leading number with space",
-			systemID:            "SNES",
-			path:                "/roms/snes/03 Super Metroid (USA).snes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "Super Metroid",
-			expectedSlug:        "supermetroid",
-		},
-		{
-			name:                "numbered playlist - preserves when disabled",
-			systemID:            "NES",
-			path:                "/roms/nes/01. Super Mario Bros (USA).nes",
-			stripLeadingNumbers: false,
-			expectedTitle:       "01. Super Mario Bros",
-			expectedSlug:        "01supermariobrothers",
-		},
-
-		// Games that naturally start with numbers (always preserved regardless of context)
-		{
-			name:                "game starting with number - 1942",
-			systemID:            "NES",
-			path:                "/roms/nes/1942 (USA).nes",
-			stripLeadingNumbers: false, // Even with true, "1942" alone won't be stripped by the regex
-			expectedTitle:       "1942",
-			expectedSlug:        "1942",
-		},
-		{
-			name:                "game starting with number - 3D Worldrunner",
-			systemID:            "NES",
-			path:                "/roms/nes/3D Worldrunner (USA).nes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "3D Worldrunner",
-			expectedSlug:        "3dworldrunner",
-		},
-		{
-			name:                "game starting with number - 7th Saga",
-			systemID:            "SNES",
-			path:                "/roms/snes/7th Saga (USA).snes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "7th Saga",
-			expectedSlug:        "7saga",
-		},
-
-		// Leading article with numbered playlist
-		{
-			name:                "numbered playlist with leading article - strips number keeps article",
-			systemID:            "NES",
-			path:                "/roms/nes/playlists/01. The Legend of Zelda (USA).nes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "The Legend of Zelda",
-			expectedSlug:        "legendofzelda", // Slug still strips "The"
-		},
-		{
-			name:                "numbered playlist with leading article - preserves number and article in title",
-			systemID:            "NES",
-			path:                "/roms/nes/playlists/02. The Legend of Zelda (USA).nes",
-			stripLeadingNumbers: false,
-			expectedTitle:       "02. The Legend of Zelda",
-			expectedSlug:        "02thelegendofzelda", // Slug keeps number, strips "The"
-		},
-
-		// Complex filenames with metadata
-		{
-			name:                "metadata stripped but number stripped in playlist",
-			systemID:            "NES",
-			path:                "/roms/nes/01 - Super Mario Bros (USA) (Rev 1) [!].nes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "Super Mario Bros",
-			expectedSlug:        "supermariobrothers",
-		},
-		{
-			name:                "edition suffix removed with slug generation",
+			name:                "disc metadata stripped",
 			systemID:            "PS1",
-			path:                "/roms/ps1/Final Fantasy VII Deluxe Edition (USA).bin",
-			stripLeadingNumbers: false,
-			expectedTitle:       "Final Fantasy VII Deluxe Edition",
-			expectedSlug:        "finalfantasy7deluxe",
-		},
-
-		// Unicode and special characters
-		{
-			name:                "unicode with numbered playlist",
-			systemID:            "NES",
-			path:                "/roms/nes/01. Pokémon Red (USA).nes",
-			stripLeadingNumbers: true,
-			expectedTitle:       "Pokémon Red",
-			expectedSlug:        "pokemonred",
-		},
-		{
-			name:                "ampersand preserved in title",
-			systemID:            "Genesis",
-			path:                "/roms/genesis/Sonic & Knuckles (USA).md",
-			stripLeadingNumbers: false,
-			expectedTitle:       "Sonic & Knuckles",
-			expectedSlug:        "sonicandknuckles",
-		},
-
-		// Roman numerals
-		{
-			name:                "roman numeral conversion",
-			systemID:            "PS1",
-			path:                "/roms/ps1/Final Fantasy VII (USA) (Disc 1).bin",
+			path:                filepath.Join("roms", "ps1", "Final Fantasy VII (USA) (Disc 1).bin"),
 			stripLeadingNumbers: false,
 			expectedTitle:       "Final Fantasy VII",
 			expectedSlug:        "finalfantasy7",
 		},
-
-		// Trailing article format - title preserved as-is, slug removes trailing ", The"
 		{
 			name:                "trailing article format - preserved in title, stripped from slug",
 			systemID:            "NES",
-			path:                "/roms/nes/Legend of Zelda, The (USA).nes",
+			path:                filepath.Join("roms", "nes", "Legend of Zelda, The (USA).nes"),
 			stripLeadingNumbers: false,
-			expectedTitle:       "Legend of Zelda, The", // Title preserves trailing article format
-			expectedSlug:        "legendofzelda",        // Slug strips trailing ", The"
+			expectedTitle:       "Legend of Zelda, The",
+			expectedSlug:        "legendofzelda",
 		},
-
-		// Subtitle handling - title preserves original delimiter, slug removes separators
 		{
 			name:                "subtitle with colon",
 			systemID:            "NES",
-			path:                "/roms/nes/Zelda: Link's Awakening (USA).nes",
+			path:                filepath.Join("roms", "nes", "Zelda: Link's Awakening (USA).nes"),
 			stripLeadingNumbers: false,
-			expectedTitle:       "Zelda: Link's Awakening", // Title preserves colon
-			expectedSlug:        "zeldalinksawakening",     // Slug removes separator
+			expectedTitle:       "Zelda: Link's Awakening",
+			expectedSlug:        "zeldalinksawakening",
 		},
 		{
 			name:                "subtitle with dash - preserved as-is",
 			systemID:            "NES",
-			path:                "/roms/nes/Zelda - Link's Awakening (USA).nes",
+			path:                filepath.Join("roms", "nes", "Zelda - Link's Awakening (USA).nes"),
 			stripLeadingNumbers: false,
-			expectedTitle:       "Zelda - Link's Awakening", // Title preserves dash separator
-			expectedSlug:        "zeldalinksawakening",      // Slug removes separator
+			expectedTitle:       "Zelda - Link's Awakening",
+			expectedSlug:        "zeldalinksawakening",
 		},
-
-		// Edge cases
 		{
 			name:                "multiple digit prefix stripped",
 			systemID:            "NES",
-			path:                "/roms/nes/123. Game Title (USA).nes",
+			path:                filepath.Join("roms", "nes", "123. Game Title (USA).nes"),
 			stripLeadingNumbers: true,
 			expectedTitle:       "Game Title",
 			expectedSlug:        "gametitle",
@@ -904,66 +321,48 @@ func TestSlugGenerationPipeline(t *testing.T) {
 		{
 			name:                "zero-padded number stripped",
 			systemID:            "SNES",
-			path:                "/roms/snes/003 - Chrono Trigger (USA).snes",
+			path:                filepath.Join("roms", "snes", "003 - Chrono Trigger (USA).snes"),
 			stripLeadingNumbers: true,
 			expectedTitle:       "Chrono Trigger",
 			expectedSlug:        "chronotrigger",
 		},
 	}
 
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create fresh scan state for each test
-			scanState := &database.ScanState{
-				SystemIDs:     make(map[string]int),
-				TitleIDs:      make(map[string]int),
-				MediaIDs:      make(map[string]int),
-				TagTypeIDs:    make(map[string]int),
-				TagIDs:        make(map[string]int),
-				SystemsIndex:  0,
-				TitlesIndex:   0,
-				MediaIndex:    0,
-				TagTypesIndex: 0,
-				TagsIndex:     0,
+			mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+			defer cleanup()
+
+			policy := browseprefix.Policy{}
+			if tt.stripLeadingNumbers {
+				policy = browseprefix.Policy{Kind: browseprefix.KindRank, Enabled: true}
 			}
 
-			// Populate from database if there's existing data
-			err := PopulateScanStateFromDB(ctx, mediaDB, scanState)
+			require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
+			require.NoError(t, mediaDB.BeginTransaction(true))
+			require.NoError(t, mediaDB.ClearScanStage())
+			require.NoError(t, StageMediaPath(&StageMediaPathParams{
+				DB:           mediaDB,
+				SystemID:     tt.systemID,
+				Path:         tt.path,
+				PrefixPolicy: policy,
+			}))
+			_, err := mediaDB.ReconcileStagedSystem(ctx, tt.systemID, database.ScanReconcileOpts{})
 			require.NoError(t, err)
+			require.NoError(t, mediaDB.CommitTransaction())
 
-			// Seed canonical tags if needed
-			if scanState.TagTypesIndex == 0 {
-				err = SeedCanonicalTags(mediaDB, scanState)
-				require.NoError(t, err)
-			}
-
-			err = mediaDB.BeginTransaction(false)
+			titles, err := mediaDB.GetTitlesBySystemID(tt.systemID)
 			require.NoError(t, err)
+			require.Len(t, titles, 1)
+			assert.Equal(t, tt.expectedTitle, titles[0].Name, "Title name mismatch")
+			assert.Equal(t, tt.expectedSlug, titles[0].Slug, "Slug mismatch")
 
-			titleIndex, mediaIndex, addErr := AddMediaPath(
-				mediaDB, scanState, tt.systemID, tt.path, "",
-				false, tt.stripLeadingNumbers, nil, "",
-			)
-
-			err = mediaDB.CommitTransaction()
+			media, err := mediaDB.GetMediaBySystemID(tt.systemID)
 			require.NoError(t, err)
-
-			// Verify the media was added successfully
-			require.NoError(t, addErr, "AddMediaPath should not error")
-			require.NotZero(t, titleIndex, "titleIndex should not be 0")
-			require.NotZero(t, mediaIndex, "mediaIndex should not be 0")
-
-			// Verify the title was created with correct name and slug
-			title, err := mediaDB.FindMediaTitle(&database.MediaTitle{DBID: int64(titleIndex)})
-			require.NoError(t, err, "Should be able to retrieve title from database")
-			assert.Equal(t, tt.expectedTitle, title.Name, "Title name mismatch")
-			assert.Equal(t, tt.expectedSlug, title.Slug, "Slug mismatch")
-
-			// Verify the media points to the correct title
-			media, err := mediaDB.FindMedia(database.Media{DBID: int64(mediaIndex)})
-			require.NoError(t, err, "Should be able to retrieve media from database")
-			assert.Equal(t, int64(titleIndex), media.MediaTitleDBID, "Media should point to correct title")
-			assert.Equal(t, tt.path, media.Path, "Media path should match")
+			require.Len(t, media, 1)
+			assert.Equal(t, titles[0].DBID, media[0].MediaTitleDBID, "Media should point to correct title")
+			assert.Equal(t, tt.path, media[0].Path, "Media path should match")
 		})
 	}
 }

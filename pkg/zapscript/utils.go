@@ -59,6 +59,20 @@ func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, er
 	}, nil
 }
 
+// parseMacroDuration parses a duration string used in **delay and {delay:N}.
+// A plain integer is treated as milliseconds; any other string is passed to
+// time.ParseDuration so "1s", "500ms", and "1m30s" are all accepted.
+func parseMacroDuration(s string) (time.Duration, error) {
+	if ms, err := strconv.Atoi(s); err == nil {
+		return time.Duration(ms) * time.Millisecond, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	return d, nil
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
@@ -89,7 +103,13 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		}
 		return platforms.CmdResult{}, nil
 	default:
-		return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], err)
+		d, durErr := time.ParseDuration(env.Cmd.Args[0])
+		if durErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], durErr)
+		}
+		log.Info().Msgf("delaying for: %v", d)
+		time.Sleep(d)
+		return platforms.CmdResult{}, nil
 	}
 }
 

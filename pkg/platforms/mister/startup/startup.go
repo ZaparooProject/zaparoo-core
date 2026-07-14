@@ -31,9 +31,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 )
 
-// TODO: delete entry from startup
-// TODO: enable/disable entry in startup
-
 type Startup struct {
 	Entries []Entry
 }

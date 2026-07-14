@@ -1763,7 +1763,6 @@ _readTag() {
     _yesno "Tag not read" --yes-label "Retry" && _readTag
     return 1
   fi
-  #TODO determin if we need a message here saying the scan was successful
   [[ -n "${currentScan}" ]] && echo "${currentScan}"
 }
 

@@ -27,7 +27,9 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
+	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,19 +116,25 @@ func TestEmulatorMapping(t *testing.T) {
 }
 
 // TestCreateEmuDeckLauncherTest tests the Test function of EmuDeck launchers.
+func testEmuDeckRetroArchOptions() *sharedretroarch.Options {
+	options := steamOSRetroArchOptions(defaultRetroArchAppendConfigPath())
+	return &options
+}
+
 func TestCreateEmuDeckLauncherTest(t *testing.T) {
 	t.Parallel()
 
 	paths := EmuDeckPaths{
-		RomsPath:     "/home/testuser/Emulation/roms",
-		GamelistPath: "/home/testuser/ES-DE/gamelists",
+		RomsPath:     filepath.Join(string(filepath.Separator), "home", "testuser", "Emulation", "roms"),
+		GamelistPath: filepath.Join(string(filepath.Separator), "home", "testuser", "ES-DE", "gamelists"),
 	}
 
 	systemInfo := esde.SystemInfo{
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
+	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupEmuDeck)
 
 	tests := []struct {
 		name     string
@@ -135,42 +143,42 @@ func TestCreateEmuDeckLauncherTest(t *testing.T) {
 	}{
 		{
 			name:     "valid ROM path within system",
-			path:     "/home/testuser/Emulation/roms/nes/super_mario.nes",
+			path:     filepath.Join(paths.RomsPath, "nes", "super_mario.nes"),
 			expected: true,
 		},
 		{
 			name:     "valid ROM path in subdirectory",
-			path:     "/home/testuser/Emulation/roms/nes/USA/zelda.nes",
+			path:     filepath.Join(paths.RomsPath, "nes", "USA", "zelda.nes"),
 			expected: true,
 		},
 		{
 			name:     "path outside system directory",
-			path:     "/home/testuser/Emulation/roms/snes/mario_world.sfc",
+			path:     filepath.Join(paths.RomsPath, "snes", "mario_world.sfc"),
 			expected: false,
 		},
 		{
 			name:     "path with parent directory traversal",
-			path:     "/home/testuser/Emulation/roms/nes/../snes/game.sfc",
+			path:     filepath.Join(paths.RomsPath, "nes", "..", "snes", "game.sfc"),
 			expected: false,
 		},
 		{
 			name:     "txt file should be skipped",
-			path:     "/home/testuser/Emulation/roms/nes/readme.txt",
+			path:     filepath.Join(paths.RomsPath, "nes", "readme.txt"),
 			expected: false,
 		},
 		{
 			name:     "directory path (no extension) should be skipped",
-			path:     "/home/testuser/Emulation/roms/nes/subdir",
+			path:     filepath.Join(paths.RomsPath, "nes", "subdir"),
 			expected: false,
 		},
 		{
 			name:     "absolute path outside roms",
-			path:     "/etc/passwd",
+			path:     filepath.Join(string(filepath.Separator), "etc", "passwd"),
 			expected: false,
 		},
 		{
 			name:     "zip archive is valid",
-			path:     "/home/testuser/Emulation/roms/nes/game.zip",
+			path:     filepath.Join(paths.RomsPath, "nes", "game.zip"),
 			expected: true,
 		},
 	}
@@ -189,8 +197,8 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 	t.Parallel()
 
 	paths := RetroDECKPaths{
-		RomsPath:     "/home/testuser/retrodeck/roms",
-		GamelistPath: "/home/testuser/retrodeck/ES-DE/gamelists",
+		RomsPath:     filepath.Join(string(filepath.Separator), "home", "testuser", "retrodeck", "roms"),
+		GamelistPath: filepath.Join(string(filepath.Separator), "home", "testuser", "retrodeck", "ES-DE", "gamelists"),
 	}
 
 	systemInfo := esde.SystemInfo{
@@ -198,6 +206,7 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 	}
 
 	launcher := createRetroDECKLauncher("snes", systemInfo, paths)
+	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupRetroDECK)
 
 	tests := []struct {
 		name     string
@@ -206,32 +215,37 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 	}{
 		{
 			name:     "valid ROM path within system",
-			path:     "/home/testuser/retrodeck/roms/snes/chrono_trigger.sfc",
+			path:     filepath.Join(paths.RomsPath, "snes", "chrono_trigger.sfc"),
 			expected: true,
 		},
 		{
 			name:     "valid ROM path in subdirectory",
-			path:     "/home/testuser/retrodeck/roms/snes/JPN/game.sfc",
+			path:     filepath.Join(paths.RomsPath, "snes", "JPN", "game.sfc"),
 			expected: true,
 		},
 		{
 			name:     "path outside system directory",
-			path:     "/home/testuser/retrodeck/roms/nes/mario.nes",
+			path:     filepath.Join(paths.RomsPath, "nes", "mario.nes"),
 			expected: false,
 		},
 		{
 			name:     "path with parent directory traversal",
-			path:     "/home/testuser/retrodeck/roms/snes/../nes/game.nes",
+			path:     filepath.Join(paths.RomsPath, "snes", "..", "nes", "game.nes"),
 			expected: false,
 		},
 		{
 			name:     "txt file should be skipped",
-			path:     "/home/testuser/retrodeck/roms/snes/notes.txt",
+			path:     filepath.Join(paths.RomsPath, "snes", "notes.txt"),
 			expected: false,
 		},
 		{
 			name:     "directory path (no extension) should be skipped",
-			path:     "/home/testuser/retrodeck/roms/snes/folder",
+			path:     filepath.Join(paths.RomsPath, "snes", "folder"),
+			expected: false,
+		},
+		{
+			name:     "system root should be skipped",
+			path:     filepath.Join(paths.RomsPath, "snes"),
 			expected: false,
 		},
 	}
@@ -250,15 +264,15 @@ func TestEmuDeckLauncherID(t *testing.T) {
 	t.Parallel()
 
 	paths := EmuDeckPaths{
-		RomsPath:     "/home/testuser/Emulation/roms",
-		GamelistPath: "/home/testuser/ES-DE/gamelists",
+		RomsPath:     filepath.Join(string(filepath.Separator), "home", "testuser", "Emulation", "roms"),
+		GamelistPath: filepath.Join(string(filepath.Separator), "home", "testuser", "ES-DE", "gamelists"),
 	}
 
 	systemInfo := esde.SystemInfo{
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	assert.Equal(t, "nes", launcher.SystemID)
 	assert.Contains(t, launcher.ID, "EmuDeck")
@@ -269,8 +283,8 @@ func TestRetroDECKLauncherID(t *testing.T) {
 	t.Parallel()
 
 	paths := RetroDECKPaths{
-		RomsPath:     "/home/testuser/retrodeck/roms",
-		GamelistPath: "/home/testuser/retrodeck/ES-DE/gamelists",
+		RomsPath:     filepath.Join(string(filepath.Separator), "home", "testuser", "retrodeck", "roms"),
+		GamelistPath: filepath.Join(string(filepath.Separator), "home", "testuser", "retrodeck", "ES-DE", "gamelists"),
 	}
 
 	systemInfo := esde.SystemInfo{
@@ -289,15 +303,15 @@ func TestEmuDeckRetroArchLauncherHasControls(t *testing.T) {
 	t.Parallel()
 
 	paths := EmuDeckPaths{
-		RomsPath:     "/home/testuser/Emulation/roms",
-		GamelistPath: "/home/testuser/ES-DE/gamelists",
+		RomsPath:     filepath.Join(string(filepath.Separator), "home", "testuser", "Emulation", "roms"),
+		GamelistPath: filepath.Join(string(filepath.Separator), "home", "testuser", "ES-DE", "gamelists"),
 	}
 
 	systemInfo := esde.SystemInfo{
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	expectedControls := []string{
 		platforms.ControlSaveState,
@@ -306,6 +320,7 @@ func TestEmuDeckRetroArchLauncherHasControls(t *testing.T) {
 		platforms.ControlTogglePause,
 		platforms.ControlReset,
 		platforms.ControlFastForward,
+		platforms.ControlRewind,
 		platforms.ControlStop,
 	}
 
@@ -313,7 +328,8 @@ func TestEmuDeckRetroArchLauncherHasControls(t *testing.T) {
 	for _, name := range expectedControls {
 		ctrl, ok := launcher.Controls[name]
 		assert.True(t, ok, "should have control: %s", name)
-		assert.NotEmpty(t, ctrl.Script, "control %s should have a script", name)
+		assert.NotNil(t, ctrl.Func, "control %s should have a native function", name)
+		assert.Empty(t, ctrl.Script, "control %s should not depend on keyboard scripts", name)
 	}
 }
 
@@ -323,53 +339,15 @@ func TestEmuDeckStandaloneLauncherHasNoControls(t *testing.T) {
 	t.Parallel()
 
 	paths := EmuDeckPaths{
-		RomsPath:     "/home/testuser/Emulation/roms",
-		GamelistPath: "/home/testuser/ES-DE/gamelists",
+		RomsPath:     filepath.Join(string(filepath.Separator), "home", "testuser", "Emulation", "roms"),
+		GamelistPath: filepath.Join(string(filepath.Separator), "home", "testuser", "ES-DE", "gamelists"),
 	}
 
 	systemInfo := esde.SystemInfo{
 		SystemID: "psx",
 	}
 
-	launcher := createEmuDeckLauncher("psx", systemInfo, paths)
+	launcher := createEmuDeckLauncher("psx", systemInfo, paths, testEmuDeckRetroArchOptions())
 
 	assert.Nil(t, launcher.Controls, "standalone launcher should not have controls")
-}
-
-// TestRetroArchControls tests the retroArchControls helper returns the
-// expected control scripts.
-func TestRetroArchControls(t *testing.T) {
-	t.Parallel()
-
-	controls := retroArchControls()
-
-	expected := map[string]string{
-		platforms.ControlSaveState:   "**input.keyboard:{f2}",
-		platforms.ControlLoadState:   "**input.keyboard:{f4}",
-		platforms.ControlToggleMenu:  "**input.keyboard:{f1}",
-		platforms.ControlTogglePause: "**input.keyboard:p",
-		platforms.ControlReset:       "**input.keyboard:{f9}",
-		platforms.ControlFastForward: "**input.keyboard:l",
-		platforms.ControlStop:        "**stop",
-	}
-
-	assert.Len(t, controls, len(expected))
-	for name, script := range expected {
-		ctrl, ok := controls[name]
-		assert.True(t, ok, "missing control: %s", name)
-		assert.Equal(t, script, ctrl.Script, "wrong script for control: %s", name)
-	}
-}
-
-// TestGetRetroArchCoresPath tests the RetroArch cores path function.
-func TestGetRetroArchCoresPath(t *testing.T) {
-	t.Parallel()
-
-	path := getRetroArchCoresPath()
-
-	// Should contain the expected path components
-	assert.Contains(t, path, ".var")
-	assert.Contains(t, path, "app")
-	assert.Contains(t, path, "org.libretro.RetroArch")
-	assert.Contains(t, path, "cores")
 }

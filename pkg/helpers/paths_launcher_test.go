@@ -381,6 +381,21 @@ func TestLauncherSpecificity(t *testing.T) {
 	}
 }
 
+func TestPathIsLauncher_SchemeUsesTestFunction(t *testing.T) {
+	t.Parallel()
+
+	launcher := platforms.Launcher{
+		ID:      "Virtual",
+		Schemes: []string{"zaparoo"},
+		Test: func(_ *config.Instance, path string) bool {
+			return path == "zaparoo://expected/Game"
+		},
+	}
+
+	assert.True(t, PathIsLauncher(nil, nil, &launcher, "zaparoo://expected/Game"))
+	assert.False(t, PathIsLauncher(nil, nil, &launcher, "zaparoo://other/Game"))
+}
+
 func TestFindLauncher_SpecificOverGeneric(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()

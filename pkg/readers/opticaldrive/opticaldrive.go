@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,7 +31,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -47,14 +48,14 @@ const (
 	MergedIDSeparator = "/"
 )
 
-// FSChecker checks if files/devices exist.
+// FSChecker checks filesystem paths used by the optical drive reader.
 type FSChecker interface {
 	Stat(path string) (os.FileInfo, error)
+	ReadDir(path string) ([]os.DirEntry, error)
 }
 
-// CommandRunner runs external commands.
-type CommandRunner interface {
-	RunBlkid(ctx context.Context, valueType, devicePath string) ([]byte, error)
+type discIdentifier interface {
+	Identify(ctx context.Context, devicePath string) (discIdentity, error)
 }
 
 // DefaultFSChecker uses os.Stat for filesystem checks.
@@ -68,48 +69,117 @@ func (DefaultFSChecker) Stat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
-// DefaultCommandRunner runs real blkid commands.
-type DefaultCommandRunner struct{}
-
-func (DefaultCommandRunner) RunBlkid(ctx context.Context, valueType, devicePath string) ([]byte, error) {
-	//nolint:gosec // G204: valueType and devicePath from OS, blkid reader's purpose
-	out, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", valueType, devicePath).Output()
+func (DefaultFSChecker) ReadDir(path string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(path)
 	if err != nil {
-		return nil, fmt.Errorf("blkid command failed: %w", err)
+		return nil, fmt.Errorf("read dir failed: %w", err)
 	}
-	return out, nil
+	return entries, nil
+}
+
+type contextReaderAtCloser interface {
+	contextReaderAt
+	Close() error
+}
+
+type defaultDiscIdentifier struct{}
+
+var openDiscDeviceReader = openDiscDevice
+
+func (defaultDiscIdentifier) Identify(ctx context.Context, devicePath string) (discIdentity, error) {
+	reader, err := openDiscDeviceReader(devicePath)
+	if err != nil {
+		return discIdentity{}, err
+	}
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	identity, found, err := readISO9660IdentityContext(ctx, reader)
+	if err != nil {
+		return discIdentity{}, err
+	}
+	if !found {
+		return discIdentity{}, errISO9660IdentityNotFound
+	}
+	return identity, nil
 }
 
 type FileReader struct {
-	fsChecker     FSChecker
-	commandRunner CommandRunner
-	cfg           *config.Instance
-	device        config.ReadersConnect
-	path          string
-	polling       bool
-	mu            syncutil.RWMutex // protects polling
-	wg            sync.WaitGroup   // tracks polling goroutine
+	fsChecker         FSChecker
+	discIdentifier    discIdentifier
+	gameIDProbe       func(path string) []readers.ScanProperty
+	cfg               *config.Instance
+	device            config.ReadersConnect
+	path              string
+	sysBlockPath      string
+	devPath           string
+	wg                sync.WaitGroup
+	mu                syncutil.RWMutex
+	defaultEnabled    bool
+	defaultAutoDetect bool
+	polling           bool
 }
 
 func NewReader(cfg *config.Instance) *FileReader {
+	return NewReaderWithDefaults(cfg, true, true)
+}
+
+func NewReaderWithDefaults(cfg *config.Instance, defaultEnabled, defaultAutoDetect bool) *FileReader {
 	return &FileReader{
-		cfg:           cfg,
-		fsChecker:     DefaultFSChecker{},
-		commandRunner: DefaultCommandRunner{},
+		cfg:               cfg,
+		defaultEnabled:    defaultEnabled,
+		defaultAutoDetect: defaultAutoDetect,
+		fsChecker:         DefaultFSChecker{},
+		discIdentifier:    defaultDiscIdentifier{},
+		gameIDProbe:       identifyGameIDProperties,
+		sysBlockPath:      filepath.Join(string(filepath.Separator), "sys", "block"),
+		devPath:           filepath.Join(string(filepath.Separator), "dev"),
 	}
 }
 
-func (*FileReader) Metadata() readers.DriverMetadata {
+func (r *FileReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{
 		ID:                "opticaldrive",
-		DefaultEnabled:    true,
-		DefaultAutoDetect: true,
+		DefaultEnabled:    r.defaultEnabled,
+		DefaultAutoDetect: r.defaultAutoDetect,
 		Description:       "Optical drive CD/DVD reader",
 	}
 }
 
 func (*FileReader) IDs() []string {
 	return []string{"opticaldrive", "optical_drive"}
+}
+
+func resolveTokenID(uuid, label, idSource string) string {
+	switch idSource {
+	case IDSourceUUID:
+		return uuid
+	case IDSourceLabel:
+		return label
+	case IDSourceMerged:
+		if uuid == "" || label == "" {
+			return ""
+		}
+		return uuid + MergedIDSeparator + label
+	default:
+		if uuid == "" || label == "" {
+			return ""
+		}
+		return uuid + MergedIDSeparator + label
+	}
+}
+
+func scanPropertiesEqual(a, b []readers.ScanProperty) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *FileReader) Open(
@@ -143,29 +213,13 @@ func (r *FileReader) Open(
 	r.polling = true
 	r.mu.Unlock()
 
-	getID := func(uuid string, label string) string {
-		if uuid == "" {
-			return label
-		} else if label == "" {
-			return uuid
-		}
-
-		switch r.device.IDSource {
-		case IDSourceUUID:
-			return uuid
-		case IDSourceLabel:
-			return label
-		case IDSourceMerged:
-			return uuid + MergedIDSeparator + label
-		default:
-			return uuid + MergedIDSeparator + label
-		}
-	}
-
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		var token *tokens.Token
+		var tokenProperties []readers.ScanProperty
+		var lastUUID, lastLabel, lastIdentityErr string
+		hasProbed := false
 
 		for {
 			r.mu.RLock()
@@ -188,6 +242,7 @@ func (r *FileReader) Open(
 					log.Warn().Err(err).Msg("optical drive device no longer exists - " +
 						"sending error signal to keep media running")
 					token = nil
+					hasProbed = false
 					iq <- readers.Scan{
 						Source:      tokens.SourceReader,
 						Token:       nil,
@@ -198,53 +253,52 @@ func (r *FileReader) Open(
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			rawUUID, err := r.commandRunner.RunBlkid(ctx, "UUID", r.path)
+			identity, identityErr := r.discIdentifier.Identify(ctx, r.path)
 			cancel()
-			if err != nil {
-				if token == nil {
+
+			uuid := strings.TrimSpace(identity.UUID)
+			label := strings.TrimSpace(identity.Label)
+			identityErrStr := errString(identityErr)
+
+			probeChanged := !hasProbed || uuid != lastUUID || label != lastLabel || identityErrStr != lastIdentityErr
+			lastUUID, lastLabel, lastIdentityErr = uuid, label, identityErrStr
+			hasProbed = true
+			if !probeChanged {
+				continue
+			}
+
+			id := resolveTokenID(uuid, label, r.device.IDSource)
+			scanProperties := r.gameIDProbe(r.path)
+			log.Debug().
+				Str("path", r.path).
+				Str("uuid", uuid).
+				Str("label", label).
+				Str("identityErr", identityErrStr).
+				Int("properties", len(scanProperties)).
+				Msg("optical media identification probe changed")
+
+			if token != nil && len(scanProperties) > 0 && scanPropertiesEqual(scanProperties, tokenProperties) {
+				if id == "" || token.UID == "" || token.UID == id {
 					continue
-				}
-				// Device exists but blkid failed - this is normal disc removal
-				log.Debug().Err(err).Msg("error identifying optical media, removing token")
-				token = nil
-				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  nil,
 				}
 			}
 
-			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-			rawLabel, err := r.commandRunner.RunBlkid(ctx, "LABEL", r.path)
-			cancel()
-			if err != nil {
-				if token == nil {
-					continue
-				}
-				log.Debug().Err(err).Msg("error identifying optical media, removing token")
-				token = nil
-				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  nil,
-				}
-			}
-
-			uuid := strings.TrimSpace(string(rawUUID))
-			label := strings.TrimSpace(string(rawLabel))
-
-			if uuid == "" && label == "" && token != nil {
-				log.Debug().Msg("id is empty, removing token")
-				token = nil
-				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  nil,
+			if id == "" && len(scanProperties) == 0 {
+				if token != nil {
+					log.Debug().
+						Err(identityErr).
+						Msg("error identifying optical media, removing token")
+					token = nil
+					tokenProperties = nil
+					iq <- readers.Scan{
+						Source: tokens.SourceReader,
+						Token:  nil,
+					}
 				}
 				continue
 			}
 
-			id := getID(uuid, label)
-			if token != nil && token.UID == id {
-				continue
-			} else if id == "" {
+			if token != nil && token.UID == id && scanPropertiesEqual(scanProperties, tokenProperties) {
 				continue
 			}
 
@@ -255,11 +309,13 @@ func (r *FileReader) Open(
 				Source:   tokens.SourceReader,
 				ReaderID: r.ReaderID(),
 			}
+			tokenProperties = append(tokenProperties[:0], scanProperties...)
 
 			log.Debug().Msgf("new token: %s", token.UID)
 			iq <- readers.Scan{
-				Source: tokens.SourceReader,
-				Token:  token,
+				Source:     tokens.SourceReader,
+				Token:      token,
+				Properties: scanProperties,
 			}
 		}
 	}()
@@ -275,8 +331,86 @@ func (r *FileReader) Close() error {
 	return nil
 }
 
-func (*FileReader) Detect(_ []string) string {
+func (r *FileReader) Detect(exclude []string) string {
+	sysBlockPath := r.sysBlockPath
+	if sysBlockPath == "" {
+		sysBlockPath = filepath.Join(string(filepath.Separator), "sys", "block")
+	}
+	devPath := r.devPath
+	if devPath == "" {
+		devPath = filepath.Join(string(filepath.Separator), "dev")
+	}
+
+	fsChecker := r.fsChecker
+	if fsChecker == nil {
+		fsChecker = DefaultFSChecker{}
+	}
+
+	entries, err := fsChecker.ReadDir(sysBlockPath)
+	if err != nil {
+		return ""
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "sr") {
+			continue
+		}
+		path := filepath.Join(devPath, name)
+		if opticalPathExcluded(path, exclude) {
+			continue
+		}
+		if _, statErr := fsChecker.Stat(path); statErr != nil {
+			continue
+		}
+		return "opticaldrive:" + path
+	}
+
 	return ""
+}
+
+func opticalPathExcluded(path string, exclude []string) bool {
+	for _, excluded := range exclude {
+		_, excludedPath, found := strings.Cut(excluded, ":")
+		if found && excludedPath == path {
+			return true
+		}
+		if !found && excluded == path {
+			return true
+		}
+	}
+	return false
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func identifyGameIDProperties(path string) []readers.ScanProperty {
+	started := time.Now()
+	log.Debug().Str("path", path).Msg("live gameid identification started")
+	candidates := gameid.IdentifyLiveDisc(path)
+	duration := time.Since(started)
+	if len(candidates) == 0 {
+		log.Debug().Str("path", path).Dur("duration", duration).Msg("live gameid not found")
+		return nil
+	}
+
+	log.Debug().Str("path", path).Int("candidates", len(candidates)).Dur("duration", duration).
+		Msg("live gameid identified")
+
+	out := make([]readers.ScanProperty, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, readers.ScanProperty{
+			System: candidate.SystemID,
+			Name:   string(tags.TagPropertyGameID),
+			Value:  candidate.ID,
+		})
+	}
+	return out
 }
 
 func (r *FileReader) Path() string {

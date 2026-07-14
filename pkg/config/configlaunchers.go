@@ -20,10 +20,14 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
@@ -34,6 +38,7 @@ import (
 
 type Launchers struct {
 	IndexRoot        []string `toml:"index_root,omitempty,multiline"`
+	Preference       []string `toml:"preference,omitempty,multiline"`
 	AllowFile        []string `toml:"allow_file,omitempty,multiline"`
 	allowFileRe      []*regexp.Regexp
 	MediaDir         string             `toml:"media_dir,omitempty"`
@@ -44,9 +49,11 @@ type Launchers struct {
 }
 
 type LaunchersDefault struct {
-	Launcher   string `toml:"launcher"`
-	InstallDir string `toml:"install_dir,omitempty"`
-	ServerURL  string `toml:"server_url,omitempty"`
+	RenderScale      *int   `toml:"render_scale,omitempty"`
+	Launcher         string `toml:"launcher"`
+	InstallDir       string `toml:"install_dir,omitempty"`
+	ServerURL        string `toml:"server_url,omitempty"`
+	RenderResolution string `toml:"render_resolution,omitempty"`
 	// Action specifies the default launch action. Common values:
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
@@ -58,17 +65,35 @@ type LaunchersDefault struct {
 	LoadPath string `toml:"load_path,omitempty"`
 }
 
+const (
+	CustomLauncherKindLauncher      = "launcher"
+	CustomLauncherKindVirtualSystem = "virtual_system"
+	CustomLauncherBackendCommand    = "command"
+	CustomLauncherBackendMisterCore = "mister_core"
+)
+
 type LaunchersCustom struct {
 	Controls   map[string]string `toml:"controls"`
 	ID         string            `toml:"id"`
-	System     string            `toml:"system"`
-	Execute    string            `toml:"execute"`
-	Lifecycle  string            `toml:"lifecycle"`
-	MediaDirs  []string          `toml:"media_dirs"`
-	FileExts   []string          `toml:"file_exts"`
-	Groups     []string          `toml:"groups"`
-	Schemes    []string          `toml:"schemes"`
-	Restricted bool              `toml:"restricted"`
+	Kind       string            `toml:"kind,omitempty"`
+	Backend    string            `toml:"backend,omitempty"`
+	System     string            `toml:"system,omitempty"`
+	Name       string            `toml:"name,omitempty"`
+	Category   string            `toml:"category,omitempty"`
+	Execute    string            `toml:"execute,omitempty"`
+	Lifecycle  string            `toml:"lifecycle,omitempty"`
+	LoadPath   string            `toml:"load_path,omitempty"`
+	MediaDirs  []string          `toml:"media_dirs,omitempty"`
+	FileExts   []string          `toml:"file_exts,omitempty"`
+	Groups     []string          `toml:"groups,omitempty"`
+	Schemes    []string          `toml:"schemes,omitempty"`
+	Restricted bool              `toml:"restricted,omitempty"`
+}
+
+func (c *Instance) LauncherPreference() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]string(nil), c.vals.Launchers.Preference...)
 }
 
 func (c *Instance) DefaultMediaDir() string {
@@ -150,6 +175,15 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 			if entry.LoadPath != "" {
 				result.LoadPath = entry.LoadPath
 			}
+			if entry.RenderScale != nil {
+				renderScale := *entry.RenderScale
+				result.RenderScale = &renderScale
+				result.RenderResolution = ""
+			}
+			if entry.RenderResolution != "" {
+				result.RenderScale = nil
+				result.RenderResolution = entry.RenderResolution
+			}
 		}
 	}
 
@@ -162,6 +196,38 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result
+}
+
+// ValidateRenderResolution validates and parses a positive WIDTHxHEIGHT render target.
+func ValidateRenderResolution(value string) (width, height int, err error) {
+	widthText, heightText, ok := strings.Cut(strings.ToLower(value), "x")
+	if !ok || widthText == "" || heightText == "" || strings.Contains(heightText, "x") {
+		return 0, 0, fmt.Errorf("render resolution must use WIDTHxHEIGHT, got %q", value)
+	}
+	width, widthErr := strconv.Atoi(widthText)
+	height, heightErr := strconv.Atoi(heightText)
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, fmt.Errorf("render resolution must use positive dimensions, got %q", value)
+	}
+	return width, height, nil
+}
+
+func validateLauncherDefaults(defaults []LaunchersDefault) error {
+	for i := range defaults {
+		entry := &defaults[i]
+		if entry.RenderScale != nil && entry.RenderResolution != "" {
+			return fmt.Errorf("launcher default %d cannot set both render_scale and render_resolution", i)
+		}
+		if entry.RenderScale != nil && *entry.RenderScale <= 0 {
+			return fmt.Errorf("launcher default %d render_scale must be positive", i)
+		}
+		if entry.RenderResolution != "" {
+			if _, _, err := ValidateRenderResolution(entry.RenderResolution); err != nil {
+				return fmt.Errorf("launcher default %d: %w", i, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
@@ -202,43 +268,50 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		return fmt.Errorf("failed to walk launchers directory: %w", err)
 	}
 
-	filesCounts := 0
-	launchersCount := 0
+	sort.Strings(launcherFiles)
 
+	filesCount := 0
+	rawLaunchers := make([]LaunchersCustom, 0)
 	for _, launcherPath := range launcherFiles {
 		log.Debug().Msgf("loading custom launcher: %s", launcherPath)
 
-		data, err := afero.ReadFile(fs, launcherPath)
-		if err != nil {
-			log.Error().Msgf("error reading custom launcher: %s", launcherPath)
+		data, readErr := afero.ReadFile(fs, launcherPath)
+		if readErr != nil {
+			log.Error().Err(readErr).Str("file", launcherPath).Msg("error reading custom launcher")
 			continue
 		}
 
 		var newVals Values
-		err = toml.Unmarshal(data, &newVals)
-		if err != nil {
-			log.Error().Msgf("error parsing custom launcher: %s", launcherPath)
+		decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
+		if decodeErr := decoder.Decode(&newVals); decodeErr != nil {
+			log.Error().Err(decodeErr).Str("file", launcherPath).Msg("error parsing custom launcher")
 			continue
 		}
 
-		for i := range newVals.Launchers.Custom {
-			cl := &newVals.Launchers.Custom[i]
-			log.Info().
-				Str("file", launcherPath).
-				Str("id", cl.ID).
-				Str("system", cl.System).
-				Strs("mediaDirs", cl.MediaDirs).
-				Strs("fileExts", cl.FileExts).
-				Msg("parsed custom launcher from TOML")
-		}
-
-		c.vals.Launchers.Custom = append(c.vals.Launchers.Custom, newVals.Launchers.Custom...)
-
-		filesCounts++
-		launchersCount += len(newVals.Launchers.Custom)
+		rawLaunchers = append(rawLaunchers, newVals.Launchers.Custom...)
+		filesCount++
 	}
 
-	log.Info().Int("files", filesCounts).Int("launchers", launchersCount).Msg("loaded custom launchers")
+	if len(launcherFiles) > 0 && filesCount == 0 {
+		return errors.New("failed to parse any custom launcher files")
+	}
+
+	validated := validateCustomLaunchers(rawLaunchers, c.vals.Launchers.Custom, "external launcher files")
+	c.customLaunchersExternal = cloneCustomLaunchers(validated)
+
+	for i := range validated {
+		cl := &validated[i]
+		log.Info().
+			Str("id", cl.ID).
+			Str("kind", effectiveCustomLauncherKind(cl)).
+			Str("backend", effectiveCustomLauncherBackend(cl)).
+			Str("system", cl.System).
+			Strs("mediaDirs", cl.MediaDirs).
+			Strs("fileExts", cl.FileExts).
+			Msg("registered custom launcher from TOML")
+	}
+
+	log.Info().Int("files", filesCount).Int("launchers", len(validated)).Msg("loaded custom launchers")
 
 	return nil
 }
@@ -246,7 +319,11 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 func (c *Instance) CustomLaunchers() []LaunchersCustom {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Launchers.Custom
+
+	entries := make([]LaunchersCustom, 0, len(c.vals.Launchers.Custom)+len(c.customLaunchersExternal))
+	entries = append(entries, c.vals.Launchers.Custom...)
+	entries = append(entries, c.customLaunchersExternal...)
+	return cloneCustomLaunchers(entries)
 }
 
 func (c *Instance) IndexRoots() []string {

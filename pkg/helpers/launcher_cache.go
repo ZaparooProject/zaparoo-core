@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -32,9 +33,11 @@ import (
 // LauncherCache provides fast O(1) launcher lookups by system ID.
 // This replaces the expensive O(n*m) pl.Launchers() calls in hot paths.
 type LauncherCache struct {
-	bySystemID   map[string][]platforms.Launcher
-	allLaunchers []platforms.Launcher
-	mu           syncutil.RWMutex
+	bySystemID          map[string][]platforms.Launcher
+	availableBySystemID map[string][]platforms.Launcher
+	allLaunchers        []platforms.Launcher
+	launchableSystems   []launchables.VirtualSystem
+	mu                  syncutil.RWMutex
 }
 
 // GlobalLauncherCache is the singleton instance used throughout the application.
@@ -44,13 +47,27 @@ var GlobalLauncherCache = &LauncherCache{}
 // Optional extra launchers (e.g. the native-audio launcher) are appended after
 // deduplication. This should be called once at startup after custom launchers are loaded.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance, extra ...platforms.Launcher) {
+	launchableSystems, launchableMedia := launchables.Available(cfg, pl)
 	all := pl.Launchers(cfg)
+	all = append(all, launchables.LaunchersFor(launchableSystems, launchableMedia)...)
 	for i := range extra {
 		if !launcherInSlice(all, extra[i].ID) {
 			all = append(all, extra[i])
 		}
 	}
+	for i := range all {
+		all[i].Available = true
+		all[i].AvailabilityReason = ""
+		if all[i].Availability == nil {
+			continue
+		}
+		if err := all[i].Availability(cfg); err != nil {
+			all[i].Available = false
+			all[i].AvailabilityReason = err.Error()
+		}
+	}
 	lc.rebuildFromSlice(all)
+	lc.setLaunchableSystems(launchableSystems)
 
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -83,12 +100,30 @@ func (lc *LauncherCache) GetLaunchersBySystem(systemID string) []platforms.Launc
 }
 
 // GetAllLaunchers returns all cached launchers.
+// GetAvailableLaunchersBySystem returns cached launchers whose runtime dependencies are available.
+func (lc *LauncherCache) GetAvailableLaunchersBySystem(systemID string) []platforms.Launcher {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	return lc.availableBySystemID[systemID]
+}
+
 func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
 	result := make([]platforms.Launcher, len(lc.allLaunchers))
 	copy(result, lc.allLaunchers)
+	return result
+}
+
+// GetLaunchableSystems returns available virtual systems cached during launcher initialization.
+func (lc *LauncherCache) GetLaunchableSystems() []launchables.VirtualSystem {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	result := make([]launchables.VirtualSystem, len(lc.launchableSystems))
+	copy(result, lc.launchableSystems)
 	return result
 }
 
@@ -103,14 +138,31 @@ func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 	defer lc.mu.Unlock()
 	lc.allLaunchers = make([]platforms.Launcher, len(launchers))
 	copy(lc.allLaunchers, launchers)
+	lc.launchableSystems = nil
 
 	lc.bySystemID = make(map[string][]platforms.Launcher)
+	lc.availableBySystemID = make(map[string][]platforms.Launcher)
 	for i := range launchers {
 		launcher := launchers[i]
-		if launcher.SystemID != "" {
-			lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
+		if launcher.Availability == nil {
+			launcher.Available = true
+			launcher.AvailabilityReason = ""
+		}
+		lc.allLaunchers[i] = launcher
+		if launcher.SystemID == "" {
+			continue
+		}
+		lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
+		if launcher.Available {
+			lc.availableBySystemID[launcher.SystemID] = append(lc.availableBySystemID[launcher.SystemID], launcher)
 		}
 	}
+}
+
+func (lc *LauncherCache) setLaunchableSystems(systems []launchables.VirtualSystem) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.launchableSystems = append([]launchables.VirtualSystem(nil), systems...)
 }
 
 // GetLauncherByID finds a launcher by its unique ID.
@@ -129,6 +181,8 @@ func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
 
 // Refresh rebuilds the cache with updated launcher data.
 // This can be called via API to refresh the cache without restarting.
+// During refresh, concurrent GetLaunchableSystems calls may briefly see no
+// virtual systems while the cache is rebuilt; they reappear after initialization.
 func (lc *LauncherCache) Refresh(pl platforms.Platform, cfg *config.Instance) {
 	lc.Initialize(pl, cfg)
 }

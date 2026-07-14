@@ -62,6 +62,89 @@ func benchBrowseFilesTagAttach(b *testing.B, name string, withTags bool) {
 	})
 }
 
+// BenchmarkCoverFlags_Attach measures fetchAndAttachCoverFlags for a browse page
+// whose covers are title-scoped (the common case: scrapers store artwork at the
+// title level). Results carry MediaTitleID as the production callers populate it,
+// so this measures the cover query itself rather than the backfill fallback.
+func BenchmarkCoverFlags_Attach(b *testing.B) {
+	for _, page := range []int{100, 500} {
+		b.Run(fmt.Sprintf("title-scope-%d", page), func(b *testing.B) {
+			b.ReportAllocs()
+			ctx := context.Background()
+			mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+			defer cleanup()
+			mediaIDs := seedBenchCoverFlagsDB(b, mediaDB, page)
+
+			results := make([]database.SearchResultWithCursor, len(mediaIDs))
+			for i, id := range mediaIDs {
+				// One media per title in the seeder, so titleID == mediaID.
+				results[i] = database.SearchResultWithCursor{MediaID: id, MediaTitleID: id}
+			}
+			// Warm the per-handle image property tag cache so the benchmark
+			// measures the cover query, not the one-off tag lookup.
+			require.NoError(b, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
+
+			b.ResetTimer()
+			for b.Loop() {
+				if err := fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// seedBenchCoverFlagsDB inserts `rows` titles, one media each, and a title-scope
+// image-boxart property per title. Returns the media DBIDs in insertion order.
+func seedBenchCoverFlagsDB(b *testing.B, mediaDB *MediaDB, rows int) []int64 {
+	b.Helper()
+	ctx := context.Background()
+	parentDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "cover")) + "/"
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(b, err)
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'Bench', 'Bench');
+		INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (901, 900, 'image-boxart');
+	`)
+	require.NoError(b, err)
+
+	titleStmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, 1, ?, ?)`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, titleStmt.Close()) }()
+
+	mediaStmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName) VALUES (?, ?, 1, ?, ?, ?)`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, mediaStmt.Close()) }()
+
+	propStmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text) VALUES (?, 901, ?)`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, propStmt.Close()) }()
+
+	mediaIDs := make([]int64, 0, rows)
+	for i := 1; i <= rows; i++ {
+		id := int64(i)
+		slug := fmt.Sprintf("cover-game-%05d", i)
+		name := fmt.Sprintf("Cover Game %05d", i)
+		path := filepath.ToSlash(filepath.Join(parentDir, fmt.Sprintf("cover-game-%05d", i), "game.chd"))
+		_, err = titleStmt.ExecContext(ctx, id, slug, name)
+		require.NoError(b, err)
+		_, err = mediaStmt.ExecContext(ctx, id, id, path, parentDir, name)
+		require.NoError(b, err)
+		_, err = propStmt.ExecContext(ctx, id, fmt.Sprintf("art/%05d.png", i))
+		require.NoError(b, err)
+		mediaIDs = append(mediaIDs, id)
+	}
+
+	require.NoError(b, tx.Commit())
+	return mediaIDs
+}
+
 func setupBrowseBenchMediaDB(b *testing.B) (mediaDB *MediaDB, cleanup func()) {
 	b.Helper()
 	tempDir, err := os.MkdirTemp("", "zaparoo-browse-bench-mediadb-*")
@@ -85,7 +168,7 @@ func seedBenchBrowseDB(b *testing.B, mediaDB *MediaDB, rows int, withTags bool) 
 	b.Helper()
 	ctx := context.Background()
 	parentDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "bench")) + "/"
-	tx, err := mediaDB.sql.BeginTx(ctx, nil)
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
 	require.NoError(b, err)
 	defer func() { _ = tx.Rollback() }()
 

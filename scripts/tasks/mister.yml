@@ -32,10 +32,12 @@ tasks:
           EXTRA_TAGS: "embed_arcadedb{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
 
   deploy:
+    vars:
+      SKIP_SERVICE_RESTART: '{{default "" .SKIP_SERVICE_RESTART}}'
     cmds:
       - task: build-{{.CLI_ARGS}}
       - scp _build/mister_{{.CLI_ARGS}}/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
-      - ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart
+      - '{{if .SKIP_SERVICE_RESTART}}echo "Skipping MiSTer service restart"{{else}}ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart{{end}}'
 
   bench-build:
     desc: Cross-compile benchmark test binaries for MiSTer ARM

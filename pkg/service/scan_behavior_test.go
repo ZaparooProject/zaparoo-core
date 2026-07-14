@@ -444,6 +444,9 @@ func TestScanBehavior_Tap_ManualExitResetsState(t *testing.T) {
 
 	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
 	env.waitForLaunch(t)
+	// LaunchMedia returns before processTokenQueue completes the software-token
+	// roundtrip. Wait for it so the manual exit cannot race that prior launch.
+	env.waitForSoftwareToken(t)
 
 	env.simulateManualExit()
 

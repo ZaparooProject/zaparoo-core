@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -337,7 +338,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
 				cmd := exec.CommandContext(context.Background(),
-					"cmd", "/c",
+					helpers.ComSpec(), "/c",
 					"start",
 					"flashpoint://run/"+id,
 				)
@@ -356,7 +357,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				//nolint:gosec // Safe: opens URL in default browser via cmd start
 				cmd := exec.CommandContext(context.Background(),
-					"cmd", "/c",
+					helpers.ComSpec(), "/c",
 					"start",
 					path,
 				)
@@ -394,11 +395,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				// Extensions not in default PATHEXT need START command for proper execution
 				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
 					//nolint:gosec // Safe: executes user-configured allow-listed script
-					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
+					cmd = exec.CommandContext(context.Background(), helpers.ComSpec(), "/c", "start", "", path)
 				} else {
 					// .bat, .cmd work fine with direct execution
 					//nolint:gosec // Safe: executes user-configured allow-listed script
-					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
+					cmd = exec.CommandContext(context.Background(), helpers.ComSpec(), "/c", path)
 				}
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				err := cmd.Start()
@@ -448,6 +449,7 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }

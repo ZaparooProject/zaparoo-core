@@ -21,11 +21,21 @@ package readers
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+)
+
+// ErrTagNotDetected and ErrUnsupportedTagType are expected user conditions
+// during a tag write (no tag was presented, or an unsupported tag was). Reader
+// drivers return these so the write path can log them at Warn rather than Error,
+// keeping them out of Sentry while genuine hardware failures remain at Error.
+var (
+	ErrTagNotDetected     = errors.New("could not detect a tag")
+	ErrUnsupportedTagType = errors.New("unsupported tag type")
 )
 
 type Capability string
@@ -43,10 +53,19 @@ type DriverMetadata struct {
 	DefaultAutoDetect bool
 }
 
+// ScanProperty is typed metadata a reader identified about a scanned object.
+// It has the same key/value shape as a stored media property.
+type ScanProperty struct {
+	System string // optional scope; empty means unscoped
+	Name   string
+	Value  string
+}
+
 type Scan struct {
 	Error       error
 	Token       *tokens.Token
 	Source      string
+	Properties  []ScanProperty
 	ReaderError bool // True when Token is nil due to reader error/disconnect vs normal token removal
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -144,8 +145,9 @@ func (p *Platform) StartPost(
 		if err != nil {
 			if attempt == maxRetries {
 				log.Warn().Err(err).Msg("ES API unavailable after retries, continuing without active media detection")
-				p.setActiveMedia(nil)
-				return nil
+				// Don't return: the background tracker (started below) keeps
+				// polling and detects games once the ES API becomes available.
+				break
 			}
 
 			delay := time.Duration(1<<attempt) * baseDelay
@@ -164,15 +166,13 @@ func (p *Platform) StartPost(
 			systemID, err := fromBatoceraSystem(gameResp.SystemName)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to convert system %s, setting no active media", gameResp.SystemName)
-				p.setActiveMedia(nil)
-				return nil
+				break
 			}
 
 			systemMeta, err := assets.GetSystemMetadata(systemID)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to get system metadata for %s, setting no active media", systemID)
-				p.setActiveMedia(nil)
-				return nil
+				break
 			}
 
 			game = models.NewActiveMedia(
@@ -393,7 +393,7 @@ func (p *Platform) ReturnToMenu() error {
 }
 
 func (p *Platform) LaunchSystem(_ *config.Instance, systemID string) error {
-	if strings.EqualFold(systemID, "menu") {
+	if strings.EqualFold(systemID, platforms.SystemMenu) {
 		return p.ReturnToMenu()
 	}
 
@@ -848,6 +848,7 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }

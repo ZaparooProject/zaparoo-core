@@ -77,6 +77,13 @@ func browseDirectoriesOpts(pathPrefix string) any {
 	})
 }
 
+func browseDirectoriesAfterOpts(pathPrefix, afterName string, limit int) any {
+	return mock.MatchedBy(func(opts database.BrowseDirectoriesOptions) bool {
+		return opts.PathPrefix == pathPrefix && opts.AfterName == afterName &&
+			opts.Limit == limit && len(opts.Systems) == 0
+	})
+}
+
 func browseFileCountOpts(pathPrefix string, letter *string) any {
 	return mock.MatchedBy(func(opts database.BrowseFileCountOptions) bool {
 		if opts.PathPrefix != pathPrefix || len(opts.Systems) != 0 {
@@ -103,6 +110,18 @@ func browseFilesSystemOpts(pathPrefix, systemID string) any {
 
 func browseFileCountSystemOpts(pathPrefix, systemID string) any {
 	return mock.MatchedBy(func(opts database.BrowseFileCountOptions) bool {
+		return opts.PathPrefix == pathPrefix && len(opts.Systems) == 1 && opts.Systems[0].ID == systemID
+	})
+}
+
+func browseDirCountOpts(pathPrefix string) any {
+	return mock.MatchedBy(func(opts database.BrowseDirCountOptions) bool {
+		return opts.PathPrefix == pathPrefix && len(opts.Systems) == 0
+	})
+}
+
+func browseDirCountSystemOpts(pathPrefix, systemID string) any {
+	return mock.MatchedBy(func(opts database.BrowseDirCountOptions) bool {
 		return opts.PathPrefix == pathPrefix && len(opts.Systems) == 1 && opts.Systems[0].ID == systemID
 	})
 }
@@ -232,6 +251,67 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	assert.Equal(t, "SNES", *entry.SystemID)
 	require.NotNil(t, entry.FileCount)
 	assert.Equal(t, 12, *entry.FileCount)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestHandleMediaBrowse_SystemRootRoutesDegradedCountUnknown covers the degrade
+// path of the route-count fallback: a route whose exact count timed out is
+// returned with CountUnknown set and must still be listed (with no file count),
+// while a route with a known zero count is empty and must be skipped.
+func TestHandleMediaBrowse_SystemRootRoutesDegradedCountUnknown(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	snesPath := filepath.Join(romsRoot, "SNES")
+	sharedPath := filepath.Join(romsRoot, "shared")
+	snesAPIPath := filepath.ToSlash(snesPath)
+	sharedAPIPath := filepath.ToSlash(sharedPath)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{
+			{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
+			{ID: "SharedSNES", SystemID: "SNES", Folders: []string{"shared"}},
+		})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockSystemRootCandidatesNotReady(mockMediaDB)
+	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
+		Return(0, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "SNES")).
+		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
+				assert.ElementsMatch(t, []string{snesAPIPath, sharedAPIPath}, opts.Routes)
+		}),
+	).Return(map[string]database.BrowseRouteCount{
+		// Exact count timed out but the route is known to contain media.
+		snesAPIPath: {Path: snesAPIPath, CountUnknown: true, SystemIDs: []string{"SNES"}},
+		// Known-empty route: must be skipped entirely.
+		sharedAPIPath: {Path: sharedAPIPath, FileCount: 0, SystemIDs: []string{"SNES"}},
+	}, nil)
+
+	systems := []string{"SNES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Systems: &systems})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "root", entry.Type)
+	assert.Equal(t, snesAPIPath, entry.Path)
+	assert.Equal(t, []string{"SNES"}, entry.SystemIDs)
+	// Degraded route: listed but with no file count.
+	assert.Nil(t, entry.FileCount)
 
 	mockMediaDB.AssertExpectations(t)
 }
@@ -473,7 +553,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testin
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
-		nil, defaultMaxResults, 0, "", systems)
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -566,7 +646,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_UsesMediaDisplayNameFallbacks(t
 			}
 			result, err := buildBrowseResponse(env, path,
 				[]database.BrowseDirectoryResult{{Name: tt.dirName, FileCount: 1, SystemIDs: []string{"PSX"}}},
-				nil, defaultMaxResults, 0, "", systems)
+				nil, defaultMaxResults, 0, 0, nil, false, systems)
 			require.NoError(t, err)
 			browseResults, ok := result.(models.BrowseResults)
 			require.True(t, ok)
@@ -624,7 +704,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_InferredFromDirSystemIDs(t *tes
 	// No systems filter passed — inferred from dir.SystemIDs.
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
-		nil, defaultMaxResults, 0, "", nil)
+		nil, defaultMaxResults, 0, 0, nil, false, nil)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -657,7 +737,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_SkipsLookupForMixedDirSystems(t
 			{Name: "NES", FileCount: 1, SystemIDs: []string{"NES"}},
 			{Name: "SNES", FileCount: 1, SystemIDs: []string{"SNES"}},
 		},
-		nil, defaultMaxResults, 0, "", nil)
+		nil, defaultMaxResults, 0, 0, nil, false, nil)
 	require.NoError(t, err)
 
 	browseResults, ok := result.(models.BrowseResults)
@@ -689,7 +769,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsDisabledSkipsLook
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: "Game.zip", FileCount: 1, SystemIDs: []string{"NES"}}},
-		nil, defaultMaxResults, 0, "", systems)
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -741,7 +821,7 @@ func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: "Game", FileCount: 2, SystemIDs: []string{"PSX"}}},
-		nil, defaultMaxResults, 0, "", systems)
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -779,7 +859,7 @@ func TestBuildBrowseResponse_NestedOnlyDirectoryRemainsPlain(t *testing.T) {
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: "Collection", FileCount: 1, SystemIDs: []string{"NES"}}},
-		nil, defaultMaxResults, 0, "", systems)
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -811,7 +891,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_OversizedDirSkipsLookup(t *test
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: "_alternatives", FileCount: 5000, SystemIDs: []string{"Arcade"}}},
-		nil, defaultMaxResults, 0, "", systems)
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -867,7 +947,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_OversizedDirExcludedFromCandida
 			{Name: "Game", FileCount: 1, SystemIDs: []string{"NES"}},
 			{Name: "Collection", FileCount: 500, SystemIDs: []string{"NES"}},
 		},
-		nil, defaultMaxResults, 0, "", systems)
+		nil, defaultMaxResults, 0, 0, nil, false, systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -931,7 +1011,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_HasCoverPropagated(t *testing.T
 			}
 			result, err := buildBrowseResponse(env, path,
 				[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
-				nil, defaultMaxResults, 0, "", systems)
+				nil, defaultMaxResults, 0, 0, nil, false, systems)
 			require.NoError(t, err)
 			browseResults, ok := result.(models.BrowseResults)
 			require.True(t, ok)
@@ -1072,11 +1152,13 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 			{Name: "NES", FileCount: 100},
 			{Name: "SNES", FileCount: 200},
 		}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts(romsAPIPath+"/")).
+		Return(2, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{}, nil)
-	// BrowseFileCount is skipped when BrowseFiles returns empty and no cursor
+	// The directory page also reports the total file count as the denominator.
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts(romsAPIPath+"/", nil)).
-		Return(0, nil).Maybe()
+		Return(0, nil)
 
 	path := romsAPIPath
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
@@ -1114,6 +1196,8 @@ func TestHandleMediaBrowse_FilesystemWithFiles(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
 		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{
@@ -1169,6 +1253,8 @@ func TestHandleMediaBrowse_FilesystemFiltersBySystem(t *testing.T) {
 		Return([]database.BrowseDirectoryResult{
 			{Name: "RPG", FileCount: 3, SystemIDs: []string{"SNES"}},
 		}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountSystemOpts(sharedPrefix, "SNES")).
+		Return(1, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, browseFilesSystemOpts(sharedPrefix, "SNES")).
 		Return([]database.SearchResultWithCursor{
 			{
@@ -1217,6 +1303,8 @@ func TestHandleMediaBrowse_Pagination(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
 		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/Alpha.sfc", MediaID: 1},
@@ -1258,6 +1346,189 @@ func TestHandleMediaBrowse_Pagination(t *testing.T) {
 	assert.Equal(t, int64(2), cursor.LastID)
 	assert.Equal(t, "Beta", cursor.SortValue)
 
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_DirPaginationPureDirPage(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	// maxResults=2 but 3 dirs are returned (limit maxResults+1=3), so more
+	// directories remain and the page is directory-only.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
+		Return([]database.BrowseDirectoryResult{
+			{Name: "Alpha", FileCount: 1},
+			{Name: "Beta", FileCount: 1},
+			{Name: "Gamma", FileCount: 1},
+		}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+		Return(10, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/SNES/", nil)).
+		Return(5, nil)
+
+	path := "/roms/SNES"
+	maxResults := 2
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path:       &path,
+		MaxResults: &maxResults,
+	})
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	// Only the directory page (2 dirs) is returned; files are not fetched yet.
+	require.Len(t, browseResults.Entries, 2)
+	assert.Equal(t, "directory", browseResults.Entries[0].Type)
+	assert.Equal(t, "Alpha", browseResults.Entries[0].Name)
+	assert.Equal(t, "directory", browseResults.Entries[1].Type)
+	assert.Equal(t, "Beta", browseResults.Entries[1].Name)
+	assert.Equal(t, 10, browseResults.TotalDirs)
+	assert.Equal(t, 5, browseResults.TotalFiles)
+
+	require.NotNil(t, browseResults.Pagination)
+	assert.True(t, browseResults.Pagination.HasNextPage)
+	require.NotNil(t, browseResults.Pagination.NextCursor)
+
+	// The cursor resumes the directory stream after the last returned dir.
+	cursor, decErr := decodeBrowseCursor(*browseResults.Pagination.NextCursor)
+	require.NoError(t, decErr)
+	require.NotNil(t, cursor)
+	assert.Equal(t, browsePhaseDirs, cursor.Phase)
+	assert.Equal(t, "Beta", cursor.DirName)
+	assert.Equal(t, 10, cursor.TotalDirs)
+	assert.Equal(t, 5, cursor.TotalFiles)
+
+	// Files are not queried while directories remain.
+	mockMediaDB.AssertNotCalled(t, "BrowseFiles", mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_DirPaginationCursorAdvance(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	// A dirs-phase cursor positioned after "Beta" carrying the first-page counts.
+	cursorStr, err := encodeDirCursor("Beta", 5, 10)
+	require.NoError(t, err)
+
+	path := "/roms/SNES"
+	maxResults := 2
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// The next page is fetched with AfterName="Beta" and the overfetch limit
+	// (maxResults+1) to detect whether more dirs remain.
+	mockMediaDB.On("BrowseDirectories", mock.Anything,
+		browseDirectoriesAfterOpts("/roms/SNES/", "Beta", maxResults+1)).
+		Return([]database.BrowseDirectoryResult{
+			{Name: "Delta", FileCount: 1},
+			{Name: "Epsilon", FileCount: 1},
+			{Name: "Zeta", FileCount: 1},
+		}, nil)
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path:       &path,
+		MaxResults: &maxResults,
+		Cursor:     &cursorStr,
+	})
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	require.Len(t, browseResults.Entries, 2)
+	assert.Equal(t, "Delta", browseResults.Entries[0].Name)
+	assert.Equal(t, "Epsilon", browseResults.Entries[1].Name)
+	// Counts are carried forward from the cursor, not recomputed.
+	assert.Equal(t, 10, browseResults.TotalDirs)
+	assert.Equal(t, 5, browseResults.TotalFiles)
+
+	require.NotNil(t, browseResults.Pagination)
+	assert.True(t, browseResults.Pagination.HasNextPage)
+	cursor, decErr := decodeBrowseCursor(*browseResults.Pagination.NextCursor)
+	require.NoError(t, decErr)
+	require.NotNil(t, cursor)
+	assert.Equal(t, browsePhaseDirs, cursor.Phase)
+	assert.Equal(t, "Epsilon", cursor.DirName)
+
+	// Cursor pages do not rerun the count queries.
+	mockMediaDB.AssertNotCalled(t, "BrowseDirCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_DirToFileTransition(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	// Exactly maxResults dirs are returned (no extra row), so directories are
+	// exhausted but fill the whole page, leaving no room for files this page.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
+		Return([]database.BrowseDirectoryResult{
+			{Name: "Alpha", FileCount: 1},
+			{Name: "Beta", FileCount: 1},
+		}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+		Return(2, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/SNES/", nil)).
+		Return(5, nil)
+
+	path := "/roms/SNES"
+	maxResults := 2
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path:       &path,
+		MaxResults: &maxResults,
+	})
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+
+	require.Len(t, browseResults.Entries, 2)
+	assert.Equal(t, "directory", browseResults.Entries[0].Type)
+	assert.Equal(t, "directory", browseResults.Entries[1].Type)
+	assert.Equal(t, 2, browseResults.TotalDirs)
+	assert.Equal(t, 5, browseResults.TotalFiles)
+
+	// More files remain, so the next cursor switches to the files phase from
+	// the beginning (no keyset).
+	require.NotNil(t, browseResults.Pagination)
+	assert.True(t, browseResults.Pagination.HasNextPage)
+	cursor, decErr := decodeBrowseCursor(*browseResults.Pagination.NextCursor)
+	require.NoError(t, decErr)
+	require.NotNil(t, cursor)
+	assert.Equal(t, browsePhaseFiles, cursor.Phase)
+	assert.Equal(t, int64(0), cursor.LastID)
+	assert.Equal(t, 5, cursor.TotalFiles)
+	assert.Equal(t, 2, cursor.TotalDirs)
+
+	// Files are not fetched on the boundary page (the page is full of dirs).
+	mockMediaDB.AssertNotCalled(t, "BrowseFiles", mock.Anything, mock.Anything)
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -1312,6 +1583,33 @@ func TestHandleMediaBrowse_CursorRoundTrip(t *testing.T) {
 	assert.False(t, browseResults.Pagination.HasNextPage)
 
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestDecodeBrowseCursor_RejectsInvalidPhase(t *testing.T) {
+	t.Parallel()
+
+	bogus, err := encodeCursorData(&browseCursorData{Phase: "bogus"})
+	require.NoError(t, err)
+
+	cursor, decErr := decodeBrowseCursor(bogus)
+	require.Error(t, decErr)
+	assert.Nil(t, cursor)
+	var clientErr *models.ClientError
+	assert.ErrorAs(t, decErr, &clientErr, "expected a client error for an invalid phase")
+}
+
+func TestDecodeBrowseCursor_AcceptsValidPhases(t *testing.T) {
+	t.Parallel()
+
+	for _, phase := range []string{"", browsePhaseDirs, browsePhaseFiles} {
+		encoded, err := encodeCursorData(&browseCursorData{Phase: phase})
+		require.NoError(t, err)
+
+		cursor, decErr := decodeBrowseCursor(encoded)
+		require.NoError(t, decErr)
+		require.NotNil(t, cursor)
+		assert.Equal(t, phase, cursor.Phase)
+	}
 }
 
 func TestHandleMediaBrowse_CursorTotalFilesSkipsCountQuery(t *testing.T) {
@@ -1410,6 +1708,8 @@ func TestHandleMediaBrowse_FilenameSortCursor(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
 		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{SystemID: "snes", Name: "Alpha", Path: "/roms/SNES/alpha.sfc", MediaID: 1},
@@ -1461,6 +1761,8 @@ func TestHandleMediaBrowse_NameDescSort(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
 		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+		Return(0, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{SystemID: "snes", Name: "Zelda", Path: "/roms/SNES/Zelda.sfc", MediaID: 3},
@@ -1724,8 +2026,8 @@ func TestHandleMediaBrowse_WithLetterFilter(t *testing.T) {
 
 	letterM := "M"
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
-		Return([]database.BrowseDirectoryResult{}, nil)
+	// A letter filter browses files only — the directory phase is skipped,
+	// so BrowseDirectories/BrowseDirCount are never called.
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{
 			{
@@ -1843,4 +2145,37 @@ func TestSchemeDisplayName(t *testing.T) {
 			assert.Equal(t, tt.expected, schemeDisplayName(tt.scheme))
 		})
 	}
+}
+
+// TestHandleMediaBrowseCancelledIsQuiet verifies that a browse request cancelled
+// by the client is returned as a QuietClientError (logged at Debug, kept out of
+// Sentry) rather than a plain error (logged at Error).
+func TestHandleMediaBrowseCancelledIsQuiet(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	// A DB query that fails because the request context was cancelled mid-browse
+	// (client navigated away) is the real-world source of these events.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseRootCounts", mock.Anything, mock.Anything).
+		Return(map[string]*int(nil), context.Canceled)
+
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, nil)
+
+	result, err := HandleMediaBrowse(env)
+	assert.Nil(t, result)
+	require.Error(t, err)
+
+	// Cancellation is returned as a QuietClientError (logged at Debug, out of
+	// Sentry) and still unwraps to context.Canceled for the JSON-RPC response.
+	var quietErr *models.QuietClientError
+	require.ErrorAs(t, err, &quietErr)
+	assert.ErrorIs(t, err, context.Canceled)
 }

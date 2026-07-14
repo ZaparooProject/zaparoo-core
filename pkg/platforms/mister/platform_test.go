@@ -26,6 +26,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -103,6 +107,63 @@ func restoreTLSRootFallbackHooks(t *testing.T) {
 	})
 }
 
+func TestIsWidgetScript(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, isWidgetScript("/media/fat/Scripts/test.sh", ""))
+	assert.False(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "-show-text"))
+	assert.True(t, isWidgetScript("/media/fat/Scripts/zaparoo.sh", "'-show-text'"))
+}
+
+func TestScriptRunMode(t *testing.T) {
+	t.Parallel()
+
+	runScript, widget := scriptRunMode("/media/fat/Scripts/test.sh", "")
+	assert.Equal(t, misterScriptRunFlag, runScript)
+	assert.False(t, widget)
+
+	runScript, widget = scriptRunMode("/media/fat/Scripts/zaparoo.sh", "'-show-text'")
+	assert.Equal(t, misterWidgetRunFlag, runScript)
+	assert.True(t, widget)
+}
+
+func TestRunScript_HiddenSetsMiSTerEnvironment(t *testing.T) {
+	t.Parallel()
+
+	if scriptIsActive() {
+		t.Skip("MiSTer script already active")
+	}
+
+	tmpDir := t.TempDir()
+	flagPath := filepath.Join(tmpDir, "run_flag")
+	argPath := filepath.Join(tmpDir, "arg")
+	scriptPath := filepath.Join(tmpDir, "script.sh")
+	script := "#!/bin/sh\n" +
+		"printf '%s' \"$ZAPAROO_RUN_SCRIPT\" > run_flag\n" +
+		"printf '%s' \"$1\" > arg\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700)) //nolint:gosec // test script must be executable
+
+	err := runScript(nil, scriptPath, "hello", true)
+	require.NoError(t, err)
+
+	flag, err := os.ReadFile(flagPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, misterScriptRunFlag, string(flag))
+
+	arg, err := os.ReadFile(argPath) //nolint:gosec // test reads from its temp dir
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(arg))
+}
+
+func TestLaunchSystem_MenuUsesLaunchMenu(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+	err := p.LaunchSystem(&config.Instance{}, "Menu")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch menu")
+}
+
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
 	t.Parallel()
 
@@ -163,7 +224,16 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			if tt.customKillFunc != nil {
 				launcher.Kill = func(cfg *config.Instance) error {
 					killCalled = true
-					return tt.customKillFunc(cfg)
+					err := tt.customKillFunc(cfg)
+					if err == nil {
+						p.processMu.Lock()
+						proc := p.trackedProcess
+						p.processMu.Unlock()
+						if proc != nil {
+							_ = proc.Signal(syscall.SIGTERM)
+						}
+					}
+					return err
 				}
 			}
 			p.setLastLauncher(&launcher)
@@ -194,6 +264,34 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			assert.Equal(t, tt.customKillCalled, killCalled, "custom Kill called mismatch")
 		})
 	}
+}
+
+func TestStopActiveLauncher_DoesNotReuseStaleKillForScript(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	killCalls := 0
+	launcher := platforms.Launcher{Kill: func(*config.Instance) error {
+		killCalls++
+		p.processMu.Lock()
+		proc := p.trackedProcess
+		p.processMu.Unlock()
+		return proc.Signal(syscall.SIGTERM)
+	}}
+	p.setLastLauncher(&launcher)
+
+	first := exec.CommandContext(context.Background(), "sleep", "10")
+	require.NoError(t, first.Start())
+	p.SetTrackedProcess(first.Process)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, killCalls)
+
+	second := exec.CommandContext(context.Background(), "sleep", "10")
+	require.NoError(t, second.Start())
+	p.SetTrackedProcess(second.Process)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	assert.Equal(t, 1, killCalls, "script stop reused stale launcher Kill hook")
 }
 
 func TestScummVMLauncher_HasCustomKill(t *testing.T) {
@@ -256,6 +354,69 @@ func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("StopActiveLauncher did not return after cleanup completed")
 	}
+}
+
+func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.CommandContext(context.Background(), "sleep", "10")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	restoreDone := make(chan struct{})
+	proc, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "return-to-menu-test")
+	require.NoError(t, err)
+
+	require.NoError(t, p.ReturnToMenu())
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("console cleanup did not complete before ReturnToMenu returned")
+	}
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(proc.Pid, 0), syscall.ESRCH)
+	}, time.Second, 10*time.Millisecond, "tracked console process survived ReturnToMenu")
+}
+
+func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	cmd := exec.CommandContext( //nolint:gosec // Fixed test shell; only temp path is variable.
+		context.Background(),
+		"sh",
+		"-c",
+		`trap 'exit 0' TERM; sh -c 'trap "" TERM; while :; do sleep 1; done' & echo $! > "$1"; wait`,
+		"sh",
+		pidPath,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	p := NewPlatform()
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+	restoreDone := make(chan struct{})
+	_, err := runTrackedProcess(p, cmd, func() { close(restoreDone) }, "group-test")
+	require.NoError(t, err)
+
+	var childPID int
+	require.Eventually(t, func() bool {
+		contents, readErr := os.ReadFile(pidPath) //nolint:gosec // Test-owned temporary file.
+		if readErr != nil {
+			return false
+		}
+		childPID, readErr = strconv.Atoi(strings.TrimSpace(string(contents)))
+		return readErr == nil
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("console cleanup did not complete before stop returned")
+	}
+
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(childPID, 0), syscall.ESRCH)
+	}, time.Second, 10*time.Millisecond, "descendant process survived console cleanup")
 }
 
 func TestArcadeCardLaunchCache(t *testing.T) {

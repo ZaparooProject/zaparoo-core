@@ -74,6 +74,44 @@ func TestIsYearValue(t *testing.T) {
 	assert.False(t, isYearValue(""))
 }
 
+func TestParseBuildDate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		// arcade YYMMDD, century pivot at 70
+		{in: "931005", want: "1993-10-05", ok: true},
+		{in: "961004", want: "1996-10-04", ok: true},
+		{in: "040202", want: "2004-02-02", ok: true},
+		{in: "000101", want: "2000-01-01", ok: true},
+		{in: "691231", want: "2069-12-31", ok: true},
+		{in: "700101", want: "1970-01-01", ok: true},
+		// YYYYMMDD
+		{in: "19920921", want: "1992-09-21", ok: true},
+		// YYYY-MM-DD passthrough
+		{in: "1992-09-21", want: "1992-09-21", ok: true},
+		// invalid month/day
+		{in: "999999", want: "", ok: false},
+		{in: "931305", want: "", ok: false}, // month 13
+		{in: "930032", want: "", ok: false}, // day 32
+		{in: "1992-13-01", want: "", ok: false},
+		// wrong shapes
+		{in: "12345", want: "", ok: false},   // 5 digits
+		{in: "1234567", want: "", ok: false}, // 7 digits
+		{in: "world", want: "", ok: false},
+		{in: "world-931005", want: "", ok: false},
+		{in: "", want: "", ok: false},
+	}
+	for _, tt := range tests {
+		got, ok := parseBuildDate(tt.in)
+		assert.Equal(t, tt.ok, ok, "ok mismatch for %q", tt.in)
+		assert.Equal(t, tt.want, got, "value mismatch for %q", tt.in)
+	}
+}
+
 func TestFindBracketedYear(t *testing.T) {
 	t.Parallel()
 

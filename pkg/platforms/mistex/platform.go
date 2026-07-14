@@ -14,6 +14,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -146,14 +147,15 @@ func (p *Platform) StartPost(
 		}
 
 		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
-		if err != nil {
-			log.Error().Msgf("failed to download arcade database: %s", err)
-		}
-
-		if arcadeDbUpdated {
+		switch {
+		case err != nil:
+			// Non-fatal: an embedded arcade database is used as a fallback. Download
+			// failures are usually network/rate-limit issues, not code faults.
+			log.Warn().Msgf("failed to download arcade database: %s", err)
+		case arcadeDbUpdated:
 			log.Info().Msg("arcade database updated")
 			tr.ReloadNameMap()
-		} else {
+		default:
 			log.Info().Msg("arcade database is up to date")
 		}
 
@@ -291,7 +293,7 @@ func (p *Platform) ActiveGamePath() string {
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	// Handle menu specially - launch menu core directly
-	if strings.EqualFold(id, "menu") {
+	if strings.EqualFold(id, platforms.SystemMenu) {
 		if err := LaunchMenu(); err != nil {
 			return fmt.Errorf("failed to launch menu: %w", err)
 		}
@@ -370,8 +372,9 @@ func (*Platform) ManagedByPackageManager() bool {
 }
 
 func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }
 
 func (*Platform) ShowNotice(

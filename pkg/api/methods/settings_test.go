@@ -87,8 +87,8 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia(t *testing.T) {
 
 	// Set up mock database - needed for checkLimits goroutine
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("GetMediaHistory", mock.Anything, mock.Anything, mock.Anything).
-		Return([]database.MediaHistoryEntry{}, nil).Maybe()
+	mockUserDB.On("SumMediaPlayTimeForDay", mock.Anything).
+		Return(int64(0), nil).Maybe()
 
 	db := &database.Database{
 		UserDB: mockUserDB,

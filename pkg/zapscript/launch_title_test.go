@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -45,6 +46,22 @@ func newMockPlatformWithLaunchers() *mocks.MockPlatform {
 	mp := mocks.NewMockPlatform()
 	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
 	return mp
+}
+
+// waitForAsyncMockCall returns a function that blocks until call has been
+// invoked. cacheSlugResolution (pkg/zapscript/titles/resolve.go) writes the
+// slug-resolution cache from a detached goroutine, so tests with a strict
+// (non-Maybe) expectation on it must wait for that goroutine to run before
+// asserting mock expectations.
+func waitForAsyncMockCall(call *mock.Call) (wait func()) {
+	done := make(chan struct{})
+	call.Run(func(mock.Arguments) { close(done) })
+	return func() {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func TestCmdTitlePassesSlotToLaunchOptions(t *testing.T) {
@@ -1588,10 +1605,13 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			Return(expectedResults, nil)
 
 		// Should update cache after successful search
-		mockMediaDB.On("SetCachedSlugResolution",
+		waitCache := waitForAsyncMockCall(mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, systemID, slug, []zapscript.TagFilter(nil),
 			int64(123), mock.AnythingOfType("string")). // strategy string
-			Return(nil).Once()
+			Return(nil).Once())
+
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+			Return([]database.MediaProperty{}, nil).Once()
 
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -1603,6 +1623,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		assert.True(t, result.MediaChanged)
 		assert.Equal(t, "strategy_exact_match", result.Strategy)
 		assert.InDelta(t, 1.0, result.Confidence, 0.001)
+		waitCache()
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 	})
@@ -1647,9 +1668,12 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 				{MediaID: 100, SystemID: systemID, Path: "/usa.smc"},
 			}, nil).Once()
 
-		mockMediaDB.On("SetCachedSlugResolution",
+		waitCache1 := waitForAsyncMockCall(mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, systemID, slug, tags1, int64(100), mock.AnythingOfType("string")).
-			Return(nil).Once()
+			Return(nil).Once())
+
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(100)).
+			Return([]database.MediaProperty{}, nil).Once()
 
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -1657,6 +1681,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 		_, err := cmdTitle(mockPlatform, env1)
 		require.NoError(t, err)
+		waitCache1()
 
 		// Second call with different tags should not use same cache
 		cmd2 := zapscript.Command{
@@ -1682,9 +1707,12 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 				{MediaID: 200, SystemID: systemID, Path: "/jp.smc"},
 			}, nil).Once()
 
-		mockMediaDB.On("SetCachedSlugResolution",
+		waitCache2 := waitForAsyncMockCall(mockMediaDB.On("SetCachedSlugResolution",
 			mock.Anything, systemID, slug, tags2, int64(200), mock.AnythingOfType("string")).
-			Return(nil).Once()
+			Return(nil).Once())
+
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(200)).
+			Return([]database.MediaProperty{}, nil).Once()
 
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -1692,6 +1720,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 		_, err = cmdTitle(mockPlatform, env2)
 		require.NoError(t, err)
+		waitCache2()
 
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
@@ -1776,6 +1805,9 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil),
 			int64(123), mock.AnythingOfType("string")).
 			Return(nil).Maybe()
+
+		mockMediaDB.On("GetMediaPropertyMetadata", mock.Anything, int64(123)).
+			Return([]database.MediaProperty{}, nil).Once()
 
 		// Platform launch fails
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).

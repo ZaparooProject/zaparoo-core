@@ -49,7 +49,7 @@ var _ KodiClient = (*Client)(nil)
 // NewClient creates a new Kodi client with configuration-based URL.
 // Uses "Kodi" as the default group for configuration lookup.
 func NewClient(cfg *config.Instance) KodiClient {
-	return NewClientWithLauncherID(cfg, shared.GroupKodi, []string{shared.GroupKodi})
+	return NewClientWithLauncherID(cfg, shared.LauncherGroupKodi, []string{shared.LauncherGroupKodi})
 }
 
 // NewClientWithLauncherID creates a new Kodi client with group-aware configuration lookup.

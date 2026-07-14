@@ -49,10 +49,10 @@ func TestWALCheckpointing(t *testing.T) {
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()
@@ -153,9 +153,12 @@ func TestConnectionParameters(t *testing.T) {
 	connParams := getSqliteConnParams()
 
 	// Verify key durable and memory-safe parameters are present.
-	// MediaDB can contain user-owned metadata, so commits must survive hard power loss.
+	// WAL + synchronous=NORMAL is durable against crashes and normal power
+	// loss; MediaDB rows are rebuildable, so the small last-transaction-loss
+	// window on hardware power loss is an acceptable trade for avoiding
+	// synchronous=FULL's per-commit fsync stalls.
 	require.Contains(t, connParams, "_journal_mode=WAL")
-	require.Contains(t, connParams, "_synchronous=FULL")
+	require.Contains(t, connParams, "_synchronous=NORMAL")
 	require.Contains(t, connParams, "_cache_size=-8192") // 8MB cache (safe on 256MB systems)
 	require.Contains(t, connParams, "_temp_store=FILE")  // temp tables on disk for safe VACUUM
 	require.Contains(t, connParams, "_mmap_size=0")      // disabled to avoid memory pressure
@@ -186,10 +189,10 @@ func TestTransactionPerformanceWithWAL(t *testing.T) {
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()
@@ -265,10 +268,10 @@ func TestWALSizeManagement(t *testing.T) {
 	}()
 
 	mediaDB := &MediaDB{
-		sql:   sqlDB,
 		ctx:   ctx,
 		clock: clockwork.NewRealClock(),
 	}
+	mediaDB.sql.Store(sqlDB)
 
 	// Initialize database schema
 	err = mediaDB.Allocate()

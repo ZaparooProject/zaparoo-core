@@ -100,55 +100,56 @@ var allTagMappings = map[string][]CanonicalTag{
 	"cl": {{Type: TagTypeRegion, Value: TagRegionCL}, {Type: TagTypeLang, Value: TagLangES}}, // Chile
 	"cn": {{Type: TagTypeRegion, Value: TagRegionCN}, {Type: TagTypeLang, Value: TagLangZH}},
 	// Serbia, also Czech language
-	"cs": {{Type: TagTypeRegion, Value: TagRegionCS}, {Type: TagTypeLang, Value: TagLangCS}},
-	"cy": {{Type: TagTypeRegion, Value: TagRegionCY}},
-	"cz": {{Type: TagTypeRegion, Value: TagRegionCZ}, {Type: TagTypeLang, Value: TagLangCS}},
-	"de": {{Type: TagTypeRegion, Value: TagRegionDE}, {Type: TagTypeLang, Value: TagLangDE}},
-	"dk": {{Type: TagTypeRegion, Value: TagRegionDK}, {Type: TagTypeLang, Value: TagLangDA}},
-	"ee": {{Type: TagTypeRegion, Value: TagRegionEE}, {Type: TagTypeLang, Value: TagLangET}}, // Estonia
-	"eg": {{Type: TagTypeRegion, Value: TagRegionEG}, {Type: TagTypeLang, Value: TagLangAR}}, // Egypt
-	"es": {{Type: TagTypeRegion, Value: TagRegionES}, {Type: TagTypeLang, Value: TagLangES}},
-	"eu": {{Type: TagTypeRegion, Value: TagRegionEU}}, // Europe - multi-region
-	"fi": {{Type: TagTypeRegion, Value: TagRegionFI}, {Type: TagTypeLang, Value: TagLangFI}},
-	"fr": {{Type: TagTypeRegion, Value: TagRegionFR}, {Type: TagTypeLang, Value: TagLangFR}},
-	"gb": {{Type: TagTypeRegion, Value: TagRegionGB}, {Type: TagTypeLang, Value: TagLangEN}},
-	"gr": {{Type: TagTypeRegion, Value: TagRegionGR}, {Type: TagTypeLang, Value: TagLangEL}},
-	"hk": {{Type: TagTypeRegion, Value: TagRegionHK}}, // Hong Kong - multilingual (Chinese/English)
-	"hr": {{Type: TagTypeRegion, Value: TagRegionHR}, {Type: TagTypeLang, Value: TagLangHR}},
-	"hu": {{Type: TagTypeRegion, Value: TagRegionHU}, {Type: TagTypeLang, Value: TagLangHU}},
-	"id": {{Type: TagTypeRegion, Value: TagRegionID}},
-	"ie": {{Type: TagTypeRegion, Value: TagRegionIE}, {Type: TagTypeLang, Value: TagLangEN}},
-	"il": {{Type: TagTypeRegion, Value: TagRegionIL}, {Type: TagTypeLang, Value: TagLangHE}},
-	"in": {{Type: TagTypeRegion, Value: TagRegionIN}, {Type: TagTypeLang, Value: TagLangHI}},
-	"ir": {{Type: TagTypeRegion, Value: TagRegionIR}, {Type: TagTypeLang, Value: TagLangFA}},
-	"is": {{Type: TagTypeRegion, Value: TagRegionIS}, {Type: TagTypeLang, Value: TagLangIS}}, // Iceland
-	"it": {{Type: TagTypeRegion, Value: TagRegionIT}, {Type: TagTypeLang, Value: TagLangIT}},
-	"jo": {{Type: TagTypeRegion, Value: TagRegionJO}, {Type: TagTypeLang, Value: TagLangAR}}, // Jordan
-	"jp": {{Type: TagTypeRegion, Value: TagRegionJP}, {Type: TagTypeLang, Value: TagLangJA}},
-	"kr": {{Type: TagTypeRegion, Value: TagRegionKR}, {Type: TagTypeLang, Value: TagLangKO}},
-	"lt": {{Type: TagTypeRegion, Value: TagRegionLT}, {Type: TagTypeLang, Value: TagLangLT}},
-	"lu": {{Type: TagTypeRegion, Value: TagRegionLU}}, // Luxembourg - multilingual (Luxembourgish/French/German)
-	"lv": {{Type: TagTypeRegion, Value: TagRegionLV}, {Type: TagTypeLang, Value: TagLangLV}},
-	"mn": {{Type: TagTypeRegion, Value: TagRegionMN}},
-	"mx": {{Type: TagTypeRegion, Value: TagRegionMX}, {Type: TagTypeLang, Value: TagLangES}},
-	"my": {{Type: TagTypeRegion, Value: TagRegionMY}, {Type: TagTypeLang, Value: TagLangMS}},
-	"nl": {{Type: TagTypeRegion, Value: TagRegionNL}, {Type: TagTypeLang, Value: TagLangNL}},
-	"no": {{Type: TagTypeRegion, Value: TagRegionNO}, {Type: TagTypeLang, Value: TagLangNO}},
-	"np": {{Type: TagTypeRegion, Value: TagRegionNP}},
-	"nz": {{Type: TagTypeRegion, Value: TagRegionNZ}, {Type: TagTypeLang, Value: TagLangEN}}, // New Zealand
-	"om": {{Type: TagTypeRegion, Value: TagRegionOM}, {Type: TagTypeLang, Value: TagLangAR}}, // Oman
-	"pe": {{Type: TagTypeRegion, Value: TagRegionPE}, {Type: TagTypeLang, Value: TagLangES}}, // Peru
-	"ph": {{Type: TagTypeRegion, Value: TagRegionPH}},
-	"pl": {{Type: TagTypeRegion, Value: TagRegionPL}, {Type: TagTypeLang, Value: TagLangPL}},
-	"pt": {{Type: TagTypeRegion, Value: TagRegionPT}, {Type: TagTypeLang, Value: TagLangPT}},
-	"qa": {{Type: TagTypeRegion, Value: TagRegionQA}, {Type: TagTypeLang, Value: TagLangAR}}, // Qatar
-	"ro": {{Type: TagTypeRegion, Value: TagRegionRO}, {Type: TagTypeLang, Value: TagLangRO}},
-	"ru": {{Type: TagTypeRegion, Value: TagRegionRU}, {Type: TagTypeLang, Value: TagLangRU}},
-	"se": {{Type: TagTypeRegion, Value: TagRegionSE}, {Type: TagTypeLang, Value: TagLangSV}},
-	"sg": {{Type: TagTypeRegion, Value: TagRegionSG}}, // Singapore - multilingual (English/Malay/Chinese/Tamil)
-	"si": {{Type: TagTypeRegion, Value: TagRegionSI}, {Type: TagTypeLang, Value: TagLangSL}},
-	"sk": {{Type: TagTypeRegion, Value: TagRegionSK}, {Type: TagTypeLang, Value: TagLangSK}},
-	"th": {{Type: TagTypeRegion, Value: TagRegionTH}, {Type: TagTypeLang, Value: TagLangTH}},
+	"cs":          {{Type: TagTypeRegion, Value: TagRegionCS}, {Type: TagTypeLang, Value: TagLangCS}},
+	"cy":          {{Type: TagTypeRegion, Value: TagRegionCY}},
+	"cz":          {{Type: TagTypeRegion, Value: TagRegionCZ}, {Type: TagTypeLang, Value: TagLangCS}},
+	"de":          {{Type: TagTypeRegion, Value: TagRegionDE}, {Type: TagTypeLang, Value: TagLangDE}},
+	"dk":          {{Type: TagTypeRegion, Value: TagRegionDK}, {Type: TagTypeLang, Value: TagLangDA}},
+	"ee":          {{Type: TagTypeRegion, Value: TagRegionEE}, {Type: TagTypeLang, Value: TagLangET}}, // Estonia
+	"eg":          {{Type: TagTypeRegion, Value: TagRegionEG}, {Type: TagTypeLang, Value: TagLangAR}}, // Egypt
+	"es":          {{Type: TagTypeRegion, Value: TagRegionES}, {Type: TagTypeLang, Value: TagLangES}},
+	"eu":          {{Type: TagTypeRegion, Value: TagRegionEU}}, // Europe - multi-region
+	"fi":          {{Type: TagTypeRegion, Value: TagRegionFI}, {Type: TagTypeLang, Value: TagLangFI}},
+	"fr":          {{Type: TagTypeRegion, Value: TagRegionFR}, {Type: TagTypeLang, Value: TagLangFR}},
+	"gb":          {{Type: TagTypeRegion, Value: TagRegionGB}, {Type: TagTypeLang, Value: TagLangEN}},
+	"gr":          {{Type: TagTypeRegion, Value: TagRegionGR}, {Type: TagTypeLang, Value: TagLangEL}},
+	"hk":          {{Type: TagTypeRegion, Value: TagRegionHK}}, // Hong Kong - multilingual (Chinese/English)
+	"hr":          {{Type: TagTypeRegion, Value: TagRegionHR}, {Type: TagTypeLang, Value: TagLangHR}},
+	"hu":          {{Type: TagTypeRegion, Value: TagRegionHU}, {Type: TagTypeLang, Value: TagLangHU}},
+	"id":          {{Type: TagTypeRegion, Value: TagRegionID}},
+	"ie":          {{Type: TagTypeRegion, Value: TagRegionIE}, {Type: TagTypeLang, Value: TagLangEN}},
+	"il":          {{Type: TagTypeRegion, Value: TagRegionIL}, {Type: TagTypeLang, Value: TagLangHE}},
+	"in":          {{Type: TagTypeRegion, Value: TagRegionIN}, {Type: TagTypeLang, Value: TagLangHI}},
+	"ir":          {{Type: TagTypeRegion, Value: TagRegionIR}, {Type: TagTypeLang, Value: TagLangFA}},
+	"is":          {{Type: TagTypeRegion, Value: TagRegionIS}, {Type: TagTypeLang, Value: TagLangIS}}, // Iceland
+	"it":          {{Type: TagTypeRegion, Value: TagRegionIT}, {Type: TagTypeLang, Value: TagLangIT}},
+	"jo":          {{Type: TagTypeRegion, Value: TagRegionJO}, {Type: TagTypeLang, Value: TagLangAR}}, // Jordan
+	"jp":          {{Type: TagTypeRegion, Value: TagRegionJP}, {Type: TagTypeLang, Value: TagLangJA}},
+	"kr":          {{Type: TagTypeRegion, Value: TagRegionKR}, {Type: TagTypeLang, Value: TagLangKO}},
+	"lt":          {{Type: TagTypeRegion, Value: TagRegionLT}, {Type: TagTypeLang, Value: TagLangLT}},
+	"lu":          {{Type: TagTypeRegion, Value: TagRegionLU}}, // Luxembourg (multilingual)
+	"lv":          {{Type: TagTypeRegion, Value: TagRegionLV}, {Type: TagTypeLang, Value: TagLangLV}},
+	"mn":          {{Type: TagTypeRegion, Value: TagRegionMN}},
+	"mx":          {{Type: TagTypeRegion, Value: TagRegionMX}, {Type: TagTypeLang, Value: TagLangES}},
+	"my":          {{Type: TagTypeRegion, Value: TagRegionMY}, {Type: TagTypeLang, Value: TagLangMS}},
+	"nl":          {{Type: TagTypeRegion, Value: TagRegionNL}, {Type: TagTypeLang, Value: TagLangNL}},
+	"no":          {{Type: TagTypeRegion, Value: TagRegionNO}, {Type: TagTypeLang, Value: TagLangNO}},
+	"np":          {{Type: TagTypeRegion, Value: TagRegionNP}},
+	"nz":          {{Type: TagTypeRegion, Value: TagRegionNZ}, {Type: TagTypeLang, Value: TagLangEN}}, // New Zealand
+	"new-zealand": {{Type: TagTypeRegion, Value: TagRegionNZ}, {Type: TagTypeLang, Value: TagLangEN}}, // NZ full name
+	"om":          {{Type: TagTypeRegion, Value: TagRegionOM}, {Type: TagTypeLang, Value: TagLangAR}}, // Oman
+	"pe":          {{Type: TagTypeRegion, Value: TagRegionPE}, {Type: TagTypeLang, Value: TagLangES}}, // Peru
+	"ph":          {{Type: TagTypeRegion, Value: TagRegionPH}},
+	"pl":          {{Type: TagTypeRegion, Value: TagRegionPL}, {Type: TagTypeLang, Value: TagLangPL}},
+	"pt":          {{Type: TagTypeRegion, Value: TagRegionPT}, {Type: TagTypeLang, Value: TagLangPT}},
+	"qa":          {{Type: TagTypeRegion, Value: TagRegionQA}, {Type: TagTypeLang, Value: TagLangAR}}, // Qatar
+	"ro":          {{Type: TagTypeRegion, Value: TagRegionRO}, {Type: TagTypeLang, Value: TagLangRO}},
+	"ru":          {{Type: TagTypeRegion, Value: TagRegionRU}, {Type: TagTypeLang, Value: TagLangRU}},
+	"se":          {{Type: TagTypeRegion, Value: TagRegionSE}, {Type: TagTypeLang, Value: TagLangSV}},
+	"sg":          {{Type: TagTypeRegion, Value: TagRegionSG}}, // Singapore (multilingual)
+	"si":          {{Type: TagTypeRegion, Value: TagRegionSI}, {Type: TagTypeLang, Value: TagLangSL}},
+	"sk":          {{Type: TagTypeRegion, Value: TagRegionSK}, {Type: TagTypeLang, Value: TagLangSK}},
+	"th":          {{Type: TagTypeRegion, Value: TagRegionTH}, {Type: TagTypeLang, Value: TagLangTH}},
 	// Turkey - context-aware: ()=region/lang, []=translated (see filename_parser.go)
 	"tr": {{Type: TagTypeRegion, Value: TagRegionTR}},
 	"tw": {{Type: TagTypeRegion, Value: TagRegionTW}, {Type: TagTypeLang, Value: TagLangZH}}, // Taiwan
@@ -216,6 +217,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	"beta-5":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta5}},
 	"preview":              {{Type: TagTypeUnfinished, Value: TagUnfinishedPreview}},
 	"pre-release":          {{Type: TagTypeUnfinished, Value: TagUnfinishedPrerelease}},
+	"wip":                  {{Type: TagTypeUnfinished, Value: TagUnfinishedWIP}},
 	"proto":                {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
 	"prototype":            {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
 	"engineering-sample":   {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
@@ -292,6 +294,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	"ntsc-pal": {{Type: TagTypeVideo, Value: TagVideoNTSCPAL}},
 	"pal":      {{Type: TagTypeVideo, Value: TagVideoPAL}},
 	"pal-60":   {{Type: TagTypeVideo, Value: TagVideoPAL60}},
+	"pal60":    {{Type: TagTypeVideo, Value: TagVideoPAL60}}, // "PAL60" without separator
 	"pal-ntsc": {{Type: TagTypeVideo, Value: TagVideoPALNTSC}},
 	"svga":     {{Type: TagTypeVideo, Value: TagVideoSVGA}},
 	"vga":      {{Type: TagTypeVideo, Value: TagVideoVGA}},
@@ -363,9 +366,27 @@ var allTagMappings = map[string][]CanonicalTag{
 	"ii+": {{Type: TagTypeCompatibility, Value: TagCompatibilityApple2Plus}},
 	"iie": {{Type: TagTypeCompatibility, Value: TagCompatibilityApple2E}},
 	// Memory requirements
-	"16k":      {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory16K}},
-	"128k":     {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory128K}},
-	"48k-128k": {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory48K128K}},
+	"3k":        {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory3K}},
+	"4k":        {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory4K}},
+	"8k":        {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory8K}},
+	"16k":       {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory16K}},
+	"19k":       {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory19K}},
+	"64k":       {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory64K}},
+	"128k":      {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory128K}},
+	"48k-128k":  {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory48K128K}},
+	"48-128k":   {{Type: TagTypeCompatibility, Value: TagCompatibilityMemory48K128K}}, // ZX Spectrum "48-128K"
+	"a000":      {{Type: TagTypeCompatibility, Value: TagCompatibilityLoadA000}},      // VIC-20 load at $A000
+	"basic":     {{Type: TagTypeCompatibility, Value: TagCompatibilityBasic}},         // Requires BASIC
+	"pascal":    {{Type: TagTypeCompatibility, Value: TagCompatibilityPascal}},        // Requires Pascal
+	"cpm":       {{Type: TagTypeCompatibility, Value: TagCompatibilityCPM}},           // Requires CP/M
+	"rdos":      {{Type: TagTypeCompatibility, Value: TagCompatibilityRDOS}},          // Atari RDOS
+	"os-b":      {{Type: TagTypeCompatibility, Value: TagCompatibilityOSB}},           // Atari OS-B
+	"sedoric":   {{Type: TagTypeCompatibility, Value: TagCompatibilitySedoric}},       // Oric Sedoric
+	"lnx":       {{Type: TagTypeMedia, Value: TagMediaLNX}},                           // C64 Lynx archive
+	"k-file":    {{Type: TagTypeMedia, Value: TagMediaKFile}},                         // Atari K-File disk image
+	"no-boot":   {{Type: TagTypeDump, Value: TagDumpNoBoot}},                          // Non-bootable dump
+	"type-in":   {{Type: TagTypeDistribution, Value: TagDistributionTypeIn}},          // Magazine type-in
+	"multipart": {{Type: TagTypeMedia, Value: TagMediaPart}},                          // Multi-part file
 	// Amiga systems
 	"+2":                     {{Type: TagTypeCompatibility, Value: TagCompatibilityAmigaPlus2}},
 	"+2a":                    {{Type: TagTypeCompatibility, Value: TagCompatibilityAmigaPlus2A}},
@@ -426,12 +447,54 @@ var allTagMappings = map[string][]CanonicalTag{
 	"vs-unisystem":           {{Type: TagTypeCompatibility, Value: TagCompatibilityNintendoVSUnisystem}},
 
 	// ============================================================================
+	// INPUT / CONTROL MAPPINGS
+	// ============================================================================
+	// Control-scheme qualifiers used in arcade (.mra) filenames, e.g.
+	// "Jackal (W, Rotary)". Without these the control variant is dropped and
+	// sibling arcade entries become indistinguishable.
+	"rotary":     {{Type: TagTypeInput, Value: TagInputJoystickRotary}}, // rotary joystick
+	"trackball":  {{Type: TagTypeInput, Value: TagInputTrackball}},      // trackball
+	"paddle":     {{Type: TagTypeInput, Value: TagInputPaddle}},         // paddle
+	"twin-stick": {{Type: TagTypeInput, Value: TagInputStickTwin}},      // twin/dual stick
+
+	// ============================================================================
 	// ARCADE AND SPECIAL HARDWARE MAPPINGS
 	// ============================================================================
 	"vs":       {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardNintendoVS}},   // VS System arcade
 	"nss":      {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardNintendoNSS}},  // Nintendo Super System arcade
 	"megaplay": {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaMegaplay}}, // MegaPlay arcade
 	"mp":       {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaMegaplay}}, // MegaPlay (short form)
+	// Arcade cabinet orientation.
+	"upright":  {{Type: TagTypeCabinet, Value: TagCabinetUpright}},
+	"cocktail": {{Type: TagTypeCabinet, Value: TagCabinetCocktail}},
+	"cabaret":  {{Type: TagTypeCabinet, Value: TagCabinetCabaret}},
+	"sitdown":  {{Type: TagTypeCabinet, Value: TagCabinetSitdown}},
+	// Arcade copy-protection state (chip families handled by parseProtectionChip).
+	"no-protection": {{Type: TagTypeProtection, Value: TagProtectionNone}},
+	"encrypted":     {{Type: TagTypeProtection, Value: TagProtectionEncrypted}},
+	"decrypted":     {{Type: TagTypeProtection, Value: TagProtectionDecrypted}},
+	"mc-8123":       {{Type: TagTypeProtection, Value: TagProtectionMC8123}},
+	"mc8123":        {{Type: TagTypeProtection, Value: TagProtectionMC8123}},
+	// Sega System board shorthand used in MiSTer arcade MRA names, e.g. "(World, S16A)".
+	"s16":  {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16}},  // Sega System 16
+	"s16a": {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16A}}, // Sega System 16A
+	"s16b": {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16B}}, // Sega System 16B
+	"s16c": {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16C}}, // Sega System 16C
+	"s18":  {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem18}},  // Sega System 18
+	"s24":  {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem24}},  // Sega System 24
+	"s32":  {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem32}},  // Sega System 32
+	// Full-word forms of the same Sega System boards (e.g. "(World, System 16B)").
+	"system-16":    {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16}},
+	"system-16a":   {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16A}},
+	"system-16b":   {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16B}},
+	"system-16c":   {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem16C}},
+	"system-18":    {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem18}},
+	"system-24":    {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem24}},
+	"system-32":    {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardSegaSystem32}},
+	"cps-changer":  {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardCapcomCPSChanger}},
+	"m72":          {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardIremM72}}, // Irem M72
+	"m72-hardware": {{Type: TagTypeArcadeBoard, Value: TagArcadeBoardIremM72}}, // Irem M72 (full form)
+	"pc10":         {{Type: TagTypeCompatibility, Value: TagCompatibilityNintendoPlaychoice10}},
 	// "bs" is ambiguous: Bosnian language vs Satellaview - handled in filename_parser.go
 	"satellaview": {{Type: TagTypeAddon, Value: TagAddonOnlineSatellaview}}, // Satellaview online service
 	// "st" is ambiguous: Sufami Turbo vs other uses - handled in filename_parser.go
@@ -733,7 +796,9 @@ var allTagMappings = map[string][]CanonicalTag{
 
 	// Japanese release/edition descriptors
 	"reprint":            {{Type: TagTypeRelease, Value: TagReleaseReissue}},
+	"re-release":         {{Type: TagTypeRelease, Value: TagReleaseReissue}},
 	"fukkokuban":         {{Type: TagTypeRelease, Value: TagReleaseReissue}},
+	"hb":                 {{Type: TagTypeRelease, Value: TagReleaseHomebrew}},   // arcade "hb" = homebrew
 	"taikenban":          {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}}, // Demo/trial version
 	"shinsaku-taikenban": {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}}, // New demo/trial
 	"ura":                {{Type: TagTypeAlt, Value: TagAlt}},                   // Alternate/secret version

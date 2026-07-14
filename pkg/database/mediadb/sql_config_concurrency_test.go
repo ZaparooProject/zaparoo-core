@@ -144,7 +144,7 @@ func TestMediaDB_BumpIndexGeneration_ConcurrentNoLostUpdates(t *testing.T) {
 // TestMediaDB_ConfigSetters_DuringActiveTransaction verifies that setters
 // route through the active transaction (db.tx) when one is open and don't
 // deadlock against it. Under SetMaxOpenConns(1), if a setter tried to use
-// db.sql while a transaction held the only connection, it would block
+// db.sql.Load() while a transaction held the only connection, it would block
 // forever; the db.conn() routing prevents that.
 func TestMediaDB_ConfigSetters_DuringActiveTransaction(t *testing.T) {
 	t.Parallel()

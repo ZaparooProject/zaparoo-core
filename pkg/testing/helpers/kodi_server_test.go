@@ -21,7 +21,6 @@ package helpers_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -70,8 +69,7 @@ func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Make actual HTTP POST request to the server
-	// TODO: Accept context from parent test for better test control and timeout handling
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, bytes.NewBuffer(jsonData))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -111,9 +109,8 @@ func TestMockKodiServer_WithActivePlayers(t *testing.T) {
 	jsonData, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	// TODO: Accept context from parent test for better test control and timeout handling
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		t.Context(),
 		http.MethodPost,
 		server.GetURLForConfig(),
 		bytes.NewBuffer(jsonData),

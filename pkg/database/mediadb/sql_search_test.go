@@ -357,8 +357,6 @@ func TestFetchAndAttachTags_ResultTitleIDsNoTagsSkipsFullFetch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, results[0].Tags)
 	assert.Empty(t, results[1].Tags)
-	assert.NotNil(t, results[0].ZapScriptTags)
-	assert.NotNil(t, results[1].ZapScriptTags)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -539,8 +537,8 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 	includeName := false
 
 	// Mock the main media query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID IN`).
 		ExpectQuery().
@@ -577,8 +575,8 @@ func TestSqlSearchMediaBySlug_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.Slug = \?`).
 		ExpectQuery().
@@ -612,8 +610,8 @@ func TestSqlSearchMediaBySecondarySlug_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/smb.nes", int64(1))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/smb.nes", int64(1), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.SecondarySlug = \?`).
 		ExpectQuery().
@@ -647,9 +645,9 @@ func TestSqlSearchMediaBySlugPrefix_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1)).
-		AddRow("nes", "Super Mario Bros 2", "/games/mario2.nes", int64(2))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "").
+		AddRow("nes", "Super Mario Bros 2", "/games/mario2.nes", int64(2), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.Slug LIKE \?`).
 		ExpectQuery().
@@ -686,9 +684,9 @@ func TestSqlSearchMediaBySlugIn_IntegrationWithTags(t *testing.T) {
 	slugList := []string{"super-mario-bros", "the-legend-of-zelda"}
 
 	// Mock the main search query
-	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
-		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1)).
-		AddRow("nes", "The Legend of Zelda", "/games/zelda.nes", int64(2))
+	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID", "DisambiguationTypes"}).
+		AddRow("nes", "Super Mario Bros", "/games/mario.nes", int64(1), "").
+		AddRow("nes", "The Legend of Zelda", "/games/zelda.nes", int64(2), "")
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID = \?.*AND MediaTitles.Slug IN`).
 		ExpectQuery().
@@ -749,152 +747,7 @@ func TestSqlSearchMediaBySlugIn_AllEmptySlugs(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestComputeZapScriptTags_Empty(t *testing.T) {
-	t.Parallel()
-	results := []database.SearchResultWithCursor{}
-	computeZapScriptTags(results)
-	assert.Empty(t, results)
-}
-
-func TestComputeZapScriptTags_SingleResult(t *testing.T) {
-	t.Parallel()
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1989"},
-				{Type: "genre", Tag: "Puzzle"},
-			},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "single result should have no disambiguating tags")
-	assert.NotNil(t, results[0].ZapScriptTags, "ZapScriptTags should be initialized, not nil")
-}
-
-func TestComputeZapScriptTags_SiblingsDifferentYear(t *testing.T) {
-	t.Parallel()
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1989"},
-				{Type: "genre", Tag: "Puzzle"},
-			},
-		},
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1990"},
-				{Type: "genre", Tag: "Puzzle"},
-			},
-		},
-	}
-	computeZapScriptTags(results)
-	require.Len(t, results[0].ZapScriptTags, 1)
-	assert.Equal(t, "year", results[0].ZapScriptTags[0].Type)
-	assert.Equal(t, "1989", results[0].ZapScriptTags[0].Tag)
-	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, "year", results[1].ZapScriptTags[0].Type)
-	assert.Equal(t, "1990", results[1].ZapScriptTags[0].Tag)
-}
-
-func TestComputeZapScriptTags_SiblingsSameYear(t *testing.T) {
-	t.Parallel()
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
-		},
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "same year across siblings should not disambiguate")
-	assert.Empty(t, results[1].ZapScriptTags)
-}
-
-func TestComputeZapScriptTags_MixedDisambiguation(t *testing.T) {
-	t.Parallel()
-	// Same year but different players — only players should disambiguate
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Street Fighter", SystemID: "Arcade", MediaID: 1,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1992"},
-				{Type: "players", Tag: "2"},
-			},
-		},
-		{
-			Name: "Street Fighter", SystemID: "Arcade", MediaID: 2,
-			Tags: []database.TagInfo{
-				{Type: "year", Tag: "1992"},
-				{Type: "players", Tag: "4"},
-			},
-		},
-	}
-	computeZapScriptTags(results)
-	// Only players should be disambiguating (years are the same)
-	require.Len(t, results[0].ZapScriptTags, 1)
-	assert.Equal(t, "players", results[0].ZapScriptTags[0].Type)
-	assert.Equal(t, "2", results[0].ZapScriptTags[0].Tag)
-	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, "players", results[1].ZapScriptTags[0].Type)
-	assert.Equal(t, "4", results[1].ZapScriptTags[0].Tag)
-}
-
-func TestComputeZapScriptTags_DifferentNamesNotGrouped(t *testing.T) {
-	t.Parallel()
-	// Different names should not be grouped as siblings
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
-		},
-		{
-			Name: "Dr. Mario", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1990"}},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "different names should not trigger disambiguation")
-	assert.Empty(t, results[1].ZapScriptTags)
-}
-
-func TestComputeZapScriptTags_NonEligibleTagTypesIgnored(t *testing.T) {
-	t.Parallel()
-	// Genre differs across siblings but is not in ZapScriptTagTypes
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "genre", Tag: "Puzzle"}},
-		},
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "genre", Tag: "Action"}},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "non-eligible tag types should not disambiguate")
-	assert.Empty(t, results[1].ZapScriptTags)
-}
-
-func TestComputeZapScriptTags_CrossSystemSameNameNotGrouped(t *testing.T) {
-	t.Parallel()
-	// Same name on different systems should NOT be grouped as siblings
-	results := []database.SearchResultWithCursor{
-		{
-			Name: "Tetris", SystemID: "NES", MediaID: 1,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1989"}},
-		},
-		{
-			Name: "Tetris", SystemID: "GB", MediaID: 2,
-			Tags: []database.TagInfo{{Type: "year", Tag: "1990"}},
-		},
-	}
-	computeZapScriptTags(results)
-	assert.Empty(t, results[0].ZapScriptTags, "cross-system same name should not trigger disambiguation")
-	assert.Empty(t, results[1].ZapScriptTags)
-}
+// Disambiguation behavior is exercised end-to-end against a real database in
+// disambiguation_test.go (RecomputeSystemDisambiguation + attachZapScriptTags),
+// since the logic now lives in stored per-title types rather than in-memory
+// page grouping.

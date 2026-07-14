@@ -121,6 +121,71 @@ func isBracketedYearValue(s string) bool {
 	return s[0] == '2' && s[1] == '0' // 2000-2099
 }
 
+// allDigits reports whether every byte of s is an ASCII digit (s must be non-empty).
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range len(s) {
+		if !isDigit(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// atoi2 converts a 2-digit ASCII string to its integer value (no validation).
+func atoi2(s string) int {
+	return int(s[0]-'0')*10 + int(s[1]-'0')
+}
+
+// validMonthDay reports whether m is 1–12 and d is 1–31 (calendar-agnostic bound).
+func validMonthDay(m, d int) bool {
+	return m >= 1 && m <= 12 && d >= 1 && d <= 31
+}
+
+// parseBuildDate normalizes a romset/build date to YYYY-MM-DD. It accepts MiSTer
+// arcade YYMMDD (6 digits; century pivot at 70, so 70–99→19xx and 00–69→20xx),
+// YYYYMMDD (8 digits), and No-Intro YYYY-MM-DD. Returns false for any other shape
+// or an out-of-range month/day. The 6-digit form is the arcade convention; callers
+// gate it on a preceding region word to avoid matching bare numbers.
+func parseBuildDate(s string) (string, bool) {
+	switch {
+	case len(s) == 10 && s[4] == '-' && s[7] == '-':
+		if !allDigits(s[0:4]) || !allDigits(s[5:7]) || !allDigits(s[8:10]) {
+			return "", false
+		}
+		if !validMonthDay(atoi2(s[5:7]), atoi2(s[8:10])) {
+			return "", false
+		}
+		return s, true
+	case len(s) == 7 && s[4] == '-':
+		// Year-month only, e.g. "1988-01" (common in NSF/SPC music build dates).
+		if !allDigits(s[0:4]) || !allDigits(s[5:7]) {
+			return "", false
+		}
+		if m := atoi2(s[5:7]); m < 1 || m > 12 {
+			return "", false
+		}
+		return s, true
+	case len(s) == 8 && allDigits(s):
+		if !validMonthDay(atoi2(s[4:6]), atoi2(s[6:8])) {
+			return "", false
+		}
+		return s[0:4] + "-" + s[4:6] + "-" + s[6:8], true
+	case len(s) == 6 && allDigits(s):
+		if !validMonthDay(atoi2(s[2:4]), atoi2(s[4:6])) {
+			return "", false
+		}
+		century := "20"
+		if s[0] >= '7' { // first digit 7–9 ⇒ YY 70–99 ⇒ 1900s
+			century = "19"
+		}
+		return century + s[0:2] + "-" + s[2:4] + "-" + s[4:6], true
+	}
+	return "", false
+}
+
 // parseMatch holds the result of a string-based pattern match, replacing []int
 // from FindStringSubmatchIndex. Fields are indices into the original string.
 type parseMatch struct {

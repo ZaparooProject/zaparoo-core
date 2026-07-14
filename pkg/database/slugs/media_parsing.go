@@ -26,7 +26,8 @@ package slugs
 // Media-specific parsers are implemented in separate files:
 //   - ParseTVShow → media_parsing_tv.go
 //   - ParseGame → media_parsing_game.go
-//   - ParseMovie, ParseMusic, etc. → TODO (return unchanged for now)
+//   - ParseMovie → media_parsing_movie.go
+//   - ParseMusic → media_parsing_music.go
 func ParseWithMediaType(mediaType MediaType, title string) string {
 	switch mediaType {
 	case MediaTypeTVShow:

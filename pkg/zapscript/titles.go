@@ -66,8 +66,9 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
+	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
 	args.Launcher = applySystemDefaultLauncher(pl, &env, system.ID)
-	launch := getLaunchClosure(pl, &env)
+	launch := getLaunchClosure(pl, &env, explicitLauncher)
 
 	// Collect all launchers for this system to enable file type prioritization
 	// during result selection. If user specified an alt launcher explicitly,
@@ -114,10 +115,12 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	}
 
 	return platforms.CmdResult{
-		MediaChanged: true,
-		Strategy:     result.Strategy,
-		Confidence:   result.Confidence,
-	}, launch(result.Result.Path)
+			MediaChanged: true,
+			Strategy:     result.Strategy,
+			Confidence:   result.Confidence,
+		}, launch(launchTarget{
+			path: result.Result.Path, systemID: result.Result.SystemID, mediaID: result.Result.MediaID,
+		})
 }
 
 // mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.

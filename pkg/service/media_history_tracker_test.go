@@ -22,6 +22,7 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -635,4 +636,70 @@ func TestMediaHistoryTracker_ConcurrentAccess(t *testing.T) {
 	// Verify no panics occurred (test for race conditions)
 	// The fact that we got here without panicking means mutex is working correctly
 	require.NotNil(t, tracker)
+}
+
+// TestMediaHistoryTracker_Listen_OrphanedEntry verifies that receiving media.started
+// while a previous DBID is still open closes the orphaned entry before creating a new one.
+// This covers the close-before-open path added to prevent orphaned history rows when a
+// media.stopped event was dropped (e.g., during an indexing storm).
+func TestMediaHistoryTracker_Listen_OrphanedEntry(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := &testhelpers.MockUserDBI{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	fakeClock := clockwork.NewFakeClock()
+
+	db := &database.Database{
+		UserDB: mockUserDB,
+	}
+
+	orphanedDBID := int64(10)
+	orphanStart := fakeClock.Now()
+
+	// Pre-set tracker state as if a game is currently tracked (orphaned open entry).
+	tracker := &mediaHistoryTracker{
+		st:                    st,
+		db:                    db,
+		clock:                 fakeClock,
+		currentHistoryDBID:    orphanedDBID,
+		currentMediaStartTime: orphanStart,
+	}
+
+	// Advance clock so the orphaned entry gets a non-zero play time.
+	fakeClock.Advance(30 * time.Second)
+
+	newDBID := int64(11)
+	activeMedia := &models.ActiveMedia{
+		Started:    fakeClock.Now(),
+		SystemID:   "snes",
+		SystemName: "Super Nintendo Entertainment System",
+		Path:       filepath.Join("games", "zelda.sfc"),
+		Name:       "The Legend of Zelda: A Link to the Past",
+		LauncherID: "retroarch",
+	}
+	testhelpers.AssertValidActiveMedia(t, activeMedia)
+	st.SetActiveMedia(activeMedia)
+
+	// Expect orphaned entry to be closed (play time = 30s from wall-clock fallback).
+	mockUserDB.On(
+		"CloseMediaHistory",
+		orphanedDBID,
+		mock.AnythingOfType("time.Time"),
+		30,
+	).Return(nil).Once()
+
+	// Expect a new entry to be created for the next game.
+	mockUserDB.On("AddMediaHistory", mock.MatchedBy(func(entry *database.MediaHistoryEntry) bool {
+		return entry.SystemID == "snes" && entry.MediaName == "The Legend of Zelda: A Link to the Past"
+	})).Return(newDBID, nil).Once()
+
+	notifChan := make(chan models.Notification, 1)
+	notifChan <- models.Notification{Method: models.NotificationStarted}
+	close(notifChan)
+
+	tracker.listen(notifChan)
+
+	mockUserDB.AssertExpectations(t)
+	assert.Equal(t, newDBID, tracker.currentHistoryDBID, "new DBID should be set after orphan close")
 }

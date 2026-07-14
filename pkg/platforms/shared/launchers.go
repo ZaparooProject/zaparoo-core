@@ -31,11 +31,12 @@ const (
 	LauncherKodiArtist     = "KodiArtist"
 )
 
-// Kodi launcher groups for configuration lookup.
-// When a config entry's launcher field matches a group name,
-// it applies to all launchers in that group.
+// Launcher groups used as stable configuration references.
 const (
-	GroupKodi      = "Kodi"
-	GroupKodiTV    = "KodiTV"
-	GroupKodiMusic = "KodiMusic"
+	LauncherGroupNative    = "Native"
+	LauncherGroupEmuDeck   = "EmuDeck"
+	LauncherGroupRetroDECK = "RetroDECK"
+	LauncherGroupKodi      = "Kodi"
+	LauncherGroupKodiTV    = "KodiTV"
+	LauncherGroupKodiMusic = "KodiMusic"
 )

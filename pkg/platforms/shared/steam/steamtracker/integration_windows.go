@@ -40,6 +40,7 @@ type WindowsPlatformIntegration struct {
 	setTrackedProc func(*os.Process)
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	activeLaunch   launchOwnership
 }
 
 // NewWindowsPlatformIntegration creates a new platform integration for Windows.
@@ -71,7 +72,8 @@ func (pi *WindowsPlatformIntegration) Stop() {
 }
 
 // onGameStart is called when a Steam game starts (detected via registry).
-func (pi *WindowsPlatformIntegration) onGameStart(appID, _ int, _ string) {
+func (pi *WindowsPlatformIntegration) onGameStart(appID, pid int, _ string) {
+	pi.activeLaunch.set(appID, pid)
 	alreadyTracked := false
 	current := pi.activeMedia()
 	if current != nil {
@@ -133,7 +135,19 @@ func (pi *WindowsPlatformIntegration) findAndTrackGameProcess(appID int) {
 }
 
 // onGameStop is called when a Steam game exits (registry cleared).
-func (pi *WindowsPlatformIntegration) onGameStop(appID int) {
-	log.Info().Int("appID", appID).Msg("detected Steam game exit")
+func (pi *WindowsPlatformIntegration) onGameStop(appID, pid int) {
+	if !pi.activeLaunch.clearIfMatches(appID, pid) {
+		log.Debug().Int("appID", appID).Int("pid", pid).Msg("ignoring stale Steam game exit")
+		return
+	}
+	current := pi.activeMedia()
+	if current == nil {
+		return
+	}
+	currentAppID, ok := steam.ExtractAppIDFromPath(current.Path)
+	if !ok || currentAppID != appID {
+		return
+	}
+	log.Info().Int("appID", appID).Int("pid", pid).Msg("detected Steam game exit")
 	pi.setActiveMedia(nil)
 }

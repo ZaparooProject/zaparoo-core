@@ -24,7 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -195,120 +195,17 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row *database.MediaTit
 	return *row, nil
 }
 
-func sqlGetAllMediaTitles(ctx context.Context, db *sql.DB) ([]database.MediaTitle, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT DBID, Slug, Name, SystemDBID, SlugLength, SlugWordCount, SecondarySlug
-		 FROM MediaTitles ORDER BY DBID`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query media titles: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	titles := make([]database.MediaTitle, 0)
-	for rows.Next() {
-		var title database.MediaTitle
-		if err := rows.Scan(
-			&title.DBID, &title.Slug, &title.Name,
-			&title.SystemDBID, &title.SlugLength, &title.SlugWordCount, &title.SecondarySlug,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan media title: %w", err)
-		}
-		titles = append(titles, title)
-	}
-	return titles, rows.Err()
-}
-
-// sqlGetTitlesWithSystems retrieves all media titles with their associated system IDs using a JOIN query.
-func sqlGetTitlesWithSystems(ctx context.Context, db *sql.DB) ([]database.TitleWithSystem, error) {
-	query := `
-		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
-		FROM MediaTitles t
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		ORDER BY t.DBID
-	`
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query titles with systems: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	titles := make([]database.TitleWithSystem, 0)
-	for rows.Next() {
-		var title database.TitleWithSystem
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
-			return nil, fmt.Errorf("failed to scan title with system: %w", err)
-		}
-		titles = append(titles, title)
-	}
-	return titles, rows.Err()
-}
-
-// sqlGetTitlesWithSystemsExcluding retrieves all media titles with their
-// associated system IDs, excluding those belonging to systems in the
-// excludeSystemIDs list
-func sqlGetTitlesWithSystemsExcluding(
-	ctx context.Context,
-	db *sql.DB,
-	excludeSystemIDs []string,
-) ([]database.TitleWithSystem, error) {
-	if len(excludeSystemIDs) == 0 {
-		return sqlGetTitlesWithSystems(ctx, db)
-	}
-
-	// Build placeholders for the IN clause
-	placeholders := make([]string, len(excludeSystemIDs))
-	args := make([]any, len(excludeSystemIDs))
-	for i, systemID := range excludeSystemIDs {
-		placeholders[i] = "?"
-		args[i] = systemID
-	}
-
-	//nolint:gosec // using parameterized placeholders, not user input
-	query := fmt.Sprintf(`
-		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
-		FROM MediaTitles t
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID NOT IN (%s)
-		ORDER BY t.DBID
-	`, strings.Join(placeholders, ","))
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query titles with systems excluding %v: %w", excludeSystemIDs, err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows")
-		}
-	}()
-
-	titles := make([]database.TitleWithSystem, 0)
-	for rows.Next() {
-		var title database.TitleWithSystem
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
-			return nil, fmt.Errorf("failed to scan title with system: %w", err)
-		}
-		titles = append(titles, title)
-	}
-	return titles, rows.Err()
-}
-
-// sqlGetTitlesBySystemID retrieves all media titles for a specific system with their associated system information.
+// sqlGetTitlesBySystemID retrieves all media titles for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL titles upfront.
+// SystemID is filled from the argument rather than joined from Systems: every row's
+// SystemID equals the filter argument, so the join only added a per-row probe and a
+// redundant string crossing (the top reindex allocator). SystemDBID is still selected
+// because other callers read it.
 func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.TitleWithSystem, error) {
 	query := `
-		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
+		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID
 		FROM MediaTitles t
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
+		WHERE t.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 	`
 	rows, err := db.QueryContext(ctx, query, systemID)
 	if err != nil {
@@ -323,12 +220,175 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 	titles := make([]database.TitleWithSystem, 0)
 	for rows.Next() {
 		var title database.TitleWithSystem
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
+		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID); err != nil {
 			return nil, fmt.Errorf("failed to scan title for system %s: %w", systemID, err)
 		}
+		title.SystemID = systemID
 		titles = append(titles, title)
 	}
 	return titles, rows.Err()
+}
+
+// sqlRecomputeTitleDisambiguation recomputes MediaTitles.DisambiguationTypes for
+// the given titles. A tag type disambiguates a title when the title's present
+// (non-missing) sibling media disagree on it: either they hold more than one
+// distinct per-media value-set, or some media carry the type and others lack it
+// entirely. Only tag types in database.ZapScriptTagTypes (the eligibility allowlist)
+// are considered. Comparing per-media sets (not values pooled across media) means a
+// multi-valued type that is identical on every sibling — e.g. every disc tagged
+// (USA, Europe) — does not falsely disambiguate. The result is stored as a sorted,
+// comma-separated list of type names (empty when nothing disambiguates).
+//
+// This is the single source of truth for sibling disambiguation: read paths
+// filter each result's tags by the stored types instead of re-deriving across a
+// page of results, which made disambiguation depend on pagination and sort order.
+func sqlRecomputeTitleDisambiguation(ctx context.Context, db sqlQueryable, titleDBIDs []int64) error {
+	return sqlRecomputeDisambiguation(ctx, db, "DBID", titleDBIDs)
+}
+
+// sqlRecomputeDisambiguationForSystems recomputes DisambiguationTypes for every
+// MediaTitle belonging to the given systems. Used at index time so titles whose
+// media set changed (including titles that lost variants) are all refreshed.
+func sqlRecomputeDisambiguationForSystems(ctx context.Context, db sqlQueryable, systemDBIDs []int64) error {
+	return sqlRecomputeDisambiguation(ctx, db, "SystemDBID", systemDBIDs)
+}
+
+// sqlRecomputeDisambiguation runs the disambiguation UPDATE filtered by either
+// MediaTitles.DBID (title-scoped) or MediaTitles.SystemDBID (system-scoped).
+// filterCol is a trusted constant, never user input.
+//
+// Each chunk executes as a single atomic UPDATE: a LEFT JOIN over the in-scope titles
+// COALESCEs a computed type list (or ” when a title no longer qualifies) so the reset and
+// set happen together. This matters because GetZapScriptTagsBySystemAndPath reads
+// DisambiguationTypes without holding db.sqlMu, and MediaDB caps the pool at one connection;
+// a two-statement reset-then-set would release the connection between them and let that
+// reader observe the transient blank state, writing a ZapScript tag with no disambiguation
+// suffix. One statement never releases the connection mid-update, so no reader sees a
+// partial result.
+func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol string, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// Allowlist of tag types eligible for disambiguation, rendered as an IN clause.
+	typeArgs := make([]any, len(database.ZapScriptTagTypes))
+	for i, t := range database.ZapScriptTagTypes {
+		typeArgs[i] = t
+	}
+	typeClause := " AND tt.Type IN (" + prepareVariadic("?", ",", len(database.ZapScriptTagTypes)) + ")"
+
+	// Chunk IDs so bound parameters stay under SQLite's limit; leave room for the
+	// type params the set statement appends.
+	chunkSize := sqliteMaxParams - len(database.ZapScriptTagTypes)
+	chunkCount := (len(ids) + chunkSize - 1) / chunkSize
+	log.Debug().
+		Str("filter", filterCol).
+		Int("idCount", len(ids)).
+		Int("chunkSize", chunkSize).
+		Int("chunkCount", chunkCount).
+		Msg("starting disambiguation recompute")
+	for start := 0; start < len(ids); start += chunkSize {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("disambiguation recompute cancelled: %w", err)
+		}
+		chunkStart := time.Now()
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		holders := prepareVariadic("?", ",", len(chunk))
+		chunkArgs := make([]any, len(chunk))
+		for i, id := range chunk {
+			chunkArgs[i] = id
+		}
+
+		// Compute disambiguating types for the in-scope multi-media titles in one
+		// set-based pass (a single global sort + aggregate, no per-title correlated
+		// subquery), then LEFT JOIN the full in-scope set back so titles that no longer
+		// qualify COALESCE to '' — the reset and the set land in one atomic UPDATE. A
+		// type disambiguates when its sibling media disagree: either two media carry
+		// different per-media value-sets (COUNT(DISTINCT vs) > 1), or some media carry
+		// the type and others lack it (mtc < the title's total non-missing media count)
+		// — the latter tells "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored
+		// comma-joined in alphabetical order; read paths reorder them by display rank.
+		// The IS NOT guard skips rows already holding the computed value.
+		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
+		setQuery := fmt.Sprintf(`
+			WITH scope AS MATERIALIZED (
+				SELECT DBID AS tid FROM MediaTitles WHERE %s IN (%s)
+			),
+			tot AS MATERIALIZED (
+				SELECT m.MediaTitleDBID AS tid, COUNT(*) AS tm
+				FROM Media m
+				JOIN scope ON scope.tid = m.MediaTitleDBID
+				WHERE m.IsMissing = 0
+				GROUP BY m.MediaTitleDBID
+				HAVING COUNT(*) > 1
+			),
+			mvs AS MATERIALIZED (
+				SELECT tid, typ, mid, group_concat(tag ORDER BY tag) AS vs
+				FROM (
+					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag
+					FROM tot
+					JOIN Media m ON m.MediaTitleDBID = tot.tid
+					JOIN MediaTags x ON x.MediaDBID = m.DBID
+					JOIN Tags t ON t.DBID = x.TagDBID
+					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+					WHERE m.IsMissing = 0%s
+				)
+				GROUP BY tid, typ, mid
+			),
+			agg AS MATERIALIZED (
+				SELECT tid, typ, COUNT(DISTINCT vs) AS dv, COUNT(*) AS mtc
+				FROM mvs GROUP BY tid, typ
+			),
+			qual AS MATERIALIZED (
+				SELECT agg.tid AS tid, agg.typ AS typ
+				FROM agg JOIN tot ON tot.tid = agg.tid
+				WHERE agg.dv > 1 OR agg.mtc < tot.tm
+			),
+			grp AS MATERIALIZED (
+				SELECT tid, group_concat(typ, ',' ORDER BY typ) AS types
+				FROM qual
+				GROUP BY tid
+			),
+			result AS MATERIALIZED (
+				SELECT scope.tid AS tid, COALESCE(grp.types, '') AS types
+				FROM scope LEFT JOIN grp ON grp.tid = scope.tid
+			)
+			UPDATE MediaTitles SET DisambiguationTypes = result.types
+			FROM result
+			WHERE MediaTitles.DBID = result.tid
+			  AND MediaTitles.DisambiguationTypes IS NOT result.types
+		`, filterCol, holders, typeClause)
+
+		setArgs := make([]any, 0, len(chunkArgs)+len(typeArgs))
+		setArgs = append(setArgs, chunkArgs...)
+		setArgs = append(setArgs, typeArgs...)
+		res, err := db.ExecContext(ctx, setQuery, setArgs...)
+		if err != nil {
+			return fmt.Errorf("failed to recompute disambiguation: %w", err)
+		}
+		rowsAffected, rowsErr := res.RowsAffected()
+		if rowsErr != nil {
+			log.Debug().Err(rowsErr).Msg("failed to read disambiguation recompute affected rows")
+		}
+		elapsed := time.Since(chunkStart)
+		logEvent := log.Debug()
+		if elapsed > 5*time.Second {
+			logEvent = log.Warn()
+		}
+		logEvent.
+			Str("filter", filterCol).
+			Int("chunk", start/chunkSize+1).
+			Int("chunkCount", chunkCount).
+			Int("idCount", len(chunk)).
+			Int64("rowsAffected", rowsAffected).
+			Dur("elapsed", elapsed).
+			Msg("disambiguation recompute chunk completed")
+	}
+	return nil
 }
 
 // PreFilterQuery represents pre-filter parameters for efficient fuzzy matching candidate reduction.

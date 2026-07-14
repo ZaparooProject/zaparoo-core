@@ -34,53 +34,42 @@ import (
 
 // AddMediaHistory adds a new media history entry and returns the DBID.
 func (db *UserDB) AddMediaHistory(entry *database.MediaHistoryEntry) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlAddMediaHistory(db.ctx, db.sql, entry)
+	return sqlAddMediaHistory(db.ctx, db.sql.Load(), entry)
 }
 
 // UpdateMediaHistoryTime updates only the PlayTime for currently playing media.
 func (db *UserDB) UpdateMediaHistoryTime(dbid int64, playTime int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlUpdateMediaHistoryTime(db.ctx, db.sql, dbid, playTime)
+	return sqlUpdateMediaHistoryTime(db.ctx, db.sql.Load(), dbid, playTime)
 }
 
 // CloseMediaHistory finalizes a media history entry with end time and final play time.
 func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseMediaHistory(db.ctx, db.sql, dbid, endTime, playTime)
+	return sqlCloseMediaHistory(db.ctx, db.sql.Load(), dbid, endTime, playTime)
 }
 
 // GetMediaHistory retrieves media history entries with pagination and optional system filtering.
 func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, nil, lastID, limit)
-}
-
-// GetMediaHistoryByProfile retrieves media history entries attributed to a
-// specific profile, with pagination.
-func (db *UserDB) GetMediaHistoryByProfile(
-	profileID string, lastID int64, limit int,
-) ([]database.MediaHistoryEntry, error) {
-	if db.sql == nil {
-		return nil, ErrNullSQL
-	}
-	return sqlGetMediaHistory(db.ctx, db.sql, nil, &profileID, lastID, limit)
+	return sqlGetMediaHistory(db.ctx, db.sql.Load(), systemIDs, nil, lastID, limit)
 }
 
 // GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
 func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.MediaHistoryEntry{}, false, ErrNullSQL
 	}
-	return sqlGetLatestMediaHistory(db.ctx, db.sql)
+	return sqlGetLatestMediaHistory(db.ctx, db.sql.Load())
 }
 
 // GetMediaHistoryTop returns aggregated media history grouped by SystemID+MediaName,
@@ -88,36 +77,59 @@ func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, err
 func (db *UserDB) GetMediaHistoryTop(
 	systemIDs []string, since *time.Time, limit int,
 ) ([]database.MediaHistoryTopEntry, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistoryTop(db.ctx, db.sql, systemIDs, since, limit)
+	return sqlGetMediaHistoryTop(db.ctx, db.sql.Load(), systemIDs, since, limit)
 }
 
 // CloseHangingMediaHistory closes any media history entries left open from unclean shutdowns.
 // It sets EndTime = StartTime + PlayTime for entries where EndTime is NULL.
 func (db *UserDB) CloseHangingMediaHistory() error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCloseHangingMediaHistory(db.ctx, db.sql)
+	return sqlCloseHangingMediaHistory(db.ctx, db.sql.Load())
 }
 
 // CleanupMediaHistory removes media history older than the retention period.
 func (db *UserDB) CleanupMediaHistory(retentionDays int) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlCleanupMediaHistory(db.ctx, db.sql, retentionDays)
+	return sqlCleanupMediaHistory(db.ctx, db.sql.Load(), retentionDays)
 }
 
 // HealTimestamps corrects timestamps for records created with unreliable clocks (MiSTer boot without NTP).
 // When NTP syncs, this reconstructs correct timestamps using: TrueStartTime = TrueBootTime + MonotonicStart
 func (db *UserDB) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlHealTimestamps(db.ctx, db.sql, bootUUID, trueBootTime)
+	return sqlHealTimestamps(db.ctx, db.sql.Load(), bootUUID, trueBootTime)
+}
+
+// SumMediaPlayTimeForDay returns the total seconds of completed play-time that
+// overlaps with the day starting at dayStart. Sessions that span midnight are
+// pro-rated: only the portion after dayStart is counted. The currently-active
+// session (EndTime IS NULL) is excluded; callers add it separately.
+func (db *UserDB) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart, nil)
+}
+
+// SumMediaPlayTimeForDayByProfile is SumMediaPlayTimeForDay scoped to
+// history attributed to a single profile. History with no profile (the
+// shared profile) is counted by SumMediaPlayTimeForDay, which sums all
+// rows: shared limits are device-level, so deactivating a profile must not
+// grant a fresh daily allowance.
+func (db *UserDB) SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart, &profileID)
 }
 
 /*
@@ -222,7 +234,9 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 		}
 	}()
 
-	_, err = stmt.ExecContext(ctx, endTime.Unix(), playTime, playTime, time.Now().Unix(), endTime.Unix(), dbid)
+	// Use endTime as UpdatedAt: both represent the moment the session ended.
+	endUnix := endTime.Unix()
+	_, err = stmt.ExecContext(ctx, endUnix, playTime, playTime, endUnix, endUnix, dbid)
 	if err != nil {
 		return fmt.Errorf("failed to execute media history close: %w", err)
 	}
@@ -476,10 +490,54 @@ func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) 
 	return rowsAffected, nil
 }
 
+func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Time, profileID *string) (int64, error) {
+	dayStartUnix := dayStart.Unix()
+
+	// Sum completed sessions that overlap [dayStart, ∞).
+	// Sessions spanning midnight are pro-rated: only the portion after dayStart counts.
+	// The active session (EndTime IS NULL) is excluded; callers add it separately.
+	query := `
+		SELECT COALESCE(SUM(
+		    CASE
+		        WHEN StartTime < ? THEN EndTime - ?
+		        ELSE PlayTime
+		    END
+		), 0)
+		FROM MediaHistory
+		WHERE EndTime IS NOT NULL
+		  AND EndTime > ?`
+	args := []any{dayStartUnix, dayStartUnix, dayStartUnix}
+	if profileID != nil {
+		query += `
+		  AND ProfileID = ?`
+		args = append(args, *profileID)
+	}
+	query += ";"
+
+	stmt, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare daily play time sum statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var total int64
+	if scanErr := stmt.QueryRowContext(ctx, args...).Scan(&total); scanErr != nil {
+		return 0, fmt.Errorf("failed to scan daily play time sum: %w", scanErr)
+	}
+
+	return total, nil
+}
+
 func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBootTime time.Time) (int64, error) {
 	trueBootUnix := trueBootTime.Unix()
 
-	// Heal MediaHistory timestamps
+	// Heal MediaHistory timestamps.
+	// Rows with MonotonicStart = 0 are skipped: they cannot be accurately healed
+	// (uptime was unavailable when the row was written), so we leave them as-is.
 	mediaStmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
 		SET StartTime = ? + MonotonicStart,
@@ -490,7 +548,7 @@ func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBoo
 		    ClockReliable = 1,
 		    ClockSource = 'healed',
 		    UpdatedAt = unixepoch()
-		WHERE BootUUID = ? AND ClockReliable = 0;
+		WHERE BootUUID = ? AND ClockReliable = 0 AND MonotonicStart > 0;
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history heal statement: %w", err)

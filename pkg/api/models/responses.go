@@ -29,13 +29,14 @@ import (
 )
 
 type SearchResultMedia struct {
-	RelPath   *string            `json:"relativePath,omitempty"`
-	System    System             `json:"system"`
-	Name      string             `json:"name"`
-	Path      string             `json:"path"`
-	ZapScript string             `json:"zapScript"`
-	Tags      []database.TagInfo `json:"tags"`
-	MediaID   int64              `json:"mediaId,omitempty"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	System             System             `json:"system"`
+	Name               string             `json:"name"`
+	Path               string             `json:"path"`
+	ZapScript          string             `json:"zapScript"`
+	Tags               []database.TagInfo `json:"tags"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
 }
 
 type PaginationInfo struct {
@@ -55,22 +56,19 @@ type TagsResponse struct {
 }
 
 type BrowseEntry struct {
-	SystemID  *string            `json:"systemId,omitempty"`
-	RelPath   *string            `json:"relativePath,omitempty"`
-	ZapScript *string            `json:"zapScript,omitempty"`
-	FileCount *int               `json:"fileCount,omitempty"`
-	Group     *string            `json:"group,omitempty"`
-	Name      string             `json:"name"`
-	Path      string             `json:"path"`
-	Type      string             `json:"type"`
-	SystemIDs []string           `json:"systemIds,omitempty"`
-	Tags      []database.TagInfo `json:"tags,omitempty"`
-	MediaID   int64              `json:"mediaId,omitempty"`
-	// HasCover is true when the media or its title has at least one image
-	// property row. Only set for media-type entries and singleton-aliased
-	// directory entries. Always emitted (never omitempty) so clients can
-	// skip cover requests for entries without art.
-	HasCover bool `json:"hasCover"`
+	SystemID           *string            `json:"systemId,omitempty"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	ZapScript          *string            `json:"zapScript,omitempty"`
+	FileCount          *int               `json:"fileCount,omitempty"`
+	Group              *string            `json:"group,omitempty"`
+	Path               string             `json:"path"`
+	Type               string             `json:"type"`
+	Name               string             `json:"name"`
+	SystemIDs          []string           `json:"systemIds,omitempty"`
+	Tags               []database.TagInfo `json:"tags,omitempty"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	HasCover           bool               `json:"hasCover"`
 }
 
 type BrowseResults struct {
@@ -78,6 +76,35 @@ type BrowseResults struct {
 	Path       string          `json:"path"`
 	Entries    []BrowseEntry   `json:"entries"`
 	TotalFiles int             `json:"totalFiles"`
+	TotalDirs  int             `json:"totalDirs"`
+}
+
+// BrowseIndexGroup is one first-character section of a browse list. Key is the
+// stable bucket identifier and Label is what to display (equal for the Latin
+// scheme; separated so a future locale scheme can show a glyph differing from
+// the key). Cursor is an opaque media.browse cursor positioned just before the
+// bucket's first row: passing it to media.browse with the same scope returns a
+// continuous page that begins at the bucket. Clients must treat Key and Cursor
+// as opaque. Offset is the 0-based position of the bucket's first item among
+// the scope's media files (excluding any leading directories), for clients that
+// jump to a position in the full list rather than reload from the cursor.
+type BrowseIndexGroup struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Cursor string `json:"cursor"`
+	Count  int    `json:"count"`
+	Offset int    `json:"offset"`
+}
+
+// BrowseIndexResults is the response for media.browse.index. Scheme reports the
+// collation used to derive buckets ("latin"), or "none" when no letter rail
+// applies to the scope (non-alphabetical sort, or a root listing); Groups is
+// then empty. Groups is authoritative and already ordered for the active sort;
+// clients render it as-is without assuming any alphabet.
+type BrowseIndexResults struct {
+	Scheme     string             `json:"scheme"`
+	Groups     []BrowseIndexGroup `json:"groups"`
+	TotalFiles int                `json:"totalFiles"`
 }
 
 type SettingsResponse struct {
@@ -128,6 +155,7 @@ type System struct {
 	ID           string  `json:"id,omitempty"`
 	Name         string  `json:"name,omitempty"`
 	Category     string  `json:"category,omitempty"`
+	ZapScript    string  `json:"zapScript,omitempty"`
 }
 
 type SystemsResponse struct {
@@ -159,7 +187,11 @@ type MappingResponse struct {
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
-	Enabled  bool   `json:"enabled"`
+	// Source identifies where the mapping came from: "database" or "file".
+	Source string `json:"source"`
+	// ReadOnly is true for mappings that can't be edited via the API (file mappings).
+	ReadOnly bool `json:"readOnly"`
+	Enabled  bool `json:"enabled"`
 }
 
 type TokenResponse struct {
@@ -186,10 +218,20 @@ type IndexingStatusResponse struct {
 	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
 	TotalMedia         *int    `json:"totalMedia,omitempty"`
-	Exists             bool    `json:"exists"`
-	Indexing           bool    `json:"indexing"`
-	Optimizing         bool    `json:"optimizing"`
-	Paused             bool    `json:"paused"`
+	// MissingMedia is the count of indexed media flagged missing on disk —
+	// what media.clean.orphans would remove.
+	MissingMedia *int `json:"missingMedia,omitempty"`
+	// SystemsCompleted/SystemsTotal report per-system indexing coverage so
+	// clients can serve partial results while a scan is still running.
+	SystemsCompleted *int `json:"systemsCompleted,omitempty"`
+	SystemsTotal     *int `json:"systemsTotal,omitempty"`
+	Exists           bool `json:"exists"`
+	Indexing         bool `json:"indexing"`
+	Optimizing       bool `json:"optimizing"`
+	Paused           bool `json:"paused"`
+	// Throttled reports that indexing is running at reduced speed while
+	// media plays.
+	Throttled bool `json:"throttled,omitempty"`
 }
 
 type ReaderResponse struct {
@@ -278,6 +320,7 @@ type MediaMetaTitleResponse struct {
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
 type MediaMetaMediaResponse struct {
 	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	LauncherOverride    *string                          `json:"launcherOverride,omitempty"`
 	Path                string                           `json:"path"`
 	ParentDir           string                           `json:"parentDir"`
 	Tags                []database.TagInfo               `json:"tags"`
@@ -337,18 +380,22 @@ type ScrapingStatusResponse struct {
 	Scraping           bool                          `json:"scraping"`
 	Done               bool                          `json:"done"`
 	Paused             bool                          `json:"paused"`
-	Force              bool                          `json:"force"`
+	// Throttled reports that scraping is running at reduced speed while
+	// media plays.
+	Throttled bool `json:"throttled,omitempty"`
+	Force     bool `json:"force"`
 }
 
 type MediaLookupMatch struct {
-	RelPath    *string            `json:"relativePath,omitempty"`
-	System     System             `json:"system"`
-	Name       string             `json:"name"`
-	Path       string             `json:"path"`
-	ZapScript  string             `json:"zapScript"`
-	Tags       []database.TagInfo `json:"tags"`
-	MediaID    int64              `json:"mediaId,omitempty"`
-	Confidence float64            `json:"confidence"`
+	RelPath            *string            `json:"relativePath,omitempty"`
+	System             System             `json:"system"`
+	Name               string             `json:"name"`
+	Path               string             `json:"path"`
+	ZapScript          string             `json:"zapScript"`
+	Tags               []database.TagInfo `json:"tags"`
+	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
+	MediaID            int64              `json:"mediaId,omitempty"`
+	Confidence         float64            `json:"confidence"`
 }
 
 type MediaLookupResponse struct {
@@ -516,10 +563,12 @@ type MediaTitleParseResponse struct {
 }
 
 type Launcher struct {
-	ID         string   `json:"id"`
-	SystemID   string   `json:"systemId,omitempty"`
-	SystemName string   `json:"systemName,omitempty"`
-	Groups     []string `json:"groups,omitempty"`
+	ID                 string   `json:"id"`
+	SystemID           string   `json:"systemId,omitempty"`
+	SystemName         string   `json:"systemName,omitempty"`
+	AvailabilityReason string   `json:"availabilityReason,omitempty"`
+	Groups             []string `json:"groups,omitempty"`
+	Available          bool     `json:"available"`
 }
 
 type LaunchersResponse struct {

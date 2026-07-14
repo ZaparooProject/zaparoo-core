@@ -117,11 +117,12 @@ func TestServerStartupConcurrency(t *testing.T) {
 			platform := mocks.NewMockPlatform()
 			platform.SetupBasicMock()
 
-			// Use a specific port to avoid conflicts
-			testPort := 8000 + attempt
+			// Bind an OS-assigned free port (port 0) instead of a hard-coded
+			// port: parallel attempts sharing fixed ports — or any other
+			// process holding one — caused "address already in use" flakes.
 			fs := helpers.NewMemoryFS()
 			configDir := t.TempDir()
-			cfg, err := helpers.NewTestConfigWithPort(fs, configDir, testPort)
+			cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
 			require.NoError(t, err)
 
 			st, notifCh := state.NewState(platform, "test-boot-uuid")
@@ -137,11 +138,12 @@ func TestServerStartupConcurrency(t *testing.T) {
 			// Start server in a separate goroutine
 			serverDone := make(chan struct{})
 			serverErr := make(chan error, 1)
+			ready := make(chan error, 1)
 			go func() {
 				defer close(serverDone)
-				serverErr <- Start(
+				serverErr <- StartWithReady(
 					platform, cfg, st, tokenQueue, nil, db,
-					nil, nil, notifBroker, "", nil, nil, nil, nil, nil,
+					nil, nil, notifBroker, "", nil, nil, nil, nil, nil, ready,
 				)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
@@ -151,6 +153,16 @@ func TestServerStartupConcurrency(t *testing.T) {
 				<-serverDone
 				require.NoError(t, <-serverErr)
 			}()
+
+			// Wait for the listener to bind before reading the resolved port:
+			// with port 0 the server writes the actual port back to cfg only
+			// after a successful bind.
+			select {
+			case bindErr := <-ready:
+				require.NoError(t, bindErr)
+			case <-time.After(2 * time.Second):
+				t.Fatal("server did not bind within timeout")
+			}
 
 			// Test that server becomes available and responds correctly
 			// The server should properly synchronize startup internally

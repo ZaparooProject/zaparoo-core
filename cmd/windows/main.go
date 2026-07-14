@@ -88,11 +88,20 @@ func isRunning() bool {
 		nil, false,
 		syswindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
 	)
-	if err != nil {
-		log.Fatal().Err(err).Msg("error creating mutex")
+	// When another instance already holds the named mutex, CreateMutex reports
+	// ERROR_ALREADY_EXISTS. That is the "already running" signal we want — not a
+	// failure. Treating it as fatal crashed the second launch instead of exiting
+	// cleanly.
+	if errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) {
+		return true
 	}
-	lastError := syswindows.GetLastError()
-	return errors.Is(lastError, syswindows.ERROR_ALREADY_EXISTS)
+	if err != nil {
+		// A genuine mutex-creation failure shouldn't prevent startup; log it and
+		// assume no other instance is running.
+		log.Error().Err(err).Msg("error creating single-instance mutex")
+		return false
+	}
+	return false
 }
 
 func main() {

@@ -33,5 +33,6 @@ func mediaDBLookupContext(env *platforms.CmdEnv) (context.Context, context.Cance
 	if parent == nil {
 		parent = context.Background()
 	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
 	return context.WithTimeout(parent, mediaDBLookupTimeout)
 }

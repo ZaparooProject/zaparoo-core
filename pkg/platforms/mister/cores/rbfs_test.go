@@ -115,3 +115,28 @@ func TestShallowScanRBF_IncludesRetroAchievementsCores(t *testing.T) {
 	assert.Equal(t, "NES", found.ShortName)
 	assert.Equal(t, "NES.rbf", found.Filename)
 }
+
+func TestShallowScanRBF_IncludesLightGunSindenCores(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	lightGunDir := filepath.Join(root, "Light Gun")
+	require.NoError(t, os.MkdirAll(lightGunDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(lightGunDir, "NES-Sinden.rbf"), []byte{}, 0o600))
+
+	rbfs, err := shallowScanRBFAt(root)
+	require.NoError(t, err)
+
+	expectedMglName := filepath.Join("Light Gun", "NES-Sinden")
+	var found *RBFInfo
+	for i := range rbfs {
+		if rbfs[i].MglName == expectedMglName {
+			found = &rbfs[i]
+			break
+		}
+	}
+
+	require.NotNil(t, found, "Light Gun Sinden core should be included in shallow RBF scan")
+	assert.Equal(t, "NES-Sinden", found.ShortName)
+	assert.Equal(t, "NES-Sinden.rbf", found.Filename)
+}

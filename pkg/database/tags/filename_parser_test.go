@@ -770,6 +770,155 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 	}
 }
 
+func TestParseFilenameToCanonicalTags_ArcadeRegionBuildDate(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []string
+	}{
+		{
+			name:     "World region with build date",
+			filename: "Super Street Fighter II The New Challengers (World 931005).mra",
+			wantTags: []string{"region:world", "builddate:1993-10-05"},
+		},
+		{
+			name:     "USA region with build date adds lang",
+			filename: "Some Arcade Game (USA 040202).mra",
+			wantTags: []string{"region:us", "lang:en", "builddate:2004-02-02"},
+		},
+		{
+			name:     "Europe region with build date no longer credit",
+			filename: "X-Men Vs. Street Fighter (Europe 961004).mra",
+			wantTags: []string{"region:eu", "builddate:1996-10-04"},
+		},
+		{
+			name:     "qualifier comma region with build date",
+			filename: "Street Fighter Zero (CPS Changer, Japan 951020).mra",
+			wantTags: []string{"region:jp", "lang:ja", "builddate:1995-10-20"},
+		},
+		{
+			name:     "standalone No-Intro build date",
+			filename: "Sonic The Hedgehog 2 (1992-09-21).bin",
+			wantTags: []string{"builddate:1992-09-21"},
+		},
+		{
+			name:     "comma-separated region and bare date",
+			filename: "X-Men Vs. Street Fighter (EU, 961004).mra",
+			wantTags: []string{"region:eu", "builddate:1996-10-04"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+			for _, want := range tt.wantTags {
+				assert.Contains(t, gotStrings, want, "expected %s in %v", want, gotStrings)
+			}
+			// No credit: fallback should survive for these region+date names.
+			for _, tagStr := range gotStrings {
+				assert.False(t, strings.HasPrefix(tagStr, "credit:"),
+					"region+date name should not produce credit: tag, got %q", tagStr)
+			}
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_CreditRemappings(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []string
+		wantNot  []string // tag prefixes that must NOT appear
+	}{
+		{
+			name:     "title-prefixed hack is unlicensed not credit",
+			filename: "Super Mario World (SMW Hack).sfc",
+			wantTags: []string{"unlicensed:hack"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "multi-token hack",
+			filename: "Super Mario World (SA-1 SMW Hack).sfc",
+			wantTags: []string{"unlicensed:hack"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "cracker credit becomes dump cracked",
+			filename: "Pitfall (4am Crack).a26",
+			wantTags: []string{"dump:cracked"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "multi-token cracker",
+			filename: "Game (4am and SAN Inc Crack).dsk",
+			wantTags: []string{"dump:cracked"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "english translation maps to unlicensed plus lang",
+			filename: "Final Fantasy (English Translation).sfc",
+			wantTags: []string{"unlicensed:translation", "lang:en"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "set number maps to set tag",
+			filename: "Galaga (Set 1).mra",
+			wantTags: []string{"set:1"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "wip maps to unfinished",
+			filename: "Some Homebrew (WIP).bin",
+			wantTags: []string{"unfinished:wip"},
+			wantNot:  []string{"credit:"},
+		},
+		{
+			name:     "genuine company name stays credit",
+			filename: "Cracktro (Fairlight).d64",
+			wantTags: []string{"credit:fairlight"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+			for _, want := range tt.wantTags {
+				assert.Contains(t, gotStrings, want, "expected %s in %v", want, gotStrings)
+			}
+			for _, prefix := range tt.wantNot {
+				for _, tagStr := range gotStrings {
+					assert.False(t, strings.HasPrefix(tagStr, prefix),
+						"%q should not produce %s tag, got %q", tt.filename, prefix, tagStr)
+				}
+			}
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_BareNumberNotBuildDate(t *testing.T) {
+	// A bare 6-digit number with no region word must not be read as a build date,
+	// including as a comma-part with no region sibling.
+	for _, filename := range []string{
+		"Mystery Game (123456).rom",
+		"Mystery Game (931005).rom",
+		"Mystery Game (Foo, 961004).rom",
+	} {
+		got := ParseFilenameToCanonicalTags(filename)
+		for _, tag := range got {
+			assert.NotEqual(t, TagTypeBuildDate, tag.Type,
+				"bare number in %q should not produce a build date, got %s", filename, tag.String())
+		}
+	}
+}
+
 func TestParseFilenameToCanonicalTags_NoDuplicates(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1185,6 +1334,246 @@ func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTVButKeepsRomTranslationP
 	assert.Contains(t, gameStrings, "unlicensed:translation")
 	assert.Contains(t, gameStrings, "lang:en")
 	assert.Contains(t, gameStrings, "region:us")
+}
+
+// TestParseFilenameToCanonicalTagsForMedia_DumpFlagGrammar verifies the TOSEC dump-flag
+// bracket grammar accepts real flag/cracker forms but rejects hyphenated words, which must
+// not be misread as flag+credit (e.g. "[b-side]" is not "bad dump by side").
+func TestParseFilenameToCanonicalTagsForMedia_DumpFlagGrammar(t *testing.T) {
+	t.Parallel()
+
+	collect := func(fn string) []string {
+		got := ParseFilenameToCanonicalTagsForMedia(fn, slugs.MediaTypeGame)
+		strs := make([]string, len(got))
+		for i, ct := range got {
+			strs[i] = ct.String()
+		}
+		return strs
+	}
+
+	// Real dump-flag / cracker forms are recognized.
+	assert.Contains(t, collect("Game [cr XOR].d64"), "dump:cracked")
+	assert.Contains(t, collect("Game [cr XOR].d64"), "credit:xor")
+	assert.Contains(t, collect("Game [h ASS].d64"), "dump:hacked")
+	assert.Contains(t, collect("Game [f1].nes"), "dump:fixed")
+	assert.Contains(t, collect("Game [a2].nes"), "dump:alternate")
+
+	// Hyphenated words must NOT be misread as flag+credit.
+	bSide := collect("Game [b-side].nes")
+	assert.NotContains(t, bSide, "dump:bad")
+	assert.NotContains(t, bSide, "credit:side")
+	aTeam := collect("Game [a-team].nes")
+	assert.NotContains(t, aTeam, "dump:alternate")
+	assert.NotContains(t, aTeam, "credit:team")
+}
+
+func TestParseFilenameToCanonicalTagsForMedia_ArcadeInputControls(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		wantTag  string
+	}{
+		{"Jackal (W, Rotary).mra", "input:joystick:rotary"},
+		{"Some Game (Trackball).mra", "input:trackball"},
+		{"Some Game (Paddle).mra", "input:paddle"},
+		{"Some Game (Twin Stick).mra", "input:stick:twin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeGame)
+			strs := make([]string, len(got))
+			for i, ct := range got {
+				strs[i] = ct.String()
+			}
+			assert.Contains(t, strs, tt.wantTag)
+		})
+	}
+}
+
+// TestParseFilenameToCanonicalTagsForMedia_ArcadeMetadataTokens covers the arcade
+// filename tokens that must map to their correct known types (not unknown): bootleg
+// bracket, Sega System board shorthand, software version, and memory config.
+func TestParseFilenameToCanonicalTagsForMedia_ArcadeMetadataTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		wantTag  string
+	}{
+		{"Jackal (W) [bl].mra", "unlicensed:bootleg"},
+		{"Action Fighter (World, S16A).mra", "arcadeboard:sega:system16a"},
+		{"Sonic (World, S16B).mra", "arcadeboard:sega:system16b"},
+		{"Body Slam (World, S16).mra", "arcadeboard:sega:system16"},
+		{"Demon Front (ver. 105).mra", "rev:105"},
+		{"Dragon World 2001 (ver. 100, Japan).mra", "rev:100"},
+		{"Caliber 50 (Ver. 1.01).mra", "rev:1-01"},
+		{"Some Game (48-128K).tap", "compatibility:memory:48k-128k"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeGame)
+			strs := make([]string, len(got))
+			for i, ct := range got {
+				strs[i] = ct.String()
+			}
+			assert.Contains(t, strs, tt.wantTag)
+		})
+	}
+}
+
+// TestParseFilenameToCanonicalTagsForMedia_LooseTokenRouting covers the systematic
+// routing fixes: comma-parts and bracket tokens now reach the classifier instead of being
+// dropped, so recognized qualifiers get their correct type in every context. Also covers
+// the new keyword/date mappings.
+func TestParseFilenameToCanonicalTagsForMedia_LooseTokenRouting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		wantTag  string
+	}{
+		// set / board as a comma-part (previously dropped after the comma)
+		{"Finalizer (World, Set 2).mra", "set:2"},
+		{"Alex Kidd (World, System 16B).mra", "arcadeboard:sega:system16b"},
+		{"Game (World, CPS Changer).mra", "arcadeboard:capcom:cpschanger"},
+		// board id followed by a trailing "version" word (previously dropped as noise)
+		{"Fantasy Zone II (System 16C version).mra", "arcadeboard:sega:system16c"},
+		// memory as a bracket token (previously dropped as dump:<raw>)
+		{"Elite (1984)(Firebird)[128K].tap", "compatibility:memory:128k"},
+		{"180 (1986)(Mastertronic)[48-128K].atr", "compatibility:memory:48k-128k"},
+		// year-month build date (previously unknown)
+		{"720 (1988-01).nsf", "builddate:1988-01"},
+		// keyword mappings whose values already existed
+		{"Game (New Zealand).z64", "region:nz"},
+		{"Game (PAL60).md", "video:pal-60"},
+		{"Game [re-release].tap", "release:reissue"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeGame)
+			strs := make([]string, len(got))
+			for i, ct := range got {
+				strs[i] = ct.String()
+			}
+			assert.Contains(t, strs, tt.wantTag)
+		})
+	}
+}
+
+// TestParseFilenameToCanonicalTagsForMedia_CabinetAndProtection covers the two arcade tag
+// types: cabinet orientation and copy-protection state (chip family only, serial dropped).
+func TestParseFilenameToCanonicalTagsForMedia_CabinetAndProtection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		wantTag  string
+	}{
+		{"Game (Cocktail).mra", "cabinet:cocktail"},
+		{"Game (Cabaret).mra", "cabinet:cabaret"},
+		{"Game (World, Upright).mra", "cabinet:upright"},
+		{"Cabinet (sitdown - upright).mra", "cabinet:sitdown"},
+		{"Cabinet (sitdown - upright).mra", "cabinet:upright"},
+		{"Alex Kidd (World, S16A) [No Protection].mra", "protection:no-protection"},
+		{"Game (Encrypted).mra", "protection:encrypted"},
+		{"Game (Decrypted).mra", "protection:decrypted"},
+		{"Game (MC-8123).mra", "protection:mc-8123"},
+		{"Ace Attacker (Japan, S16A) [FD1094 317-0060].mra", "protection:fd1094"},
+		{"Alien (World) (FD1094 317-0154).mra", "protection:fd1094"},
+		{"Altered Beast (set 8) (8751 317-0078).mra", "protection:8751"},
+		{"Action Fighter (World, S16A) [FD1089B 317-0018].mra", "protection:fd1089"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename+"_"+tt.wantTag, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeGame)
+			strs := make([]string, len(got))
+			for i, ct := range got {
+				strs[i] = ct.String()
+			}
+			assert.Contains(t, strs, tt.wantTag)
+		})
+	}
+
+	// The protection chip serial (e.g. "317-0060") is deliberately dropped — only the chip
+	// family is kept — so no resulting tag should carry the serial.
+	t.Run("serial_dropped", func(t *testing.T) {
+		t.Parallel()
+		for _, ct := range ParseFilenameToCanonicalTagsForMedia(
+			"Ace Attacker (Japan, S16A) [FD1094 317-0060].mra", slugs.MediaTypeGame,
+		) {
+			assert.NotContains(t, ct.String(), "317", "chip serial must not leak into a tag: %s", ct.String())
+		}
+	})
+}
+
+// TestParseFilenameToCanonicalTagsForMedia_MusicBrackets covers the media-aware bracket
+// handling for SPC/NSF music libraries: track numbers, alternate-sound sets, and composer text.
+func TestParseFilenameToCanonicalTagsForMedia_MusicBrackets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		wantTag  string
+	}{
+		{"Star Fox [01].spc", "track:1"},
+		{"Star Fox [12].spc", "track:12"},
+		{"Utopia [AS1].spc", "alt:1"},
+		{"Zelda [AS3].spc", "alt:3"},
+		{"Song [Hajime Hirasawa].spc", "credit:hajime-hirasawa"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeMusic)
+			strs := make([]string, len(got))
+			for i, ct := range got {
+				strs[i] = ct.String()
+			}
+			assert.Contains(t, strs, tt.wantTag)
+		})
+	}
+}
+
+// TestParseFilenameToCanonicalTagsForMedia_FormatAndStructureTokens covers the remaining
+// format/memory/structure/hardware tokens that previously dropped or fell to dump:<raw>.
+func TestParseFilenameToCanonicalTagsForMedia_FormatAndStructureTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		wantTag  string
+	}{
+		{"180 (1986)(Mastertronic)[cr XOR].atr", "dump:cracked"},
+		{"180 (1986)(Mastertronic)[cr XOR].atr", "credit:xor"},
+		{"007 (1987)(Domark)[k-file].atr", "media:k-file"},
+		{"Boulder Dash (1984)(First Star)[lnx].atr", "media:lnx"},
+		{"Prog (19xx)(-)[basic].rkr", "compatibility:basic"},
+		{"Game (8K).prg", "compatibility:memory:8k"},
+		{"Game (4K).prg", "compatibility:memory:4k"},
+		{"Game (A000).prg", "compatibility:load:a000"},
+		{"Game [no boot].dsk", "dump:no-boot"},
+		{"Prog (type-in).prg", "distribution:type-in"},
+		{"Great Giana (Side 1 of 2).d64", "media:side-a"},
+		{"Great Giana (Side 1 of 2).d64", "disctotal:2"},
+		{"R-Type (World, M72 hardware).mra", "arcadeboard:irem:m72"},
+		{"Game [2017-10-31].hex", "builddate:2017-10-31"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename+"_"+tt.wantTag, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeGame)
+			strs := make([]string, len(got))
+			for i, ct := range got {
+				strs[i] = ct.String()
+			}
+			assert.Contains(t, strs, tt.wantTag)
+		})
+	}
 }
 
 func TestParseFilenameToCanonicalTagsForMedia_NonGameSkipsRomTranslationLanguageTags(t *testing.T) {
@@ -2471,6 +2860,59 @@ func BenchmarkDetectNumberingPattern(b *testing.B) {
 					ParseFilenameToCanonicalTags(fn)
 				}
 			}
+		})
+	}
+}
+
+// TestParseTitleFromFilename_AmigaVision verifies that titles derived from
+// AmigaVision listing lines (the path basename) are cleaned correctly. The scanner
+// leaves ScanResult.Name empty so the indexer derives the title from the path,
+// which means the raw listing line — e.g. "1869 (AGA)[en]" — arrives as the
+// filename argument here.
+func TestParseTitleFromFilename_AmigaVision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		filename  string
+		wantTitle string
+	}{
+		{
+			name:      "game with AGA chipset and single language",
+			filename:  "1869 (AGA)[en]",
+			wantTitle: "1869",
+		},
+		{
+			name:      "game with OCS chipset and single language",
+			filename:  "3D Pool (OCS)[en]",
+			wantTitle: "3D Pool",
+		},
+		{
+			name:      "game with OCS chipset and multi-language bracket",
+			filename:  "7 Colors (OCS)[en-de-fr-it-es]",
+			wantTitle: "7 Colors",
+		},
+		{
+			name:      "demo with group paren and AGA chipset",
+			filename:  "1001 Stolen Ideas (Airwalk)(AGA)",
+			wantTitle: "1001 Stolen Ideas",
+		},
+		{
+			name:      "demo with group paren and OCS chipset",
+			filename:  "9 Fingers (Spaceballs)(OCS)",
+			wantTitle: "9 Fingers",
+		},
+		{
+			name:      "game title with leading number preserved",
+			filename:  "1869 (OCS)[en]",
+			wantTitle: "1869",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.wantTitle, ParseTitleFromFilename(tt.filename, false))
 		})
 	}
 }

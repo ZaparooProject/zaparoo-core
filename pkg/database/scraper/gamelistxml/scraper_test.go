@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -72,19 +73,19 @@ func TestCleanField_Empty(t *testing.T) {
 	assert.Empty(t, cleanField(""))
 }
 
-// --- resolveESPath ---
+// --- esmedia.ResolvePath ---
 
 func TestResolveESPath_RelativeDotSlash(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("./roms/mario.nes", root)
+	got := esmedia.ResolvePath("./roms/mario.nes", root)
 	assert.Equal(t, filepath.Join(root, "roms", "mario.nes"), got)
 }
 
 func TestResolveESPath_RelativeNoDot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("roms/mario.nes", root)
+	got := esmedia.ResolvePath("roms/mario.nes", root)
 	assert.Equal(t, filepath.Join(root, "roms", "mario.nes"), got)
 }
 
@@ -92,7 +93,7 @@ func TestResolveESPath_AbsoluteInsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	absPath := filepath.Join(root, "roms", "mario.nes")
-	got := resolveESPath(absPath, root)
+	got := esmedia.ResolvePath(absPath, root)
 	assert.Equal(t, absPath, got)
 }
 
@@ -100,20 +101,20 @@ func TestResolveESPath_AbsoluteOutsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	absPath := filepath.Join(root, "mario.nes")
-	got := resolveESPath(absPath, filepath.Join(root, "other"))
+	got := esmedia.ResolvePath(absPath, filepath.Join(root, "other"))
 	assert.Empty(t, got)
 }
 
 func TestResolveESPath_Empty(t *testing.T) {
 	t.Parallel()
-	got := resolveESPath("", t.TempDir())
+	got := esmedia.ResolvePath("", t.TempDir())
 	assert.Empty(t, got)
 }
 
 func TestResolveESPath_PathTraversal(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("../../etc/passwd", root)
+	got := esmedia.ResolvePath("../../etc/passwd", root)
 	// Relative paths that escape systemRootPath must be rejected.
 	assert.Empty(t, got, "path traversal outside root must return empty string")
 }
@@ -121,7 +122,7 @@ func TestResolveESPath_PathTraversal(t *testing.T) {
 func TestResolveESPath_TraversalToAbsolute(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESPath("../../../etc/passwd", root)
+	got := esmedia.ResolvePath("../../../etc/passwd", root)
 	assert.Empty(t, got, "deep traversal outside root must return empty string")
 }
 
@@ -336,7 +337,7 @@ func TestLoadRecords_PathMatch(t *testing.T) {
 	assert.Equal(t, "Mario", records[0].Game.Name)
 	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
 	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
-	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].AvailableMediaDirs["image"])
+	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].MediaDirsByRoot[0]["image"])
 }
 
 func TestLoadRecords_SubfolderPathMatch(t *testing.T) {
@@ -485,6 +486,107 @@ func TestLoadRecords_PokemonAccentMatchesNonAccentedSlug(t *testing.T) {
 	assert.Equal(t, int64(856), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(857), records[0].MatchedMediaDBID)
 	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_SlugOnlySingleMediaRowIsWriteSafe(t *testing.T) {
+	t.Parallel()
+
+	// Models issue #977: gamelist <path> differs from the indexed file path
+	// (here by subfolder), so the path-fold match fails, but both fold to
+	// the same title slug. With exactly one media row the match is
+	// unambiguous and media-level art should be written.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./Bomber Man.mra</path>
+    <name>Bomber Man</name>
+    <image>./media/images/bomberman.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "arcade", ROMPaths: []string{root}},
+		mediaBySlugAndPath("bomberman", &database.MediaTitle{DBID: 10, Slug: "bomberman"},
+			database.Media{
+				DBID: 11, MediaTitleDBID: 10,
+				Path: filepath.Join(root, "subdir", "Bomber Man.mra"),
+			}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.Equal(t, int64(10), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+	// Confirm MapToDB produces an image prop that will not be dropped.
+	mapped := (&GamelistXMLScraper{}).MapToDB(records[0])
+	assert.NotEmpty(t, mapped.MediaProps, "image prop must survive to the write when write-safe")
+}
+
+func TestLoadRecords_SlugOnlyMultipleMediaRowsStaysUnsafe(t *testing.T) {
+	t.Parallel()
+
+	// Two regional variants under one title; the gamelist path matches neither
+	// by fold → gamelistMatchSlugOnly but MediaLevelWriteSafe must stay false
+	// to avoid attaching art to the wrong variant.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./Game.nes</path>
+    <name>Game</name>
+    <image>./media/images/game.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		mediaBySlugAndPath("game", &database.MediaTitle{DBID: 20, Slug: "game"},
+			database.Media{DBID: 21, MediaTitleDBID: 20, Path: filepath.Join(root, "USA", "Game.nes")},
+			database.Media{DBID: 22, MediaTitleDBID: 20, Path: filepath.Join(root, "Japan", "Game.nes")}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.False(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_SlugConflictStaysUnsafe(t *testing.T) {
+	t.Parallel()
+
+	// The gamelist <path> folds to a media row belonging to a DIFFERENT title
+	// than the slug match. Even though only one media row exists for the slug-
+	// matched title, the conflict disqualifies media-level writes.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./game.nes</path>
+    <name>Game</name>
+    <image>./media/images/game.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	// Build indexes manually: title 30 is slug-matched, but game.nes is
+	// indexed under title 40 (a different title).
+	indexes := mediaByPath(
+		database.Media{DBID: 50, MediaTitleDBID: 40, Path: filepath.Join(root, "game.nes")},
+		database.Media{DBID: 51, MediaTitleDBID: 30, Path: filepath.Join(root, "other", "game.nes")},
+	)
+	indexes.TitlesBySlug["game"] = database.MediaTitle{DBID: 30, Slug: "game"}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		indexes,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, gamelistMatchSlugConflict, records[0].MatchKind)
 	assert.False(t, records[0].MediaLevelWriteSafe)
 }
 
@@ -1370,8 +1472,8 @@ func TestMapToDB_FilesystemFallback_Image(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(imgDir, "mario.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"image": imgDir},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"image": imgDir}},
 		Game: esapi.Game{
 			Path:  "./roms/mario.nes",
 			Image: "", // no XML path → filesystem fallback
@@ -1402,8 +1504,8 @@ func TestMapToDB_FilesystemFallback_NestedGamePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(imgPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"images": imgDir},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"images": imgDir}},
 		Game: esapi.Game{
 			Path: "./Japan/Game.nes",
 		},
@@ -1422,6 +1524,65 @@ func TestMapToDB_FilesystemFallback_NestedGamePath(t *testing.T) {
 	assert.True(t, found, "nested filesystem fallback image property missing")
 }
 
+func TestMapToDB_FilesystemFallback_CrossRoot(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	artRoot := filepath.Join(base, "fat", "nes")
+	imgDir := filepath.Join(artRoot, "media", "images")
+	require.NoError(t, os.MkdirAll(imgDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(imgDir, "Game.png"), []byte{}, 0o600))
+
+	// The gamelist.xml lives on romRoot; artwork lives on a different root.
+	rec := GamelistRecord{
+		SystemRootPath:  romRoot,
+		MediaDirsByRoot: []map[string]string{{}, {"images": imgDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range result.MediaProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(imgDir, "Game.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "cross-root filesystem fallback image property missing")
+}
+
+func TestMapToDB_FilesystemFallback_PrefersEarlierRootInOrder(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	romRoot := filepath.Join(base, "cifs", "nes")
+	firstArtDir := filepath.Join(base, "usb0", "nes", "media", "images")
+	secondArtDir := filepath.Join(base, "fat", "nes", "media", "images")
+	require.NoError(t, os.MkdirAll(firstArtDir, 0o750))
+	require.NoError(t, os.MkdirAll(secondArtDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(firstArtDir, "Game.png"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(secondArtDir, "Game.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:  romRoot,
+		MediaDirsByRoot: []map[string]string{{"images": firstArtDir}, {"images": secondArtDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range result.MediaProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(firstArtDir, "Game.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "cross-root filesystem fallback image property missing")
+}
+
 func TestMapToDB_FilesystemFallback_NestedWinsBeforeFlat(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -1434,9 +1595,9 @@ func TestMapToDB_FilesystemFallback_NestedWinsBeforeFlat(t *testing.T) {
 	require.NoError(t, os.WriteFile(flatPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"images": imgDir},
-		Game:               esapi.Game{Path: "./Japan/Game.nes"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"images": imgDir}},
+		Game:            esapi.Game{Path: "./Japan/Game.nes"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1462,9 +1623,9 @@ func TestMapToDB_FilesystemFallback_ThumbnailBox2DFrontAlias(t *testing.T) {
 	require.NoError(t, os.WriteFile(thumbPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"box2dfront": thumbDir},
-		Game:               esapi.Game{Path: "./Game.nes"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"box2dfront": thumbDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1489,9 +1650,9 @@ func TestMapToDB_FilesystemFallback_Boxart(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(boxartDir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart": boxartDir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart": boxartDir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1521,11 +1682,11 @@ func TestMapToDB_FallbackFindsBox2DLogoTitleScreenDirs(t *testing.T) {
 
 	rec := GamelistRecord{
 		SystemRootPath: root,
-		AvailableMediaDirs: map[string]string{
+		MediaDirsByRoot: []map[string]string{{
 			"box2d":       box2DDir,
 			"logo":        logoDir,
 			"titlescreen": titleScreenDir,
-		},
+		}},
 		Game: esapi.Game{Path: "./Game.nes"},
 	}
 
@@ -1560,9 +1721,9 @@ func TestMapToDB_FallbackFindsJPGMediaFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(imgPath, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"images": imgDir},
-		Game:               esapi.Game{Path: "./Game.nes"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"images": imgDir}},
+		Game:            esapi.Game{Path: "./Game.nes"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1594,8 +1755,8 @@ func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
 	require.NoError(t, os.WriteFile(fsImg, []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"image": filepath.Join(root, "media", "image")},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"image": filepath.Join(root, "media", "image")}},
 		Game: esapi.Game{
 			Path:  "./roms/mario.nes",
 			Image: "./media/images/mario.png", // XML path present → must win
@@ -1618,7 +1779,7 @@ func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
 func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// No media/ directory, no AvailableMediaDirs — should produce no image props.
+	// No media/ directory, no MediaDirsByRoot — should produce no image props.
 	rec := GamelistRecord{
 		SystemRootPath: root,
 		Game:           esapi.Game{Path: "./roms/mario.nes"},
@@ -1706,9 +1867,9 @@ func TestMapToDB_FilesystemFallback_Boxart3D(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart3d": dir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart3d": dir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1733,9 +1894,9 @@ func TestMapToDB_FilesystemFallback_BoxartSide(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart2dside": dir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart2dside": dir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1760,9 +1921,9 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
 
 	rec := GamelistRecord{
-		SystemRootPath:     root,
-		AvailableMediaDirs: map[string]string{"boxart2dback": dir},
-		Game:               esapi.Game{Path: "./roms/sonic.md"},
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{{"boxart2dback": dir}},
+		Game:            esapi.Game{Path: "./roms/sonic.md"},
 	}
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
@@ -1778,13 +1939,13 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 	assert.True(t, found, "filesystem fallback boxartback property missing")
 }
 
-// --- resolveESPath additional ---
+// --- esmedia.ResolvePath additional ---
 
 func TestResolveESPath_HomeRelativeEscapesRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	// ~/... resolves to home dir, which is outside t.TempDir().
-	got := resolveESPath("~/games/mario.nes", root)
+	got := esmedia.ResolvePath("~/games/mario.nes", root)
 	assert.Empty(t, got, "home-relative path escaping system root must be rejected")
 }
 
@@ -1795,7 +1956,7 @@ func TestResolveESPath_HomeRelativeInsideRoot(t *testing.T) {
 		t.Skip("cannot determine home dir")
 	}
 	// Use home dir itself as the system root so ~/relative stays inside.
-	got := resolveESPath("~/games/mario.nes", home)
+	got := esmedia.ResolvePath("~/games/mario.nes", home)
 	assert.Equal(t, filepath.Join(home, "games", "mario.nes"), got)
 }
 
@@ -2225,7 +2386,7 @@ func TestLoadCompanionEntries_EntrySkippedNoIdNoPath(t *testing.T) {
 func TestLoadCompanionEntries_ChildPathTraversalRejected(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// Child path escapes root → resolveESPath returns "" → child skipped.
+	// Child path escapes root → esmedia.ResolvePath returns "" → child skipped.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
   <game id="1" source="ZaparooCompanion">
     <name>Parent</name>
@@ -2443,6 +2604,103 @@ func TestProcessCompanionEntries_DuplicateSlugChildConsumesTitleMedia(t *testing
 		mockDB.batches[0][0].MediaDBID,
 		mockDB.batches[0][1].MediaDBID,
 	})
+}
+
+func TestProcessCompanionEntries_ConflictingChildSlugPrefersConsistentParent(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// The same "phantasystar4" slug is listed under two parents. The WRONG parent
+	// (Phantasy Star 3) is listed first to prove file order does not decide the winner;
+	// name consistency must route the slug to the Phantasy Star 4 parent (id 30).
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="30" source="ZaparooCompanion">
+    <name>Phantasy Star 4 - The End Of The Millennium</name>
+    <developer>Sega</developer>
+  </game>
+  <game id="77" source="ZaparooCompanion">
+    <name>Phantasy Star 3 - Generations Of Doom</name>
+    <developer>Sega</developer>
+  </game>
+  <game parentid="77" source="ZaparooCompanion"><path>./phantasystar4.slug</path></game>
+  <game parentid="30" source="ZaparooCompanion"><path>./phantasystar4.slug</path></game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(500),
+		companionWriteMatcher(
+			nil,
+			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "sega", Label: "Sega"}},
+			companionXMLGameIDProps("30"),
+		)).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "Genesis", ROMPaths: []string{root}, DBID: 5}
+	indexes := mediaByPath(database.Media{
+		DBID: 40, MediaTitleDBID: 500, Path: filepath.Join(root, "Phantasy Star IV (USA).md"),
+	})
+	indexes.AllTitlesBySlug["phantasystar4"] = database.MediaTitle{DBID: 500, SystemDBID: 5, Slug: "phantasystar4"}
+
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB, indexes, nil)
+
+	assert.Equal(t, 1, stats.ConflictingChildSlugs)
+	assertCompanionCounts(t, &stats, 1, 1, 0)
+	mockDB.AssertExpectations(t)
+}
+
+func TestResolveCompanionSlugConflicts(t *testing.T) {
+	t.Parallel()
+	parents := []companionParent{
+		{GameID: "30", Game: esapi.Game{Name: "Phantasy Star 4 - The End Of The Millennium"}},
+		{GameID: "77", Game: esapi.Game{Name: "Phantasy Star 3 - Generations Of Doom"}},
+		{GameID: "1", Game: esapi.Game{Name: "Double Dragon"}},
+		{GameID: "2", Game: esapi.Game{Name: "Double Dragon"}},
+		{GameID: "8", Game: esapi.Game{Name: "Some Unrelated Game"}},
+		{GameID: "9", Game: esapi.Game{Name: "Another Unrelated Game"}},
+		{GameID: "50", Game: esapi.Game{Name: "Mega"}},      // prefix of "megaman" -> score 1
+		{GameID: "51", Game: esapi.Game{Name: "Megaman X"}}, // "megaman" prefix of it -> score 1
+	}
+	child := func(stem, parent string) companionChild {
+		return companionChild{ResolvedPath: filepath.Join(t.TempDir(), stem+".slug"), ParentGameID: parent}
+	}
+	children := []companionChild{
+		child("phantasystar4", "77"), // wrong parent first
+		child("phantasystar4", "30"), // consistent parent
+		child("phantasystar3", "77"), // single parent, untouched
+		child("doubledragon", "1"),   // tie: both parents equally named -> unmanaged
+		child("doubledragon", "2"),
+		child("mystery", "8"), // no parent name relates -> drop all
+		child("mystery", "9"),
+		child("megaman", "50"), // prefix-only tie between differently-named parents -> drop all
+		child("megaman", "51"),
+		{ResolvedPath: filepath.Join(t.TempDir(), "real.md"), ParentGameID: "30"}, // non-slug, untouched
+	}
+
+	var stats companionStats
+	got := resolveCompanionSlugConflicts("Genesis", parents, children, &stats)
+
+	parentFor := func(stem string) []string {
+		var ids []string
+		for _, c := range got {
+			if s, ok := companionSlugStem(c.ResolvedPath); ok && s == stem {
+				ids = append(ids, c.ParentGameID)
+			}
+		}
+		return ids
+	}
+	assert.Equal(t, []string{"30"}, parentFor("phantasystar4"), "consistent parent wins regardless of order")
+	assert.Equal(t, []string{"77"}, parentFor("phantasystar3"), "single-parent slug untouched")
+	assert.ElementsMatch(t, []string{"1", "2"}, parentFor("doubledragon"), "equal-name tie left unmanaged")
+	assert.Empty(t, parentFor("mystery"), "no consistent parent -> all dropped")
+	assert.Empty(t, parentFor("megaman"), "prefix-only tie -> all dropped")
+	assert.Equal(t, 5, stats.ConflictingChildSlugs, "1 phantasystar4 + 2 mystery + 2 megaman dropped")
+
+	var nonSlug int
+	for _, c := range got {
+		if _, ok := companionSlugStem(c.ResolvedPath); !ok {
+			nonSlug++
+		}
+	}
+	assert.Equal(t, 1, nonSlug, "non-slug child untouched")
 }
 
 func TestProcessCompanionEntries_RewritesAlreadyScraped(t *testing.T) {
@@ -2827,6 +3085,51 @@ func TestProcessCompanionEntries_ThrottlesBatchProgress(t *testing.T) {
 		SystemID: "nes", Total: companionWriteBatchSize + 1,
 		Processed: companionWriteBatchSize + 1, Matched: companionWriteBatchSize + 1,
 	})
+}
+
+func TestProcessCompanionEntries_HonorsPauseBetweenChildren(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="42" source="ZaparooCompanion"><name>Game</name></game>
+  <game parentid="42" source="ZaparooCompanion"><path>./child1.rom</path></game>
+  <game parentid="42" source="ZaparooCompanion"><path>./child2.rom</path></game>
+</gameList>`), 0o600))
+
+	mockDB := &batchMockMediaDB{MockMediaDBI: helpers.NewMockMediaDBI()}
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	indexes := mediaByPath(
+		database.Media{DBID: 10, MediaTitleDBID: 20, Path: filepath.Join(root, "child1.rom")},
+		database.Media{DBID: 11, MediaTitleDBID: 21, Path: filepath.Join(root, "child2.rom")},
+	)
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	done := make(chan companionStats, 1)
+	go func() {
+		done <- s.processCompanionEntries(
+			context.Background(), scraper.ScrapeOptions{Pauser: pauser}, system, mockDB, indexes, nil,
+		)
+	}()
+
+	select {
+	case <-done:
+		require.FailNow(t, "processCompanionEntries did not block on a paused pauser before processing children")
+	case <-time.After(150 * time.Millisecond):
+	}
+	require.Empty(t, mockDB.batches, "companion writes must not run while indexing is paused")
+
+	pauser.Resume()
+
+	select {
+	case stats := <-done:
+		assertCompanionCounts(t, &stats, 2, 2, 0)
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "processCompanionEntries did not resume after pauser.Resume()")
+	}
+	require.Len(t, mockDB.batches, 1)
 }
 
 func TestProcessCompanionEntries_BatchFailureFallsBackToPerTargetWrites(t *testing.T) {
@@ -3348,8 +3651,10 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
+func TestScrapeLoop_SlugOnlySingleMediaMatchWritesImageAndTitle(t *testing.T) {
 	t.Parallel()
+	// Single-media-row slug-only match: both title-level metadata (description)
+	// and media-level art (image) must be written.
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
 <gameList>
@@ -3382,6 +3687,75 @@ func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
 			return false
 		}
 		descTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
+		imageTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+		return assert.Contains(t, w.MediaProps, database.MediaProperty{
+			TypeTag:     imageTypeTag,
+			Text:        filepath.ToSlash(filepath.Join(root, "media", "images", "mario.png")),
+			ContentType: "image/png",
+		}) &&
+			assert.Contains(t, w.TitleProps, database.MediaProperty{
+				TypeTag:     descTypeTag,
+				Text:        "Title metadata",
+				ContentType: "text/plain",
+			})
+	})
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, writeMatcher).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 1, done.Matched)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_SlugOnlyMultipleMediaMatchDropsImage(t *testing.T) {
+	t.Parallel()
+	// Multi-media-row slug-only match: image must be dropped (media-level
+	// writes unsafe) while title-level metadata still writes.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./xml-path.nes</path>
+    <name>Mario</name>
+    <desc>Title metadata</desc>
+    <image>./media/images/mario.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	const (
+		titleDBID  = int64(2)
+		mediaDBID1 = int64(20)
+		mediaDBID2 = int64(21)
+		systemDBID = int64(200)
+	)
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{
+			{DBID: mediaDBID1, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "USA", "Mario.nes")},
+			{DBID: mediaDBID2, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "Japan", "Mario.nes")},
+		}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
+	writeMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		if w == nil {
+			return false
+		}
+		descTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
 		return assert.Empty(t, w.MediaTags) &&
 			assert.Empty(t, w.MediaProps) &&
 			assert.Contains(t, w.TitleProps, database.MediaProperty{
@@ -3390,7 +3764,7 @@ func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
 				ContentType: "text/plain",
 			})
 	})
-	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, writeMatcher).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID1, titleDBID, writeMatcher).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	ch := make(chan scraper.ScrapeUpdate, 128)

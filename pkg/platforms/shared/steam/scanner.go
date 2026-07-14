@@ -53,7 +53,13 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 	//nolint:gosec // Safe: reads Steam config files for game library scanning
 	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
 	if err != nil {
-		log.Error().Err(err).Msg("error opening libraryfolders.vdf")
+		// Steam not installed at this path (no library file) is expected on many
+		// devices; log at Debug to keep it out of Sentry. Mirror ScanSteamShortcuts.
+		if os.IsNotExist(err) {
+			log.Debug().Err(err).Msg("libraryfolders.vdf not found, skipping Steam app scan")
+		} else {
+			log.Warn().Err(err).Msg("error opening libraryfolders.vdf")
+		}
 		return results, nil
 	}
 	defer func() {

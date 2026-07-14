@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/localmedia"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -46,6 +47,8 @@ import (
 
 // Timeout constants for process termination.
 const (
+	// CustomKillTimeout is how long to wait for launcher-specific graceful shutdown.
+	CustomKillTimeout = 500 * time.Millisecond
 	// SIGTERMTimeout is how long to wait for graceful SIGTERM shutdown.
 	SIGTERMTimeout = 3 * time.Second
 	// SIGKILLTimeout is how long to wait after SIGKILL before proceeding.
@@ -55,14 +58,19 @@ const (
 // Base provides common functionality for all Linux-family platforms.
 // Platforms embed this struct and override methods as needed.
 type Base struct {
-	launcherManager platforms.LauncherContextManager
-	serviceCtx      context.Context
-	clock           clockwork.Clock
-	activeMedia     func() *models.ActiveMedia
-	setActiveMedia  func(*models.ActiveMedia)
-	trackedProcess  *os.Process
-	platformID      string
-	processMu       syncutil.RWMutex
+	launcherManager         platforms.LauncherContextManager
+	serviceCtx              context.Context
+	clock                   clockwork.Clock
+	activeMedia             func() *models.ActiveMedia
+	setActiveMedia          func(*models.ActiveMedia)
+	trackedProcess          *os.Process
+	completedTrackedProcess *os.Process
+	trackedProcessDone      chan struct{}
+	lastConfig              *config.Instance
+	platformID              string
+	lastLauncher            platforms.Launcher
+	processMu               syncutil.RWMutex
+	processWaitClaimed      bool
 }
 
 // NewBase creates a new Base with the given platform ID.
@@ -115,48 +123,169 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 	b.processMu.Lock()
 	defer b.processMu.Unlock()
 
-	// Kill any existing tracked process before setting new one
-	if b.trackedProcess != nil {
+	// Process handles may be recreated for the same PID when a tracker restarts.
+	// Keep existing lifecycle state instead of signaling the live process.
+	if b.trackedProcess != nil && proc != nil && b.trackedProcess.Pid == proc.Pid {
+		return
+	}
+
+	// Kill any existing tracked process before setting new one.
+	if b.trackedProcess != nil && b.trackedProcess != proc {
 		if err := b.trackedProcess.Kill(); err != nil {
 			log.Warn().Err(err).Msg("failed to kill previous tracked process")
 		}
 	}
 
 	b.trackedProcess = proc
+	b.completedTrackedProcess = nil
+	b.processWaitClaimed = false
+	if proc == nil {
+		b.trackedProcessDone = nil
+	} else {
+		b.trackedProcessDone = make(chan struct{})
+	}
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-// StopActiveLauncher kills tracked process and all its children, then clears active media.
-// Uses SIGTERM first for graceful shutdown, then SIGKILL after timeout.
+// ClearTrackedProcessPID forgets a completed externally-owned process without
+// signaling it. The PID check prevents an older lifecycle event from clearing
+// a newer tracked process.
+func (b *Base) ClearTrackedProcessPID(pid int) bool {
+	b.processMu.Lock()
+	defer b.processMu.Unlock()
+
+	if b.trackedProcess == nil || b.trackedProcess.Pid != pid {
+		return false
+	}
+
+	b.trackedProcess = nil
+	b.completedTrackedProcess = nil
+	b.trackedProcessDone = nil
+	b.processWaitClaimed = false
+	return true
+}
+
+// WaitTrackedProcess waits for and reaps proc. StopActiveLauncher coordinates
+// through the same completion channel so os.Process.Wait is called exactly once.
+func (b *Base) WaitTrackedProcess(proc *os.Process) error {
+	b.processMu.Lock()
+	if b.trackedProcess != proc {
+		b.processMu.Unlock()
+		return errors.New("process is no longer tracked")
+	}
+	if b.trackedProcessDone == nil {
+		b.trackedProcessDone = make(chan struct{})
+	}
+	done := b.trackedProcessDone
+	if b.processWaitClaimed {
+		b.processMu.Unlock()
+		<-done
+		return nil
+	}
+	b.processWaitClaimed = true
+	b.processMu.Unlock()
+
+	_, err := proc.Wait()
+	b.finishTrackedProcess(proc, done)
+	if err != nil {
+		return fmt.Errorf("wait for tracked process: %w", err)
+	}
+	return nil
+}
+
+func (b *Base) finishTrackedProcess(proc *os.Process, done chan struct{}) {
+	close(done)
+
+	b.processMu.Lock()
+	defer b.processMu.Unlock()
+	if b.trackedProcess == proc {
+		b.trackedProcess = nil
+		b.completedTrackedProcess = proc
+		b.trackedProcessDone = nil
+		b.processWaitClaimed = false
+	}
+}
+
+// ClearTrackedProcessMedia clears active media only if proc completed without
+// a newer process being tracked. This prevents an old process waiter from
+// clearing the active media published by a replacement launch.
+func (b *Base) ClearTrackedProcessMedia(proc *os.Process) bool {
+	b.processMu.Lock()
+	if b.completedTrackedProcess != proc || b.trackedProcess != nil {
+		b.processMu.Unlock()
+		return false
+	}
+	b.completedTrackedProcess = nil
+	b.processMu.Unlock()
+
+	if b.setActiveMedia != nil {
+		b.setActiveMedia(nil)
+	}
+	return true
+}
+
+func (b *Base) claimProcessWaiterLocked(proc *os.Process) <-chan struct{} {
+	if b.trackedProcessDone == nil {
+		b.trackedProcessDone = make(chan struct{})
+	}
+	done := b.trackedProcessDone
+	if b.processWaitClaimed {
+		return done
+	}
+
+	b.processWaitClaimed = true
+	go func() {
+		_, err := proc.Wait()
+		if err != nil {
+			log.Debug().Err(err).Int("pid", proc.Pid).Msg("tracked process wait completed with error")
+		}
+		b.finishTrackedProcess(proc, done)
+	}()
+	return done
+}
+
+// StopActiveLauncher stops the tracked process tree and clears active media.
+// Launcher-specific shutdown runs first, followed by SIGTERM and SIGKILL fallback.
 func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 	if b.launcherManager != nil {
 		b.launcherManager.NewContext()
 	}
 
 	b.processMu.Lock()
-	defer b.processMu.Unlock()
+	proc := b.trackedProcess
+	customKill := b.lastLauncher.Kill
+	cfg := b.lastConfig
+	b.lastLauncher = platforms.Launcher{}
+	b.lastConfig = nil
+	var done <-chan struct{}
+	if proc != nil {
+		done = b.claimProcessWaiterLocked(proc)
+	}
+	b.processMu.Unlock()
 
-	if b.trackedProcess != nil {
-		proc := b.trackedProcess // Capture to avoid race with Wait goroutine
-		pid := int32(proc.Pid)   //nolint:gosec // PID fits in int32
-		done := make(chan struct{})
-		go func() {
-			_, _ = proc.Wait()
-			close(done)
-		}()
+	if proc != nil {
+		pid := int32(proc.Pid) //nolint:gosec // PID fits in int32
+		exited := false
+		if customKill != nil {
+			log.Debug().Msg("using custom Kill function for launcher")
+			if err := customKill(cfg); err != nil {
+				log.Warn().Err(err).Msg("custom Kill function failed, falling back to signals")
+			} else {
+				exited = b.waitForExit(done, CustomKillTimeout)
+			}
+		}
 
-		procs := getProcessTree(pid)
-		if len(procs) == 0 {
-			log.Debug().Int32("pid", pid).Msg("process not found, may have already exited")
-		} else {
-			log.Debug().Int("count", len(procs)).Int32("rootPid", pid).Msg("terminating process tree")
-
-			// Children are terminated before parent to avoid orphaning
-			terminateProcessTree(procs)
-
-			if !b.waitForExit(done, SIGTERMTimeout) {
-				log.Debug().Msg("SIGTERM timeout, sending SIGKILL")
-				killProcessTree(procs)
+		if !exited {
+			procs := getProcessTree(pid)
+			if len(procs) == 0 {
+				log.Debug().Int32("pid", pid).Msg("process not found, may have already exited")
+			} else {
+				log.Debug().Int("count", len(procs)).Int32("rootPid", pid).Msg("terminating process tree")
+				terminateProcessTree(procs)
+				if !b.waitForExit(done, SIGTERMTimeout) {
+					log.Debug().Msg("SIGTERM timeout, sending SIGKILL")
+					killProcessTree(getProcessTree(pid))
+				}
 			}
 		}
 
@@ -167,7 +296,13 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 			log.Debug().Msg("process cleanup timeout, proceeding anyway")
 		}
 
-		b.trackedProcess = nil
+		b.processMu.Lock()
+		if b.trackedProcess == proc {
+			b.trackedProcess = nil
+			b.trackedProcessDone = nil
+			b.processWaitClaimed = false
+		}
+		b.processMu.Unlock()
 	}
 
 	if b.setActiveMedia != nil {
@@ -298,6 +433,11 @@ func (b *Base) LaunchMedia(
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
+	b.processMu.Lock()
+	b.lastLauncher = *launcher
+	b.lastConfig = cfg
+	b.processMu.Unlock()
+
 	return nil
 }
 
@@ -363,6 +503,7 @@ func (*Base) ManagedByPackageManager() bool {
 
 // Scrapers returns the default set of metadata scrapers for Linux-based platforms.
 func (*Base) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
-	s := gamelistxml.NewPlatformScraper()
-	return map[string]platforms.Scraper{s.ID: s}
+	gamelist := gamelistxml.NewPlatformScraper()
+	media := localmedia.NewPlatformScraper()
+	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
 }

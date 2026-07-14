@@ -34,70 +34,70 @@ import (
 var ErrProfileNotFound = errors.New("profile not found")
 
 func (db *UserDB) CreateProfile(p *database.Profile) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlCreateProfile(db.ctx, db.sql, p)
+	return sqlCreateProfile(db.ctx, db.sql.Load(), p)
 }
 
 func (db *UserDB) GetProfile(profileID string) (*database.Profile, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetProfile(db.ctx, db.sql, "ProfileID", profileID)
+	return sqlGetProfile(db.ctx, db.sql.Load(), "ProfileID", profileID)
 }
 
 func (db *UserDB) GetProfileBySwitchID(switchID string) (*database.Profile, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetProfile(db.ctx, db.sql, "SwitchID", switchID)
+	return sqlGetProfile(db.ctx, db.sql.Load(), "SwitchID", switchID)
 }
 
 func (db *UserDB) ListProfiles() ([]database.Profile, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlListProfiles(db.ctx, db.sql)
+	return sqlListProfiles(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) UpdateProfile(p *database.Profile) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlUpdateProfile(db.ctx, db.sql, p)
+	return sqlUpdateProfile(db.ctx, db.sql.Load(), p)
 }
 
 // DeleteProfile removes a profile. If the profile is the device's active
 // profile, the active-profile device state is cleared in the same
 // transaction.
 func (db *UserDB) DeleteProfile(profileID string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlDeleteProfile(db.ctx, db.sql, profileID)
+	return sqlDeleteProfile(db.ctx, db.sql.Load(), profileID)
 }
 
 func (db *UserDB) SetDeviceState(key, value string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlSetDeviceState(db.ctx, db.sql, key, value)
+	return sqlSetDeviceState(db.ctx, db.sql.Load(), key, value)
 }
 
 // GetDeviceState returns the value for key and whether it exists.
 func (db *UserDB) GetDeviceState(key string) (value string, found bool, err error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return "", false, ErrNullSQL
 	}
-	return sqlGetDeviceState(db.ctx, db.sql, key)
+	return sqlGetDeviceState(db.ctx, db.sql.Load(), key)
 }
 
 func (db *UserDB) DeleteDeviceState(key string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlDeleteDeviceState(db.ctx, db.sql, key)
+	return sqlDeleteDeviceState(db.ctx, db.sql.Load(), key)
 }
 
 /*

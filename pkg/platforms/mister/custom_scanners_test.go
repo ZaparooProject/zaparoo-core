@@ -221,8 +221,201 @@ func TestAmigaScanner_IgnoresStaleListingRoot(t *testing.T) {
 	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, filepath.Join(validPath, "listings", "games.txt", "Valid Game"), results[0].Path)
-	assert.Equal(t, "Valid Game", results[0].Name)
+	assert.Equal(t, filepath.Join(validPath, "Games", "Valid Game"), results[0].Path)
+	assert.Empty(t, results[0].Name)
+}
+
+func TestAmigaScanner_AddsGamesAndDemosSubfolders(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+	require.NoError(t, os.WriteFile(filepath.Join(validPath, "listings", "demos.txt"), []byte("Valid Demo\n"), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Games", "Valid Game"),
+		NoExt: true,
+	})
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Demos", "Valid Demo"),
+		NoExt: true,
+	})
+}
+
+func TestAmigaScanner_FiltersListingFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+	initial := []platforms.ScanResult{{Path: filepath.Join(validPath, "listings", "games.txt")}}
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", initial)
+	require.NoError(t, err)
+	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(validPath, "listings", "games.txt")})
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Games", "Valid Game"),
+		NoExt: true,
+	})
+}
+
+func TestAmigaScanner_LeavesNameEmptyForIndexerTitleCleaning(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+
+	listingPath := filepath.Join(validPath, "listings")
+	require.NoError(t, os.MkdirAll(listingPath, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(validPath, "shared"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(validPath, "AmigaVision.hdf"), []byte("test"), 0o600))
+	gamesContent := "1869 (AGA)[en]\n3D Pool (OCS)[en]\n7 Colors (OCS)[en-de-fr-it-es]\n"
+	demosContent := "1001 Stolen Ideas (Airwalk)(AGA)\n9 Fingers (Spaceballs)(OCS)\n"
+	require.NoError(t, os.WriteFile(filepath.Join(listingPath, "games.txt"), []byte(gamesContent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(listingPath, "demos.txt"), []byte(demosContent), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+
+	for _, r := range results {
+		assert.Empty(t, r.Name, "ScanResult.Name must be empty so the indexer derives a cleaned title from the path")
+	}
+
+	// Paths still carry the raw listing line so launch validation can match exactly.
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Games", "1869 (AGA)[en]"),
+		NoExt: true,
+	})
+	assert.Contains(t, results, platforms.ScanResult{
+		Path:  filepath.Join(validPath, "Demos", "1001 Stolen Ideas (Airwalk)(AGA)"),
+		NoExt: true,
+	})
+}
+
+func TestAmigaLauncher_DoesNotMatchListingBackupFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt")))
+	assert.True(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "games.txt.bak")))
+	assert.False(t, amigaLauncher.Test(cfg, filepath.Join(validPath, "listings", "demos.txt.bak")))
+}
+
+func TestAmigaScanner_AddsVirtualMGLFiles(t *testing.T) {
+	t.Parallel()
+
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	mglDir := t.TempDir()
+	amigaMGL := filepath.Join(mglDir, "Amiga.mgl")
+	amiga500MGL := filepath.Join(mglDir, "Amiga 500.mgl")
+	require.NoError(t, os.WriteFile(amigaMGL, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(amiga500MGL, []byte("test"), 0o600))
+
+	mglPaths := []string{
+		amigaMGL,
+		amiga500MGL,
+		filepath.Join(mglDir, "Missing.mgl"),
+	}
+	results := amigaVisionMGLScanResults(installPath, mglPaths)
+
+	assert.Equal(t, []platforms.ScanResult{
+		{Path: filepath.Join(installPath, "Amiga.mgl"), Name: "Amiga"},
+		{Path: filepath.Join(installPath, "Amiga 500.mgl"), Name: "Amiga 500"},
+	}, results)
+}
+
+func TestResolveAmigaVisionVirtualMGLPath(t *testing.T) {
+	mglDir := t.TempDir()
+	realMGL := filepath.Join(mglDir, "Amiga.mgl")
+	virtualMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga.mgl")
+	realVirtualMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga.mgl")
+	require.NoError(t, os.WriteFile(realMGL, []byte("test"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(realVirtualMGL), 0o700))
+	require.NoError(t, os.WriteFile(realVirtualMGL, []byte("test"), 0o600))
+
+	oldPaths := amigaVisionMGLPaths
+	amigaVisionMGLPaths = []string{realMGL}
+	t.Cleanup(func() { amigaVisionMGLPaths = oldPaths })
+
+	installPath := filepath.Join(t.TempDir(), "games", "Amiga")
+	routedVirtualMGL := filepath.Join(installPath, "Amiga.mgl")
+	require.NoError(t, os.MkdirAll(installPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(installPath, "AmigaVision.hdf"), []byte("test"), 0o600))
+
+	missingMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga 500.mgl")
+	nonMGL := filepath.Join(t.TempDir(), "games", "Amiga", "Readme.txt")
+	mglWithoutAmigaVision := filepath.Join(t.TempDir(), "games", "Amiga", "Amiga.mgl")
+
+	assert.Equal(t, realMGL, resolveAmigaVisionVirtualMGLPath(virtualMGL))
+	assert.Equal(t, realVirtualMGL, resolveAmigaVisionVirtualMGLPath(realVirtualMGL))
+	assert.Equal(t, missingMGL, resolveAmigaVisionVirtualMGLPath(missingMGL))
+	assert.Equal(t, nonMGL, resolveAmigaVisionVirtualMGLPath(nonMGL))
+	assert.True(t, isAmigaVisionVirtualMGLPath(routedVirtualMGL))
+	assert.False(t, isAmigaVisionVirtualMGLPath(mglWithoutAmigaVision))
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+	assert.True(t, amigaLauncher.Test(nil, routedVirtualMGL))
+}
+
+func TestAmigaLauncher_TestRequiresAmigaVisionVirtualPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+	nonAmigaVisionPath := filepath.Join(root, "other", "Amiga")
+	require.NoError(t, os.MkdirAll(filepath.Join(nonAmigaVisionPath, "Games"), 0o700))
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(&config.Instance{}))
+
+	assert.True(t, amigaLauncher.Test(nil, filepath.Join(validPath, "Games", "Valid Game")))
+	assert.False(t, amigaLauncher.Test(nil, filepath.Join(nonAmigaVisionPath, "Games", "Other Game")))
 }
 
 func TestAmigaScanner_RequiresBootImage(t *testing.T) {
@@ -336,6 +529,103 @@ func TestNeoGeoScanner_AddsNestedRomsetEntries(t *testing.T) {
 	assert.Contains(t, results, platforms.ScanResult{Path: nestedNeoPath})
 	assert.Contains(t, results, platforms.ScanResult{Path: zipPath, Name: "Metal Slug", NoExt: true})
 	assert.Contains(t, results, platforms.ScanResult{Path: folderPath, Name: "King of Fighters '98", NoExt: true})
+}
+
+func TestNeoGeoScanner_AddsRootRomsetEntries(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	folderPath := filepath.Join(neoGeoPath, "MSLUG")
+	zipPath := filepath.Join(neoGeoPath, "kof98.zip")
+
+	require.NoError(t, os.MkdirAll(folderPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(folderPath, "crom0"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+  <romset name="kof98" altname="King of Fighters '98"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", []platforms.ScanResult{
+		{Path: filepath.Join(folderPath, "crom0")},
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(folderPath, "crom0")})
+	assert.Contains(t, results, platforms.ScanResult{Path: folderPath, Name: "Metal Slug", NoExt: true})
+	assert.Contains(t, results, platforms.ScanResult{Path: zipPath, Name: "King of Fighters '98", NoExt: true})
+}
+
+func TestNeoGeoScanner_AddsRootSymlinkedRomsetFolder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	targetPath := filepath.Join(root, "romsets", "mslug")
+	linkPath := filepath.Join(neoGeoPath, "mslug")
+	require.NoError(t, os.MkdirAll(targetPath, 0o700))
+	require.NoError(t, os.MkdirAll(neoGeoPath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(targetPath, "crom0"), []byte("test"), 0o600))
+	require.NoError(t, os.Symlink(targetPath, linkPath))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, results, platforms.ScanResult{Path: linkPath, Name: "Metal Slug", NoExt: true})
+}
+
+func TestNeoGeoScanner_HandlesMalformedRomsets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	folderPath := filepath.Join(neoGeoPath, "mslug")
+	contentPath := filepath.Join(folderPath, "crom0")
+	require.NoError(t, os.MkdirAll(folderPath, 0o700))
+	require.NoError(t, os.WriteFile(contentPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte("<romsets>"), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", []platforms.ScanResult{
+		{Path: contentPath},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []platforms.ScanResult{{Path: contentPath}}, results)
 }
 
 func TestCollectNeoGeoRomsetEntries_DeduplicatesOverlappingRoots(t *testing.T) {

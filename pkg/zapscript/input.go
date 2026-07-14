@@ -158,26 +158,70 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	return platforms.CmdResult{}, nil
 }
 
+const defaultInterKeyDelay = 100 * time.Millisecond
+
+// keyboardSequencer is an optional interface platforms may implement to handle a
+// whole key sequence at once. Implementations get shift-batching, inline token
+// interpretation (delay/hold/sigils), and sequence-scoped release-all;
+// the per-key fallback loop is used otherwise.
+type keyboardSequencer interface {
+	KeyboardPressSequence(args []string, interKeyDelay time.Duration) error
+}
+
 // PressKeyboardSequence is shared between ZapScript commands and API handlers.
-func PressKeyboardSequence(pl platforms.Platform, args []string) error {
+// interKeyDelay sets the gap between consecutive key presses; pass 0 to use
+// the default (100 ms). If the platform implements keyboardSequencer, the full
+// args slice is handed off; otherwise falls back to pressing each key
+// individually.
+func PressKeyboardSequence(pl platforms.Platform, args []string, interKeyDelay time.Duration) error {
+	if interKeyDelay == 0 {
+		interKeyDelay = defaultInterKeyDelay
+	}
+	if ks, ok := pl.(keyboardSequencer); ok {
+		if err := ks.KeyboardPressSequence(args, interKeyDelay); err != nil {
+			return fmt.Errorf("keyboard sequence: %w", err)
+		}
+		return nil
+	}
 	for _, name := range args {
 		if err := pl.KeyboardPress(name); err != nil {
 			return fmt.Errorf("failed to press keyboard key '%s': %w", name, err)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(interKeyDelay)
 	}
 	return nil
 }
 
 // PressGamepadSequence is shared between ZapScript commands and API handlers.
-func PressGamepadSequence(pl platforms.Platform, args []string) error {
+// interKeyDelay sets the gap between button presses; pass 0 to use the default.
+func PressGamepadSequence(pl platforms.Platform, args []string, interKeyDelay time.Duration) error {
+	if interKeyDelay == 0 {
+		interKeyDelay = defaultInterKeyDelay
+	}
 	for _, name := range args {
 		if err := pl.GamepadPress(name); err != nil {
 			return fmt.Errorf("failed to press gamepad button '%s': %w", name, err)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(interKeyDelay)
 	}
 	return nil
+}
+
+// parseSpeedArg reads the optional ?speed= advanced arg and converts it to a
+// time.Duration using parseMacroDuration. Returns 0 (use default) if unset.
+//
+//nolint:gocritic // single-use parameter in command handler
+func parseSpeedArg(env platforms.CmdEnv) time.Duration {
+	s := env.Cmd.AdvArgs.Get("speed")
+	if s == "" {
+		return 0
+	}
+	d, err := parseMacroDuration(s)
+	if err != nil {
+		log.Warn().Str("speed", s).Err(err).Msg("invalid speed arg, using default")
+		return 0
+	}
+	return d
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -194,10 +238,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 
 	log.Info().Int("key_count", len(env.Cmd.Args)).Msg("keyboard input")
 
-	// TODO: stuff like adjust delay, only press, etc.
-	//	     basically a filled out mini macro language for key presses
-
-	if err := PressKeyboardSequence(pl, env.Cmd.Args); err != nil {
+	if err := PressKeyboardSequence(pl, env.Cmd.Args, parseSpeedArg(env)); err != nil {
 		return platforms.CmdResult{}, err
 	}
 
@@ -218,7 +259,28 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 	log.Info().Int("button_count", len(env.Cmd.Args)).Msg("gamepad input")
 
-	if err := PressGamepadSequence(pl, env.Cmd.Args); err != nil {
+	if err := PressGamepadSequence(pl, env.Cmd.Args, parseSpeedArg(env)); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	return platforms.CmdResult{}, nil
+}
+
+//nolint:gocritic // single-use parameter in command handler
+func cmdInputText(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Unsafe {
+		return platforms.CmdResult{}, ErrRemoteSource
+	}
+
+	for _, key := range env.Cmd.Args {
+		if err := checkInputKey(env.Cfg, pl.ID(), key); err != nil {
+			return platforms.CmdResult{}, err
+		}
+	}
+
+	log.Info().Int("char_count", len(env.Cmd.Args)).Msg("text input")
+
+	if err := PressKeyboardSequence(pl, env.Cmd.Args, 0); err != nil {
 		return platforms.CmdResult{}, err
 	}
 

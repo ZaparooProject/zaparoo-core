@@ -64,6 +64,7 @@ func optionalDBEnrichmentContext(parent context.Context) (context.Context, conte
 	if parent == nil {
 		parent = context.Background()
 	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
 	return context.WithTimeout(parent, optionalDBEnrichmentTimeout)
 }
 

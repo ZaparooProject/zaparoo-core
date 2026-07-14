@@ -20,6 +20,7 @@
 package systemdefs
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
+
+// ErrUnknownSystem is returned when a system ID cannot be resolved. When this
+// originates from a user-supplied value (e.g. a system named in ZapScript), the
+// token-launch path logs it at Warn rather than Error.
+var ErrUnknownSystem = errors.New("unknown system")
 
 // The Systems list contains all the supported systems such as consoles,
 // computers and media types that are indexable by Zaparoo. This is the reference
@@ -100,7 +106,7 @@ func GetSystem(id string) (*System, error) {
 	if system, ok := Systems[id]; ok {
 		return &system, nil
 	}
-	return nil, fmt.Errorf("unknown system: %s", id)
+	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
 }
 
 // buildLookupMap initializes the system lookup map with all possible lookup keys.
@@ -194,7 +200,7 @@ func LookupSystem(id string) (*System, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("unknown system: %s", id)
+	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
 }
 
 func AllSystems() []System {
@@ -263,12 +269,14 @@ const (
 	SystemGameboy2P         = "Gameboy2P"
 	SystemGameCube          = "GameCube"
 	SystemGameGear          = "GameGear"
+	SystemGameGear2P        = "GameGear2P"
 	SystemGameNWatch        = "GameNWatch"
 	SystemGameCom           = "GameCom"
 	SystemGBA               = "GBA"
 	SystemGBA2P             = "GBA2P"
 	SystemGenesis           = "Genesis"
 	SystemGenesisMSU        = "GenesisMSU"
+	SystemGenesisPlus       = "GenesisPlus"
 	SystemIntellivision     = "Intellivision"
 	SystemJaguar            = "Jaguar"
 	SystemJaguarCD          = "JaguarCD"
@@ -410,45 +418,60 @@ const (
 
 // Other
 const (
-	SystemAndroid     = "Android"
-	SystemArcade      = "Arcade"
-	SystemAtomiswave  = "Atomiswave"
-	SystemArduboy     = "Arduboy"
-	SystemChip8       = "Chip8"
-	SystemCPS1        = "CPS1"
-	SystemCPS2        = "CPS2"
-	SystemCPS3        = "CPS3"
-	SystemDAPHNE      = "DAPHNE"
-	SystemDICE        = "DICE"
-	SystemSinge       = "Singe"
-	SystemModel1      = "Model1"
-	SystemModel2      = "Model2"
-	SystemNamco2X6    = "Namco2X6"
-	SystemNamco22     = "Namco22"
-	SystemTriforce    = "Triforce"
-	SystemLindbergh   = "Lindbergh"
-	SystemChihiro     = "Chihiro"
-	SystemGaelco      = "Gaelco"
-	SystemHikaru      = "Hikaru"
-	SystemIOS         = "iOS"
-	SystemModel3      = "Model3"
-	SystemNAOMI       = "NAOMI"
-	SystemNAOMI2      = "NAOMI2"
-	SystemPico8       = "Pico8"
-	SystemTIC80       = "TIC80"
-	SystemVideo       = "Video"
-	SystemAudio       = "Audio"
-	SystemMovie       = "Movie"
-	SystemTVEpisode   = "TVEpisode"
-	SystemTVShow      = "TVShow"
-	SystemMusicTrack  = "MusicTrack"
-	SystemMusicArtist = "MusicArtist"
-	SystemMusicAlbum  = "MusicAlbum"
-	SystemImage       = "Image"
-	SystemJ2ME        = "J2ME"
-	SystemGroovy      = "Groovy"
-	SystemPlugNPlay   = "PlugNPlay"
-	SystemDevErr      = "DevErr"
+	SystemAndroid           = "Android"
+	SystemArcade            = "Arcade"
+	SystemAtomiswave        = "Atomiswave"
+	SystemArduboy           = "Arduboy"
+	SystemChip8             = "Chip8"
+	SystemCPS1              = "CPS1"
+	SystemCPS2              = "CPS2"
+	SystemCPS3              = "CPS3"
+	SystemIremM72           = "IremM72"
+	SystemIremM92           = "IremM92"
+	SystemJalecoMegaSystem1 = "JalecoMegaSystem1"
+	SystemNamcoSystem1      = "NamcoSystem1"
+	SystemPGM               = "PGM"
+	SystemSegaSTV           = "SegaSTV"
+	SystemSegaSystem16      = "SegaSystem16"
+	SystemSegaSystem18      = "SegaSystem18"
+	SystemTaitoF2           = "TaitoF2"
+	SystemDAPHNE            = "DAPHNE"
+	SystemDICE              = "DICE"
+	SystemSinge             = "Singe"
+	SystemModel1            = "Model1"
+	SystemModel2            = "Model2"
+	SystemNamco2X6          = "Namco2X6"
+	SystemNamco22           = "Namco22"
+	SystemTriforce          = "Triforce"
+	SystemLindbergh         = "Lindbergh"
+	SystemChihiro           = "Chihiro"
+	SystemGaelco            = "Gaelco"
+	SystemHikaru            = "Hikaru"
+	SystemIOS               = "iOS"
+	SystemModel3            = "Model3"
+	SystemNAOMI             = "NAOMI"
+	SystemNAOMI2            = "NAOMI2"
+	SystemPico8             = "Pico8"
+	SystemTIC80             = "TIC80"
+	SystemVideo             = "Video"
+	SystemAudio             = "Audio"
+	SystemApplication       = "Application"
+	SystemMovie             = "Movie"
+	SystemTVEpisode         = "TVEpisode"
+	SystemTVSeason          = "TVSeason"
+	SystemTVShow            = "TVShow"
+	SystemMusicTrack        = "MusicTrack"
+	SystemMusicArtist       = "MusicArtist"
+	SystemMusicAlbum        = "MusicAlbum"
+	SystemMusicVideo        = "MusicVideo"
+	SystemPodcastSeries     = "PodcastSeries"
+	SystemPodcastEpisode    = "PodcastEpisode"
+	SystemAudiobook         = "Audiobook"
+	SystemImage             = "Image"
+	SystemJ2ME              = "J2ME"
+	SystemGroovy            = "Groovy"
+	SystemPlugNPlay         = "PlugNPlay"
+	SystemDevErr            = "DevErr"
 )
 
 var Systems = map[string]System{
@@ -560,6 +583,9 @@ var Systems = map[string]System{
 		Aliases: []string{"GG"},
 		Slugs:   []string{"segagamegear"},
 	},
+	SystemGameGear2P: {
+		ID: SystemGameGear2P,
+	},
 	SystemGameNWatch: {
 		ID:    SystemGameNWatch,
 		Slugs: []string{"gameandwatch", "gnw", "nintendogamewatch"},
@@ -584,6 +610,11 @@ var Systems = map[string]System{
 	SystemGenesisMSU: {
 		ID:        SystemGenesisMSU,
 		Aliases:   []string{"MegaDriveMSU", "MSU-MD"},
+		Fallbacks: []string{SystemGenesis},
+	},
+	SystemGenesisPlus: {
+		ID:        SystemGenesisPlus,
+		Aliases:   []string{"MDPlus", "MegaDrivePlus"},
 		Fallbacks: []string{SystemGenesis},
 	},
 	SystemIntellivision: {
@@ -749,11 +780,12 @@ var Systems = map[string]System{
 	},
 	SystemSNESMSU1: {
 		ID:        SystemSNESMSU1,
-		Aliases:   []string{"MSU1", "MSU-1"},
+		Aliases:   []string{"MSU1", "MSU-1", "SNES-MSU1"},
 		Fallbacks: []string{SystemSNES},
 	},
 	SystemSGBMSU1: {
 		ID:        SystemSGBMSU1,
+		Aliases:   []string{"SGB-MSU1", "SuperGameboyMSU1"},
 		Fallbacks: []string{SystemSuperGameboy},
 	},
 	SystemSNESMusic: {
@@ -1177,6 +1209,11 @@ var Systems = map[string]System{
 		Slugs:     []string{"audiofile"},
 		MediaType: MediaTypeAudio,
 	},
+	SystemApplication: {
+		ID:        SystemApplication,
+		Aliases:   []string{"App", "Apps", "Software"},
+		MediaType: MediaTypeApplication,
+	},
 	SystemMovie: {
 		ID:        SystemMovie,
 		Slugs:     []string{"movies", "film", "cinema"},
@@ -1187,6 +1224,12 @@ var Systems = map[string]System{
 		ID:        SystemTVEpisode,
 		Aliases:   []string{"TV"},
 		Slugs:     []string{"television", "tvchannel"},
+		MediaType: MediaTypeTVShow,
+		Fallbacks: []string{SystemVideo},
+	},
+	SystemTVSeason: {
+		ID:        SystemTVSeason,
+		Slugs:     []string{"tvseasons", "televisionseason", "televisionseasons"},
 		MediaType: MediaTypeTVShow,
 		Fallbacks: []string{SystemVideo},
 	},
@@ -1215,6 +1258,30 @@ var Systems = map[string]System{
 		MediaType: MediaTypeMusic,
 		Fallbacks: []string{SystemAudio},
 	},
+	SystemMusicVideo: {
+		ID:        SystemMusicVideo,
+		Slugs:     []string{"musicvideos"},
+		MediaType: MediaTypeMusic,
+		Fallbacks: []string{SystemVideo},
+	},
+	SystemPodcastSeries: {
+		ID:        SystemPodcastSeries,
+		Slugs:     []string{"podcastshow", "podcastshows"},
+		MediaType: MediaTypeAudio,
+		Fallbacks: []string{SystemAudio},
+	},
+	SystemPodcastEpisode: {
+		ID:        SystemPodcastEpisode,
+		Slugs:     []string{"podcastepisodes"},
+		MediaType: MediaTypeAudio,
+		Fallbacks: []string{SystemAudio},
+	},
+	SystemAudiobook: {
+		ID:        SystemAudiobook,
+		Slugs:     []string{"audiobooks"},
+		MediaType: MediaTypeAudio,
+		Fallbacks: []string{SystemAudio},
+	},
 	SystemImage: {
 		ID:        SystemImage,
 		Slugs:     []string{"picture", "pictures", "photo", "photos", "images"},
@@ -1225,16 +1292,59 @@ var Systems = map[string]System{
 		Slugs: []string{"javame", "javamobile", "mobilephone"},
 	},
 	SystemCPS1: {
-		ID:    SystemCPS1,
-		Slugs: []string{"cpsystem1", "capcomsystem1", "capcomplay1"},
+		ID:        SystemCPS1,
+		Slugs:     []string{"cpsystem1", "capcomsystem1", "capcomplay1"},
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemCPS2: {
-		ID:    SystemCPS2,
-		Slugs: []string{"cpsystem2", "capcomsystem2", "capcomplay2"},
+		ID:        SystemCPS2,
+		Slugs:     []string{"cpsystem2", "capcomsystem2", "capcomplay2"},
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemCPS3: {
-		ID:    SystemCPS3,
-		Slugs: []string{"cpsystem3", "capcomsystem3", "capcomplay3"},
+		ID:        SystemCPS3,
+		Slugs:     []string{"cpsystem3", "capcomsystem3", "capcomplay3"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemIremM72: {
+		ID:        SystemIremM72,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemIremM92: {
+		ID:        SystemIremM92,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemJalecoMegaSystem1: {
+		ID:        SystemJalecoMegaSystem1,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemNamcoSystem1: {
+		ID:        SystemNamcoSystem1,
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemPGM: {
+		ID:        SystemPGM,
+		Slugs:     []string{"igs", "igspgm", "polygamemaster"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSegaSTV: {
+		ID:        SystemSegaSTV,
+		Slugs:     []string{"stv"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSegaSystem16: {
+		ID:        SystemSegaSystem16,
+		Slugs:     []string{"system16"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSegaSystem18: {
+		ID:        SystemSegaSystem18,
+		Slugs:     []string{"system18"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemTaitoF2: {
+		ID:        SystemTaitoF2,
+		Fallbacks: []string{SystemArcade},
 	},
 	SystemAtariST: {
 		ID:    SystemAtariST,

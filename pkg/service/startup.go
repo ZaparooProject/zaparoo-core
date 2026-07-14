@@ -41,6 +41,8 @@ import (
 
 const zapLinkHostExpiration = 30 * 24 * time.Hour
 
+const userDBBackupMaxAge = 24 * time.Hour
+
 func setupEnvironment(pl platforms.Platform) error {
 	return setupEnvironmentFS(afero.NewOsFs(), pl)
 }
@@ -96,16 +98,13 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	}
 
 	log.Debug().Msg("opening user database")
-	userDB, err := userdb.OpenUserDB(ctx, pl)
-	if err != nil {
-		return db, fmt.Errorf("failed to open user database: %w", err)
-	}
+	userDB, err := openAndRecoverUserDB(ctx, pl)
+	// Assign before the error check: openAndRecoverUserDB can return a non-nil
+	// handle alongside an error, and the deferred closeDatabase only closes what
+	// is stored on db. Assigning here ensures that handle is not leaked.
 	db.UserDB = userDB
-
-	log.Debug().Msg("running user database migrations")
-	err = userDB.MigrateUp()
 	if err != nil {
-		return db, fmt.Errorf("error migrating userdb: %w", err)
+		return db, err
 	}
 
 	// migrate old boltdb mappings if required
@@ -115,8 +114,104 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		log.Error().Err(err).Msg("error migrating old boltdb mappings")
 	}
 
+	// One-time import of favourites/launcher overrides that older versions wrote
+	// only to media.db, so they live in UserDB (the source of truth) and survive a
+	// future media.db rebuild.
+	backfillMediaUserData(ctx, db)
+
 	success = true
 	return db, nil
+}
+
+// backfillMediaUserData seeds UserDB from favourites/launcher overrides that older
+// versions stored only in media.db. It runs only while UserDB has no media user
+// data yet: once any row exists, UserDB is authoritative and media.db's copy is
+// never re-read (re-reading could resurrect a favourite the user removed if a prior
+// projection write had failed). Best-effort: failures are logged, not fatal.
+func backfillMediaUserData(ctx context.Context, db *database.Database) {
+	if db == nil || db.UserDB == nil || db.MediaDB == nil {
+		return
+	}
+
+	existing, err := db.UserDB.ListMediaUserData()
+	if err != nil {
+		log.Warn().Err(err).Msg("skipping media user data backfill: failed to read user database")
+		return
+	}
+	if len(existing) > 0 {
+		return
+	}
+
+	rows, err := db.MediaDB.GetExistingMediaUserData(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read existing media user data for backfill")
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+
+	migrated := 0
+	for i := range rows {
+		row := rows[i]
+		if upErr := db.UserDB.UpsertMediaUserData(&row); upErr != nil {
+			log.Warn().Err(upErr).
+				Str("system", row.SystemID).Str("path", row.Path).
+				Msg("failed to backfill media user data row")
+			continue
+		}
+		migrated++
+	}
+	log.Info().Int("migrated", migrated).Int("found", len(rows)).
+		Msg("backfilled media user data into user database")
+}
+
+func openAndRecoverUserDB(ctx context.Context, pl platforms.Platform) (*userdb.UserDB, error) {
+	userDB, err := userdb.OpenUserDB(ctx, pl)
+	if err != nil {
+		if userDB != nil && userDB.NoteCorruption(err) {
+			logUserDBIntegrityReport(userDB)
+			if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
+				return userDB, fmt.Errorf("failed to recover corrupt user database after open error: %w", recoverErr)
+			}
+			return userDB, nil
+		}
+		return userDB, fmt.Errorf("failed to open user database: %w", err)
+	}
+	if userDB.IsMarkedCorrupt() {
+		logUserDBIntegrityReport(userDB)
+		if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
+			return userDB, fmt.Errorf("failed to recover marked corrupt user database: %w", recoverErr)
+		}
+		return userDB, nil
+	}
+
+	log.Debug().Msg("running user database migrations")
+	if err = userDB.MigrateUp(); err != nil {
+		if userDB.NoteCorruption(err) {
+			logUserDBIntegrityReport(userDB)
+			if _, recoverErr := userDB.RecoverFromCorruption(); recoverErr != nil {
+				return userDB, fmt.Errorf(
+					"failed to recover corrupt user database after migration error: %w", recoverErr,
+				)
+			}
+			return userDB, nil
+		}
+		return userDB, fmt.Errorf("error migrating userdb: %w", err)
+	}
+
+	if backup, created, backupErr := userDB.EnsureRecentBackup(userDBBackupMaxAge); backupErr != nil {
+		log.Warn().Err(backupErr).Msg("failed to ensure recent user database backup")
+	} else if created {
+		log.Info().Str("path", backup.Path).Msg("created scheduled user database backup")
+	}
+	return userDB, nil
+}
+
+func logUserDBIntegrityReport(userDB *userdb.UserDB) {
+	for _, line := range userDB.IntegrityReport() {
+		log.Warn().Str("report", line).Msg("user database integrity report")
+	}
 }
 
 func closeDatabase(db *database.Database) {
@@ -240,10 +335,21 @@ func runMediaDBStartupMaintenance(
 		return
 	}
 
+	indexingStatus, indexingStatusErr := db.GetIndexingStatus()
+	if indexingStatusErr != nil {
+		log.Warn().Err(indexingStatusErr).Msg("failed to check indexing status before tag cache warmup")
+	}
+	interruptedIndexing := indexingStatusErr == nil &&
+		(indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending)
+
 	// Only rebuild the tag cache if LoadCachedTagCache didn't populate it
 	// from disk. Skipping the rebuild on a warm boot is the whole point of
-	// persisting the cache.
-	if !tagCacheLoaded {
+	// persisting the cache. Also skip when an interrupted index is waiting to
+	// resume; routine cache work must not delay visible media-update progress.
+	if interruptedIndexing {
+		log.Debug().Str("status", indexingStatus).Msg("skipping startup media maintenance before index resume")
+		return
+	} else if !tagCacheLoaded {
 		if err := db.RebuildTagCache(); err != nil {
 			log.Warn().Err(err).Msg("failed to warm tag cache on startup")
 		} else if persistErr := db.PersistTagCache(); persistErr != nil {
@@ -267,7 +373,7 @@ func runMediaDBStartupMaintenance(
 		return
 	}
 
-	indexingStatus, err := db.GetIndexingStatus()
+	indexingStatus, err = db.GetIndexingStatus()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to check indexing status before temporary media repair jobs")
 		return

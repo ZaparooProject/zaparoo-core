@@ -399,8 +399,9 @@ An object:
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
 | relativePath | string               | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
-| zapScript | string                   | Yes      | ZapScript command to launch this media item.                                                                |
+| zapScript | string                   | Yes      | ZapScript command to launch this media item. Includes the disambiguating tags inline (e.g. `@Arcade/X-Men Vs. Street Fighter (region:eu) (builddate:1996-10-04)`) so the written command resolves back to this specific variant. |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
+| disambiguatingTags | [TagInfo](#taginfo-object)[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Omitted when the title has nothing to disambiguate. Clients can render these to tell variants apart. |
 
 ##### System object
 
@@ -580,13 +581,14 @@ All parameters are optional. When called with no parameters, returns root entrie
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
-| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
+| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries, except a `root` entry whose exact count could not be computed in time (known non-empty, count omitted). |
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | relativePath | string   | No       | Relative path from root directory. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
 
 ##### Browse pagination object
 
@@ -701,6 +703,79 @@ All parameters are optional. When called with no parameters, returns root entrie
   }
 }
 ```
+
+### media.browse.index
+
+Return the ordered first-character "jump to letter" buckets for a browse scope. Each bucket carries a count and a ready-to-use cursor that seeks `media.browse` to the start of that bucket, so a single round trip gives a client everything it needs to draw a section rail _and_ jump into the full ordered list. This avoids paging from the top to reach a distant section, which matters on constrained clients (e.g. MiSTer).
+
+The scope parameters mirror `media.browse` so the index describes the exact list `media.browse` would return for the same scope. The per-bucket `cursor` is an ordinary browse cursor: pass it to `media.browse` with the same `path`/`systems`/`sort` to get a normal page that begins at the bucket and continues into the next bucket as the user scrolls.
+
+#### Parameters
+
+All parameters are optional.
+
+| Key         | Type     | Required | Description                                                                                       |
+| :---------- | :------- | :------- | :------------------------------------------------------------------------------------------------ |
+| path        | string   | No       | Directory or virtual scheme to index, same as `media.browse`. Omit or set empty for a root listing (no rail applies). |
+| systems     | string[] | No       | Case-sensitive system IDs to scope the index to, same as `media.browse`.                          |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in `systems`.                                                |
+| sort        | string   | No       | Sort order, must match the `media.browse` sort the rail is for. One of `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. |
+
+#### Result
+
+| Key        | Type                                          | Required | Description                                                                 |
+| :--------- | :-------------------------------------------- | :------- | :-------------------------------------------------------------------------- |
+| scheme     | string                                        | Yes      | Collation used to derive the buckets. `latin` for first-character bucketing; `none` when no rail applies (a root listing, or a directory whose effective sort is not alphabetical, e.g. a ranked/date-prefixed collection folder), in which case `groups` is empty. |
+| totalFiles | number                                        | Yes      | Total media files in the scope.                                             |
+| groups     | [BrowseIndexGroup](#browse-index-group-object)[] | Yes   | Only non-empty buckets, ordered to match `sort`.                            |
+
+##### Browse index group object
+
+| Key    | Type   | Required | Description                                                                                       |
+| :----- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| key    | string | Yes      | Stable bucket identifier (`A`–`Z`, `0-9`, `#`). Treat as opaque.                                  |
+| label  | string | Yes      | Display text for the bucket. Equal to `key` for the `latin` scheme.                               |
+| count  | number | Yes      | Number of media files in the bucket.                                                              |
+| cursor | string | Yes      | Opaque `media.browse` cursor positioned just before the bucket's first row. Empty string for the bucket that begins the list (call `media.browse` with no cursor for the first page). |
+| offset | number | Yes      | 0-based position of the bucket's first item among the scope's media files, taken from its row number in the same ordered listing `media.browse` pages through (so it cannot drift from the browse order). Excludes any directory entries the listing shows before files; a client that jumps to a position in the full list adds its own leading-directory count. Use this to jump to the bucket's position rather than reloading from `cursor`. |
+
+Clients should render `groups` exactly as received, in order, without assuming a particular alphabet: `scheme` and `key` are opaque so a future locale-aware scheme (e.g. pinyin/kana/hangul buckets) requires no client change.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.browse.index",
+  "params": {
+    "path": "/roms/SNES",
+    "sort": "name-asc"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "scheme": "latin",
+    "totalFiles": 150,
+    "groups": [
+      { "key": "#", "label": "#", "count": 3, "cursor": "", "offset": 0 },
+      { "key": "0-9", "label": "0-9", "count": 7, "cursor": "eyJzb3J0VmFsdWUiOiIjV29sZiIsImxhc3RJZCI6MTAyfQ==", "offset": 3 },
+      { "key": "A", "label": "A", "count": 12, "cursor": "eyJzb3J0VmFsdWUiOiI5IExpdmVzIiwibGFzdElkIjoxMTV9", "offset": 10 }
+    ]
+  }
+}
+```
+
+To jump to "A", the client calls `media.browse` with that group's `cursor` and the same `path`/`sort`; the returned page begins at the first "A" title and continues into "B" as the user keeps scrolling.
 
 ### media.tags
 
@@ -849,6 +924,7 @@ Optionally, an object:
 | :------ | :------- | :------- | :---------------------------------------------------------------------------------- |
 | systems     | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| rebuild     | boolean  | No       | Discard the media database entirely and index from scratch ("fresh start"). Scraped metadata is lost and must be re-scraped; favourites and launcher overrides are preserved (they live in the user database and are re-applied after indexing). Cannot be combined with `systems`. |
 
 An omitted or `null` value parameters key is also valid and will index every system.
 
@@ -1407,6 +1483,7 @@ Single requests return the existing single `media` response shape. Batch request
 | isMissing  | boolean                                 | Yes      | Whether the indexed file is currently missing.        |
 | tags       | [TagInfo](#taginfo-object)[]            | Yes      | ROM-level tags for this media row.                    |
 | properties | object                                  | Yes      | ROM-level properties keyed by canonical type tag.     |
+| launcherOverride | string                            | No       | Launcher ID stored for this media row, mirrored from `property:launcher-override` in `properties`. When present, Core uses it for title, search, path, random, and history launches unless ZapScript includes an explicit `launcher` argument. |
 | title      | [MediaMetaTitle](#media-meta-title-object) | Yes   | Shared title metadata for this media row.             |
 
 ##### Media meta title object
@@ -1464,7 +1541,13 @@ Property keys are canonical type tags such as `property:description`, `property:
       "tags": [
         {"type": "region", "tag": "usa"}
       ],
-      "properties": {},
+      "properties": {
+        "property:launcher-override": {
+          "text": "RetroArch",
+          "contentType": ""
+        }
+      },
+      "launcherOverride": "RetroArch",
       "title": {
         "slug": "super mario world",
         "name": "Super Mario World",
@@ -1506,6 +1589,77 @@ Property keys are canonical type tags such as `property:description`, `property:
 }
 ```
 
+### media.meta.update
+
+Update writable metadata fields for one indexed media row, then return the same response shape as [`media.meta`](#mediameta).
+
+Use this to store a per-media launcher override. Core validates the launcher exists and supports the media row's system before saving it. Set `launcherOverride` to `null` to clear the override.
+
+Launcher selection order is:
+
+1. Explicit `launcher` advanced argument in ZapScript.
+2. Per-media `launcherOverride` stored with `media.meta.update`.
+3. System default launcher from configuration.
+4. Normal launcher matching.
+
+#### Parameters
+
+An object identifying the media row by `mediaId` or by `system` and canonical `path`.
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| mediaId | number | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system  | string | No       | System ID for the media row. Required when `mediaId` is omitted. |
+| path    | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
+| media   | object | Yes      | Patch object. Currently supports only `launcherOverride`. |
+
+##### Media patch object
+
+| Key              | Type        | Required | Description |
+| :--------------- | :---------- | :------- | :---------- |
+| launcherOverride | string\|null | Yes      | Launcher ID to use for this media row, matched case-insensitively and stored with canonical casing. Use `null` to clear it. Empty strings are rejected. |
+
+#### Result
+
+| Key   | Type                            | Required | Description                 |
+| :---- | :------------------------------ | :------- | :-------------------------- |
+| media | [MediaMeta](#media-meta-object) | Yes      | Updated metadata for row.   |
+
+#### Example
+
+##### Set override
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.meta.update",
+  "params": {
+    "mediaId": 42,
+    "media": {
+      "launcherOverride": "RetroArch"
+    }
+  }
+}
+```
+
+##### Clear override
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "media.meta.update",
+  "params": {
+    "system": "SNES",
+    "path": "/roms/snes/Super Mario World.sfc",
+    "media": {
+      "launcherOverride": null
+    }
+  }
+}
+```
+
 ### media.image
 
 Return the best matching image for one indexed media row as base64-encoded data.
@@ -1521,8 +1675,12 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
-| imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
-Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+| imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
+| maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. |
+
+Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+
+Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
 
 #### Result
 
@@ -1545,7 +1703,8 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
   "params": {
     "system": "SNES",
     "path": "/roms/snes/Super Mario World.sfc",
-    "imageTypes": ["boxart", "image"]
+    "imageTypes": ["boxart", "image"],
+    "maxSize": 512
   }
 }
 ```
@@ -1557,9 +1716,9 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
   "jsonrpc": "2.0",
   "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
   "result": {
-    "contentType": "image/png",
-    "extension": "png",
-    "data": "iVBORw0KGgoAAAANSUhEUgAA...",
+    "contentType": "image/webp",
+    "extension": "webp",
+    "data": "UklGRiQAAABXRUJQVlA4...",
     "typeTag": "property:image-boxart"
   }
 }
@@ -1928,17 +2087,21 @@ Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`,
 
 ### systems
 
-List all currently indexed systems.
+List systems currently indexed or supported by an available launcher on the running platform. Virtual systems are also included.
+
+Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index.
 
 #### Parameters
 
-None.
+| Key | Type    | Required | Description                                                                                     |
+| :-- | :------ | :------- | :---------------------------------------------------------------------------------------------- |
+| all | boolean | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
 
 #### Result
 
-| Key     | Type                       | Required | Description                    |
-| :------ | :------------------------- | :------- | :----------------------------- |
-| systems | [System](#system-object)[] | Yes      | A list of all indexed systems. |
+| Key     | Type                       | Required | Description                                                        |
+| :------ | :------------------------- | :------- | :----------------------------------------------------------------- |
+| systems | [System](#system-object)[] | Yes      | Indexed, available, and optionally unavailable platform systems.   |
 
 See [System object](#system-object).
 
@@ -1950,7 +2113,10 @@ See [System object](#system-object).
 {
   "jsonrpc": "2.0",
   "id": "dbd312f3-7a5f-11ef-8f29-020304050607",
-  "method": "systems"
+  "method": "systems",
+  "params": {
+    "all": true
+  }
 }
 ```
 

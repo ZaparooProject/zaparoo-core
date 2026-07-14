@@ -400,6 +400,132 @@ done:
 		"subscriber should have received direct sends plus at least one coalesced delivery")
 }
 
+// TestBroker_MethodFilterReceivesOnlyMatchingMethods verifies that a subscriber
+// with a method filter only receives notifications for the declared methods and
+// silently skips all others — no drop warning is emitted for filtered-out methods.
+func TestBroker_MethodFilterReceivesOnlyMatchingMethods(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := make(chan models.Notification, 20)
+	b := NewBroker(ctx, source)
+	b.Start()
+
+	// Lifecycle-only subscriber — should not see indexing or custom events.
+	lifecycle, _ := b.Subscribe(10, models.NotificationStarted, models.NotificationStopped)
+	// Unfiltered subscriber — must see everything.
+	all, _ := b.Subscribe(20)
+
+	// Send a mix of methods.
+	toSend := []models.Notification{
+		{Method: models.NotificationStarted, Params: []byte(`{}`)},
+		{Method: models.NotificationMediaIndexing, Params: []byte(`{}`)},
+		{Method: "custom.event", Params: []byte(`{}`)},
+		{Method: models.NotificationStopped, Params: []byte(`{}`)},
+	}
+	for _, n := range toSend {
+		source <- n
+	}
+
+	// Give broker time to deliver.
+	time.Sleep(30 * time.Millisecond)
+
+	// Filtered subscriber should see only started and stopped.
+	var lifecycleMethods []string
+	drainLifecycle := time.After(50 * time.Millisecond)
+	for {
+		select {
+		case n, ok := <-lifecycle:
+			if !ok {
+				goto checkLifecycle
+			}
+			lifecycleMethods = append(lifecycleMethods, n.Method)
+		case <-drainLifecycle:
+			goto checkLifecycle
+		}
+	}
+checkLifecycle:
+	assert.Equal(t, []string{models.NotificationStarted, models.NotificationStopped}, lifecycleMethods,
+		"filtered subscriber must only see declared methods")
+
+	// Unfiltered subscriber should see all four.
+	var allMethods []string
+	drainAll := time.After(50 * time.Millisecond)
+	for {
+		select {
+		case n, ok := <-all:
+			if !ok {
+				goto checkAll
+			}
+			allMethods = append(allMethods, n.Method)
+		case <-drainAll:
+			goto checkAll
+		}
+	}
+checkAll:
+	assert.Len(t, allMethods, 4, "unfiltered subscriber must see all methods")
+}
+
+// TestBroker_FilteredLifecycleSubscriberSurvivesIndexingBurst verifies the
+// regression: an indexing-storm burst that fills an unfiltered subscriber's
+// buffer must not cause media.started or media.stopped to be dropped for a
+// filtered lifecycle subscriber. This was the original failure mode — lifecycle
+// events were dropped because all subscribers shared the same full buffer.
+func TestBroker_FilteredLifecycleSubscriberSurvivesIndexingBurst(t *testing.T) {
+	t.Parallel()
+
+	const burstSize = 200
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := make(chan models.Notification, burstSize+10)
+	// media.indexing is coalesceable (mirrors production config).
+	b := NewBroker(ctx, source, models.NotificationMediaIndexing)
+	b.Start()
+
+	// Filtered lifecycle subscriber — mirrors LimitsManager / indexpause.
+	lifecycle, _ := b.Subscribe(32, models.NotificationStarted, models.NotificationStopped)
+	// Unfiltered slow consumer — will have its buffer filled by the burst.
+	_, _ = b.Subscribe(2)
+
+	// Flood the broker with indexing events to fill the slow consumer's buffer.
+	for i := range burstSize {
+		source <- models.Notification{
+			Method: models.NotificationMediaIndexing,
+			Params: []byte(fmt.Sprintf(`{"step":%d}`, i)),
+		}
+	}
+	// Interleave a lifecycle event mid-burst.
+	source <- models.Notification{Method: models.NotificationStarted, Params: []byte(`{}`)}
+	source <- models.Notification{Method: models.NotificationStopped, Params: []byte(`{}`)}
+
+	// Give broker time to process everything.
+	time.Sleep(100 * time.Millisecond)
+
+	// Lifecycle subscriber must have received both events.
+	var got []string
+	drain := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case n, ok := <-lifecycle:
+			if !ok {
+				goto check
+			}
+			got = append(got, n.Method)
+		case <-drain:
+			goto check
+		}
+	}
+check:
+	assert.Contains(t, got, models.NotificationStarted,
+		"media.started must not be dropped during an indexing burst")
+	assert.Contains(t, got, models.NotificationStopped,
+		"media.stopped must not be dropped during an indexing burst")
+}
+
 // TestBroker_CoalesceDoesNotAffectCriticalEvents verifies that non-coalesceable
 // notifications (e.g. tokens.added) are never merged or silently dropped via the
 // coalescing path — they follow the original drop-with-warning path.

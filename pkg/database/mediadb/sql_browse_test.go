@@ -229,6 +229,216 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheParentMissing(t *testing.T)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseDirectoriesFromCache_SingleSystemPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	// Keyset (AfterName) and overfetch (Limit) are bound after the system filter.
+	mock.ExpectQuery("SELECT d.Name, c.FileCount").
+		WithArgs(int64(10), "SNES", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("Delta", 1).AddRow("Epsilon", 1))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesFromCache_MultiSystemPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	// System filter args precede the keyset and overfetch limit.
+	mock.ExpectQuery("SELECT d.Name, SUM").
+		WithArgs(int64(10), "NES", "SNES", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+			AddRow("Delta", 1, "SNES").AddRow("Epsilon", 1, "NES"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "NES"}, {ID: "SNES"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_MediaFallbackPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	romsDir := browseTestDir("roms")
+	// HAVING keyset and LIMIT are bound after the path-prefix args.
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("Delta", 2).AddRow("Epsilon", 2))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: romsDir,
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "Delta", results[0].Name)
+	assert.Equal(t, "Epsilon", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectoriesForSystems_MediaFallbackPaginates(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	psxDir := browseTestDir("media", "fat", "games", "PSX")
+	// Path-prefix args, then system filter, then keyset and limit.
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX", "Beta", 3).
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+			AddRow("USA", 273, "PSX").AddRow("World", 10, "PSX"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: psxDir,
+		Systems:    []systemdefs.System{{ID: "PSX"}},
+		AfterName:  "Beta",
+		Limit:      3,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "USA", results[0].Name)
+	assert.Equal(t, "World", results[1].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_CacheSingleSystem(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM BrowseDirCounts").
+		WithArgs(int64(10), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(7))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: gamesDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 7, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_CacheNoSystemUsesDistinct(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	gamesDir := browseTestDir("media", "fat", "games")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(gamesDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT d.DBID\\) FROM BrowseDirCounts").
+		WithArgs(int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(13))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: gamesDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 13, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_FallsBackToMediaWhenParentMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	romsDir := browseTestDir("roms")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(romsDir).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM \\(WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(4))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: romsDir,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirCount_FallsBackToMediaWhenCacheNotReady(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	romsDir := browseTestDir("roms")
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM \\(WITH matched AS").
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(9))
+
+	count, err := sqlBrowseDirCount(context.Background(), db, database.BrowseDirCountOptions{
+		PathPrefix: romsDir,
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseVirtualSchemesFromCache_ReturnsEmptyWithoutMediaFallback(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
@@ -547,6 +757,17 @@ func TestFetchAndAttachCoverFlags_EmptyResults(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func expectImagePropertyTagLookup(mock sqlmock.Sqlmock, ids ...int64) {
+	rows := sqlmock.NewRows([]string{"DBID"})
+	for _, id := range ids {
+		rows.AddRow(id)
+	}
+	mock.ExpectQuery(`SELECT t\.DBID\s+FROM Tags t\s+JOIN TagTypes tt ON tt\.DBID = t\.TypeDBID`+
+		`\s+WHERE tt\.Type = \? AND t\.Tag LIKE \?\s+ORDER BY t\.DBID`).
+		WithArgs(string(tags.TagTypeProperty), imagePropertyValuePrefix+"%").
+		WillReturnRows(rows)
+}
+
 func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -554,14 +775,17 @@ func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	results := []database.SearchResultWithCursor{
-		{MediaID: 1, Name: "NoCoverGame"},
-		{MediaID: 2, Name: "AnotherNoCoverGame"},
+		{MediaID: 1, MediaTitleID: 101, Name: "NoCoverGame"},
+		{MediaID: 2, MediaTitleID: 102, Name: "AnotherNoCoverGame"},
 	}
 
-	// Query returns no rows — neither media ID has any image property.
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(1), int64(2), int64(1), int64(2)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}))
+	// Query returns no rows — neither media ID has any image property. Title IDs
+	// are populated so no backfill query runs; the media leg binds mediaIDs and
+	// the title leg binds titleIDs.
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(1), int64(2), int64(901), int64(101), int64(102), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -577,14 +801,15 @@ func TestFetchAndAttachCoverFlags_MediaLevelCover(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	results := []database.SearchResultWithCursor{
-		{MediaID: 10, Name: "GameWithCover"},
-		{MediaID: 20, Name: "GameWithoutCover"},
+		{MediaID: 10, MediaTitleID: 110, Name: "GameWithCover"},
+		{MediaID: 20, MediaTitleID: 120, Name: "GameWithoutCover"},
 	}
 
 	// Query returns mediaID 10 as having a cover (media-level property).
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(10), int64(20), int64(10), int64(20)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(10)))
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(10), int64(20), int64(901), int64(110), int64(120), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("media", int64(10)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -606,10 +831,11 @@ func TestFetchAndAttachCoverFlags_TitleLevelCover(t *testing.T) {
 		{MediaID: 31, MediaTitleID: 100, Name: "GameA (Rev B)"},
 	}
 
-	// Query returns both media IDs (via the title-level UNION ALL leg).
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(30), int64(31), int64(30), int64(31)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(30)).AddRow(int64(31)))
+	// Query returns the shared title ID from the title-level UNION ALL leg.
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(30), int64(31), int64(901), int64(100), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("title", int64(100)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -625,11 +851,12 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	results := []database.SearchResultWithCursor{
-		{MediaID: 5, Name: "SomeGame"},
+		{MediaID: 5, MediaTitleID: 105, Name: "SomeGame"},
 	}
 
-	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
-		WithArgs(int64(5), int64(5)).
+	expectImagePropertyTagLookup(mock, 901)
+	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
+		WithArgs(int64(5), int64(901), int64(105), int64(901)).
 		WillReturnError(errors.New("db unavailable"))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
@@ -649,7 +876,7 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 func seedImagePropertyTags(t *testing.T, mediaDB *MediaDB) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := mediaDB.sql.ExecContext(ctx, `
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
 		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
 		INSERT OR IGNORE INTO Tags (DBID, TypeDBID, Tag) VALUES (901, 900, 'image-boxart');
 	`)
@@ -709,7 +936,7 @@ func TestFetchAndAttachCoverFlags_Integration_MediaLevelProperty(t *testing.T) {
 		{MediaID: mediaB.DBID, MediaTitleID: titleB.DBID, Name: "Game Without Cover"},
 	}
 
-	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql, results))
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
 	assert.True(t, results[0].HasCover, "media with image property should have HasCover=true")
 	assert.False(t, results[1].HasCover, "media without image property should have HasCover=false")
 }
@@ -760,76 +987,120 @@ func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
 		{MediaID: mediaB.DBID, MediaTitleID: title.DBID, Name: "Rev B"},
 	}
 
-	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql, results))
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
 	assert.True(t, results[0].HasCover, "media whose title has an image property should have HasCover=true")
 	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
 }
 
-// TestFetchAndDisambiguateSiblings_NoSiblings verifies that when all entries on
-// the page have unique names, ZapScriptTags is set to an empty slice with no
-// DB queries.
-func TestFetchAndDisambiguateSiblings_NoSiblings(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+// TestFetchAndAttachCoverFlags_Integration_TitleCoverWithoutMediaTitleID verifies
+// that a title-scoped cover is detected even when the result omits MediaTitleID.
+// The cover query resolves the title through the Media row (Media.MediaTitleDBID is
+// NOT NULL), so callers that build results without populating MediaTitleID — such as
+// singleton container aliases — still get correct title-scope cover flags. This
+// guards against the regression where folder-based systems showed a blank grid.
+func TestFetchAndAttachCoverFlags_Integration_TitleCoverWithoutMediaTitleID(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
 
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Title Only Cover"),
+		Name:       "Title Only Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "title_only.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "title_only.png")},
+	}))
+
+	// MediaTitleID deliberately left zero, mirroring a synthetic result.
 	results := []database.SearchResultWithCursor{
-		{MediaID: 1, MediaTitleID: 10, SystemID: "NES", Name: "Game A"},
-		{MediaID: 2, MediaTitleID: 11, SystemID: "NES", Name: "Game B"},
-		{MediaID: 3, MediaTitleID: 12, SystemID: "NES", Name: "Game C"},
+		{MediaID: media.DBID, Name: "Title Only Cover"},
 	}
-
-	// No DB queries should be issued — grouping is pure in-memory.
-	err = fetchAndDisambiguateSiblings(context.Background(), db, results)
-	require.NoError(t, err)
-	for i, r := range results {
-		assert.Equal(t, []database.TagInfo{}, r.ZapScriptTags, "entry %d should have empty ZapScriptTags", i)
-	}
-	assert.NoError(t, mock.ExpectationsWereMet(), "no DB queries expected")
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
+	assert.True(t, results[0].HasCover,
+		"title-scope cover must resolve via the Media row even when MediaTitleID is omitted")
 }
 
-// TestFetchAndDisambiguateSiblings_EmptyResults verifies the empty-input guard.
-func TestFetchAndDisambiguateSiblings_EmptyResults(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+// TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse reproduces the
+// regression where a browse that runs before the image-* property tags are seeded
+// (which happens inside the indexing pipeline) pins an empty tag set in the
+// process-lifetime cache, leaving every later browse reporting HasCover=false until
+// the process restarts. The scrape/index-completion path never invalidates this
+// cache, so the only recovery without this fix is a restart.
+func TestFetchAndAttachCoverFlags_Integration_TagsSeededAfterFirstBrowse(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
 
-	err = fetchAndDisambiguateSiblings(context.Background(), db, nil)
-	require.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
+	ctx := context.Background()
 
-func TestFetchAndDisambiguateSiblings_DuplicateNamesFetchTags(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
 
-	results := []database.SearchResultWithCursor{
-		{MediaID: 1, MediaTitleID: 10, SystemID: "NES", Name: "Same Game"},
-		{MediaID: 2, MediaTitleID: 11, SystemID: "NES", Name: "Same Game"},
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game With Cover"),
+		Name:       "Game With Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "with_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// First browse runs before any image-* property tag exists, mirroring a browse
+	// landing mid-reindex before SeedCanonicalTags. No covers can exist yet, so
+	// HasCover=false here is correct — but it must not be cached for the DB handle.
+	firstPass := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, MediaTitleID: title.DBID, Name: "Game With Cover"},
 	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), firstPass))
+	require.False(t, firstPass[0].HasCover, "no image tags seeded yet, so HasCover must be false")
 
-	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM MediaTags`).
-		WithArgs(int64(1), int64(2), int64(10), int64(11)).
-		WillReturnRows(sqlmock.NewRows([]string{"HasTags"}).AddRow(true))
-	mock.ExpectPrepare(`SELECT\s+0 as SourceKind`).
-		ExpectQuery().
-		WithArgs(int64(1), int64(2), int64(10), int64(11)).
-		WillReturnRows(sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "DisplayName", "Type"}).
-			AddRow(0, int64(1), "USA", "United States", "release").
-			AddRow(0, int64(2), "Japan", "Japan", "release"))
+	// Indexing then seeds the image-* tags and the scraper writes the cover property.
+	seedImagePropertyTags(t, mediaDB)
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "with_cover.png")},
+	}))
 
-	err = fetchAndDisambiguateSiblings(context.Background(), db, results)
-	require.NoError(t, err)
-	require.Len(t, results[0].ZapScriptTags, 1)
-	require.Len(t, results[1].ZapScriptTags, 1)
-	assert.Equal(t, database.TagInfo{Tag: "USA", Type: "release", Label: "United States"}, results[0].ZapScriptTags[0])
-	assert.Equal(t, database.TagInfo{Tag: "Japan", Type: "release", Label: "Japan"}, results[1].ZapScriptTags[0])
-	assert.NoError(t, mock.ExpectationsWereMet())
+	// A subsequent browse on the same DB handle must now see the cover. Without the
+	// empty-result guard in resolveImagePropertyTagDBIDs, the first pass would have
+	// cached an empty tag set and this would still report false.
+	secondPass := []database.SearchResultWithCursor{
+		{MediaID: media.DBID, MediaTitleID: title.DBID, Name: "Game With Cover"},
+	}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), secondPass))
+	assert.True(t, secondPass[0].HasCover,
+		"cover must be detected once image tags are seeded, even if an earlier browse ran first")
 }
+
+// Sibling disambiguation is exercised end-to-end in disambiguation_test.go: it
+// now reads stored per-title types (RecomputeSystemDisambiguation) instead of
+// grouping a page in memory, so it is correct across page boundaries.
 
 // TestBrowseFiles_SortNameFallback_Integration verifies that a media row with
 // SortName=” (pre-migration) gets its display name derived from the file path
@@ -865,7 +1136,7 @@ func TestBrowseFiles_SortNameFallback_Integration(t *testing.T) {
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	// Blank out SortName directly so the scan loop hits the fallback path.
-	_, err = mediaDB.sql.ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, media.DBID)
+	_, err = mediaDB.sql.Load().ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, media.DBID)
 	require.NoError(t, err)
 
 	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{

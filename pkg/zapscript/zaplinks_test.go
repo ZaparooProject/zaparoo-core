@@ -34,10 +34,12 @@ import (
 	"strings"
 	"testing"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -253,6 +255,7 @@ func TestPreWarmZapLinkHostsContext_CancelledAfterConnectivityCheckSkipsDatabase
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	checkInternet := func(_ context.Context, _ int) bool {
 		cancel()
 		return true
@@ -600,6 +603,42 @@ func TestIsZapLink_SuccessIsCached(t *testing.T) {
 	assert.True(t, result)
 
 	mockUserDB.AssertExpectations(t)
+}
+
+func TestCheckZapLinkFetchesSupportedRemoteScript(t *testing.T) {
+	t.Parallel()
+
+	expected := "**launch.system:snes"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case WellKnownPath:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"zapscript": 1}`))
+		case "/token":
+			assert.Equal(t, "mister", r.Header.Get(HeaderZaparooPlatform))
+			w.Header().Set("Content-Type", MIMEZaparooZapScript)
+			_, _ = w.Write([]byte(expected))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}
+	mockUserDB.On("GetZapLinkHost", server.URL).Return(false, false, nil)
+	mockUserDB.On("UpdateZapLinkHost", server.URL, 1).Return(nil)
+	mockUserDB.On("UpdateZapLinkCache", server.URL+"/token", expected).Return(nil)
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("mister")
+
+	target, err := checkZapLink(nil, platform, db, gozapscript.Command{Args: []string{server.URL + "/token"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, target)
+	mockUserDB.AssertExpectations(t)
+	platform.AssertExpectations(t)
 }
 
 // FetchWellKnown Tests

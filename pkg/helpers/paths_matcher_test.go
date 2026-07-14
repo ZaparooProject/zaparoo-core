@@ -100,6 +100,39 @@ func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
 	assert.Equal(t, `c:\roms\custom\game.rom`, matcherSeen)
 }
 
+func TestLauncherMatcher_SchemeUsesTestFunction(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:       "VirtualLauncher",
+		SystemID: "Virtual",
+		Schemes:  []string{"zaparoo"},
+		Test: func(_ *config.Instance, path string) bool {
+			return path == "zaparoo://expected/Game"
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.MatchSystemFile("Virtual", "zaparoo://expected/Game"))
+	assert.False(t, matcher.MatchSystemFile("Virtual", "zaparoo://other/Game"))
+}
+
 func TestLauncherMatcher_NilPlatformDoesNotSynthesizeMediaPaths(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	launcher := platforms.Launcher{

@@ -68,11 +68,11 @@ func newPersistTestDB(t *testing.T) (*MediaDB, sqlmock.Sqlmock, string) {
 	dbPath := filepath.Join(dbDir, "media.db")
 
 	mediaDB := &MediaDB{
-		sql:    db,
 		ctx:    context.Background(),
 		clock:  clockwork.NewFakeClock(),
 		dbPath: dbPath,
 	}
+	mediaDB.sql.Store(db)
 	return mediaDB, mock, dbPath
 }
 

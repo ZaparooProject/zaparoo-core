@@ -20,14 +20,69 @@
 package tui
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFormatDisambiguatingTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected string
+		input    []database.TagInfo
+	}{
+		{
+			name:     "empty slice",
+			input:    []database.TagInfo{},
+			expected: "",
+		},
+		{
+			name:     "nil slice",
+			input:    nil,
+			expected: "",
+		},
+		{
+			name: "single tag",
+			input: []database.TagInfo{
+				{Type: "region", Tag: "eu"},
+			},
+			expected: "region:eu",
+		},
+		{
+			name: "multiple same-type tags",
+			input: []database.TagInfo{
+				{Type: "region", Tag: "eu"},
+				{Type: "region", Tag: "us"},
+			},
+			expected: "region:eu, region:us",
+		},
+		{
+			name: "mixed types preserve given order",
+			input: []database.TagInfo{
+				{Type: "region", Tag: "eu"},
+				{Type: "builddate", Tag: "1996-10-04"},
+			},
+			expected: "region:eu, builddate:1996-10-04",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := formatDisambiguatingTags(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
 
 func TestTruncateSystemName(t *testing.T) {
 	t.Parallel()
@@ -77,6 +132,31 @@ func TestTruncateSystemName(t *testing.T) {
 			// Verify truncated results are at most 18 chars
 			assert.LessOrEqual(t, len(result), 18)
 		})
+	}
+}
+
+func psxFirstPageResult(nextCursor string) *models.SearchResults {
+	return &models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Game One",
+				Path:      "game-one.chd",
+				ZapScript: "@PlayStation/Game One",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+			{
+				Name:      "Game Two",
+				Path:      "game-two.chd",
+				ZapScript: "@PlayStation/Game Two",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+		},
+		Total: 2,
+		Pagination: &models.PaginationInfo{
+			NextCursor:  &nextCursor,
+			HasNextPage: true,
+			PageSize:    2,
+		},
 	}
 }
 
@@ -177,6 +257,268 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 	// Wait for SearchMedia to be called using the mock's signal channel
 	called := mockSvc.SearchMediaCalled()
 	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+}
+
+func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{{ID: "psx", Name: "PlayStation"}})
+
+	nextCursor := "next-page"
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor == nil
+	})).Return(psxFirstPageResult(nextCursor), nil).Once()
+	releaseNextPage := make(chan time.Time)
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor != nil && *params.Cursor == nextCursor &&
+			params.Query != nil && *params.Query == ""
+	})).Return(&models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Game Three",
+				Path:      "game-three.chd",
+				ZapScript: "@PlayStation/Game Three",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+		},
+		Total: 1,
+		Pagination: &models.PaginationInfo{
+			HasNextPage: false,
+			PageSize:    2,
+		},
+	}, nil).WaitUntil(releaseNextPage).Once()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	session := NewSession()
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
+	})
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+
+	runner.SimulateTab()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+	assert.Equal(t, 1, mockSvc.SearchMediaCallCount(), "initial selection should not immediately prefetch")
+
+	// Editing the input must not combine the previous page's cursor with a new query.
+	session.SetSearchMediaName("different query")
+	scrollDone := make(chan struct{})
+	go func() {
+		runner.SimulateArrowDown()
+		close(scrollDone)
+	}()
+	select {
+	case <-scrollDone:
+	case <-time.After(100 * time.Millisecond):
+		close(releaseNextPage)
+		<-scrollDone
+		t.Fatal("scrolling blocked while the next page loaded")
+	}
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loading more results", 100*time.Millisecond))
+	close(releaseNextPage)
+
+	assert.True(t, runner.WaitForText("Game Three", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Game One"), "first page should remain visible")
+	assert.True(t, runner.ContainsText("game-two.chd"), "prefetch should preserve current selection")
+	assert.False(t, runner.ContainsText("Load more results"), "pagination should not add a list row")
+	assert.True(t, runner.ContainsText("Loaded 3 results"))
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBuildSearchMedia_AutoloadErrorCanRetry_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{{ID: "psx", Name: "PlayStation"}})
+
+	nextCursor := "next-page"
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor == nil
+	})).Return(psxFirstPageResult(nextCursor), nil).Once()
+	moreParams := mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor != nil && *params.Cursor == nextCursor
+	})
+	mockSvc.On("SearchMedia", mock.Anything, moreParams).
+		Return(nil, errors.New("temporary search failure")).Once()
+	mockSvc.On("SearchMedia", mock.Anything, moreParams).Return(&models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Game Three",
+				Path:      "game-three.chd",
+				ZapScript: "@PlayStation/Game Three",
+				System:    models.System{ID: "psx", Name: "PlayStation"},
+			},
+		},
+		Total: 1,
+		Pagination: &models.PaginationInfo{
+			HasNextPage: false,
+			PageSize:    1,
+		},
+	}, nil).Once()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App(), NewSession())
+	})
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+
+	runner.SimulateTab()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+	runner.SimulateArrowDown()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+
+	assert.True(t, runner.WaitForText("Error loading more results", 100*time.Millisecond))
+	assert.False(t, runner.ContainsText("Load more results"), "failed load should not add a list row")
+
+	runner.SimulateArrowUp()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	assert.True(t, runner.WaitForText("Game Three", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Game One"), "retry should preserve first page")
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBuildSearchMedia_FreshSearchErrorClearsPagination_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{{ID: "psx", Name: "PlayStation"}})
+
+	nextCursor := "stale-cursor"
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor == nil && params.Query != nil && *params.Query == ""
+	})).Return(psxFirstPageResult(nextCursor), nil).Once()
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor == nil && params.Query != nil && *params.Query == "new query"
+	})).Return(nil, errors.New("fresh search failed")).Once()
+	mockSvc.On("SearchMedia", mock.Anything, mock.MatchedBy(func(params models.SearchParams) bool {
+		return params.Cursor != nil && *params.Cursor == nextCursor
+	})).Return(&models.SearchResults{}, nil).Maybe()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	session := NewSession()
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
+	})
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+
+	runner.SimulateTab()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+
+	runner.SimulateArrowLeft()
+	session.SetSearchMediaName("new query")
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForText("An error occurred during search", 100*time.Millisecond))
+
+	runner.SimulateTab()
+	runner.SimulateArrowDown()
+	assert.Never(t, func() bool {
+		return mockSvc.SearchMediaCallCount() > 2
+	}, 50*time.Millisecond, 5*time.Millisecond, "failed fresh search should discard the old cursor")
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBuildSearchMedia_DisambiguatingTags_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{
+		{ID: "genesis", Name: "Genesis"},
+	})
+
+	searchResults := &models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Sonic The Hedgehog",
+				Path:      "/roms/genesis/sonic_eu.md",
+				ZapScript: "**launch.genesis:/roms/genesis/sonic_eu.md",
+				System:    models.System{ID: "genesis", Name: "Genesis"},
+				DisambiguatingTags: []database.TagInfo{
+					{Type: "region", Tag: "eu"},
+					{Type: "region", Tag: "us"},
+				},
+			},
+			{
+				Name:      "Sonic The Hedgehog",
+				Path:      "/roms/genesis/sonic_jp.md",
+				ZapScript: "**launch.genesis:/roms/genesis/sonic_jp.md",
+				System:    models.System{ID: "genesis", Name: "Genesis"},
+				DisambiguatingTags: []database.TagInfo{
+					{Type: "region", Tag: "jp"},
+				},
+			},
+			{
+				Name:      "Streets of Rage",
+				Path:      "/roms/genesis/streets.md",
+				ZapScript: "**launch.genesis:/roms/genesis/streets.md",
+				System:    models.System{ID: "genesis", Name: "Genesis"},
+			},
+		},
+		Total: 3,
+	}
+	mockSvc.SetupSearchMedia(searchResults)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	session := NewSession()
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+
+	// Trigger search
+	runner.SimulateTab()
+	runner.SimulateEnter()
+
+	called := mockSvc.SearchMediaCalled()
+	require.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+
+	// Results with disambiguating tags should show them in the row
+	assert.True(t, runner.WaitForText("region:eu", 100*time.Millisecond), "region:eu tag should appear in results")
+	assert.True(t, runner.ContainsText("region:jp"), "region:jp tag should appear in results")
+
+	// Result without tags should still render cleanly (no spurious parens)
+	assert.True(t, runner.ContainsText("Streets of Rage"), "unduplicated title should appear")
 }
 
 func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {

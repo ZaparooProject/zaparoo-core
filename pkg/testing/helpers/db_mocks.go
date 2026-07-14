@@ -228,6 +228,65 @@ func (m *MockUserDBI) GetEnabledMappings() ([]database.Mapping, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) GetMediaUserData(systemID, path string) (database.MediaUserData, bool, error) {
+	args := m.Called(systemID, path)
+	data, ok := args.Get(0).(database.MediaUserData)
+	if !ok {
+		data = database.MediaUserData{}
+	}
+	found := args.Bool(1)
+	if err := args.Error(2); err != nil {
+		return data, found, fmt.Errorf("mock UserDBI get media user data failed: %w", err)
+	}
+	return data, found, nil
+}
+
+func (m *MockUserDBI) SetMediaUserFavorite(systemID, path string, favorite bool) error {
+	args := m.Called(systemID, path, favorite)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user favorite failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) SetMediaUserLauncherOverride(systemID, path, launcherID string) error {
+	args := m.Called(systemID, path, launcherID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user launcher override failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) UpsertMediaUserData(data *database.MediaUserData) error {
+	args := m.Called(data)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI upsert media user data failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteMediaUserData(systemID, path string) error {
+	args := m.Called(systemID, path)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete media user data failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ListMediaUserData() ([]database.MediaUserData, error) {
+	args := m.Called()
+	if data, ok := args.Get(0).([]database.MediaUserData); ok {
+		if err := args.Error(1); err != nil {
+			return data, fmt.Errorf("mock UserDBI list media user data failed: %w", err)
+		}
+		return data, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list media user data failed: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockUserDBI) UpdateZapLinkHost(host string, isZapScript int) error {
 	args := m.Called(host, isZapScript)
 	if err := args.Error(0); err != nil {
@@ -379,6 +438,30 @@ func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (i
 		return rowsHealed, fmt.Errorf("mock UserDBI heal timestamps failed: %w", err)
 	}
 	return rowsHealed, nil
+}
+
+func (m *MockUserDBI) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
+	args := m.Called(dayStart)
+	total, ok := args.Get(0).(int64)
+	if !ok {
+		total = 0
+	}
+	if err := args.Error(1); err != nil {
+		return total, fmt.Errorf("mock UserDBI sum media play time for day failed: %w", err)
+	}
+	return total, nil
+}
+
+func (m *MockUserDBI) SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error) {
+	args := m.Called(dayStart, profileID)
+	total, ok := args.Get(0).(int64)
+	if !ok {
+		total = 0
+	}
+	if err := args.Error(1); err != nil {
+		return total, fmt.Errorf("mock UserDBI sum media play time for day by profile failed: %w", err)
+	}
+	return total, nil
 }
 
 func (m *MockUserDBI) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
@@ -559,20 +642,6 @@ func (m *MockUserDBI) DeleteProfile(profileID string) error {
 	return nil
 }
 
-func (m *MockUserDBI) GetMediaHistoryByProfile(
-	profileID string, lastID int64, limit int,
-) ([]database.MediaHistoryEntry, error) {
-	args := m.Called(profileID, lastID, limit)
-	history, ok := args.Get(0).([]database.MediaHistoryEntry)
-	if !ok {
-		history = []database.MediaHistoryEntry{}
-	}
-	if err := args.Error(1); err != nil {
-		return history, fmt.Errorf("mock UserDBI get media history by profile failed: %w", err)
-	}
-	return history, nil
-}
-
 func (m *MockUserDBI) SetDeviceState(key, value string) error {
 	args := m.Called(key, value)
 	if err := args.Error(0); err != nil {
@@ -601,14 +670,116 @@ func (m *MockUserDBI) DeleteDeviceState(key string) error {
 	return nil
 }
 
+func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, error) {
+	args := m.Called(reason, manual)
+	info, ok := args.Get(0).(database.BackupInfo)
+	if !ok {
+		return database.BackupInfo{}, errors.New("mock UserDBI backup returned invalid backup info")
+	}
+	if err := args.Error(1); err != nil {
+		return info, fmt.Errorf("mock UserDBI backup failed: %w", err)
+	}
+	return info, nil
+}
+
+func (m *MockUserDBI) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo, bool, error) {
+	args := m.Called(maxAge)
+	info, ok := args.Get(0).(database.BackupInfo)
+	if !ok {
+		return database.BackupInfo{}, false, errors.New(
+			"mock UserDBI ensure recent backup returned invalid backup info",
+		)
+	}
+	created, ok := args.Get(1).(bool)
+	if !ok {
+		return info, false, errors.New("mock UserDBI ensure recent backup returned invalid created flag")
+	}
+	if err := args.Error(2); err != nil {
+		return info, created, fmt.Errorf("mock UserDBI ensure recent backup failed: %w", err)
+	}
+	return info, created, nil
+}
+
+func (m *MockUserDBI) ListBackups() ([]database.BackupInfo, error) {
+	args := m.Called()
+	if backups, ok := args.Get(0).([]database.BackupInfo); ok {
+		if err := args.Error(1); err != nil {
+			return backups, fmt.Errorf("mock UserDBI list backups failed: %w", err)
+		}
+		return backups, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list backups failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) RestoreBackup(name string) (database.RestoreInfo, error) {
+	args := m.Called(name)
+	info, ok := args.Get(0).(database.RestoreInfo)
+	if !ok {
+		return database.RestoreInfo{}, errors.New("mock UserDBI restore backup returned invalid restore info")
+	}
+	if err := args.Error(1); err != nil {
+		return info, fmt.Errorf("mock UserDBI restore backup failed: %w", err)
+	}
+	return info, nil
+}
+
+func (m *MockUserDBI) IntegrityReport() []string {
+	args := m.Called()
+	if report, ok := args.Get(0).([]string); ok {
+		return report
+	}
+	return nil
+}
+
+func (m *MockUserDBI) MarkCorrupt(reason string) {
+	m.Called(reason)
+}
+
+func (m *MockUserDBI) IsMarkedCorrupt() bool {
+	args := m.Called()
+	marked, ok := args.Get(0).(bool)
+	return ok && marked
+}
+
+func (m *MockUserDBI) ClearCorruptMarker() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI clear corrupt marker failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) NoteCorruption(err error) bool {
+	args := m.Called(err)
+	marked, ok := args.Get(0).(bool)
+	return ok && marked
+}
+
+func (m *MockUserDBI) RecoverFromCorruption() (database.RestoreInfo, error) {
+	args := m.Called()
+	info, ok := args.Get(0).(database.RestoreInfo)
+	if !ok {
+		return database.RestoreInfo{}, errors.New("mock UserDBI recover returned invalid restore info")
+	}
+	if err := args.Error(1); err != nil {
+		return info, fmt.Errorf("mock UserDBI recover from corruption failed: %w", err)
+	}
+	return info, nil
+}
+
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock
-
-	// Transaction tracking for tests
-	TransactionCount     int  // Total number of transactions begun
-	ActiveTransaction    bool // Whether a transaction is currently active
-	OperationsOutsideTxn int  // Count of operations performed outside transactions
+	ScrapeImageSystems    []string
+	TransactionCount      int
+	OperationsOutsideTxn  int
+	ActiveTransaction     bool
+	Optimizing            bool
+	BrowseCacheRebuilding bool
+	ScrapeImageChangesAll bool
 }
 
 // trackDatabaseOperation tracks whether operations happen inside or outside transactions
@@ -736,6 +907,19 @@ func (m *MockMediaDBI) CommitTransactionWithOptions(options database.Transaction
 	return nil
 }
 
+func (m *MockMediaDBI) FlushBatchInserters() error {
+	// Infrastructure call during indexing; treat as a no-op unless a test sets
+	// an explicit expectation, so callers don't have to wire it up everywhere.
+	if !m.hasExpectedCall("FlushBatchInserters") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) RollbackTransaction() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
@@ -743,6 +927,60 @@ func (m *MockMediaDBI) RollbackTransaction() error {
 	}
 	// Track transaction state for tests
 	m.ActiveTransaction = false
+	return nil
+}
+
+func (m *MockMediaDBI) StageScannedMedia(media *database.ScanStagedMedia) error {
+	// Per-file staging call during indexing; a no-op unless a test wires an
+	// explicit expectation, mirroring FlushBatchInserters.
+	if !m.hasExpectedCall("StageScannedMedia") {
+		return nil
+	}
+	args := m.Called(media)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) ReconcileStagedSystem(
+	ctx context.Context, systemID string, opts database.ScanReconcileOpts,
+) (database.ScanReconcileStats, error) {
+	// Default mirrors a system with no staged files and no DB rows: reconcile
+	// is a no-op and the scanner marks the system complete without a commit.
+	if !m.hasExpectedCall("ReconcileStagedSystem") {
+		return database.ScanReconcileStats{}, nil
+	}
+	args := m.Called(ctx, systemID, opts)
+	stats, ok := args.Get(0).(database.ScanReconcileStats)
+	if !ok {
+		stats = database.ScanReconcileStats{}
+	}
+	if err := args.Error(1); err != nil {
+		return stats, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return stats, nil
+}
+
+func (m *MockMediaDBI) ClearScanStage() error {
+	if !m.hasExpectedCall("ClearScanStage") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) SeedCanonicalTagDefinitions(ctx context.Context) error {
+	if !m.hasExpectedCall("SeedCanonicalTagDefinitions") {
+		return nil
+	}
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
 	return nil
 }
 
@@ -756,6 +994,73 @@ func (m *MockMediaDBI) WALCheckpoint() error {
 		return nil
 	}
 	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) QuickCheck() (bool, error) {
+	if !m.hasExpectation("QuickCheck") {
+		return true, nil
+	}
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return args.Bool(0), fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
+func (m *MockMediaDBI) IntegrityReport() []string {
+	if !m.hasExpectation("IntegrityReport") {
+		return []string{"ok"}
+	}
+	args := m.Called()
+	if report, ok := args.Get(0).([]string); ok {
+		return report
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) MarkCorrupt(reason string) {
+	if !m.hasExpectation("MarkCorrupt") {
+		return
+	}
+	m.Called(reason)
+}
+
+func (m *MockMediaDBI) IsMarkedCorrupt() bool {
+	if !m.hasExpectation("IsMarkedCorrupt") {
+		return false
+	}
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockMediaDBI) ClearCorruptMarker() error {
+	if !m.hasExpectation("ClearCorruptMarker") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) NoteCorruption(err error) bool {
+	if !m.hasExpectation("NoteCorruption") {
+		return false
+	}
+	args := m.Called(err)
+	return args.Bool(0)
+}
+
+func (m *MockMediaDBI) Recreate(keepBackup bool) error {
+	if !m.hasExpectation("Recreate") {
+		return nil
+	}
+	args := m.Called(keepBackup)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -901,6 +1206,33 @@ func (m *MockMediaDBI) GetTitlesWithPreFilter(
 func (m *MockMediaDBI) GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error) {
 	args := m.Called(ctx, systemID, path)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SearchMediaByProperty(
+	ctx context.Context,
+	systemID string,
+	property string,
+	value string,
+) ([]database.SearchResult, error) {
+	args := m.Called(ctx, systemID, property, value)
+	if results, ok := args.Get(0).([]database.SearchResult); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) HasMediaPropertyForPath(ctx context.Context, systemID, path, property string) (bool, error) {
+	args := m.Called(ctx, systemID, path, property)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
 }
 
 func (m *MockMediaDBI) GetTags(
@@ -1176,45 +1508,9 @@ func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, er
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error {
-	m.trackDatabaseOperation() // Track if called outside transaction
-	args := m.Called(mediaDBID, mediaTitleDBID, sortName)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockMediaDBI) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
-	m.trackDatabaseOperation() // Track if called outside transaction
-	args := m.Called(mediaDBID, parentDir)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
-	m.trackDatabaseOperation() // Track if called outside transaction
-	args := m.Called(mediaDBID)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
 func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID, tagDBID)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockMediaDBI) DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) error {
-	m.trackDatabaseOperation() // Track if called outside transaction
-	args := m.Called(mediaDBID, tagDBIDs)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -1378,6 +1674,22 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+// IsOptimizing backs the fields directly (no m.Called()) so the many callers of
+// the media status query don't each need to stub it. Tests that care about a
+// full RunBackgroundOptimization pass set Optimizing directly; tests exercising
+// the browse-cache self-heal use BeginBrowseCacheRebuild/EndBrowseCacheRebuild.
+func (m *MockMediaDBI) IsOptimizing() bool {
+	return m.Optimizing || m.BrowseCacheRebuilding
+}
+
+func (m *MockMediaDBI) BeginBrowseCacheRebuild() {
+	m.BrowseCacheRebuilding = true
+}
+
+func (m *MockMediaDBI) EndBrowseCacheRebuild() {
+	m.BrowseCacheRebuilding = false
+}
+
 func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
 	m.Called(statusCallback, pauser)
 }
@@ -1394,8 +1706,28 @@ func (m *MockMediaDBI) WaitForBackgroundOperations() {
 	m.Called()
 }
 
+func (m *MockMediaDBI) BeginRecovery() {
+	m.Called()
+}
+
+func (m *MockMediaDBI) EndRecovery() {
+	m.Called()
+}
+
 func (m *MockMediaDBI) TrackBackgroundOperation() {
 	m.Called()
+}
+
+func (m *MockMediaDBI) HasBackgroundOperations() bool {
+	if !m.hasExpectation("HasBackgroundOperations") {
+		return false
+	}
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockMediaDBI) SetIndexingConnBoost(active bool) {
+	m.Called(active)
 }
 
 func (m *MockMediaDBI) BackgroundOperationDone() {
@@ -1431,8 +1763,48 @@ func (m *MockMediaDBI) SetIndexingStatus(status string) error {
 }
 
 func (m *MockMediaDBI) GetIndexingStatus() (string, error) {
+	if !m.hasExpectation("GetIndexingStatus") {
+		return "", nil
+	}
 	args := m.Called()
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) GetIndexResumeAttempts() (int, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Int(0), nil
+}
+
+func (m *MockMediaDBI) IncrementIndexResumeAttempts() (int, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Int(0), nil
+}
+
+func (m *MockMediaDBI) ResetIndexResumeAttempts() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetIndexResumeCheckpoint() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetIndexResumeCheckpoint(checkpoint string) error {
+	args := m.Called(checkpoint)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) hasExpectation(method string) bool {
@@ -1540,22 +1912,6 @@ func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
-func (m *MockMediaDBI) BulkSetMediaMissing(dbids map[int]struct{}) error {
-	args := m.Called(dbids)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int) error {
-	args := m.Called(systemDBIDs)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
 func (m *MockMediaDBI) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	args := m.Called(ctx)
 	if id, ok := args.Get(0).(int64); ok {
@@ -1579,91 +1935,6 @@ func (m *MockMediaDBI) SetBatchSize(size int) {
 	m.Called(size)
 }
 
-// GetMax*ID methods for resume functionality
-func (m *MockMediaDBI) GetMaxSystemID() (int64, error) {
-	args := m.Called()
-	if id, ok := args.Get(0).(int64); ok {
-		if err := args.Error(1); err != nil {
-			return id, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return id, nil
-	}
-	if err := args.Error(1); err != nil {
-		return 0, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return 0, nil
-}
-
-func (m *MockMediaDBI) GetMaxTitleID() (int64, error) {
-	args := m.Called()
-	if id, ok := args.Get(0).(int64); ok {
-		if err := args.Error(1); err != nil {
-			return id, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return id, nil
-	}
-	if err := args.Error(1); err != nil {
-		return 0, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return 0, nil
-}
-
-func (m *MockMediaDBI) GetMaxMediaID() (int64, error) {
-	args := m.Called()
-	if id, ok := args.Get(0).(int64); ok {
-		if err := args.Error(1); err != nil {
-			return id, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return id, nil
-	}
-	if err := args.Error(1); err != nil {
-		return 0, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return 0, nil
-}
-
-func (m *MockMediaDBI) GetMaxTagTypeID() (int64, error) {
-	args := m.Called()
-	if id, ok := args.Get(0).(int64); ok {
-		if err := args.Error(1); err != nil {
-			return id, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return id, nil
-	}
-	if err := args.Error(1); err != nil {
-		return 0, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return 0, nil
-}
-
-func (m *MockMediaDBI) GetMaxTagID() (int64, error) {
-	args := m.Called()
-	if id, ok := args.Get(0).(int64); ok {
-		if err := args.Error(1); err != nil {
-			return id, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return id, nil
-	}
-	if err := args.Error(1); err != nil {
-		return 0, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return 0, nil
-}
-
-func (m *MockMediaDBI) GetMaxMediaTagID() (int64, error) {
-	args := m.Called()
-	if id, ok := args.Get(0).(int64); ok {
-		if err := args.Error(1); err != nil {
-			return id, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return id, nil
-	}
-	if err := args.Error(1); err != nil {
-		return 0, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return 0, nil
-}
-
 // GetAll* methods for populating scan state maps
 func (m *MockMediaDBI) GetAllSystems() ([]database.System, error) {
 	args := m.Called()
@@ -1679,162 +1950,18 @@ func (m *MockMediaDBI) GetAllSystems() ([]database.System, error) {
 	return []database.System{}, nil
 }
 
-func (m *MockMediaDBI) GetAllMediaTitles() ([]database.MediaTitle, error) {
-	args := m.Called()
-	if titles, ok := args.Get(0).([]database.MediaTitle); ok {
+func (m *MockMediaDBI) GetExistingMediaUserData(ctx context.Context) ([]database.MediaUserData, error) {
+	args := m.Called(ctx)
+	if data, ok := args.Get(0).([]database.MediaUserData); ok {
 		if err := args.Error(1); err != nil {
-			return titles, fmt.Errorf("mock operation failed: %w", err)
+			return data, fmt.Errorf("mock operation failed: %w", err)
 		}
-		return titles, nil
+		return data, nil
 	}
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return []database.MediaTitle{}, nil
-}
-
-func (m *MockMediaDBI) GetAllMedia() ([]database.Media, error) {
-	args := m.Called()
-	if media, ok := args.Get(0).([]database.Media); ok {
-		if err := args.Error(1); err != nil {
-			return media, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return media, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return []database.Media{}, nil
-}
-
-func (m *MockMediaDBI) GetAllTags() ([]database.Tag, error) {
-	args := m.Called()
-	if tags, ok := args.Get(0).([]database.Tag); ok {
-		if err := args.Error(1); err != nil {
-			return tags, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return tags, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return []database.Tag{}, nil
-}
-
-func (m *MockMediaDBI) GetAllTagTypes() ([]database.TagType, error) {
-	args := m.Called()
-	if tagTypes, ok := args.Get(0).([]database.TagType); ok {
-		if err := args.Error(1); err != nil {
-			return tagTypes, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return tagTypes, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return []database.TagType{}, nil
-}
-
-// GetTitlesWithSystems mock method for optimized JOIN query
-func (m *MockMediaDBI) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
-	args := m.Called()
-	if titles, ok := args.Get(0).([]database.TitleWithSystem); ok {
-		if err := args.Error(1); err != nil {
-			return titles, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return titles, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return []database.TitleWithSystem{}, nil
-}
-
-// GetMediaWithFullPath mock method for optimized JOIN query
-func (m *MockMediaDBI) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) {
-	args := m.Called()
-	if media, ok := args.Get(0).([]database.MediaWithFullPath); ok {
-		if err := args.Error(1); err != nil {
-			return media, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return media, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return []database.MediaWithFullPath{}, nil
-}
-
-// GetSystemsExcluding mock method for optimized selective indexing
-func (m *MockMediaDBI) GetSystemsExcluding(excludeSystemIDs []string) ([]database.System, error) {
-	// Try to get mock expectations, but don't fail if none are set
-	if len(m.ExpectedCalls) > 0 {
-		for _, call := range m.ExpectedCalls {
-			if call.Method == "GetSystemsExcluding" {
-				args := m.Called(excludeSystemIDs)
-				if systems, ok := args.Get(0).([]database.System); ok {
-					if err := args.Error(1); err != nil {
-						return systems, fmt.Errorf("mock operation failed: %w", err)
-					}
-					return systems, nil
-				}
-				if err := args.Error(1); err != nil {
-					return nil, fmt.Errorf("mock operation failed: %w", err)
-				}
-				return []database.System{}, nil
-			}
-		}
-	}
-	// Default behavior when no expectations are set - return empty slice
-	return []database.System{}, nil
-}
-
-// GetTitlesWithSystemsExcluding mock method for optimized selective indexing
-func (m *MockMediaDBI) GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]database.TitleWithSystem, error) {
-	// Try to get mock expectations, but don't fail if none are set
-	if len(m.ExpectedCalls) > 0 {
-		for _, call := range m.ExpectedCalls {
-			if call.Method == "GetTitlesWithSystemsExcluding" {
-				args := m.Called(excludeSystemIDs)
-				if titles, ok := args.Get(0).([]database.TitleWithSystem); ok {
-					if err := args.Error(1); err != nil {
-						return titles, fmt.Errorf("mock operation failed: %w", err)
-					}
-					return titles, nil
-				}
-				if err := args.Error(1); err != nil {
-					return nil, fmt.Errorf("mock operation failed: %w", err)
-				}
-				return []database.TitleWithSystem{}, nil
-			}
-		}
-	}
-	// Default behavior when no expectations are set - return empty slice
-	return []database.TitleWithSystem{}, nil
-}
-
-// GetMediaWithFullPathExcluding mock method for optimized selective indexing
-func (m *MockMediaDBI) GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]database.MediaWithFullPath, error) {
-	// Try to get mock expectations, but don't fail if none are set
-	if len(m.ExpectedCalls) > 0 {
-		for _, call := range m.ExpectedCalls {
-			if call.Method == "GetMediaWithFullPathExcluding" {
-				args := m.Called(excludeSystemIDs)
-				if media, ok := args.Get(0).([]database.MediaWithFullPath); ok {
-					if err := args.Error(1); err != nil {
-						return media, fmt.Errorf("mock operation failed: %w", err)
-					}
-					return media, nil
-				}
-				if err := args.Error(1); err != nil {
-					return nil, fmt.Errorf("mock operation failed: %w", err)
-				}
-				return []database.MediaWithFullPath{}, nil
-			}
-		}
-	}
-	// Default behavior when no expectations are set - return empty slice
-	return []database.MediaWithFullPath{}, nil
+	return []database.MediaUserData{}, nil
 }
 
 // GetTitlesBySystemID mock method for per-system lazy loading during resume
@@ -1885,34 +2012,19 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 	return []database.MediaWithFullPath{}, nil
 }
 
-// GetMediaTagsBySystemID mock method for per-system lazy loading during resume.
-func (m *MockMediaDBI) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
-	args := m.Called(systemID)
-	if links, ok := args.Get(0).([]database.MediaTagLink); ok {
-		if err := args.Error(1); err != nil {
-			return links, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return links, nil
+func (m *MockMediaDBI) GetMissingMediaCount() (int, error) {
+	if !m.hasExpectedCall("GetMissingMediaCount") {
+		return 0, nil
+	}
+	args := m.Called()
+	count, ok := args.Get(0).(int)
+	if !ok {
+		count = 0
 	}
 	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
+		return count, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return []database.MediaTagLink{}, nil
-}
-
-// GetScannerMediaTagsBySystemID mock method for per-system scanner-managed tag loading.
-func (m *MockMediaDBI) GetScannerMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
-	args := m.Called(systemID)
-	if links, ok := args.Get(0).([]database.MediaTagLink); ok {
-		if err := args.Error(1); err != nil {
-			return links, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return links, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return []database.MediaTagLink{}, nil
+	return count, nil
 }
 
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
@@ -1927,6 +2039,20 @@ func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 		return 0, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return 0, nil
+}
+
+func (m *MockMediaDBI) HasAnyMedia() (bool, error) {
+	args := m.Called()
+	if has, ok := args.Get(0).(bool); ok {
+		if err := args.Error(1); err != nil {
+			return has, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return has, nil
+	}
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return false, nil
 }
 
 func (m *MockMediaDBI) GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error) {
@@ -2218,7 +2344,12 @@ func ExpectTransactionRollback(mockDB sqlmock.Sqlmock) {
 //		userDB.AssertExpectations(t)
 //	}
 func NewMockUserDBI() *MockUserDBI {
-	return &MockUserDBI{}
+	m := &MockUserDBI{}
+	// A reindex always lists media user data to re-materialize the media.db
+	// projection. Default to an empty list so tests exercising NewNamesIndex
+	// don't each need to stub it; tests can override with their own expectation.
+	m.On("ListMediaUserData").Return([]database.MediaUserData{}, nil).Maybe()
+	return m
 }
 
 // NewMockMediaDBI creates a new mock MediaDBI interface for testing.
@@ -2242,6 +2373,10 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	// Planner-statistics refresh before cache builds; succeeds by default
 	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
+	// Per-system browse cache refresh after each system commit during indexing
+	mockMediaDB.On("PopulateBrowseCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	// Connection pool widening around an index run
+	mockMediaDB.On("SetIndexingConnBoost", mock.Anything).Maybe()
 	// Set default expectation for InvalidateSystemTagsCache to return success
 	// This is called during media inserts and should succeed by default
 	mockMediaDB.On("InvalidateSystemTagsCache", mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -2256,12 +2391,22 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("LoadCachedSlugSearchCache").Return(false, nil).Maybe()
 	mockMediaDB.On("IndexGeneration").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("BumpIndexGeneration").Return(int64(1), nil).Maybe()
+	mockMediaDB.On("GetIndexResumeAttempts").Return(0, nil).Maybe()
+	mockMediaDB.On("IncrementIndexResumeAttempts").Return(1, nil).Maybe()
+	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil).Maybe()
+	mockMediaDB.On("GetIndexResumeCheckpoint").Return("", nil).Maybe()
+	mockMediaDB.On("SetIndexResumeCheckpoint", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("UpdateMediaTitleName", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
+	// Disambiguation refresh runs per system at the end of indexing.
+	mockMediaDB.On("RecomputeSystemDisambiguation", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RecomputeTitleDisambiguation", mock.Anything, mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }
 
@@ -2369,6 +2514,22 @@ func (m *MockMediaDBI) BrowseDirectories(
 	return []database.BrowseDirectoryResult{}, nil
 }
 
+func (m *MockMediaDBI) BrowseDirCount(
+	ctx context.Context, opts database.BrowseDirCountOptions,
+) (int, error) {
+	args := m.Called(ctx, opts)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 func (m *MockMediaDBI) BrowseFiles(
 	ctx context.Context, opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
@@ -2399,6 +2560,22 @@ func (m *MockMediaDBI) BrowseFileCount(
 		return 0, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return 0, nil
+}
+
+func (m *MockMediaDBI) BrowseIndex(
+	ctx context.Context, opts database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	args := m.Called(ctx, opts)
+	if result, ok := args.Get(0).(database.BrowseIndexResult); ok {
+		if err := args.Error(1); err != nil {
+			return result, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.BrowseIndexResult{}, nil
 }
 
 func (m *MockMediaDBI) BrowseVirtualSchemes(
@@ -2475,6 +2652,24 @@ func (m *MockMediaDBI) PopulateBrowseCache(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) PopulateBrowseCacheForSystems(ctx context.Context, systemIDs []string) error {
+	args := m.Called(ctx, systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) BrowseCacheNeedsRebuild(
+	ctx context.Context,
+) (bool, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
 }
 
 // --- Scraper support methods ---
@@ -2610,6 +2805,22 @@ func (m *MockMediaDBI) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID 
 	return nil
 }
 
+func (m *MockMediaDBI) RecomputeTitleDisambiguation(ctx context.Context, titleDBIDs []int64) error {
+	args := m.Called(ctx, titleDBIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) RecomputeSystemDisambiguation(ctx context.Context, systemDBIDs []int64) error {
+	args := m.Called(ctx, systemDBIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) UpsertMediaTitleProperties(
 	ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty,
 ) error {
@@ -2638,6 +2849,22 @@ func (m *MockMediaDBI) ApplyScrapeResult(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) ConsumeScrapeImageChanges() ([]string, bool) {
+	if m.hasExpectedCall("ConsumeScrapeImageChanges") {
+		args := m.Called()
+		systems, ok := args.Get(0).([]string)
+		if !ok {
+			return nil, args.Bool(1)
+		}
+		return systems, args.Bool(1)
+	}
+	systems := m.ScrapeImageSystems
+	all := m.ScrapeImageChangesAll
+	m.ScrapeImageSystems = nil
+	m.ScrapeImageChangesAll = false
+	return systems, all
 }
 
 func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(

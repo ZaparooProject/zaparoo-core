@@ -123,13 +123,14 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
-	fs       afero.Fs
-	appPath  string
-	cfgPath  string
-	authPath string
-	vals     Values
-	defaults Values
-	mu       syncutil.RWMutex
+	fs                      afero.Fs
+	appPath                 string
+	cfgPath                 string
+	authPath                string
+	customLaunchersExternal []LaunchersCustom
+	vals                    Values
+	defaults                Values
+	mu                      syncutil.RWMutex
 }
 
 // getFs returns the instance's filesystem, defaulting to the OS filesystem
@@ -247,13 +248,11 @@ func (c *Instance) Load() error {
 	oldVals := c.vals
 	c.vals = c.defaults
 
-	// Save mappings and custom launchers — they're normally loaded from
-	// separate files via LoadMappings/LoadCustomLaunchers, not config.toml.
-	// Save() strips them before marshal, so after a round-trip they'd be
-	// empty. Restore the old values only when the TOML didn't provide new
-	// ones (a user might hand-edit config.toml to include them).
+	// Save mappings — they're normally loaded from separate files via
+	// LoadMappings, not config.toml. Save() strips them before marshal, so
+	// after a round-trip they'd be empty. Restore old values only when TOML
+	// did not provide new ones.
 	savedMappings := oldVals.Mappings
-	savedCustomLaunchers := oldVals.Launchers.Custom
 
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
@@ -262,9 +261,6 @@ func (c *Instance) Load() error {
 
 	if len(c.vals.Mappings.Entry) == 0 {
 		c.vals.Mappings = savedMappings
-	}
-	if len(c.vals.Launchers.Custom) == 0 {
-		c.vals.Launchers.Custom = savedCustomLaunchers
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {
@@ -302,6 +298,15 @@ func (c *Instance) LoadTOML(data string) error {
 func (c *Instance) applyTOML(data string) error {
 	if err := toml.Unmarshal([]byte(data), &c.vals); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	c.vals.Launchers.Custom = validateCustomLaunchers(
+		c.vals.Launchers.Custom,
+		nil,
+		"config.toml",
+	)
+	if err := validateLauncherDefaults(c.vals.Launchers.Default); err != nil {
+		return fmt.Errorf("invalid launcher defaults: %w", err)
 	}
 
 	// prepare allow files regexes

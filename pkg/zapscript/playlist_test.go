@@ -198,7 +198,7 @@ func TestCmdPlaylistOpen_NoArgs(t *testing.T) {
 		{
 			name:           "no args with no active playlist returns error",
 			activePlaylist: nil,
-			expectedError:  "no active playlist to open",
+			expectedError:  "no playlist active",
 		},
 	}
 

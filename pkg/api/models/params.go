@@ -20,7 +20,11 @@
 //nolint:revive // custom validation tags (letter, duration, etc.) are unknown to revive
 package models
 
-import "github.com/ZaparooProject/go-zapscript"
+import (
+	"encoding/json"
+
+	"github.com/ZaparooProject/go-zapscript"
+)
 
 type SearchParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
@@ -42,9 +46,19 @@ type BrowseParams struct {
 	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 }
 
+type SystemsParams struct {
+	All bool `json:"all,omitempty"`
+}
+
 type MediaIndexParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	// Rebuild discards the media database entirely and indexes from scratch.
+	// Scraped metadata is lost and must be re-scraped; user data (favourites,
+	// launcher overrides) lives in UserDB and is re-applied after indexing.
+	// Incompatible with a systems filter: a fresh database indexed selectively
+	// would silently drop every other system's media.
+	Rebuild *bool `json:"rebuild,omitempty"`
 }
 
 type RunParams struct {
@@ -60,6 +74,12 @@ type RunScriptParams struct {
 	Cmds      []zapscript.ZapScriptCmd `json:"cmds"`
 	ZapScript int                      `json:"zapscript"`
 	Unsafe    bool                     `json:"unsafe"`
+}
+
+type AllMappingsParams struct {
+	// IncludeReadOnly also returns read-only mappings loaded from the mappings
+	// folder. Defaults to false so older clients keep receiving DB mappings only.
+	IncludeReadOnly bool `json:"includeReadOnly,omitempty"`
 }
 
 type AddMappingParams struct {
@@ -88,6 +108,10 @@ type UpdateMappingParams struct {
 type ReaderWriteParams struct {
 	ReaderID *string `json:"readerId,omitempty"`
 	Text     string  `json:"text" validate:"required"`
+}
+
+type BackupRestoreParams struct {
+	Name string `json:"name" validate:"required"`
 }
 
 type ReaderWriteCancelParams struct {
@@ -247,8 +271,21 @@ type MediaTagsUpdateParams struct {
 	Remove  []string `json:"remove,omitempty" validate:"omitempty,dive,min=1"`
 }
 
+type MediaMetaUpdateParams struct {
+	MediaID *int64          `json:"mediaId,omitempty"`
+	System  string          `json:"system" validate:"omitempty,min=1"`
+	Path    string          `json:"path"   validate:"omitempty,min=1"`
+	Media   json.RawMessage `json:"media,omitempty"`
+}
+
 type MediaImageParams struct {
-	MediaID    *int64   `json:"mediaId,omitempty"`
+	MediaID *int64 `json:"mediaId,omitempty"`
+	// MaxSize is a hint for the longest edge (in pixels) of the returned image.
+	// The server resizes down to fit a MaxSize×MaxSize box and caches the result;
+	// omit it to receive the full-size image. Requests are snapped to a small set
+	// of standard sizes server-side, so the returned image may be larger than
+	// requested — clients should downscale to their final display size.
+	MaxSize    *int32   `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
 	System     string   `json:"system"            validate:"omitempty,min=1"`
 	Path       string   `json:"path"              validate:"omitempty,min=1"`
 	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`

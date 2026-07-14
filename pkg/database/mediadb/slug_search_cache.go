@@ -1207,7 +1207,7 @@ func (c *SlugSearchCache) TrigramIndexSize() int {
 
 // RebuildSlugSearchCache builds or rebuilds the in-memory slug search cache.
 func (db *MediaDB) RebuildSlugSearchCache() error {
-	cache, err := buildSlugSearchCache(db.ctx, db.sql)
+	cache, err := buildSlugSearchCache(db.ctx, db.sql.Load())
 	if err != nil {
 		return fmt.Errorf("failed to build slug search cache: %w", err)
 	}
@@ -1222,7 +1222,7 @@ func (db *MediaDB) RebuildSlugSearchCache() error {
 }
 
 func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
-	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql, systemIDs)
+	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql.Load(), systemIDs)
 	if err != nil {
 		return fmt.Errorf("failed to build selective slug search cache: %w", err)
 	}

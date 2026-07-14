@@ -80,6 +80,16 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 
 	row := resolved[0].Row
 	resolveDuration := time.Since(resolveStarted)
+
+	// Write the durable truth (UserDB) before the media.db projection. add/remove
+	// are restricted to user:favorite, and media.db applies removes before adds,
+	// so the net favourite state is "any add present". If the projection write
+	// below fails the truth is still saved and the next reindex re-materializes it.
+	favorite := len(add) > 0
+	if udErr := setMediaUserFavorite(&env, row.System.SystemID, row.Path, favorite); udErr != nil {
+		return nil, udErr
+	}
+
 	updateStarted := time.Now()
 	if updateErr := updateMediaUserTags(env.Database.MediaDB, row.DBID, remove, add); updateErr != nil {
 		return nil, updateErr

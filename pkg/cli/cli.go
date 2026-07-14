@@ -22,6 +22,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -52,6 +53,9 @@ type Flags struct {
 	ShowPicker *string
 	Reload     *bool
 	Pair       *bool
+	Backup     *bool
+	Backups    *bool
+	Restore    *string
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -102,6 +106,21 @@ func SetupFlags() *Flags {
 			false,
 			"start pairing flow and display PIN for client to enter",
 		),
+		Backup: flag.Bool(
+			"backup",
+			false,
+			"create a backup of the database",
+		),
+		Backups: flag.Bool(
+			"backups",
+			false,
+			"list available database backups",
+		),
+		Restore: flag.String(
+			"restore",
+			"",
+			"restore the database from the named backup",
+		),
 	}
 }
 
@@ -126,6 +145,18 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	}
 }
 
+// logClientCommandError logs a failure from a CLI local-client command. A
+// refused connection means the Zaparoo service isn't running — an expected user
+// situation already surfaced on stderr — so it logs at Warn to stay out of
+// Sentry; any other failure logs at Error.
+func logClientCommandError(err error, msg string) {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		log.Warn().Err(err).Msg(msg)
+		return
+	}
+	log.Error().Err(err).Msg(msg)
+}
+
 func runFlag(cfg *config.Instance, value string) {
 	data, err := json.Marshal(&models.RunParams{
 		Text: &value,
@@ -137,7 +168,7 @@ func runFlag(cfg *config.Instance, value string) {
 
 	_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(data))
 	if err != nil {
-		log.Error().Err(err).Msg("error running")
+		logClientCommandError(err, "error running")
 		_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
 		os.Exit(1)
 	}
@@ -175,7 +206,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		_, err = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
 		if err != nil {
-			log.Error().Err(err).Msg("error writing tag")
+			logClientCommandError(err, "error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
 			enableRun()
 			os.Exit(1)
@@ -201,7 +232,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			cfg, models.NotificationTokensAdded,
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("error waiting for notification")
+			logClientCommandError(err, "error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
 			close(sigs)
 			enableRun()
@@ -238,7 +269,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		resp, err := client.LocalClient(context.Background(), cfg, method, params)
 		if err != nil {
-			log.Error().Err(err).Msg("error calling API")
+			logClientCommandError(err, "error calling API")
 			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
 			os.Exit(1)
 		}
@@ -282,19 +313,61 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		}
 
 		_, _ = fmt.Fprint(os.Stderr, "Pairing successful!\n")
-		sanitizedResult := strings.ReplaceAll(result, "\n", "")
-		sanitizedResult = strings.ReplaceAll(sanitizedResult, "\r", "")
-		_, _ = fmt.Println(sanitizedResult)
+		_, _ = fmt.Println(sanitizeForOutput(result))
 		os.Exit(0)
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 		if err != nil {
-			log.Error().Err(err).Msg("error reloading settings")
+			logClientCommandError(err, "error reloading settings")
 			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case *f.Backup:
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackup, "")
+		if err != nil {
+			logClientCommandError(err, "error creating backup")
+			_, _ = fmt.Fprintf(os.Stderr, "Error creating backup: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(resp))
+		os.Exit(0)
+	case *f.Backups:
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackupList, "")
+		if err != nil {
+			logClientCommandError(err, "error listing backups")
+			_, _ = fmt.Fprintf(os.Stderr, "Error listing backups: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(resp))
+		os.Exit(0)
+	case isFlagPassed("restore"):
+		if *f.Restore == "" {
+			_, _ = fmt.Fprint(os.Stderr, "Error: restore flag requires a backup name\n")
+			os.Exit(1)
+		}
+		data, err := json.Marshal(&models.BackupRestoreParams{Name: *f.Restore})
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
+			os.Exit(1)
+		}
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackupRestore, string(data))
+		if err != nil {
+			logClientCommandError(err, "error restoring backup")
+			_, _ = fmt.Fprintf(os.Stderr, "Error restoring backup: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Println(sanitizeForOutput(resp))
+		os.Exit(0)
 	}
+}
+
+// sanitizeForOutput strips carriage returns and newlines from a server response
+// before it is printed, so a value carried through from a remote source cannot
+// inject extra lines into terminal output.
+func sanitizeForOutput(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	return strings.ReplaceAll(s, "\n", "")
 }
 
 // Setup initializes the user config and logging. Returns a user config object.

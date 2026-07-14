@@ -967,11 +967,13 @@ func (s *Service) acquireStartGate() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening start gate lock: %w", err)
 	}
+	//nolint:gosec // File descriptor fits in int on supported platforms.
 	if flockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); flockErr != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("acquiring start gate lock: %w", flockErr)
 	}
 	return func() {
+		//nolint:gosec // File descriptor fits in int on supported platforms.
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 	}, nil

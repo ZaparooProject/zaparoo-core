@@ -41,6 +41,7 @@ var CanonicalIsExclusive = map[TagType]bool{
 	TagTypeExtension:   true,
 	TagTypeMedia:       true,
 	TagTypeArcadeBoard: true,
+	TagTypeProtection:  true, // one copy-protection state per romset (cabinet stays additive)
 
 	// Sequential ordering types
 	TagTypeSeason:  true,
@@ -52,6 +53,9 @@ var CanonicalIsExclusive = map[TagType]bool{
 	// Single status types
 	TagTypeUnfinished: true,
 	TagTypeCopyright:  true,
+
+	// One build/romset date per file
+	TagTypeBuildDate: true,
 
 	// Game family/series — one authoritative value per title
 	TagTypeGameFamily: true,

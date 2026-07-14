@@ -23,11 +23,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,23 +53,13 @@ func TestCalculateDailyUsage_ProfileScoped(t *testing.T) {
 
 	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
 	todayStart := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
-	startTime := now.Add(-2 * time.Hour)
-	endTime := now.Add(-1 * time.Hour)
 	profileID := "kid-a"
 
 	mockDB := testhelpers.NewMockUserDBI()
-	// Only the profile-scoped query may be used; an unscoped GetMediaHistory
-	// call would fail the mock expectations.
-	mockDB.On("GetMediaHistoryByProfile", profileID, int64(0), 100).
-		Return([]database.MediaHistoryEntry{
-			{
-				DBID:      1,
-				StartTime: startTime,
-				EndTime:   &endTime,
-				PlayTime:  3600,
-				ProfileID: &profileID,
-			},
-		}, nil)
+	// Only the profile-scoped sum may be used; an unscoped
+	// SumMediaPlayTimeForDay call would fail the mock expectations.
+	mockDB.On("SumMediaPlayTimeForDayByProfile", todayStart, profileID).
+		Return(int64(3600), nil)
 
 	tm := NewLimitsManager(
 		&database.Database{UserDB: mockDB}, nil, &config.Instance{},
@@ -86,16 +78,11 @@ func TestCalculateDailyUsage_NoProfile_SumsAllHistory(t *testing.T) {
 
 	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
 	todayStart := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
-	startTime := now.Add(-2 * time.Hour)
-	endTime := now.Add(-1 * time.Hour)
 
 	mockDB := testhelpers.NewMockUserDBI()
-	// Without an active profile, the unscoped query is used — device-level
+	// Without an active profile, the unscoped sum is used — device-level
 	// accounting is byte-identical to pre-profile behavior.
-	mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
-		Return([]database.MediaHistoryEntry{
-			{DBID: 1, StartTime: startTime, EndTime: &endTime, PlayTime: 1800},
-		}, nil)
+	mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(1800), nil)
 
 	tm := NewLimitsManager(
 		&database.Database{UserDB: mockDB}, nil, &config.Instance{},
@@ -112,21 +99,12 @@ func TestCheckBeforeLaunch_ProfileLimitsWithGlobalDisabled(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
-	startTime := now.Add(-3 * time.Hour)
-	endTime := now.Add(-1 * time.Hour)
 	profileID := "kid-a"
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistoryByProfile", profileID, int64(0), 100).
-		Return([]database.MediaHistoryEntry{
-			{
-				DBID:      1,
-				StartTime: startTime,
-				EndTime:   &endTime,
-				PlayTime:  7200, // 2 hours played today by this profile
-				ProfileID: &profileID,
-			},
-		}, nil)
+	// 2 hours played today by this profile.
+	mockDB.On("SumMediaPlayTimeForDayByProfile", mock.AnythingOfType("time.Time"), profileID).
+		Return(int64(7200), nil)
 
 	// Global config has limits disabled — the profile override alone must
 	// enforce its 1 hour daily limit (the issue #883 use case).
@@ -140,9 +118,10 @@ func TestCheckBeforeLaunch_ProfileLimitsWithGlobalDisabled(t *testing.T) {
 	)
 	tm.SetLimitsProvider(stubProvider{enabled: true, daily: time.Hour, profileID: profileID})
 
-	err = tm.CheckBeforeLaunch()
+	reason, err := tm.CheckBeforeLaunch()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daily playtime limit reached")
+	assert.Equal(t, models.PlaytimeLimitReasonDaily, reason)
 }
 
 func TestCheckBeforeLaunch_ProviderDisabledSkipsChecks(t *testing.T) {
@@ -156,7 +135,9 @@ func TestCheckBeforeLaunch_ProviderDisabledSkipsChecks(t *testing.T) {
 	)
 	tm.SetLimitsProvider(stubProvider{enabled: false, daily: time.Nanosecond})
 
-	require.NoError(t, tm.CheckBeforeLaunch())
+	reason, err := tm.CheckBeforeLaunch()
+	require.NoError(t, err)
+	assert.Empty(t, reason)
 	mockDB.AssertExpectations(t)
 }
 

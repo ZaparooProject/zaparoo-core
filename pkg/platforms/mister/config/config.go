@@ -3,9 +3,7 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 )
@@ -21,11 +19,6 @@ const (
 	ScriptsDir         = SDRootDir + "/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
 	LinuxDir           = SDRootDir + "/linux"
-	MainPickerDir      = "/tmp/PICKERITEMS"
-	MainPickerSelected = "/tmp/PICKERSELECTED"
-	MainFeaturesFile   = "/tmp/MAINFEATURES"
-	MainFeaturePicker  = "PICKER"
-	MainFeatureNotice  = "NOTICE"
 	ScreenshotsDir     = SDRootDir + "/screenshots"
 	WallpapersDir      = SDRootDir + "/wallpapers"
 	MenuCore           = "MENU"
@@ -44,27 +37,6 @@ const (
 )
 
 var UpdateAllDownloaderCACert = filepath.Join(ScriptsDir, ".config", "downloader", "cacert.pem")
-
-func MainHasFeature(feature string) bool {
-	if _, err := os.Stat(MainFeaturesFile); os.IsNotExist(err) {
-		return false
-	}
-
-	contents, err := os.ReadFile(MainFeaturesFile)
-	if err != nil {
-		return false
-	}
-
-	features := strings.Split(string(contents), ",")
-
-	for _, f := range features {
-		if strings.EqualFold(f, feature) {
-			return true
-		}
-	}
-
-	return false
-}
 
 var GamesFolders = []string{
 	"/media/usb0/games",

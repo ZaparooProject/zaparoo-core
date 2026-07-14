@@ -21,8 +21,6 @@ package mediascanner
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -36,8 +34,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/gameid"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
-	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
 
@@ -53,484 +52,6 @@ type PathFragmentParams struct {
 	StripLeadingNumbers bool
 }
 
-// We can't batch effectively without a sense of relationships
-// Instead of indexing string columns, use an in-memory map to track records to
-// insert IDs.
-// Batching should be able to run with an assumed IDs
-// database.ScanState and DB transactions allow accumulation
-
-// FlushScanStateMaps clears the per-system in-memory maps (TitleIDs, MediaIDs)
-// to free memory after a system finishes indexing.
-//
-// IMPORTANT: This must only be called BETWEEN systems, never mid-system. Both
-// TitleIDs and MediaIDs hold dedup state for the current system; clearing them
-// while still inside the per-file loop would cause:
-//   - InsertMediaTitle UNIQUE failures for multi-file titles (e.g. multi-disc
-//     games sharing one MediaTitle row), silently dropping the later files
-//   - In persistent mode, InsertMedia UNIQUE failures for already-existing
-//     media, leaving stale MissingMedia entries that get falsely marked missing
-//
-// Cross-system safety: MediaKey/TitleKey are systemID-prefixed, so clearing
-// these maps between systems can never collide with the next system's keys.
-// In resume/persistent mode the next system's data is reloaded by
-// PopulateScanStateForSystem / PopulatePersistentScanStateForSystem.
-//
-// Other maps are intentionally NOT cleared:
-//   - SystemIDs preserved — DO NOT clear (UNIQUE violations with batch inserts)
-//   - TagIDs / TagTypeIDs preserved — reused across systems
-//   - MissingMedia preserved — reinitialized per system before loading that
-//     system's existing media and finalized immediately after that system ends
-func FlushScanStateMaps(ss *database.ScanState) {
-	// Clear maps by deleting all keys instead of reallocating
-	// This reuses the underlying memory allocation
-	for k := range ss.TitleIDs {
-		delete(ss.TitleIDs, k)
-	}
-	for k := range ss.MediaIDs {
-		delete(ss.MediaIDs, k)
-	}
-	for k := range ss.MediaTitleIDs {
-		delete(ss.MediaTitleIDs, k)
-	}
-	for k := range ss.MediaSortNames {
-		delete(ss.MediaSortNames, k)
-	}
-	for mediaID := range ss.MediaTagIDs {
-		delete(ss.MediaTagIDs, mediaID)
-	}
-	for mediaID := range ss.MediaParentDirs {
-		delete(ss.MediaParentDirs, mediaID)
-	}
-}
-
-func AddMediaPath(
-	db database.MediaDBI,
-	ss *database.ScanState,
-	systemID string,
-	path string,
-	providedName string,
-	noExt bool,
-	stripLeadingNumbers bool,
-	cfg *config.Instance,
-	mediaType slugs.MediaType,
-) (titleIndex, mediaIndex int, err error) {
-	prefixPolicy := browseprefix.Policy{}
-	if stripLeadingNumbers {
-		prefixPolicy = browseprefix.Policy{Kind: browseprefix.KindRank, Enabled: true}
-	}
-	return AddMediaPathWithPrefixPolicy(db, ss, systemID, path, providedName, noExt, prefixPolicy, cfg, mediaType)
-}
-
-func AddMediaPathWithPrefixPolicy(
-	db database.MediaDBI,
-	ss *database.ScanState,
-	systemID string,
-	path string,
-	providedName string,
-	noExt bool,
-	prefixPolicy browseprefix.Policy,
-	cfg *config.Instance,
-	mediaType slugs.MediaType,
-) (titleIndex, mediaIndex int, err error) {
-	existingMedia := false
-	pf := GetPathFragments(&PathFragmentParams{
-		Config:       cfg,
-		Path:         path,
-		NoExt:        noExt,
-		PrefixPolicy: prefixPolicy,
-		SystemID:     systemID,
-		MediaType:    mediaType,
-		ProvidedName: providedName,
-	})
-
-	systemIndex := 0
-	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
-		ss.SystemsIndex++
-		systemIndex = ss.SystemsIndex
-		_, err := db.InsertSystem(database.System{
-			DBID:     int64(systemIndex),
-			SystemID: systemID,
-			Name:     systemID,
-		})
-		if err != nil {
-			ss.SystemsIndex-- // Rollback index increment on failure
-			return 0, 0, fmt.Errorf("error inserting system %s: %w", systemID, err)
-		}
-		ss.SystemIDs[systemID] = systemIndex
-	} else {
-		systemIndex = foundSystemIndex
-	}
-
-	titleKey := database.TitleKey(systemID, pf.Slug)
-	canonicalTitleName := pf.Title
-	displayTitleName := pf.DisplayTitle
-	if displayTitleName == "" {
-		displayTitleName = canonicalTitleName
-	}
-	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
-		ss.TitlesIndex++
-		titleIndex = ss.TitlesIndex
-
-		// Generate slug metadata from pre-computed tokens (avoids redundant slugification)
-		metadata := mediadb.GenerateSlugMetadataFromTokens(mediaType, pf.Title, pf.Slug, pf.SlugTokens)
-
-		_, err := db.InsertMediaTitle(&database.MediaTitle{
-			DBID:          int64(titleIndex),
-			Slug:          pf.Slug,
-			Name:          pf.Title,
-			SystemDBID:    int64(systemIndex),
-			SlugLength:    metadata.SlugLength,
-			SlugWordCount: metadata.SlugWordCount,
-			SecondarySlug: sql.NullString{String: metadata.SecondarySlug, Valid: metadata.SecondarySlug != ""},
-		})
-		if err != nil {
-			ss.TitlesIndex-- // Rollback index increment on failure
-			return 0, 0, fmt.Errorf("error inserting media title %s: %w", pf.Title, err)
-		}
-		ss.TitleIDs[titleKey] = titleIndex
-		if ss.TitleNames != nil {
-			ss.TitleNames[titleIndex] = canonicalTitleName
-		}
-	} else {
-		titleIndex = foundTitleIndex
-	}
-
-	mediaKey := database.MediaKey(systemID, pf.Path)
-	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
-		ss.MediaIndex++
-		mediaIndex = ss.MediaIndex
-
-		parentDir := mediadb.ParentDirForMediaPath(pf.Path)
-
-		_, err := db.InsertMedia(database.Media{
-			DBID:           int64(mediaIndex),
-			Path:           pf.Path,
-			ParentDir:      parentDir,
-			SortName:       displayTitleName,
-			MediaTitleDBID: int64(titleIndex),
-			SystemDBID:     int64(systemIndex),
-		})
-		if err != nil {
-			ss.MediaIndex-- // Rollback index increment on failure
-			return 0, 0, fmt.Errorf("error inserting media %s: %w", pf.Path, err)
-		}
-		ss.MediaIDs[mediaKey] = mediaIndex
-		if ss.MediaTitleIDs != nil {
-			ss.MediaTitleIDs[mediaIndex] = titleIndex
-		}
-		if ss.MediaSortNames != nil {
-			ss.MediaSortNames[mediaIndex] = displayTitleName
-		}
-		if ss.MediaParentDirs != nil {
-			ss.MediaParentDirs[mediaIndex] = parentDir
-		}
-	} else {
-		existingMedia = true
-		mediaIndex = foundMediaIndex
-		parentDir := mediadb.ParentDirForMediaPath(pf.Path)
-		// Mark as found during persistent indexing (not missing)
-		if ss.MissingMedia != nil {
-			delete(ss.MissingMedia, foundMediaIndex)
-		}
-		if ss.MediaParentDirs != nil {
-			existingParentDir, ok := ss.MediaParentDirs[mediaIndex]
-			if !ok || existingParentDir != parentDir {
-				if err := db.UpdateMediaParentDir(int64(mediaIndex), parentDir); err != nil {
-					return 0, 0, fmt.Errorf("error updating media parent dir %s: %w", pf.Path, err)
-				}
-				ss.MediaParentDirs[mediaIndex] = parentDir
-			}
-		}
-		_, needsSortName := ss.MediaNeedsSortName[mediaIndex]
-		existingTitleIndex, titleKnown := ss.MediaTitleIDs[mediaIndex]
-		existingSortName, sortNameKnown := ss.MediaSortNames[mediaIndex]
-		sortNameChanged := ss.MediaSortNames != nil && (!sortNameKnown || existingSortName != displayTitleName)
-		if !titleKnown || existingTitleIndex != titleIndex || needsSortName || sortNameChanged {
-			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), displayTitleName); err != nil {
-				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
-			}
-			if ss.MediaTitleIDs != nil {
-				ss.MediaTitleIDs[mediaIndex] = titleIndex
-			}
-			if ss.MediaSortNames != nil {
-				ss.MediaSortNames[mediaIndex] = displayTitleName
-			}
-			if ss.MediaNeedsSortName != nil {
-				delete(ss.MediaNeedsSortName, mediaIndex)
-			}
-		}
-	}
-
-	desiredTagIDs := make(map[int]struct{})
-	extensionTagIndex := 0
-
-	// Extract extension tag only if filename tags are enabled
-	if pf.Ext != "" && (cfg == nil || cfg.FilenameTags()) {
-		// Remove leading dot from extension for tag storage
-		extWithoutDot := strings.TrimPrefix(pf.Ext, ".")
-		// Use composite key for extension tags to avoid collisions
-		extensionKey := database.TagKey(string(tags.TagTypeExtension), extWithoutDot)
-		if _, ok := ss.TagIDs[extensionKey]; !ok {
-			// Get or create the Extension tag type ID dynamically
-			extensionTypeID, found := ss.TagTypeIDs[string(tags.TagTypeExtension)]
-			if !found {
-				// Extension tag type doesn't exist in cache, try to look it up
-				existingTagType, getErr := db.FindTagType(database.TagType{Type: string(tags.TagTypeExtension)})
-				if getErr != nil || existingTagType.DBID == 0 {
-					return 0, 0, fmt.Errorf(
-						"extension tag type not found and not in cache "+
-							"(should not happen after SeedCanonicalTags): %w",
-						getErr,
-					)
-				}
-				extensionTypeID = int(existingTagType.DBID)
-				ss.TagTypeIDs[string(tags.TagTypeExtension)] = extensionTypeID
-			}
-
-			ss.TagsIndex++
-			tagIndex := ss.TagsIndex
-			_, err := db.InsertTag(database.Tag{
-				DBID:     int64(tagIndex),
-				Tag:      extWithoutDot,
-				TypeDBID: int64(extensionTypeID),
-			})
-			if err != nil {
-				ss.TagsIndex-- // Rollback index increment on failure
-				log.Error().Err(err).Msgf("error inserting tag extension: %s", extWithoutDot)
-			} else {
-				ss.TagIDs[extensionKey] = tagIndex
-			}
-		}
-
-		// Link the extension tag to the media
-		extensionTagIndex = ss.TagIDs[extensionKey]
-		if extensionTagIndex > 0 {
-			desiredTagIDs[extensionTagIndex] = struct{}{}
-		}
-	}
-
-	for _, tagStr := range pf.Tags {
-		tagIndex := 0
-
-		if foundTagIndex, ok := ss.TagIDs[tagStr]; ok {
-			tagIndex = foundTagIndex
-		}
-
-		// Dynamically create open-ended string tags for rev, developer, publisher, and credit.
-		// These types allow arbitrary values (e.g. "rev:7-2502", "credit:nintendo-r-and-d1").
-		if tagIndex == 0 {
-			var dynType string
-			switch {
-			case strings.HasPrefix(tagStr, string(tags.TagTypeRev)+":"):
-				dynType = string(tags.TagTypeRev)
-			case strings.HasPrefix(tagStr, string(tags.TagTypeDeveloper)+":"):
-				dynType = string(tags.TagTypeDeveloper)
-			case strings.HasPrefix(tagStr, string(tags.TagTypePublisher)+":"):
-				dynType = string(tags.TagTypePublisher)
-			case strings.HasPrefix(tagStr, string(tags.TagTypeCredit)+":"):
-				dynType = string(tags.TagTypeCredit)
-			}
-			if dynType != "" {
-				tagValue := strings.TrimPrefix(tagStr, dynType+":")
-				typeID, found := ss.TagTypeIDs[dynType]
-				if !found {
-					existingTagType, getErr := db.FindTagType(database.TagType{Type: dynType})
-					if getErr != nil || existingTagType.DBID == 0 {
-						log.Error().Err(getErr).Msgf(
-							"%s tag type not found (should not happen after SeedCanonicalTags)", dynType)
-						continue
-					}
-					typeID = int(existingTagType.DBID)
-					ss.TagTypeIDs[dynType] = typeID
-				}
-				ss.TagsIndex++
-				tagIndex = ss.TagsIndex
-				_, insertErr := db.InsertTag(database.Tag{
-					DBID:     int64(tagIndex),
-					Tag:      tags.PadTagValue(tagValue),
-					TypeDBID: int64(typeID),
-				})
-				if insertErr != nil {
-					ss.TagsIndex--
-					log.Error().Err(insertErr).Msgf("error inserting %s tag: %s", dynType, tagValue)
-					continue
-				}
-				ss.TagIDs[tagStr] = tagIndex
-			}
-		}
-
-		if tagIndex == 0 {
-			// Don't insert unknown tags for other tag types
-			log.Trace().Msgf("skipping unknown tag: %s", tagStr)
-			continue
-		}
-
-		desiredTagIDs[tagIndex] = struct{}{}
-	}
-
-	if existingMedia {
-		if ss.MediaTagIDs != nil {
-			if err := reconcileExistingMediaTags(db, ss, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
-				return 0, 0, fmt.Errorf("error reconciling media tags %s: %w", pf.Path, err)
-			}
-		} else {
-			if err := insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
-				return 0, 0, fmt.Errorf("error inserting media tags %s without prior state: %w", pf.Path, err)
-			}
-		}
-
-		return titleIndex, mediaIndex, nil
-	}
-
-	if err := insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
-		return 0, 0, fmt.Errorf("error inserting media tags %s: %w", pf.Path, err)
-	}
-	if ss.MediaTagIDs != nil {
-		ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
-	}
-
-	return titleIndex, mediaIndex, nil
-}
-
-func reconcileExistingMediaTags(
-	db database.MediaDBI,
-	ss *database.ScanState,
-	mediaIndex int,
-	desiredTagIDs map[int]struct{},
-	extensionTagIndex int,
-) error {
-	existingTagIDs := ss.MediaTagIDs[mediaIndex]
-	if existingTagIDs == nil {
-		existingTagIDs = make(map[int]struct{})
-	}
-
-	staleTagIDs := make([]int, 0)
-	for tagIndex := range existingTagIDs {
-		if _, ok := desiredTagIDs[tagIndex]; ok {
-			continue
-		}
-		if isUserOwnedTagID(ss, tagIndex) {
-			desiredTagIDs[tagIndex] = struct{}{}
-			continue
-		}
-		staleTagIDs = append(staleTagIDs, tagIndex)
-	}
-	if len(staleTagIDs) > 0 {
-		if err := db.DeleteMediaTagsByTagIDs(int64(mediaIndex), staleTagIDs); err != nil {
-			return fmt.Errorf("failed to delete stale media tags: %w", err)
-		}
-	}
-
-	for tagIndex := range desiredTagIDs {
-		if _, ok := existingTagIDs[tagIndex]; ok {
-			continue
-		}
-		if err := insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex)); err != nil {
-			return err
-		}
-	}
-
-	ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
-
-	return nil
-}
-
-func isUserOwnedTagID(ss *database.ScanState, tagIndex int) bool {
-	ensureUserOwnedTagIDs(ss)
-	return ss.UserOwnedTagIDs[tagIndex]
-}
-
-func ensureUserOwnedTagIDs(ss *database.ScanState) {
-	if ss.UserOwnedTagIDs != nil {
-		return
-	}
-
-	ss.UserOwnedTagIDs = make(map[int]bool)
-	for tagKey, id := range ss.TagIDs {
-		tagType, _, found := strings.Cut(tagKey, ":")
-		if !found || !tags.IsUserOwnedType(tags.TagType(tagType)) {
-			continue
-		}
-
-		ss.UserOwnedTagIDs[id] = true
-	}
-}
-
-func insertDesiredMediaTags(
-	db database.MediaDBI,
-	mediaIndex int,
-	desiredTagIDs map[int]struct{},
-	extensionTagIndex int,
-) error {
-	for tagIndex := range desiredTagIDs {
-		if err := insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex)); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func tagLogLabel(tagIndex, extensionTagIndex int) string {
-	if tagIndex == extensionTagIndex {
-		return "extension"
-	}
-
-	return ""
-}
-
-func insertMediaTagLink(db database.MediaDBI, mediaIndex, tagIndex int, tagStr string) error {
-	_, err := db.InsertMediaTag(database.MediaTag{
-		TagDBID:   int64(tagIndex),
-		MediaDBID: int64(mediaIndex),
-	})
-	if err == nil {
-		return nil
-	}
-
-	var sqliteErr sqlite3.Error
-	switch {
-	case errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
-		!errors.Is(err, mediadb.ErrDependencyFlush):
-		switch tagStr {
-		case "extension":
-			log.Trace().Err(err).Msg("media tag relationship already exists for extension")
-		case "":
-			log.Trace().Err(err).Msg("media tag relationship already exists")
-		default:
-			log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
-		}
-		return nil
-	case tagStr == "extension":
-		log.Error().Err(err).Msg("error inserting media tag relationship for extension")
-	case tagStr == "":
-		log.Error().Err(err).Msg("error inserting media tag")
-	default:
-		log.Error().Err(err).Str("tag", tagStr).Msg("error inserting media tag")
-	}
-
-	if tagStr == "" {
-		return fmt.Errorf("insert media tag for media %d: %w", mediaIndex, err)
-	}
-
-	return fmt.Errorf("insert media tag %q for media %d: %w", tagStr, mediaIndex, err)
-}
-
-type systemStateData struct {
-	titles    []database.TitleWithSystem
-	media     []database.MediaWithFullPath
-	mediaTags []database.MediaTagLink
-}
-
-func cloneMediaTagSet(tagIDs map[int]struct{}) map[int]struct{} {
-	cloned := make(map[int]struct{}, len(tagIDs))
-	for tagID := range tagIDs {
-		cloned[tagID] = struct{}{}
-	}
-
-	return cloned
-}
-
 type MediaPathFragments struct {
 	Path         string
 	FileName     string
@@ -542,11 +63,151 @@ type MediaPathFragments struct {
 	Tags         []string
 }
 
+// StageMediaPathParams contains parameters for StageMediaPath.
+type StageMediaPathParams struct {
+	Config       *config.Instance
+	DB           database.MediaDBI
+	Path         string
+	SystemID     string
+	MediaType    slugs.MediaType
+	ProvidedName string
+	PrefixPolicy browseprefix.Policy
+	NoExt        bool
+}
+
+// StageMediaPath parses one scanned file into its media fragments and appends
+// them to the scanner staging tables. Tags, missing state, and most existence
+// checks run set-based in ReconcileStagedSystem once the system's files are
+// staged, so scanner memory does not grow with library or database size.
+func StageMediaPath(params *StageMediaPathParams) error {
+	pf := GetPathFragments(&PathFragmentParams{
+		Config:       params.Config,
+		Path:         params.Path,
+		NoExt:        params.NoExt,
+		PrefixPolicy: params.PrefixPolicy,
+		SystemID:     params.SystemID,
+		MediaType:    params.MediaType,
+		ProvidedName: params.ProvidedName,
+	})
+
+	metadata := mediadb.GenerateSlugMetadataFromTokens(params.MediaType, pf.Title, pf.Slug, pf.SlugTokens)
+
+	staged := database.ScanStagedMedia{
+		Path:          pf.Path,
+		ParentDir:     mediadb.ParentDirForMediaPath(pf.Path),
+		Slug:          pf.Slug,
+		TitleName:     pf.Title,
+		SortName:      pf.DisplayTitle,
+		SecondarySlug: metadata.SecondarySlug,
+		SlugLength:    metadata.SlugLength,
+		SlugWordCount: metadata.SlugWordCount,
+		Tags:          stagedTagsFromFragments(&pf, params.Config),
+		Properties:    stagedPropertiesFromPath(params.DB, params.SystemID, pf.Path),
+	}
+	if err := params.DB.StageScannedMedia(&staged); err != nil {
+		return fmt.Errorf("error staging media path %s: %w", pf.Path, err)
+	}
+	return nil
+}
+
+func stagedPropertiesFromPath(db database.MediaDBI, systemID, path string) []database.ScanStagedProperty {
+	if !gameid.IsCandidate(path, systemID) {
+		return nil
+	}
+
+	property := string(tags.TagPropertyGameID)
+	has, err := db.HasMediaPropertyForPath(context.Background(), systemID, path, property)
+	if err != nil {
+		log.Warn().Err(err).Str("system", systemID).Str("path", path).Msg("failed to check existing gameid property")
+	} else if has {
+		log.Debug().Str("system", systemID).Str("path", path).Msg("gameid property already indexed")
+		return nil
+	}
+
+	started := time.Now()
+	log.Debug().Str("system", systemID).Str("path", path).Msg("gameid identification started")
+	id, err := gameid.IdentifyPathForSystem(path, systemID)
+	duration := time.Since(started)
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Str("system", systemID).
+			Str("path", path).
+			Dur("duration", duration).
+			Msg("gameid identification skipped")
+		return nil
+	}
+	if id == "" {
+		log.Debug().Str("system", systemID).Str("path", path).Dur("duration", duration).Msg("gameid not found")
+		return nil
+	}
+
+	log.Debug().Str("system", systemID).Str("path", path).Str("gameid", id).Dur("duration", duration).
+		Msg("gameid identified")
+
+	return []database.ScanStagedProperty{{
+		Type: string(tags.TagTypeProperty),
+		Name: property,
+		Text: id,
+	}}
+}
+
+// stagedTagsFromFragments converts the parsed filename tags (and the extension
+// pseudo-tag) into staged type/value pairs. Values are the natural (unpadded)
+// form: a filename may spell a numeric segment with or without leading zeros
+// ("rev:2" vs "rev:02"); unpadding here and re-padding at the DB write site
+// collapses both onto the stored form so reconcile joins match exactly and no
+// phantom tag churn marks titles touched on an unchanged re-index.
+func stagedTagsFromFragments(pf *MediaPathFragments, cfg *config.Instance) []database.ScanStagedTag {
+	staged := make([]database.ScanStagedTag, 0, len(pf.Tags)+1)
+
+	// Extension tag only if filename tags are enabled.
+	if pf.Ext != "" && (cfg == nil || cfg.FilenameTags()) {
+		staged = append(staged, database.ScanStagedTag{
+			Type:  string(tags.TagTypeExtension),
+			Value: strings.TrimPrefix(pf.Ext, "."),
+		})
+	}
+
+	for _, rawTagStr := range pf.Tags {
+		tagStr := tags.UnpadTagValue(rawTagStr)
+		tagType, tagValue, found := strings.Cut(tagStr, ":")
+		if !found || tagType == "" || tagValue == "" {
+			log.Trace().Msgf("skipping malformed tag: %s", tagStr)
+			continue
+		}
+		staged = append(staged, database.ScanStagedTag{Type: tagType, Value: tagValue})
+	}
+	return staged
+}
+
+// SeedCanonicalTags seeds the database with canonical GameDataBase-style
+// hierarchical tag types and values (e.g. "genre:sports:wrestling",
+// "players:2:vs"). Definitions live in the tags package. Runs set-based inside
+// its own transaction; already-present rows are left untouched.
+func SeedCanonicalTags(ctx context.Context, db database.MediaDBI) error {
+	if err := db.BeginTransaction(false); err != nil {
+		return fmt.Errorf("failed to begin transaction for seeding tags: %w", err)
+	}
+	if err := db.SeedCanonicalTagDefinitions(ctx); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction after tag seeding failure")
+		}
+		return fmt.Errorf("failed to seed canonical tags: %w", err)
+	}
+	if err := db.CommitTransaction(); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction after commit failure")
+		}
+		return fmt.Errorf("failed to commit tag seeding transaction: %w", err)
+	}
+	return nil
+}
+
 func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
 	canonicalStructs := tags.ParseFilenameToCanonicalTagsForMedia(filename, mediaType)
 
 	// Convert CanonicalTag structs to "type:value" format for database compatibility
-	// This matches the composite keys used in the TagIDs map
 	canonicalTags := make([]string, 0, len(canonicalStructs))
 	for _, ct := range canonicalStructs {
 		canonicalTags = append(canonicalTags, ct.String())
@@ -555,614 +216,10 @@ func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
 	return canonicalTags
 }
 
-// SeedCanonicalTags seeds the database with canonical GameDataBase-style hierarchical tags.
-// Tags follow the format: category:subcategory:value (e.g., "genre:sports:wrestling", "players:2:vs")
-// Tag definitions are in tags.go for centralized management.
-//
-// NOTE: This function ALWAYS uses non-batch mode (prepared statements) because the canonical
-// tag dataset contains many entries and using batch mode with fail-fast behavior would cause issues.
-// Prepared statements handle this better.
-func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
-	// Always use non-batch mode for seeding canonical tags
-	// This prevents issues with the large dataset and provides better error handling
-	if err := db.BeginTransaction(false); err != nil {
-		return fmt.Errorf("failed to begin transaction for seeding tags: %w", err)
-	}
-
-	// Use canonical tag definitions from tags.go
-	typeMatches := make(map[string][]string)
-	for tagType, tagValues := range tags.CanonicalTagDefinitions {
-		// Convert []TagValue to []string
-		strTags := make([]string, len(tagValues))
-		for i, tag := range tagValues {
-			strTags[i] = string(tag)
-		}
-		typeMatches[string(tagType)] = strTags
-	}
-
-	if _, exists := ss.TagTypeIDs[string(tags.TagTypeUnknown)]; !exists {
-		ss.TagTypesIndex++
-		_, err := db.InsertTagType(database.TagType{
-			DBID:        int64(ss.TagTypesIndex),
-			Type:        string(tags.TagTypeUnknown),
-			IsExclusive: tags.IsExclusiveType(tags.TagTypeUnknown),
-		})
-		if err != nil {
-			ss.TagTypesIndex-- // Rollback index increment on failure
-			return fmt.Errorf("error inserting tag type unknown: %w", err)
-		}
-		ss.TagTypeIDs[string(tags.TagTypeUnknown)] = ss.TagTypesIndex
-	}
-
-	unknownKey := database.TagKey("unknown", "unknown")
-	if _, exists := ss.TagIDs[unknownKey]; !exists {
-		ss.TagsIndex++
-		_, err := db.InsertTag(database.Tag{
-			DBID:     int64(ss.TagsIndex),
-			Tag:      "unknown",
-			TypeDBID: int64(ss.TagTypeIDs["unknown"]),
-		})
-		if err != nil {
-			ss.TagsIndex-- // Rollback index increment on failure
-			return fmt.Errorf("error inserting tag unknown: %w", err)
-		}
-		ss.TagIDs[unknownKey] = ss.TagsIndex
-	}
-
-	if _, exists := ss.TagTypeIDs["extension"]; !exists {
-		ss.TagTypesIndex++
-		_, err := db.InsertTagType(database.TagType{
-			DBID:        int64(ss.TagTypesIndex),
-			Type:        "extension",
-			IsExclusive: tags.IsExclusiveType(tags.TagTypeExtension),
-		})
-		if err != nil {
-			ss.TagTypesIndex-- // Rollback index increment on failure
-			return fmt.Errorf("error inserting tag type extension: %w", err)
-		}
-		ss.TagTypeIDs["extension"] = ss.TagTypesIndex
-	}
-
-	for typeStr, tagValues := range typeMatches {
-		typeID, exists := ss.TagTypeIDs[typeStr]
-		if !exists {
-			ss.TagTypesIndex++
-			_, err := db.InsertTagType(database.TagType{
-				DBID:        int64(ss.TagTypesIndex),
-				Type:        typeStr,
-				IsExclusive: tags.IsExclusiveType(tags.TagType(typeStr)),
-			})
-			if err != nil {
-				ss.TagTypesIndex-- // Rollback index increment on failure
-				return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
-			}
-			typeID = ss.TagTypesIndex
-			ss.TagTypeIDs[typeStr] = typeID
-		}
-
-		for _, tag := range tagValues {
-			tagValue := strings.ToLower(tag)
-			compositeKey := database.TagKey(typeStr, tagValue)
-
-			if _, exists := ss.TagIDs[compositeKey]; exists {
-				continue
-			}
-
-			ss.TagsIndex++
-			_, err := db.InsertTag(database.Tag{
-				DBID:     int64(ss.TagsIndex),
-				Tag:      tags.PadTagValue(tagValue),
-				TypeDBID: int64(typeID),
-			})
-			if err != nil {
-				ss.TagsIndex-- // Rollback index increment on failure
-				return fmt.Errorf("error inserting tag %s: %w", tag, err)
-			}
-			// Use composite key "type:value" to avoid collisions (e.g., disc:1 vs rev:1)
-			ss.TagIDs[compositeKey] = ss.TagsIndex
-		}
-	}
-
-	if err := db.CommitTransaction(); err != nil {
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			log.Error().Err(rbErr).Msg("failed to rollback transaction after commit failure")
-		}
-		return fmt.Errorf("failed to commit tag seeding transaction: %w", err)
-	}
-
-	return nil
-}
-
-// PopulateScanStateFromDB initializes the scan state with existing database IDs
-// when resuming an interrupted indexing operation
-func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *database.ScanState) error {
-	// Check for cancellation before starting
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Get max IDs from existing data to continue indexing from the right point
-	maxSystemID, err := db.GetMaxSystemID()
-	if err != nil {
-		return fmt.Errorf("failed to get max system ID: %w", err)
-	}
-	ss.SystemsIndex = int(maxSystemID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxTitleID, err := db.GetMaxTitleID()
-	if err != nil {
-		return fmt.Errorf("failed to get max title ID: %w", err)
-	}
-	ss.TitlesIndex = int(maxTitleID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxMediaID, err := db.GetMaxMediaID()
-	if err != nil {
-		return fmt.Errorf("failed to get max media ID: %w", err)
-	}
-	ss.MediaIndex = int(maxMediaID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxTagTypeID, err := db.GetMaxTagTypeID()
-	if err != nil {
-		return fmt.Errorf("failed to get max tag type ID: %w", err)
-	}
-	ss.TagTypesIndex = int(maxTagTypeID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxTagID, err := db.GetMaxTagID()
-	if err != nil {
-		return fmt.Errorf("failed to get max tag ID: %w", err)
-	}
-	ss.TagsIndex = int(maxTagID)
-
-	// Populate maps with existing data to prevent duplicate insertion attempts
-	// This is crucial for resuming indexing operations
-
-	// Check for cancellation before loading systems
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// First populate systems map
-	systems, err := db.GetAllSystems()
-	if err != nil {
-		return fmt.Errorf("failed to get existing systems: %w", err)
-	}
-	for _, system := range systems {
-		ss.SystemIDs[system.SystemID] = int(system.DBID)
-	}
-
-	// NOTE: TitleIDs and MediaIDs are NOT loaded here for resume optimization.
-	// Instead, they are lazy-loaded per-system using PopulateScanStateForSystem()
-	// before processing each system.
-
-	// Check for cancellation before loading tag types
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Populate tag types map
-	tagTypes, err := db.GetAllTagTypes()
-	if err != nil {
-		return fmt.Errorf("failed to get existing tag types: %w", err)
-	}
-	// Build reverse lookup from TypeDBID -> type string for composite key construction
-	tagTypeByDBID := make(map[int64]string, len(tagTypes))
-	for _, tagType := range tagTypes {
-		ss.TagTypeIDs[tagType.Type] = int(tagType.DBID)
-		tagTypeByDBID[tagType.DBID] = tagType.Type
-	}
-
-	// Check for cancellation before loading tags
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Populate tags map with composite keys (type:value format)
-	// This must match the key format used in AddMediaPath and SeedCanonicalTags
-	allTags, err := db.GetAllTags()
-	if err != nil {
-		return fmt.Errorf("failed to get existing tags: %w", err)
-	}
-	ss.UserOwnedTagIDs = make(map[int]bool)
-	for _, tag := range allTags {
-		tagType := tagTypeByDBID[tag.TypeDBID]
-		compositeKey := database.TagKey(tagType, tag.Tag)
-		ss.TagIDs[compositeKey] = int(tag.DBID)
-		if tags.IsUserOwnedType(tags.TagType(tagType)) {
-			ss.UserOwnedTagIDs[int(tag.DBID)] = true
-		}
-	}
-
-	log.Debug().
-		Int("maxSystemID", ss.SystemsIndex).
-		Int("maxTitleID", ss.TitlesIndex).
-		Int("maxMediaID", ss.MediaIndex).
-		Int("maxTagTypeID", ss.TagTypesIndex).
-		Int("maxTagID", ss.TagsIndex).
-		Int("systemsMapSize", len(ss.SystemIDs)).
-		Int("tagTypesMapSize", len(ss.TagTypeIDs)).
-		Int("tagsMapSize", len(ss.TagIDs)).
-		Msg("populated scan state")
-
-	return nil
-}
-
-// PopulateScanStateForSystem loads the existing titles and media for a single system into the scan state.
-// This is called lazily during resume, just before processing each system.
-//
-// This function is safe to call multiple times for different systems - it appends to the
-// existing TitleIDs and MediaIDs maps.
-func PopulateScanStateForSystem(
-	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
-) error {
-	stateData, err := loadSystemStateData(ctx, db, systemID, ss.MediaTagIDs != nil)
-	if err != nil {
-		return err
-	}
-
-	for _, title := range stateData.titles {
-		titleKey := database.TitleKey(title.SystemID, title.Slug)
-		ss.TitleIDs[titleKey] = int(title.DBID)
-		if ss.TitleNames != nil {
-			ss.TitleNames[int(title.DBID)] = title.Name
-		}
-	}
-
-	for _, m := range stateData.media {
-		mediaKey := database.MediaKey(m.SystemID, m.Path)
-		ss.MediaIDs[mediaKey] = int(m.DBID)
-		if ss.MediaTitleIDs != nil {
-			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
-		}
-		if ss.MediaNeedsSortName != nil && m.SortName == "" {
-			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
-		}
-		if ss.MediaSortNames != nil {
-			ss.MediaSortNames[int(m.DBID)] = m.SortName
-		}
-		if ss.MediaParentDirs != nil {
-			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
-		}
-	}
-
-	if ss.MediaTagIDs != nil {
-		for _, link := range stateData.mediaTags {
-			mediaDBID := int(link.MediaDBID)
-			if ss.MediaTagIDs[mediaDBID] == nil {
-				ss.MediaTagIDs[mediaDBID] = make(map[int]struct{})
-			}
-			ss.MediaTagIDs[mediaDBID][int(link.TagDBID)] = struct{}{}
-		}
-	}
-
-	return nil
-}
-
-func loadSystemStateData(
-	ctx context.Context, db database.MediaDBI, systemID string, loadMediaTags bool,
-) (systemStateData, error) {
-	startTime := time.Now()
-
-	// Check for cancellation before starting
-	select {
-	case <-ctx.Done():
-		return systemStateData{}, ctx.Err()
-	default:
-	}
-
-	// Load titles for this system
-	titlesStart := time.Now()
-	titles, err := db.GetTitlesBySystemID(systemID)
-	titlesElapsed := time.Since(titlesStart)
-	if err != nil {
-		return systemStateData{}, fmt.Errorf("failed to get titles for system %s: %w", systemID, err)
-	}
-
-	// Check for cancellation between operations
-	select {
-	case <-ctx.Done():
-		return systemStateData{}, ctx.Err()
-	default:
-	}
-
-	// Load media for this system
-	mediaStart := time.Now()
-	media, err := db.GetMediaBySystemID(systemID)
-	mediaElapsed := time.Since(mediaStart)
-	if err != nil {
-		return systemStateData{}, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
-	}
-
-	mediaTags := []database.MediaTagLink(nil)
-	mediaTagsElapsed := time.Duration(0)
-	if loadMediaTags {
-		mediaTagsStart := time.Now()
-		mediaTags, err = db.GetScannerMediaTagsBySystemID(systemID)
-		mediaTagsElapsed = time.Since(mediaTagsStart)
-		if err != nil {
-			return systemStateData{}, fmt.Errorf("failed to get scanner media tags for system %s: %w", systemID, err)
-		}
-	}
-
-	log.Debug().
-		Str("system", systemID).
-		Int("titles", len(titles)).
-		Int("media", len(media)).
-		Int("mediaTags", len(mediaTags)).
-		Dur("titlesDuration", titlesElapsed).
-		Dur("mediaDuration", mediaElapsed).
-		Dur("mediaTagsDuration", mediaTagsElapsed).
-		Dur("elapsed", time.Since(startTime)).
-		Msg("loaded existing data for system resume")
-
-	return systemStateData{titles: titles, media: media, mediaTags: mediaTags}, nil
-}
-
-// PopulatePersistentScanStateForSystem loads existing Media DBIDs for a system into
-// ss.MissingMedia. As AddMediaPath processes files, found entries are removed.
-// After the system is fully scanned, remaining entries represent missing media.
-// This also populates MediaIDs and TitleIDs via PopulateScanStateForSystem.
-func PopulatePersistentScanStateForSystem(
-	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
-) error {
-	stateData, err := loadSystemStateData(ctx, db, systemID, ss.MediaTagIDs != nil)
-	if err != nil {
-		return err
-	}
-
-	// Persistent scan callers may not pre-initialize MissingMedia; this loader owns it.
-	if ss.MissingMedia == nil {
-		ss.MissingMedia = make(map[int]struct{})
-	}
-
-	for _, title := range stateData.titles {
-		titleKey := database.TitleKey(title.SystemID, title.Slug)
-		ss.TitleIDs[titleKey] = int(title.DBID)
-		if ss.TitleNames != nil {
-			ss.TitleNames[int(title.DBID)] = title.Name
-		}
-	}
-
-	for _, m := range stateData.media {
-		mediaKey := database.MediaKey(m.SystemID, m.Path)
-		ss.MediaIDs[mediaKey] = int(m.DBID)
-		if ss.MediaTitleIDs != nil {
-			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
-		}
-		if ss.MediaNeedsSortName != nil && m.SortName == "" {
-			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
-		}
-		if ss.MediaSortNames != nil {
-			ss.MediaSortNames[int(m.DBID)] = m.SortName
-		}
-		if ss.MediaParentDirs != nil {
-			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
-		}
-		ss.MissingMedia[int(m.DBID)] = struct{}{}
-	}
-
-	if ss.MediaTagIDs != nil {
-		for _, link := range stateData.mediaTags {
-			mediaDBID := int(link.MediaDBID)
-			if ss.MediaTagIDs[mediaDBID] == nil {
-				ss.MediaTagIDs[mediaDBID] = make(map[int]struct{})
-			}
-			ss.MediaTagIDs[mediaDBID][int(link.TagDBID)] = struct{}{}
-		}
-	}
-
-	log.Debug().
-		Str("system", systemID).
-		Int("missingMediaCandidates", len(stateData.media)).
-		Msg("populated missing media tracking for system")
-
-	return nil
-}
-
-// PopulateScanStateForSelectiveIndexing populates scan state for selective indexing with optimized loading.
-// Uses true lazy loading for Systems/TagTypes (via UNIQUE constraints) and minimal data loading
-// for MediaTitles/Media (only systems NOT being reindexed) to dramatically improve performance.
-func PopulateScanStateForSelectiveIndexing(
-	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemsToReindex []string,
-) error {
-	// Check for cancellation before starting
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Get max IDs from existing data to continue indexing from the right point
-	maxSystemID, err := db.GetMaxSystemID()
-	if err != nil {
-		return fmt.Errorf("failed to get max system ID: %w", err)
-	}
-	ss.SystemsIndex = int(maxSystemID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxTitleID, err := db.GetMaxTitleID()
-	if err != nil {
-		return fmt.Errorf("failed to get max title ID: %w", err)
-	}
-	ss.TitlesIndex = int(maxTitleID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxMediaID, err := db.GetMaxMediaID()
-	if err != nil {
-		return fmt.Errorf("failed to get max media ID: %w", err)
-	}
-	ss.MediaIndex = int(maxMediaID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxTagTypeID, err := db.GetMaxTagTypeID()
-	if err != nil {
-		return fmt.Errorf("failed to get max tag type ID: %w", err)
-	}
-	ss.TagTypesIndex = int(maxTagTypeID)
-
-	// Check for cancellation
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	maxTagID, err := db.GetMaxTagID()
-	if err != nil {
-		return fmt.Errorf("failed to get max tag ID: %w", err)
-	}
-	ss.TagsIndex = int(maxTagID)
-
-	// SystemIDs must be pre-populated because keys are NOT system-scoped ("pc", "nes"),
-	// so multiple folders can map to the same SystemID (e.g., Batocera: 50+ folders → "pc").
-	//
-	// TagTypeIDs and TagIDs must be pre-populated because AddMediaPath uses them to
-	// create MediaTag associations — empty maps cause tags to be silently dropped.
-	//
-	// TitleIDs and MediaIDs can remain empty because their keys ARE system-scoped
-	// and TruncateSystems CASCADE deleted all data for reindexed systems.
-
-	// Check for cancellation before loading systems
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	systems, err := db.GetAllSystems()
-	if err != nil {
-		return fmt.Errorf("failed to get existing systems for selective indexing: %w", err)
-	}
-	ss.SystemIDs = make(map[string]int, len(systems))
-	for _, system := range systems {
-		ss.SystemIDs[system.SystemID] = int(system.DBID)
-	}
-
-	// Check for cancellation before loading tag types
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	tagTypes, err := db.GetAllTagTypes()
-	if err != nil {
-		return fmt.Errorf("failed to get existing tag types for selective indexing: %w", err)
-	}
-	ss.TagTypeIDs = make(map[string]int, len(tagTypes))
-	tagTypeByDBID := make(map[int64]string, len(tagTypes))
-	for _, tagType := range tagTypes {
-		ss.TagTypeIDs[tagType.Type] = int(tagType.DBID)
-		tagTypeByDBID[tagType.DBID] = tagType.Type
-	}
-
-	// Check for cancellation before loading tags
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	allTags, err := db.GetAllTags()
-	if err != nil {
-		return fmt.Errorf("failed to get existing tags for selective indexing: %w", err)
-	}
-	ss.TagIDs = make(map[string]int, len(allTags))
-	for _, tag := range allTags {
-		tagType := tagTypeByDBID[tag.TypeDBID]
-		compositeKey := database.TagKey(tagType, tag.Tag)
-		ss.TagIDs[compositeKey] = int(tag.DBID)
-	}
-
-	// TitleIDs and MediaIDs remain empty (system-scoped keys, safe for selective indexing)
-	ss.TitleIDs = make(map[string]int)
-	ss.MediaIDs = make(map[string]int)
-
-	// Check for cancellation before re-seeding
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// TruncateSystems orphan-cleans tags only used by truncated systems,
-	// so re-seed any missing canonical tags before indexing.
-	if err := SeedCanonicalTags(db, ss); err != nil {
-		return fmt.Errorf("failed to re-seed canonical tags for selective indexing: %w", err)
-	}
-
-	log.Debug().Msgf("populated scan state for selective indexing: "+
-		"maxIDs: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; "+
-		"maps: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; systems to reindex: %v",
-		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
-		ss.TagTypesIndex, ss.TagsIndex, len(ss.SystemIDs), len(ss.TitleIDs), len(ss.MediaIDs),
-		len(ss.TagTypeIDs), len(ss.TagIDs), systemsToReindex)
-
-	return nil
-}
-
 func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	f := MediaPathFragments{}
 
-	// don't clean the :// in custom scheme paths
-	if helpers.ReURI.MatchString(params.Path) {
-		f.Path = params.Path
-	} else {
-		// Clean and normalize to forward slashes for cross-platform consistency
-		f.Path = filepath.ToSlash(filepath.Clean(params.Path))
-	}
+	f.Path = pathutil.CanonicalMediaPath(params.Path)
 
 	// Use FilenameFromPath for virtual paths to get URL-decoded names
 	// For regular paths, extract basename manually
@@ -1236,7 +293,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	}
 
 	// SlugifyWithTokens computes both slug and tokens in a single pass,
-	// avoiding redundant re-slugification in AddMediaPath.
+	// avoiding redundant re-slugification in StageMediaPath.
 	slugResult := slugs.SlugifyWithTokens(mediaType, f.Title)
 	f.Slug = slugResult.Slug
 	f.SlugTokens = slugResult.Tokens

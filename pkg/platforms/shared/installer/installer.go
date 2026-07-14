@@ -123,7 +123,6 @@ func findInstallDir(
 	// TODO: this would be better if it could auto-detect the existing preferred
 	//       platform games folder, but there's currently no shared mechanism to
 	//       work out the correct root folder for a platform
-	// TODO: config override to set explicit fallback/default media folder
 
 	localPath := filepath.Clean(filepath.Join(fallbackDir, names.filename))
 

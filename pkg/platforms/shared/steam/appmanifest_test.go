@@ -382,6 +382,24 @@ func TestLookupAppNameInLibraries(t *testing.T) {
 	})
 }
 
+func TestSteamDirAppLookup(t *testing.T) {
+	t.Parallel()
+
+	steamDir := t.TempDir()
+	steamAppsDir := filepath.Join(steamDir, "steamapps")
+	//nolint:gosec // G301: test directory permissions are fine
+	require.NoError(t, os.MkdirAll(steamAppsDir, 0o755))
+	createMockManifest(t, steamAppsDir, 12345, "ConfiguredGame")
+
+	name, ok := LookupAppNameInSteamDir(steamDir, 12345)
+	require.True(t, ok)
+	assert.Equal(t, "ConfiguredGame", name)
+
+	installDir, ok := FindInstallDirByAppIDInSteamDir(steamDir, 12345)
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(steamAppsDir, "common", "ConfiguredGame"), installDir)
+}
+
 func TestLookupInstallDirInLibraries(t *testing.T) {
 	t.Parallel()
 

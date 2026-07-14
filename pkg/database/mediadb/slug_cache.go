@@ -82,7 +82,7 @@ func generateSlugCacheKey(systemID, slug string, tagFilters []zapscript.TagFilte
 func (db *MediaDB) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
 ) (mediaDBID int64, strategy string, found bool) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return 0, "", false
 	}
 
@@ -92,7 +92,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 		return 0, "", false
 	}
 
-	err = db.sql.QueryRowContext(ctx,
+	err = db.sql.Load().QueryRowContext(ctx,
 		"SELECT MediaDBID, Strategy FROM SlugResolutionCache WHERE CacheKey = ?",
 		cacheKey).Scan(&mediaDBID, &strategy)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -117,7 +117,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 func (db *MediaDB) SetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
 ) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -131,7 +131,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 		return fmt.Errorf("failed to marshal tag filters: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.sql.Load().ExecContext(ctx, `
 		INSERT OR REPLACE INTO SlugResolutionCache
 		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -153,7 +153,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 // InvalidateSlugCache clears all cached slug resolutions.
 // This should be called after any operation that changes the media database content.
 func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -169,7 +169,7 @@ func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
 // InvalidateSlugCacheForSystems clears cached slug resolutions for specific systems.
 // This is used during selective system reindexing to avoid invalidating the entire cache.
 func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
 
@@ -200,7 +200,7 @@ func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs 
 // GetMediaByDBID retrieves a single SearchResultWithCursor by Media DBID.
 // This is used to reconstruct the full result from a cached Media DBID.
 func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (database.SearchResultWithCursor, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return database.SearchResultWithCursor{}, ErrNullSQL
 	}
 
@@ -208,7 +208,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 
 	// Query for media information from committed state. Foreground title
 	// resolution must not read an active indexing transaction.
-	err := db.sql.QueryRowContext(ctx, `
+	err := db.sql.Load().QueryRowContext(ctx, `
 		SELECT
 			Systems.SystemID,
 			MediaTitles.Name,
@@ -229,7 +229,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	}
 
 	// Fetch tags from both MediaTags (file-level) and MediaTitleTags (title-level)
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.sql.Load().QueryContext(ctx, `
 		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
@@ -273,78 +273,31 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 // GetZapScriptTagsBySystemAndPath retrieves disambiguating tags for a media item.
 // A tag is disambiguating when sibling media entries (same title) have different
 // values for that tag type (e.g., 2-player vs 4-player variants of the same game).
-// Returns only the target media's tags for tag types that differ across siblings.
+// Returns only the target media's tags for tag types listed in the title's
+// precomputed MediaTitles.DisambiguationTypes (see RecomputeTitleDisambiguation).
 // Returns empty slice if no disambiguating tags exist or media not found.
 func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	ctx context.Context, systemID, path string,
 ) ([]database.TagInfo, error) {
-	if db.sql == nil {
+	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
 
-	// Single query: find tag types where siblings under the same title have
-	// different values, then return only the target media's tags for those types.
-	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
-	typePlaceholders := prepareVariadic("?", ",", len(database.ZapScriptTagTypes))
-	args := make([]any, 0, 2+len(database.ZapScriptTagTypes)*4)
-	args = append(args, systemID, path)
-	for range 4 {
-		for _, tagType := range database.ZapScriptTagTypes {
-			args = append(args, tagType)
-		}
-	}
-
-	rows, err := db.sql.QueryContext(ctx, fmt.Sprintf(`
-		WITH Target AS (
-			SELECT Media.DBID, Media.MediaTitleDBID
-			FROM Media
-			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
-			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-			WHERE Systems.SystemID = ? AND Media.Path = ? AND Media.IsMissing = 0
-		),
-		-- All eligible tags for the target (file-level + title-level)
-		TargetTags AS (
-			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
-			FROM Target
-			JOIN MediaTags mt ON Target.DBID = mt.MediaDBID
-			JOIN Tags t ON mt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN (%s)
-			UNION
-			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
-			FROM Target
-			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
-			JOIN Tags t ON mtt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN (%s)
-		),
-		-- All eligible tags across siblings (file-level + title-level)
-		SiblingTags AS (
-			SELECT DISTINCT t.Tag, t.TypeDBID
-			FROM Target
-			JOIN Media sibling ON sibling.MediaTitleDBID = Target.MediaTitleDBID
-			JOIN MediaTags smt ON sibling.DBID = smt.MediaDBID
-			JOIN Tags t ON smt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN (%s)
-			AND sibling.IsMissing = 0
-			UNION
-			SELECT DISTINCT t.Tag, t.TypeDBID
-			FROM Target
-			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
-			JOIN Tags t ON mtt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN (%s)
-		)
-		SELECT tt.Type, tt.Tag
-		FROM TargetTags tt
-		WHERE (
-			SELECT COUNT(DISTINCT st.Tag)
-			FROM SiblingTags st
-			WHERE st.TypeDBID = tt.TypeDBID
-		) > 1
-		ORDER BY tt.Type, tt.Tag
-	`, typePlaceholders, typePlaceholders, typePlaceholders, typePlaceholders), args...)
+	// The disambiguating types are precomputed per title, so this is a single
+	// indexed lookup: return the target media's tags whose type is listed for its
+	// title. The comma-boundary membership test never matches a type prefix.
+	rows, err := db.sql.Load().QueryContext(ctx, `
+		SELECT TagTypes.Type, Tags.Tag, Tags.DisplayName
+		FROM Media
+		JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+		JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+		JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
+		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+		JOIN TagTypes ON TagTypes.DBID = Tags.TypeDBID
+		WHERE Systems.SystemID = ? AND Media.Path = ? AND Media.IsMissing = 0
+		  AND instr(',' || MediaTitles.DisambiguationTypes || ',', ',' || TagTypes.Type || ',') > 0
+		ORDER BY TagTypes.Type, Tags.Tag
+	`, systemID, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get zapscript tags by system and path: %w", err)
 	}
@@ -357,7 +310,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	resultTags := make([]database.TagInfo, 0)
 	for rows.Next() {
 		var tag database.TagInfo
-		if scanErr := rows.Scan(&tag.Type, &tag.Tag); scanErr != nil {
+		if scanErr := rows.Scan(&tag.Type, &tag.Tag, &tag.Label); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
 		tag.Tag = tags.UnpadTagValue(tag.Tag)
@@ -366,6 +319,16 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
+
+	// Order by display importance so the written ZapScript matches the order shown to
+	// users (variant flags, region, ... credit last); sort by value within a type.
+	sort.SliceStable(resultTags, func(a, b int) bool {
+		ra, rb := database.TagTypeDisplayRank(resultTags[a].Type), database.TagTypeDisplayRank(resultTags[b].Type)
+		if ra != rb {
+			return ra < rb
+		}
+		return resultTags[a].Tag < resultTags[b].Tag
+	})
 
 	return resultTags, nil
 }

@@ -42,7 +42,7 @@ func TestUpsertMediaBlob_Insert(t *testing.T) {
 	assert.Positive(t, dbid)
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs WHERE DBID = ?", dbid).Scan(&count))
 	assert.Equal(t, 1, count)
 }
@@ -65,7 +65,7 @@ func TestUpsertMediaBlob_Dedup(t *testing.T) {
 	assert.Equal(t, dbid1, dbid2, "identical data must resolve to the same DBID")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 1, count, "only one row should exist for identical data")
 }
@@ -106,7 +106,7 @@ func TestUpsertMediaBlob_DifferentContentType(t *testing.T) {
 	assert.NotEqual(t, dbid1, dbid2, "same data with different content types must produce different DBIDs")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 2, count, "two rows should exist for same data under different content types")
 }
@@ -126,7 +126,7 @@ func TestUpsertMediaBlob_FramesContentTypeBeforeData(t *testing.T) {
 	assert.NotEqual(t, dbid1, dbid2, "field boundaries must be part of the hash input")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 2, count, "ambiguous concatenations must not dedupe together")
 }
@@ -221,7 +221,7 @@ func TestPruneOrphanedBlobs_NoRefs(t *testing.T) {
 	assert.Equal(t, int64(1), deleted)
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 0, count)
 }
@@ -249,7 +249,7 @@ func TestPruneOrphanedBlobs_WithRef(t *testing.T) {
 	assert.Equal(t, int64(0), deleted, "referenced blob must not be deleted")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 1, count)
 }
@@ -279,7 +279,7 @@ func TestPruneOrphanedBlobs_Mixed(t *testing.T) {
 	assert.Equal(t, int64(1), deleted, "exactly one orphaned blob should be pruned")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 1, count, "the referenced blob must remain")
 }
@@ -307,7 +307,7 @@ func TestPruneOrphanedBlobs_WithMediaPropsRef(t *testing.T) {
 	assert.Equal(t, int64(0), deleted, "ROM-level referenced blob must not be deleted")
 
 	var count int
-	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+	require.NoError(t, mediaDB.sql.Load().QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 1, count, "the ROM-level referenced blob must remain")
 }

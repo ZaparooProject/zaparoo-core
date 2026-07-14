@@ -42,9 +42,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
@@ -52,6 +54,13 @@ import (
 )
 
 const defaultMaxResults = 100
+
+const (
+	preparingMediaDatabaseUpdateDisplay       = "Preparing media database update"
+	preparingResumeMediaDatabaseUpdateDisplay = "Preparing to resume media database update"
+	preparingDatabaseOptimizationDisplay      = "Preparing database optimization"
+	preparingMediaScrapeDisplay               = "Preparing media scrape"
+)
 
 // tagsPerCategoryLimit caps the number of tags returned per type in media.tags
 // responses. Tags are sorted by usage count (most popular first) before capping,
@@ -269,6 +278,11 @@ func ClearIndexingStatus() {
 	statusInstance.clear()
 }
 
+// SetIndexingForTest marks indexing as in progress - used for testing.
+func SetIndexingForTest() {
+	statusInstance.startIfNotRunning()
+}
+
 // IsIndexing reports whether media indexing is currently in progress.
 func IsIndexing() bool {
 	return statusInstance.get().indexing
@@ -330,6 +344,101 @@ func newIndexingStatus() *indexingStatus {
 
 var statusInstance = newIndexingStatus()
 
+func activeMediaPausesMediaWork(media *models.ActiveMedia) bool {
+	if media == nil {
+		return false
+	}
+	slot, err := mediaslot.Normalize(media.Slot)
+	if err != nil {
+		log.Warn().Err(err).Str("slot", media.Slot).Msg("active media has invalid slot; pausing media work")
+		return true
+	}
+	return slot == mediaslot.Primary
+}
+
+func syncMediaWorkPauserWithActiveMedia(cfg *config.Instance, media *models.ActiveMedia, pauser *syncutil.Pauser) {
+	if pauser == nil {
+		return
+	}
+	if activeMediaPausesMediaWork(media) {
+		policy := config.MediaPausePolicy{Mode: config.IndexDuringMediaThrottle, Level: syncutil.ThrottleLight}
+		if cfg != nil {
+			systemID := ""
+			if media != nil {
+				systemID = media.SystemID
+			}
+			policy = cfg.ResolveMediaPausePolicy(systemID)
+		}
+		if policy.Mode == config.IndexDuringMediaPause {
+			pauser.Pause()
+		} else {
+			pauser.Throttle(policy.Level)
+		}
+		return
+	}
+	pauser.Resume()
+}
+
+func ptrString(value string) *string {
+	return &value
+}
+
+func isPersistentMediaWorkStatus(status string) bool {
+	return status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending
+}
+
+// mediaDBHasUsableData reports whether the media database holds queryable
+// data right now: a completed prior index, or at least one system committed
+// by an in-progress one. Drives the Exists field so clients can serve
+// partial results mid-index instead of treating the database as absent.
+func mediaDBHasUsableData(mediaDB database.MediaDBI) bool {
+	if mediaDB == nil {
+		return false
+	}
+	if lastGenerated, err := mediaDB.GetLastGenerated(); err == nil && !time.Unix(0, 0).Equal(lastGenerated) {
+		return true
+	}
+	hasMedia, err := mediaDB.HasAnyMedia()
+	return err == nil && hasMedia
+}
+
+func notifyMediaIndexingStopped(ns chan<- models.Notification, mediaDB database.MediaDBI) {
+	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+		Exists:   mediaDBHasUsableData(mediaDB),
+		Indexing: false,
+	})
+}
+
+func invalidateIndexedThumbnails(systems []systemdefs.System, rebuild bool) {
+	if rebuild || len(systems) == 0 {
+		WipeMediaThumbCache()
+		return
+	}
+	requested := make(map[string]struct{}, len(systems))
+	for _, system := range systems {
+		requested[system.ID] = struct{}{}
+	}
+	allSystems := systemdefs.AllSystems()
+	if len(requested) >= len(allSystems) {
+		allRequested := true
+		for _, system := range allSystems {
+			if _, ok := requested[system.ID]; !ok {
+				allRequested = false
+				break
+			}
+		}
+		if allRequested {
+			WipeMediaThumbCache()
+			return
+		}
+	}
+	systemIDs := make([]string, 0, len(requested))
+	for systemID := range requested {
+		systemIDs = append(systemIDs, systemID)
+	}
+	WipeMediaThumbCacheSystems(systemIDs)
+}
+
 func GenerateMediaDB(
 	ctx context.Context,
 	pl platforms.Platform,
@@ -339,18 +448,63 @@ func GenerateMediaDB(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false)
+}
+
+// GenerateMediaDBRebuild is GenerateMediaDB with a fresh start: the media
+// database file is discarded and recreated before indexing, so everything —
+// including scraped metadata — is rebuilt from scratch. User data (favourites,
+// launcher overrides) lives in UserDB and is re-applied after indexing.
+func GenerateMediaDBRebuild(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	systems []systemdefs.System,
+	db *database.Database,
+	pauser *syncutil.Pauser,
+) error {
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, true)
+}
+
+func startMediaDBGeneration(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	systems []systemdefs.System,
+	db *database.Database,
+	pauser *syncutil.Pauser,
+	rebuild bool,
+) error {
 	if err := startIndexingIfNoScrape(); err != nil {
 		return err
 	}
 
-	// Also prevent indexing if optimization is running
+	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+		Exists:             mediaDBHasUsableData(db.MediaDB),
+		Indexing:           true,
+		Paused:             pauser != nil && pauser.IsPaused(),
+		Throttled:          pauser != nil && pauser.IsThrottled(),
+		CurrentStepDisplay: ptrString(preparingMediaDatabaseUpdateDisplay),
+	})
+
+	// Also prevent indexing if optimization is actively running in this process.
+	// A persisted "running" optimization without the process-local flag means the
+	// previous optimization was interrupted before this boot; don't let that stale
+	// state block resuming an interrupted index.
 	optimizationStatus, err := db.MediaDB.GetOptimizationStatus()
-	if err != nil {
+	switch {
+	case err != nil:
 		statusInstance.clear()
+		notifyMediaIndexingStopped(ns, db.MediaDB)
 		return fmt.Errorf("failed to get optimization status during indexing check: %w", err)
-	} else if optimizationStatus == "running" {
+	case db.MediaDB.IsOptimizing():
 		statusInstance.clear()
+		notifyMediaIndexingStopped(ns, db.MediaDB)
 		return models.ClientErrf("database optimization in progress")
+	case optimizationStatus == mediadb.IndexingStatusRunning:
+		log.Info().Msg("persisted optimization was interrupted; allowing media indexing to start")
 	}
 
 	// Check available disk space before starting indexing
@@ -360,6 +514,7 @@ func GenerateMediaDB(
 		log.Warn().Err(err).Msg("unable to check free disk space before indexing")
 	} else if freeBytes < config.MinFreeDiskBytes {
 		statusInstance.clear()
+		notifyMediaIndexingStopped(ns, db.MediaDB)
 		freeMB := freeBytes / (1024 * 1024)
 		needMB := config.MinFreeDiskBytes / (1024 * 1024)
 		return models.ClientErrf(
@@ -374,19 +529,50 @@ func GenerateMediaDB(
 	statusInstance.setCancelFunc(cancelFunc)
 
 	log.Info().Msg("generating media db")
-	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-		Exists:   false,
-		Indexing: true,
-		Paused:   pauser != nil && pauser.IsPaused(),
-	})
 
 	db.MediaDB.TrackBackgroundOperation()
 	go func() {
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
+		// Lowest CPU/IO priority for the whole index run; the locked thread
+		// dies with this goroutine so the change never leaks.
+		bgpriority.Apply()
+
+		// Widen the connection pool for the duration: the indexing writer
+		// holds a connection near-continuously, and foreground search +
+		// browse must not queue behind each other on the single remainder.
+		db.MediaDB.SetIndexingConnBoost(true)
+		defer db.MediaDB.SetIndexingConnBoost(false)
+
+		if rebuild {
+			// Recreate closes the database, and Close waits for all tracked
+			// background operations — including this goroutine — so step out of
+			// the tracked set for the recreate and re-register before indexing.
+			// The indexing slot claimed above keeps competing index/scrape
+			// requests out during the untracked window.
+			db.MediaDB.BackgroundOperationDone()
+			recreateErr := db.MediaDB.Recreate(false)
+			db.MediaDB.TrackBackgroundOperation()
+			if recreateErr != nil {
+				log.Error().Err(recreateErr).Msg("failed to recreate media database for rebuild")
+				notifyMediaIndexingStopped(ns, db.MediaDB)
+				statusInstance.clear()
+				return
+			}
+			// Recreate opened a fresh pool at the steady-state size; re-widen it.
+			db.MediaDB.SetIndexingConnBoost(true)
+			log.Info().Msg("media database recreated for full rebuild; starting reindex")
+		}
+
 		notifState := indexingNotificationState{}
 		const notifThrottleInterval = 250 * time.Millisecond
+
+		// Tracks whether the DB holds queryable data, so status notifications
+		// stay truthful mid-index (clients serve partial results against it).
+		// Sticky once true: media only accumulates during a run. Rechecked at
+		// most once per throttled notification until it flips.
+		dbHasData := mediaDBHasUsableData(db.MediaDB)
 
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
@@ -415,6 +601,13 @@ func GenerateMediaDB(
 				}
 			}
 
+			// Once cancellation is requested the scanner may fire one more status
+			// update before it observes the cancelled context. Skip it so the
+			// running flag isn't resurrected after cancel() cleared it.
+			if indexCtx.Err() != nil {
+				return
+			}
+
 			// Always update in-memory status for polling clients.
 			statusInstance.set(indexingStatusVals{
 				indexing:    true,
@@ -432,14 +625,24 @@ func GenerateMediaDB(
 				return
 			}
 
+			if !dbHasData {
+				dbHasData = mediaDBHasUsableData(db.MediaDB)
+			}
+			// Step increments as each system starts, so Step-1 systems have
+			// committed; Total includes the final "Writing database" step.
+			systemsCompleted := max(status.Step-1, 0)
+			systemsTotal := max(status.Total-1, 0)
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:             false,
+				Exists:             dbHasData,
 				Indexing:           true,
 				Paused:             pauser != nil && pauser.IsPaused(),
+				Throttled:          pauser != nil && pauser.IsThrottled(),
 				TotalSteps:         &status.Total,
 				CurrentStep:        &status.Step,
 				CurrentStepDisplay: &desc,
 				TotalFiles:         &status.Files,
+				SystemsCompleted:   &systemsCompleted,
+				SystemsTotal:       &systemsTotal,
 			})
 
 			log.Debug().Msgf("indexing status: %v", indexingStatusVals{
@@ -451,10 +654,12 @@ func GenerateMediaDB(
 			})
 		}, pauser)
 		if err != nil {
+			// A cancelled or failed run may still leave a usable database
+			// (a prior index, or systems committed before the interruption).
 			if errors.Is(err, context.Canceled) {
 				log.Info().Msg("media indexing was cancelled")
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:     false,
+					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
 				})
@@ -462,7 +667,7 @@ func GenerateMediaDB(
 				log.Error().Err(err).Msg("error generating media db")
 				// TODO: error notification to client
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:     false,
+					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
 				})
@@ -471,8 +676,15 @@ func GenerateMediaDB(
 			return
 		}
 		log.Info().Msg("finished generating media db successfully")
+		// A completed index (whether a fresh run or a resumed one) clears the
+		// consecutive resume-attempt counter immediately, rather than waiting for
+		// the next boot to observe a clean status. Otherwise interruptions from an
+		// earlier effort keep counting and could trip the resume cap prematurely.
+		if resetErr := db.MediaDB.ResetIndexResumeAttempts(); resetErr != nil {
+			log.Warn().Err(resetErr).Msg("failed to reset index resume attempts after successful index")
+		}
 		mediaImageNoImages.clear()
-		WipeMediaThumbCache()
+		invalidateIndexedThumbnails(systems, rebuild)
 		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
@@ -518,6 +730,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 
 	var systems []systemdefs.System
 	var isSelectiveIndexing bool
+	var rebuild bool
 
 	if len(env.Params) > 0 {
 		var params models.MediaIndexParams
@@ -529,6 +742,13 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		if validateErr := validation.DefaultValidator.Validate(&params); validateErr != nil {
 			log.Warn().Err(validateErr).Msg("invalid params")
 			return nil, models.ClientErrf("invalid params: %w", validateErr)
+		}
+
+		rebuild = params.Rebuild != nil && *params.Rebuild
+		if rebuild && params.Systems != nil {
+			// A rebuild discards the whole database; indexing only a subset
+			// afterwards would silently drop every other system's media.
+			return nil, models.ClientErrf("rebuild cannot be combined with a systems filter")
 		}
 
 		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
@@ -570,8 +790,18 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	// Reconcile with current primary-media state before reporting initial
+	// paused status. This clears stale pauses left by non-primary media events.
+	if env.State != nil {
+		syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.IndexPauser)
+	}
+
 	// Use app-scoped context — indexing outlives the API request
-	err := GenerateMediaDB(
+	generate := GenerateMediaDB
+	if rebuild {
+		generate = GenerateMediaDBRebuild
+	}
+	err := generate(
 		env.State.GetContext(),
 		env.Platform,
 		env.Config,
@@ -720,13 +950,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 
 		results = append(results, models.SearchResultMedia{
-			MediaID:   result.MediaID,
-			RelPath:   relPath,
-			System:    resultSystem,
-			Name:      result.Name,
-			Path:      result.Path,
-			ZapScript: zapScript,
-			Tags:      result.Tags,
+			MediaID:            result.MediaID,
+			RelPath:            relPath,
+			System:             resultSystem,
+			Name:               result.Name,
+			Path:               result.Path,
+			ZapScript:          zapScript,
+			Tags:               result.Tags,
+			DisambiguatingTags: result.ZapScriptTags,
 		})
 	}
 
@@ -782,11 +1013,29 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	var tagList []database.TagInfo
 	var err error
 
-	// Optimize for "all systems" case
+	// Prefer SystemTagsCache for all-systems too. Scanning MediaTags and
+	// MediaTitleTags directly can take seconds on million-row libraries, while the
+	// cache is rebuilt after indexing and is small enough for request-time use.
 	fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
 	switch {
 	case system == nil || len(*system) == 0:
-		tagList, err = env.Database.MediaDB.GetAllUsedTags(ctx)
+		indexedSystemIDs, indexedErr := env.Database.MediaDB.IndexedSystems()
+		if indexedErr == nil && len(indexedSystemIDs) > 0 {
+			var systems []systemdefs.System
+			systems, err = resolveSystems(indexedSystemIDs, false)
+			if err == nil {
+				tagList, err = env.Database.MediaDB.GetSystemTagsCached(ctx, systems)
+			}
+		}
+		if indexedErr != nil || len(indexedSystemIDs) == 0 || err != nil {
+			if indexedErr != nil {
+				log.Debug().Err(indexedErr).Msg("failed to get indexed systems for cached tag list")
+			}
+			if err != nil {
+				log.Debug().Err(err).Msg("failed to get cached all-system tags")
+			}
+			tagList, err = env.Database.MediaDB.GetAllUsedTags(ctx)
+		}
 	default:
 		systems, resolveErr := resolveSystems(*system, fuzzy)
 		if resolveErr != nil {
@@ -886,7 +1135,19 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	status := statusInstance.get()
 	resp.Database.Indexing = status.indexing
 
-	// Get optimization status
+	// Get persisted work statuses. Process-local status wins when present, but
+	// persisted DBConfig state lets clients show boot-time interrupted work before
+	// the resume goroutine has rebuilt in-memory progress.
+	persistedIndexingStatus := ""
+	if !resp.Database.Indexing {
+		var indexingErr error
+		persistedIndexingStatus, indexingErr = env.Database.MediaDB.GetIndexingStatus()
+		if indexingErr != nil {
+			log.Warn().Err(indexingErr).Msg("failed to get persisted indexing status for media response")
+			persistedIndexingStatus = ""
+		}
+	}
+
 	optimizationStatus, err := env.Database.MediaDB.GetOptimizationStatus()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get optimization status for media response")
@@ -894,51 +1155,69 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	}
 
 	paused := env.IndexPauser != nil && env.IndexPauser.IsPaused()
+	throttled := env.IndexPauser != nil && env.IndexPauser.IsThrottled()
 
 	switch {
 	case resp.Database.Indexing:
 		// During indexing, don't show optimizing even if optimization is running
 		resp.Database.Optimizing = false
 		resp.Database.Paused = paused
-		resp.Database.Exists = false
+		resp.Database.Throttled = throttled
+		resp.Database.Exists = mediaDBHasUsableData(env.Database.MediaDB)
 		resp.Database.TotalSteps = &status.totalSteps
 		resp.Database.CurrentStep = &status.currentStep
 		resp.Database.CurrentStepDisplay = &status.currentDesc
 		resp.Database.TotalFiles = &status.totalFiles
-	case optimizationStatus == "running":
+		systemsCompleted := max(status.currentStep-1, 0)
+		systemsTotal := max(status.totalSteps-1, 0)
+		resp.Database.SystemsCompleted = &systemsCompleted
+		resp.Database.SystemsTotal = &systemsTotal
+	case isPersistentMediaWorkStatus(persistedIndexingStatus):
+		resp.Database.Indexing = true
+		resp.Database.Optimizing = false
+		resp.Database.Paused = paused
+		resp.Database.Throttled = throttled
+		resp.Database.Exists = mediaDBHasUsableData(env.Database.MediaDB)
+		resp.Database.CurrentStepDisplay = ptrString(preparingResumeMediaDatabaseUpdateDisplay)
+	// IsOptimizing also covers a standalone browse-cache rebuild (e.g. the startup
+	// self-heal) that runs outside a full RunBackgroundOptimization pass and so
+	// never touches the persisted OptimizationStatus. See MediaDB.IsOptimizing.
+	case isPersistentMediaWorkStatus(optimizationStatus) || env.Database.MediaDB.IsOptimizing():
 		resp.Database.Optimizing = true
 		resp.Database.Paused = paused
 		// If optimizing, show the current optimization step
 		optimizationStep, stepErr := env.Database.MediaDB.GetOptimizationStep()
-		if stepErr != nil {
+		switch {
+		case stepErr != nil:
 			log.Warn().Err(stepErr).Msg("failed to get optimization step")
-		} else if optimizationStep != "" {
+		case optimizationStep != "":
 			resp.Database.CurrentStepDisplay = &optimizationStep
+		case optimizationStatus == mediadb.IndexingStatusPending:
+			resp.Database.CurrentStepDisplay = ptrString(preparingDatabaseOptimizationDisplay)
 		}
 
 		// Database exists but is being optimized
 		resp.Database.Exists = true
 	default:
-		// Not indexing and not optimizing
+		// Not indexing and not optimizing. Existence covers both a completed
+		// index and partial data left by an interrupted one.
 		resp.Database.Optimizing = false
-		// Try to get last generated time, but don't fail if database is locked
-		lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
-		if err != nil {
-			// Database might be locked during indexing transition - don't fail completely
-			log.Warn().Err(err).Msg("failed to get last generated time, assuming database doesn't exist")
-			resp.Database.Exists = false
-		} else {
-			resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
-		}
+		resp.Database.Exists = mediaDBHasUsableData(env.Database.MediaDB)
 	}
 
-	// Get total media count if database exists and is not indexing
+	// Get media counts if database exists and is not indexing
 	if resp.Database.Exists && !resp.Database.Indexing {
 		totalCount, err := env.Database.MediaDB.GetTotalMediaCount()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to get total media count")
 		} else {
 			resp.Database.TotalMedia = &totalCount
+		}
+		missingCount, err := env.Database.MediaDB.GetMissingMediaCount()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to get missing media count")
+		} else {
+			resp.Database.MissingMedia = &missingCount
 		}
 	}
 

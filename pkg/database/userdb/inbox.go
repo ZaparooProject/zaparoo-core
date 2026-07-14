@@ -24,17 +24,17 @@ import (
 )
 
 func (db *UserDB) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
-	return sqlAddInboxMessage(db.ctx, db.sql, msg)
+	return sqlAddInboxMessage(db.ctx, db.sql.Load(), msg)
 }
 
 func (db *UserDB) GetInboxMessages() ([]database.InboxMessage, error) {
-	return sqlGetInboxMessages(db.ctx, db.sql)
+	return sqlGetInboxMessages(db.ctx, db.sql.Load())
 }
 
 func (db *UserDB) DeleteInboxMessage(id int64) error {
-	return sqlDeleteInboxMessage(db.ctx, db.sql, id)
+	return sqlDeleteInboxMessage(db.ctx, db.sql.Load(), id)
 }
 
 func (db *UserDB) DeleteAllInboxMessages() (int64, error) {
-	return sqlDeleteAllInboxMessages(db.ctx, db.sql)
+	return sqlDeleteAllInboxMessages(db.ctx, db.sql.Load())
 }

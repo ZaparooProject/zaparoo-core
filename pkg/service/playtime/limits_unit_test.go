@@ -285,12 +285,11 @@ func TestCooldownTimer_AutomaticReset(t *testing.T) {
 
 	tm.enabled = true
 
-	// Simulate entering cooldown with 20 minute timeout
+	// Simulate entering cooldown with 20 minute timeout (default from config).
 	tm.mu.Lock()
 	tm.state = StateCooldown
 	tm.sessionCumulativeTime = 30 * time.Minute
 	tm.lastStopTime = clock.Now()
-	tm.sessionResetTimeout = 20 * time.Minute
 	tm.cooldownTimer = clock.NewTimer(20 * time.Minute)
 	tm.mu.Unlock()
 
@@ -336,12 +335,11 @@ func TestCooldownTimer_CancelledByNewGame(t *testing.T) {
 
 	tm.enabled = true
 
-	// Enter cooldown with timer running
+	// Enter cooldown with timer running (20 min = default from config).
 	tm.mu.Lock()
 	tm.state = StateCooldown
 	tm.sessionCumulativeTime = 15 * time.Minute
 	tm.lastStopTime = clock.Now()
-	tm.sessionResetTimeout = 20 * time.Minute
 	tm.cooldownTimer = clock.NewTimer(20 * time.Minute)
 	originalTimer := tm.cooldownTimer
 	tm.mu.Unlock()

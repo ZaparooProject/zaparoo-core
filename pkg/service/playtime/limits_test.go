@@ -161,13 +161,16 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
+		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
+			Return(int64(0), nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
 		}
 
-		cfg := &config.Instance{}
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{Limits: config.PlaytimeLimits{Daily: "2h"}},
+		})
 
 		sessionStart := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
 		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
@@ -239,13 +242,16 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
+		mockDB.On("SumMediaPlayTimeForDay", time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)).
+			Return(int64(0), nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
 		}
 
-		cfg := &config.Instance{}
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{Limits: config.PlaytimeLimits{Daily: "2h"}},
+		})
 
 		// Session started yesterday at 11 PM
 		sessionStart := time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC)
@@ -279,107 +285,74 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 	t.Parallel()
 
+	// todayStart for all test cases: midnight UTC on 2025-01-15
+	todayStart := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+
 	tests := []struct {
 		sessionStart            time.Time
 		currentTime             time.Time
 		name                    string
 		wantSessionDurationDesc string
 		wantDailyUsageDesc      string
-		historicalEntries       []database.MediaHistoryEntry
-		wantSessionDuration     time.Duration
-		wantDailyUsageToday     time.Duration
+		// sqlSeconds is the value SumMediaPlayTimeForDay returns for completed
+		// historical sessions. The current session's contribution is added by
+		// buildRuleContext via sessionDurationToday.
+		sqlSeconds          int64
+		wantSessionDuration time.Duration
+		wantDailyUsageToday time.Duration
 	}{
 		{
 			name:                    "session entirely within today",
 			sessionStart:            time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC),
 			currentTime:             time.Date(2025, 1, 15, 15, 30, 0, 0, time.UTC),
-			historicalEntries:       []database.MediaHistoryEntry{},
+			sqlSeconds:              0, // no completed sessions before current
 			wantSessionDuration:     90 * time.Minute,
 			wantDailyUsageToday:     90 * time.Minute,
 			wantSessionDurationDesc: "1.5 hours",
 			wantDailyUsageDesc:      "1.5 hours (current session only)",
 		},
 		{
-			name:         "session started yesterday, continues today",
-			sessionStart: time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC), // 11 PM yesterday
-			currentTime:  time.Date(2025, 1, 15, 0, 30, 0, 0, time.UTC), // 12:30 AM today
-			historicalEntries: []database.MediaHistoryEntry{
-				// Previous session yesterday: 10 PM - 11 PM (1 hour)
-				{
-					DBID:      2,
-					StartTime: time.Date(2025, 1, 14, 22, 0, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC)),
-					PlayTime:  3600, // 1 hour in seconds
-				},
-			},
-			wantSessionDuration:     90 * time.Minute, // Total session: 1.5 hours
-			wantDailyUsageToday:     30 * time.Minute, // Only 30 minutes after midnight
+			// Previous session 22:00–23:00 yesterday; SQL excludes it (EndTime not > dayStart).
+			// sqlSeconds=0; only the 30 min after midnight counts toward today.
+			name:                    "session started yesterday, continues today",
+			sessionStart:            time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC),
+			currentTime:             time.Date(2025, 1, 15, 0, 30, 0, 0, time.UTC),
+			sqlSeconds:              0,
+			wantSessionDuration:     90 * time.Minute,
+			wantDailyUsageToday:     30 * time.Minute,
 			wantSessionDurationDesc: "1.5 hours total",
 			wantDailyUsageDesc:      "30 minutes (only time after midnight)",
 		},
 		{
-			name:         "session started yesterday, historical session spans midnight",
-			sessionStart: time.Date(2025, 1, 15, 1, 0, 0, 0, time.UTC), // 1 AM today
-			currentTime:  time.Date(2025, 1, 15, 2, 0, 0, 0, time.UTC), // 2 AM today
-			historicalEntries: []database.MediaHistoryEntry{
-				// Session that spans midnight: 11 PM yesterday - 12:30 AM today
-				{
-					DBID:      3,
-					StartTime: time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 15, 0, 30, 0, 0, time.UTC)),
-					PlayTime:  5400, // 1.5 hours total
-				},
-			},
-			wantSessionDuration:     60 * time.Minute, // Current session: 1 hour
-			wantDailyUsageToday:     90 * time.Minute, // 30 min from historical + 60 min current
+			// Historical session spans midnight (23:00–00:30): 30 min portion after midnight = 1800 sec.
+			name:                    "session started yesterday, historical session spans midnight",
+			sessionStart:            time.Date(2025, 1, 15, 1, 0, 0, 0, time.UTC), // 1 AM today
+			currentTime:             time.Date(2025, 1, 15, 2, 0, 0, 0, time.UTC), // 2 AM today
+			sqlSeconds:              1800,                                         // 30 min after midnight
+			wantSessionDuration:     60 * time.Minute,                             // Current session: 1 hour
+			wantDailyUsageToday:     90 * time.Minute,                             // 30 min historical + 60 min current
 			wantSessionDurationDesc: "1 hour",
 			wantDailyUsageDesc:      "1.5 hours (30 min historical after midnight + 1 hour current)",
 		},
 		{
-			name:         "multiple historical sessions, some span midnight",
-			sessionStart: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC), // 10 AM today
-			currentTime:  time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC), // 11 AM today
-			historicalEntries: []database.MediaHistoryEntry{
-				// Most recent: Started today at 8 AM, ended at 9 AM (1 hour)
-				{
-					DBID:      5,
-					StartTime: time.Date(2025, 1, 15, 8, 0, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 15, 9, 0, 0, 0, time.UTC)),
-					PlayTime:  3600,
-				},
-				// Spans midnight: 11:30 PM yesterday - 12:45 AM today
-				{
-					DBID:      4,
-					StartTime: time.Date(2025, 1, 14, 23, 30, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 15, 0, 45, 0, 0, time.UTC)),
-					PlayTime:  4500, // 1.25 hours total
-				},
-				// Entirely yesterday: 10 PM - 11 PM
-				{
-					DBID:      3,
-					StartTime: time.Date(2025, 1, 14, 22, 0, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC)),
-					PlayTime:  3600,
-				},
-			},
-			wantSessionDuration:     60 * time.Minute,  // Current: 1 hour
-			wantDailyUsageToday:     165 * time.Minute, // 45 min (midnight span) + 60 min (8-9 AM) + 60 min (current)
+			// Two historical sessions overlap today: 8–9 AM (3600 sec) + midnight-span 45 min
+			// (2700 sec) = 6300 sec total. Entirely-yesterday session (22–23) excluded by SQL.
+			// wantDailyUsageToday = 105 min historical + 60 min current = 165 min.
+			name:                    "multiple historical sessions, some span midnight",
+			sessionStart:            time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
+			currentTime:             time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC),
+			sqlSeconds:              6300,
+			wantSessionDuration:     60 * time.Minute,
+			wantDailyUsageToday:     165 * time.Minute,
 			wantSessionDurationDesc: "1 hour",
-			wantDailyUsageDesc:      "2h45m (45 min from midnight span + 1 hour 8-9 AM + 1 hour current)",
+			wantDailyUsageDesc:      "2h45m (45 min midnight span + 1 hour 8-9 AM + 1 hour current)",
 		},
 		{
-			name:         "historical session ended before today - should not count",
-			sessionStart: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
-			currentTime:  time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC),
-			historicalEntries: []database.MediaHistoryEntry{
-				// Ended before today
-				{
-					DBID:      2,
-					StartTime: time.Date(2025, 1, 14, 22, 0, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 14, 23, 30, 0, 0, time.UTC)),
-					PlayTime:  5400,
-				},
-			},
+			// Historical session 22:00–23:30 yesterday; EndTime not > dayStart, excluded.
+			name:                    "historical session ended before today - should not count",
+			sessionStart:            time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
+			currentTime:             time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC),
+			sqlSeconds:              0, // excluded
 			wantSessionDuration:     60 * time.Minute,
 			wantDailyUsageToday:     60 * time.Minute, // Only current session
 			wantSessionDurationDesc: "1 hour",
@@ -393,17 +366,15 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 
 			// Setup mock database
 			mockDB := testhelpers.NewMockUserDBI()
-			mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return(tt.historicalEntries, nil)
+			mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(tt.sqlSeconds, nil)
 
 			db := &database.Database{
 				UserDB: mockDB,
 			}
 
-			// Setup config with limits enabled
-			cfg := &config.Instance{}
-			*cfg = config.Instance{} // Initialize with defaults
-			// Note: We don't actually need limits enabled for buildRuleContext testing,
-			// just need the Instance to exist
+			cfg := newTestConfig(t, &config.Values{
+				Playtime: config.Playtime{Limits: config.PlaytimeLimits{Daily: "24h"}},
+			})
 
 			// Create LimitsManager with fake clock
 			fakeClock := clockwork.NewFakeClockAt(tt.currentTime)
@@ -434,71 +405,47 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		todayStart            time.Time
-		name                  string
-		historicalEntries     []database.MediaHistoryEntry
-		currentSessionDur     time.Duration
-		wantDailyUsage        time.Duration
-		wantDailyUsageMinutes int
+		todayStart        time.Time
+		name              string
+		currentSessionDur time.Duration
+		wantDailyUsage    time.Duration
+		// sqlSeconds is the value SumMediaPlayTimeForDay returns for completed
+		// sessions overlapping today. The active session (EndTime IS NULL) is
+		// excluded by the SQL query; callers add currentSessionDur separately.
+		sqlSeconds int64
 	}{
 		{
 			name:              "no historical entries, only current session",
 			todayStart:        time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
 			currentSessionDur: 45 * time.Minute,
-			historicalEntries: []database.MediaHistoryEntry{},
+			sqlSeconds:        0,
 			wantDailyUsage:    45 * time.Minute,
 		},
 		{
+			// Completed session (1 hour) + active session excluded by SQL.
+			// currentSessionDur accounts for the active session; no double-count.
 			name:              "active session in DB should be skipped (prevents double-counting)",
 			todayStart:        time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
 			currentSessionDur: 30 * time.Minute,
-			historicalEntries: []database.MediaHistoryEntry{
-				// Previous completed session today
-				{
-					DBID:      2,
-					StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)),
-					PlayTime:  3600, // 1 hour
-				},
-				// Active session (EndTime = nil) - should be SKIPPED to avoid double-count
-				{
-					DBID:      3,
-					StartTime: time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC),
-					EndTime:   nil,  // Still running
-					PlayTime:  1800, // 30 minutes (same as currentSessionDur)
-				},
-			},
-			// Should be: 1 hour (completed) + 30 min (current) = 90 minutes
-			// NOT: 1 hour + 30 min (from DB) + 30 min (current) = 2 hours
-			wantDailyUsage: 90 * time.Minute,
+			sqlSeconds:        3600, // 1 hour completed session
+			wantDailyUsage:    90 * time.Minute,
 		},
 		{
+			// Session ending exactly at midnight: EndTime == dayStart, SQL uses > not >=, so excluded.
 			name:              "historical session exactly at midnight boundary",
 			todayStart:        time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
 			currentSessionDur: 30 * time.Minute,
-			historicalEntries: []database.MediaHistoryEntry{
-				{
-					DBID:      1,
-					StartTime: time.Date(2025, 1, 14, 23, 59, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)), // Ends exactly at midnight
-					PlayTime:  60,
-				},
-			},
-			wantDailyUsage: 30 * time.Minute, // Should not count the midnight-ending session
+			sqlSeconds:        0,
+			wantDailyUsage:    30 * time.Minute,
 		},
 		{
+			// Session ending 1 second after midnight: EndTime > dayStart, StartTime < dayStart.
+			// SQL returns EndTime - dayStart = 1 second.
 			name:              "historical session ends 1 second after midnight",
 			todayStart:        time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
 			currentSessionDur: 30 * time.Minute,
-			historicalEntries: []database.MediaHistoryEntry{
-				{
-					DBID:      1,
-					StartTime: time.Date(2025, 1, 14, 23, 59, 0, 0, time.UTC),
-					EndTime:   timePtr(time.Date(2025, 1, 15, 0, 0, 1, 0, time.UTC)), // 1 second after midnight
-					PlayTime:  61,
-				},
-			},
-			wantDailyUsage: 30*time.Minute + 1*time.Second, // Should count 1 second from historical
+			sqlSeconds:        1,
+			wantDailyUsage:    30*time.Minute + 1*time.Second,
 		},
 	}
 
@@ -508,7 +455,7 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 
 			// Setup mock database
 			mockDB := testhelpers.NewMockUserDBI()
-			mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return(tt.historicalEntries, nil)
+			mockDB.On("SumMediaPlayTimeForDay", tt.todayStart).Return(tt.sqlSeconds, nil)
 
 			db := &database.Database{
 				UserDB: mockDB,
@@ -517,11 +464,6 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 			// Create LimitsManager
 			cfg := &config.Instance{}
 			tm := NewLimitsManager(db, nil, cfg, clockwork.NewRealClock(), newNoOpMockPlayer())
-
-			// Mark session start as reliable
-			tm.mu.Lock()
-			tm.sessionStartReliable = true
-			tm.mu.Unlock()
 
 			// Calculate daily usage
 			dailyUsage, err := tm.calculateDailyUsage(tt.todayStart, tt.currentSessionDur)
@@ -535,7 +477,397 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 	}
 }
 
-// Helper function to create time pointers
-func timePtr(t time.Time) *time.Time {
-	return &t
+// TestRestoreSessionFromHistory covers the session-restore path that reconstructs
+// cooldown state from MediaHistory entries after a service restart.
+func TestRestoreSessionFromHistory(t *testing.T) {
+	t.Parallel()
+
+	// All test cases use the default 20-minute session reset timeout (nil SessionReset = default).
+	baseCfg := func(t *testing.T) *config.Instance {
+		t.Helper()
+		//nolint:exhaustruct // only SessionResetTimeout (default) needed
+		cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+		require.NoError(t, err)
+		return cfg
+	}
+
+	t.Run("no entries - no restore", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{}, nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), clockwork.NewFakeClock(), newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(time.Now())
+
+		tm.mu.Lock()
+		assert.Equal(t, StateReset, tm.state)
+		assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("most recent entry still open - no restore", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 1, StartTime: time.Now().Add(-5 * time.Minute), EndTime: nil, PlayTime: 300},
+			}, nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), clockwork.NewFakeClock(), newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(time.Now())
+
+		tm.mu.Lock()
+		assert.Equal(t, StateReset, tm.state)
+		assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("last session outside cooldown window - no restore", func(t *testing.T) {
+		t.Parallel()
+
+		// Session ended 25 minutes ago; default cooldown is 20 minutes.
+		endTime := time.Now().Add(-25 * time.Minute)
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 1, StartTime: endTime.Add(-10 * time.Minute), EndTime: &endTime, PlayTime: 600},
+			}, nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), clockwork.NewFakeClock(), newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(time.Now())
+
+		tm.mu.Lock()
+		assert.Equal(t, StateReset, tm.state)
+		assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("single session within cooldown window - restored to cooldown", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+		// Session ended 5 minutes ago with 10 minutes of play time.
+		endTime := now.Add(-5 * time.Minute)
+		startTime := endTime.Add(-10 * time.Minute)
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 1, StartTime: startTime, EndTime: &endTime, PlayTime: 600},
+			}, nil)
+
+		fakeClock := clockwork.NewFakeClockAt(now)
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), fakeClock, newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(now)
+
+		tm.mu.Lock()
+		assert.Equal(t, StateCooldown, tm.state, "state should be restored to cooldown")
+		assert.Equal(t, 600*time.Second, tm.sessionCumulativeTime, "cumulative time should match PlayTime")
+		assert.Equal(t, endTime, tm.lastStopTime, "last stop time should be restored")
+		assert.NotNil(t, tm.cooldownTimer, "cooldown timer should be set")
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("multiple consecutive sessions - cumulative time accumulates", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+
+		// Most recent session (DBID 2): ended 3 minutes ago, 5 minutes play.
+		end2 := now.Add(-3 * time.Minute)
+		start2 := end2.Add(-5 * time.Minute)
+		// Previous session (DBID 1): ended 10 minutes ago (gap 7 min < 20 min), 8 minutes play.
+		end1 := now.Add(-10 * time.Minute)
+		start1 := end1.Add(-8 * time.Minute)
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// GetMediaHistory returns newest-first.
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 2, StartTime: start2, EndTime: &end2, PlayTime: 300},
+				{DBID: 1, StartTime: start1, EndTime: &end1, PlayTime: 480},
+			}, nil)
+
+		fakeClock := clockwork.NewFakeClockAt(now)
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), fakeClock, newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(now)
+
+		tm.mu.Lock()
+		assert.Equal(t, StateCooldown, tm.state)
+		// 300s + 480s = 780s total cumulative time
+		assert.Equal(t, 780*time.Second, tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("gap between sessions exceeds window - only most recent session counted", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+
+		// Most recent session (DBID 2): ended 3 minutes ago, 5 minutes play.
+		end2 := now.Add(-3 * time.Minute)
+		start2 := end2.Add(-5 * time.Minute)
+		// Previous session (DBID 1): ended 30 minutes ago (gap 25 min > 20 min), 10 minutes play.
+		end1 := now.Add(-30 * time.Minute)
+		start1 := end1.Add(-10 * time.Minute)
+
+		mockDB := testhelpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).
+			Return([]database.MediaHistoryEntry{
+				{DBID: 2, StartTime: start2, EndTime: &end2, PlayTime: 300},
+				{DBID: 1, StartTime: start1, EndTime: &end1, PlayTime: 600},
+			}, nil)
+
+		fakeClock := clockwork.NewFakeClockAt(now)
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			baseCfg(t), fakeClock, newNoOpMockPlayer(),
+		)
+		defer tm.Stop()
+
+		tm.RestoreSessionFromHistory(now)
+
+		tm.mu.Lock()
+		assert.Equal(t, StateCooldown, tm.state)
+		// Only the most recent 300s session should be accumulated; gap breaks the chain.
+		assert.Equal(t, 300*time.Second, tm.sessionCumulativeTime)
+		tm.mu.Unlock()
+		mockDB.AssertExpectations(t)
+	})
+}
+
+// TestCheckBeforeLaunch verifies that CheckBeforeLaunch correctly blocks launches
+// when daily or session limits have been reached or leave insufficient time.
+func TestCheckBeforeLaunch(t *testing.T) {
+	t.Parallel()
+
+	// reliableClock returns a time in 2025 so helpers.IsClockReliable returns true.
+	reliableTime := time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC)
+	todayStart := time.Date(2025, 6, 13, 0, 0, 0, 0, time.UTC)
+
+	t.Run("limits not enabled in config - allowed", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Daily:   "2h",
+					Session: "1h",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(nil, nil, cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer())
+		// PlaytimeLimitsEnabled() is false (Enabled == nil)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.NoError(t, err)
+		assert.Empty(t, reason)
+	})
+
+	t.Run("no limits configured - allowed", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "",
+					Session: "",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(nil, nil, cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer())
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.NoError(t, err)
+		assert.Empty(t, reason)
+	})
+
+	t.Run("daily limit fully consumed - blocked with daily reason", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// DB reports 2 hours already played today.
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(7200), nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonDaily, reason)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("daily limit with less than minimum viable session remaining - blocked", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// 30 seconds remaining (2h limit - 1h59m30s played). MinimumViableSession = 1 minute.
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(7170), nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonDaily, reason)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("session limit fully consumed - blocked with session reason", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Session: "1h",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(
+			nil, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		// Inject 1h of accumulated session time.
+		tm.mu.Lock()
+		tm.sessionCumulativeTime = time.Hour
+		tm.mu.Unlock()
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonSession, reason)
+	})
+
+	t.Run("session limit with less than minimum viable session remaining - blocked", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Session: "1h",
+				},
+			},
+		})
+
+		tm := NewLimitsManager(
+			nil, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		// 59m30s used — 30 seconds remain, which is below MinimumViableSession (1 minute).
+		tm.mu.Lock()
+		tm.sessionCumulativeTime = 59*time.Minute + 30*time.Second
+		tm.mu.Unlock()
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.Error(t, err)
+		assert.Equal(t, apimodels.PlaytimeLimitReasonSession, reason)
+	})
+
+	t.Run("both limits have time remaining - allowed", func(t *testing.T) {
+		t.Parallel()
+
+		enabled := true
+		cfg := newTestConfig(t, &config.Values{
+			Playtime: config.Playtime{
+				Limits: config.PlaytimeLimits{
+					Enabled: &enabled,
+					Daily:   "2h",
+					Session: "1h",
+				},
+			},
+		})
+
+		mockDB := testhelpers.NewMockUserDBI()
+		// 30 minutes played today.
+		mockDB.On("SumMediaPlayTimeForDay", todayStart).Return(int64(1800), nil)
+
+		tm := NewLimitsManager(
+			&database.Database{UserDB: mockDB}, nil,
+			cfg, clockwork.NewFakeClockAt(reliableTime), newNoOpMockPlayer(),
+		)
+		tm.SetEnabled(true)
+
+		// 30 minutes of session cumulative time accumulated.
+		tm.mu.Lock()
+		tm.sessionCumulativeTime = 30 * time.Minute
+		tm.mu.Unlock()
+
+		reason, err := tm.CheckBeforeLaunch()
+		require.NoError(t, err)
+		assert.Empty(t, reason)
+		mockDB.AssertExpectations(t)
+	})
 }

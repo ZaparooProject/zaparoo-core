@@ -255,6 +255,11 @@ func Start(
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.Start(notifBroker, st.Notifications)
+	// Restore session state from history so session limits survive restarts within
+	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
+	// and after the active profile is restored, so the session is judged
+	// against the right profile's limits.
+	limitsManager.RestoreSessionFromHistory(time.Now())
 	if limitsResolver.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
 	}
@@ -354,6 +359,9 @@ func Start(
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
+	// Recover before resuming persisted media work. A running status may be stale after
+	// a crash, while the sidecar marker remains authoritative and must win.
+	checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 	checkAndResumeScraping(pl, cfg, db, st, scrapePauser)
 
 	idleSched.Schedule(
@@ -364,6 +372,10 @@ func Start(
 				log.Warn().Msg("skipping startup media work: database is nil")
 				return
 			}
+
+			// Recover a corrupt media database before any other startup work reads it,
+			// so cache loads and resume checks operate on the fresh DB.
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 
 			var tagCacheLoaded, slugCacheLoaded bool
 			if db.MediaDB != nil {
@@ -391,10 +403,25 @@ func Start(
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-			checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-			checkAndResumeOptimization(db, st.Notifications, indexPauser)
+			indexResumeStarted := checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+			if !indexResumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+				// A failed optimization revealed a corrupt database; rebuild it now
+				// rather than waiting for the next startup.
+				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			}
 
+			// Rebuild the slug search cache (synchronous) before kicking off the
+			// browse-cache self-heal. Both are heavy DB readers; running them
+			// concurrently on a large library saturates the 2-connection pool and
+			// starves foreground browse (observed as 30 s browse timeouts on wake).
+			// Serializing them keeps a connection free for browsing throughout.
 			rebuildStartupSlugSearchCache(db.MediaDB, slugCacheLoaded)
+
+			// Recover a stale/absent browse cache so large libraries stay browsable
+			// without waiting for a full reindex to finish. Runs after the resume
+			// checks so it can see whether indexing was actually (re)started, and
+			// after the slug rebuild so the two don't contend for the connection pool.
+			checkAndHealBrowseCache(st.GetContext(), db, st.Notifications, indexPauser)
 		},
 	)
 
@@ -434,8 +461,9 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
-	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
-	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
+	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
+	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
@@ -448,7 +476,7 @@ func Start(
 		db:    db,
 		clock: clockwork.NewRealClock(),
 	}
-	historyNotifications, _ := notifBroker.Subscribe(100)
+	historyNotifications, _ := notifBroker.Subscribe(100, models.NotificationStarted, models.NotificationStopped)
 	historyListenDone := make(chan struct{})
 	go func() {
 		defer close(historyListenDone)

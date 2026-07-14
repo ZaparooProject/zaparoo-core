@@ -61,9 +61,14 @@ func HandleReaderWrite(
 
 	t, err := r.Write(p.Text)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		switch {
+		case errors.Is(err, context.Canceled):
 			log.Debug().Err(err).Msg("tag write cancelled")
-		} else {
+		case errors.Is(err, readers.ErrTagNotDetected), errors.Is(err, readers.ErrUnsupportedTagType):
+			// Expected user conditions (no tag presented, unsupported tag);
+			// keep these out of Sentry. Hardware write failures stay at Error.
+			log.Warn().Err(err).Msg("error writing to reader")
+		default:
 			log.Error().Err(err).Msg("error writing to reader")
 		}
 		return nil, errors.New("error writing to reader")

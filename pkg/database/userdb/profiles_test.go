@@ -189,52 +189,72 @@ func TestMediaHistory_ProfileAttribution(t *testing.T) {
 	defer cleanup()
 
 	now := time.Now()
+	year, month, day := now.Date()
+	dayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+	startTime := dayStart.Add(1 * time.Hour)
 	profileID := "profile-uuid-1"
 
+	attributedEnd := startTime.Add(120 * time.Second)
 	attributed := &database.MediaHistoryEntry{
-		StartTime:  now,
+		StartTime:  startTime,
+		EndTime:    &attributedEnd,
 		SystemID:   "SNES",
 		SystemName: "Super Nintendo",
 		MediaPath:  "snes/game.sfc",
 		MediaName:  "Game",
 		LauncherID: "test",
 		PlayTime:   120,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		CreatedAt:  startTime,
+		UpdatedAt:  startTime,
 		ProfileID:  &profileID,
 	}
-	_, err := db.AddMediaHistory(attributed)
+	dbid, err := db.AddMediaHistory(attributed)
 	require.NoError(t, err)
+	require.NoError(t, db.CloseMediaHistory(dbid, attributedEnd, 120))
 
+	unattributedEnd := startTime.Add(60 * time.Second)
 	unattributed := &database.MediaHistoryEntry{
-		StartTime:  now,
+		StartTime:  startTime,
+		EndTime:    &unattributedEnd,
 		SystemID:   "NES",
 		SystemName: "Nintendo",
 		MediaPath:  "nes/other.nes",
 		MediaName:  "Other",
 		LauncherID: "test",
 		PlayTime:   60,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		CreatedAt:  startTime,
+		UpdatedAt:  startTime,
 	}
-	_, err = db.AddMediaHistory(unattributed)
+	dbid, err = db.AddMediaHistory(unattributed)
 	require.NoError(t, err)
+	require.NoError(t, db.CloseMediaHistory(dbid, unattributedEnd, 60))
 
-	// Profile-scoped query returns only the attributed row.
-	scoped, err := db.GetMediaHistoryByProfile(profileID, 0, 10)
-	require.NoError(t, err)
-	require.Len(t, scoped, 1)
-	assert.Equal(t, "SNES", scoped[0].SystemID)
-	require.NotNil(t, scoped[0].ProfileID)
-	assert.Equal(t, profileID, *scoped[0].ProfileID)
-
-	// Unscoped query returns everything (device-level accounting).
+	// Rows carry their attribution.
 	all, err := db.GetMediaHistory(nil, 0, 10)
 	require.NoError(t, err)
-	assert.Len(t, all, 2)
+	require.Len(t, all, 2)
+	for i := range all {
+		if all[i].SystemID == "SNES" {
+			require.NotNil(t, all[i].ProfileID)
+			assert.Equal(t, profileID, *all[i].ProfileID)
+		} else {
+			assert.Nil(t, all[i].ProfileID)
+		}
+	}
+
+	// Profile-scoped daily sum counts only the attributed session.
+	scoped, err := db.SumMediaPlayTimeForDayByProfile(dayStart, profileID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(120), scoped)
+
+	// Unscoped daily sum counts everything (shared-profile / device-level
+	// accounting).
+	total, err := db.SumMediaPlayTimeForDay(dayStart)
+	require.NoError(t, err)
+	assert.Equal(t, int64(180), total)
 
 	// Unknown profile matches nothing.
-	none, err := db.GetMediaHistoryByProfile("unknown", 0, 10)
+	none, err := db.SumMediaPlayTimeForDayByProfile(dayStart, "unknown")
 	require.NoError(t, err)
-	assert.Empty(t, none)
+	assert.Equal(t, int64(0), none)
 }

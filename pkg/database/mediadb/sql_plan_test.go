@@ -33,13 +33,13 @@ func TestExplainHotScraperQueries(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT COUNT(*)
 		FROM MediaTags
 		WHERE TagDBID = ?
 	`, int64(1))
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT m.DBID
 		FROM Media m INDEXED BY media_system_path_idx
 		CROSS JOIN MediaTags mt
@@ -49,7 +49,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 	`, int64(1), int64(1))
 
 	// Previous scraped-ID shape. Kept to compare tag-driven scan against system-driven lookup.
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT mt.MediaDBID
 		FROM MediaTags mt
 		JOIN Media m ON mt.MediaDBID = m.DBID
@@ -57,7 +57,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 	`, int64(1), int64(1))
 
 	// Previous scraped-ID shape. Kept to compare the removed join/distinct overhead.
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT DISTINCT mt.MediaDBID
 		FROM MediaTags mt
 		JOIN Media m ON mt.MediaDBID = m.DBID
@@ -66,7 +66,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 		WHERE m.SystemDBID = ? AND tt.Type = ? AND t.Tag = ?
 	`, int64(1), "scraper.test", "scraped")
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
 		FROM MediaTitles mt
 		WHERE mt.SystemDBID = ?
@@ -80,7 +80,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 	`, int64(1), int64(1))
 
 	// Previous missing-title shape. Kept to compare removed Tags/TagTypes correlated join overhead.
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
 		FROM MediaTitles mt
 		WHERE mt.SystemDBID = ?
@@ -96,7 +96,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 		  )
 	`, int64(1), "scraper.test", "scraped", "scraped")
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
 		FROM Media m
 		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
@@ -105,7 +105,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 		ORDER BY m.DBID
 	`, "NES")
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		DELETE FROM MediaTitleTags
 		WHERE MediaTitleDBID IN (?, ?)
 		  AND EXISTS (
@@ -117,7 +117,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 	`, int64(1), int64(2), int64(2))
 
 	// Previous production shape. Target-copy benchmark showed it scales with large tag-type cardinality.
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		DELETE FROM MediaTitleTags
 		WHERE MediaTitleDBID IN (?, ?)
 		  AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)
@@ -125,7 +125,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 
 	// Rejected on target: fewer statements locally, but slower batch duration on target storage.
 	// Kept here only to compare plan shape when investigating future delete alternatives.
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		WITH delete_pairs(MediaTitleDBID, TypeDBID) AS (
 			VALUES (?, ?), (?, ?)
 		)
@@ -139,27 +139,27 @@ func TestExplainHotScraperQueries(t *testing.T) {
 		)
 	`, int64(1), int64(2), int64(2), int64(2))
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT DBID, Tag
 		FROM Tags
 		WHERE TypeDBID = ? AND Tag IN (?, ?, ?)
 	`, int64(2), "nintendo", "capcom", "konami")
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT DBID, Type, IsExclusive
 		FROM TagTypes
 		WHERE Type IN (?, ?, ?)
 	`, "developer", "property", "scraper.test")
 
-	explainQueryPlan(ctx, t, mediaDB.sql, `
+	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT t.DBID, t.Tag
 		FROM Tags t
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		WHERE tt.Type = ? AND t.Tag IN (?, ?)
 	`, "property", "description", "00000000000description")
 
-	dumpScraperPragmas(ctx, t, mediaDB.sql)
-	dumpSQLiteStats(ctx, t, mediaDB.sql)
+	dumpScraperPragmas(ctx, t, mediaDB.sql.Load())
+	dumpSQLiteStats(ctx, t, mediaDB.sql.Load())
 }
 
 func explainQueryPlan(ctx context.Context, t testing.TB, db *sql.DB, query string, args ...any) {

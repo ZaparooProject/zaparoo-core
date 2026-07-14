@@ -4,13 +4,13 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -44,7 +44,7 @@ type platformWithArcadeCache interface {
 type NameMapping struct {
 	CoreName   string
 	System     string
-	Name       string // TODO: use names.txt
+	Name       string
 	ArcadeName string
 }
 
@@ -140,6 +140,7 @@ func (tr *Tracker) mediaLookupContext() (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
+	//nolint:gosec // Caller owns and invokes returned cancel function.
 	return context.WithTimeout(parent, mediaLookupTimeout)
 }
 
@@ -207,7 +208,13 @@ func (tr *Tracker) LoadCore() {
 
 	data, err := os.ReadFile(misterconfig.CoreNameFile)
 	if err != nil {
-		log.Error().Msgf("error reading core name: %s", err)
+		// CORENAME is absent until MiSTer launches a core (e.g. right after boot).
+		// That's expected; other read errors (permissions, I/O) stay at Error.
+		if os.IsNotExist(err) {
+			log.Debug().Msgf("core name file not present yet: %s", err)
+		} else {
+			log.Error().Msgf("error reading core name: %s", err)
+		}
 		return
 	}
 
@@ -308,7 +315,13 @@ func (tr *Tracker) loadGame() {
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, mglErr := mgls.ReadMgl(path)
 		if mglErr != nil {
-			log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
+			// A missing MGL (e.g. AmigaVision virtual paths, or a cleaned-up temp
+			// MGL) just means we can't track that game; not a fault worth Sentry.
+			if errors.Is(mglErr, os.ErrNotExist) {
+				log.Warn().Err(mglErr).Str("path", path).Msg("active game mgl file not found")
+			} else {
+				log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
+			}
 		} else {
 			path = ResolvePath(mgl.File.Path)
 			log.Info().Msgf("mgl path: %s", path)
@@ -440,42 +453,6 @@ func loadRecent(filename string) error {
 	return nil
 }
 
-func (tr *Tracker) runPickerSelection(name string) {
-	contents, err := os.ReadFile(name) //nolint:gosec // Internal picker selection file
-	switch {
-	case err != nil:
-		log.Error().Msgf("error reading main picker selected: %s", err)
-	case len(contents) == 0:
-		log.Error().Msgf("main picker selected is empty")
-	default:
-		path := strings.TrimSpace(string(contents))
-		path = misterconfig.SDRootDir + "/" + path
-		log.Info().Msgf("main picker selected path: %s", path)
-
-		pickerContents, err := os.ReadFile(path) //nolint:gosec // Internal picker content path
-		if err != nil {
-			log.Error().Msgf("error reading main picker selected path: %s", err)
-		} else {
-			_, err = client.LocalClient(context.Background(), tr.cfg, models.MethodRun, string(pickerContents))
-			if err != nil {
-				log.Error().Err(err).Msg("error running local client")
-			}
-		}
-
-		files, err := os.ReadDir(misterconfig.MainPickerDir)
-		if err != nil {
-			log.Error().Msgf("error reading picker items dir: %s", err)
-		} else {
-			for _, file := range files {
-				err := os.Remove(filepath.Join(misterconfig.MainPickerDir, file.Name()))
-				if err != nil {
-					log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
-				}
-			}
-		}
-	}
-}
-
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
@@ -502,11 +479,12 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
 						err = loadRecent(event.Name)
 						if err != nil {
-							log.Error().Msgf("error loading recent file: %s", err)
+							if errors.Is(err, os.ErrNotExist) {
+								log.Warn().Msgf("recent mgl file not found: %s", err)
+							} else {
+								log.Error().Msgf("error loading recent file: %s", err)
+							}
 						}
-					case event.Name == misterconfig.MainPickerSelected:
-						log.Info().Msgf("main picker selected: %s", event.Name)
-						tr.runPickerSelection(event.Name)
 					}
 				}
 			case watchErr, ok := <-watcher.Errors:
@@ -576,16 +554,6 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	err = watcher.Add(misterconfig.CurrentPathFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to watch current path file (%s): %w", misterconfig.CurrentPathFile, err)
-	}
-
-	_, pickerExists := os.Stat(misterconfig.MainPickerSelected)
-	if pickerExists == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		log.Debug().Msgf("adding watcher for picker selected file: %s", misterconfig.MainPickerSelected)
-		err = watcher.Add(misterconfig.MainPickerSelected)
-		if err != nil {
-			return nil, fmt.Errorf("failed to watch picker selected file (%s): %w",
-				misterconfig.MainPickerSelected, err)
-		}
 	}
 
 	elapsed := time.Since(startTime)
