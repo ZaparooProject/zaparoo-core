@@ -146,7 +146,9 @@ func HandleRunRest(
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Info().Msg("received REST run request")
 
-		text := chi.URLParam(r, "*")
+		routeCtx := chi.RouteContext(r.Context())
+		prefix := strings.TrimSuffix(routeCtx.RoutePattern(), "*")
+		text := strings.TrimPrefix(r.URL.Path, prefix)
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
 			log.Warn().Msg("REST run not allowed")

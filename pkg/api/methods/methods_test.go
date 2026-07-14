@@ -78,6 +78,78 @@ func TestHandleRunRestReturnsWhenServiceContextCancelled(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
 
+// TestHandleRunRestDecodesPathWithParentheses is a regression test for
+// https://github.com/ZaparooProject/zaparoo-core/issues/1099 — filenames
+// containing parentheses (e.g. "Youjyuden (JP).mra") were failing to load
+// via the REST /run endpoint. Go's net/http populates r.URL.RawPath only
+// when its default re-escaping of r.URL.Path would not reproduce the
+// original request target exactly; a percent-escaped space combined with
+// literal parentheses is one such case. chi.URLParam(r, "*") returns the
+// wildcard segment from RawPath when present, so the token text ended up
+// still percent-encoded (e.g. "Youjyuden%20(JP).mra") instead of decoded
+// (e.g. "Youjyuden (JP).mra"), which broke file lookups downstream.
+func TestHandleRunRestDecodesPathWithParentheses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		requestPath string
+		wantText    string
+	}{
+		{
+			name:        "plain path with encoded space",
+			requestPath: "/run/SNES/Super%20Metroid.sfc",
+			wantText:    "SNES/Super Metroid.sfc",
+		},
+		{
+			name:        "path with parentheses and encoded space",
+			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
+			wantText:    "_Arcade/Youjyuden (JP).mra",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Instance{}
+			platform := mocks.NewMockPlatform()
+			platform.SetupBasicMock()
+			st, _ := state.NewState(platform, "test-boot-uuid")
+			t.Cleanup(st.StopService)
+
+			tokenQueue := make(chan tokens.Token, 1)
+			router := chi.NewRouter()
+			router.Get("/run/*", HandleRunRest(cfg, st, tokenQueue))
+
+			req := httptest.NewRequestWithContext(
+				context.Background(), http.MethodGet, tt.requestPath, http.NoBody,
+			)
+			req.RemoteAddr = "127.0.0.1:1234"
+			recorder := httptest.NewRecorder()
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				router.ServeHTTP(recorder, req)
+			}()
+
+			select {
+			case token := <-tokenQueue:
+				assert.Equal(t, tt.wantText, token.Text)
+			case <-time.After(time.Second):
+				t.Fatal("REST run handler did not send token to queue")
+			}
+
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("REST run handler did not return")
+			}
+		})
+	}
+}
+
 func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
 	t.Parallel()
 
