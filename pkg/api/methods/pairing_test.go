@@ -37,7 +37,7 @@ type mockPairingController struct {
 	cancelled bool
 }
 
-func (m *mockPairingController) StartPairing() (string, time.Time, error) {
+func (m *mockPairingController) StartPairing(_ string) (string, time.Time, error) {
 	return m.pin, m.expiresAt, m.err
 }
 

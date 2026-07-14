@@ -127,6 +127,8 @@ func (h *pairingTestHarness) runHandshake(
 	expectedServer := computePairingHMAC(confirmKeyB, "server", name, msgA, msgB)
 	require.Equal(t, expectedServer, result.ServerHMAC, "server HMAC must match what client computes")
 	require.Equal(t, derivedPairingKey, result.Client.PairingKey, "pairing keys must agree")
+	require.Equal(t, "member", result.Client.Role,
+		"client role must match the role chosen at StartPairing approval")
 
 	return result.Client, result.Client.PairingKey
 }
@@ -135,7 +137,7 @@ func TestStartPairing_GeneratesPIN(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	pin, expiresAt, err := h.mgr.StartPairing()
+	pin, expiresAt, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	assert.Len(t, pin, pairingPINLength)
@@ -149,9 +151,9 @@ func TestStartPairing_AlreadyInProgress(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
-	_, _, err = h.mgr.StartPairing()
+	_, _, err = h.mgr.StartPairing("member")
 	require.ErrorIs(t, err, errPairingInProgress)
 }
 
@@ -159,10 +161,10 @@ func TestStartPairing_AfterCancel(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 	h.mgr.CancelPairing()
-	_, _, err = h.mgr.StartPairing()
+	_, _, err = h.mgr.StartPairing("member")
 	require.NoError(t, err, "should be able to start a new pairing after cancel")
 }
 
@@ -170,12 +172,12 @@ func TestStartPairing_AfterExpiry(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t, WithPairingPINTTL(50*time.Millisecond))
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
 
-	_, _, err = h.mgr.StartPairing()
+	_, _, err = h.mgr.StartPairing("member")
 	require.NoError(t, err, "expired PIN should not block a new one")
 }
 
@@ -191,7 +193,7 @@ func TestPendingPIN_Active(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	gotPIN, _ := h.mgr.PendingPIN()
@@ -202,7 +204,7 @@ func TestPendingPIN_Expired(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t, WithPairingPINTTL(5*time.Millisecond))
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 	time.Sleep(15 * time.Millisecond)
 
@@ -218,7 +220,7 @@ func TestStartSession_RejectsOversizedPakeMessage(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	huge := make([]byte, pairingMaxPakeMessageBytes+1)
@@ -230,7 +232,7 @@ func TestSuccessfulHandshake(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	c, pairingKey := h.runHandshake(t, pin, "Test App")
@@ -257,7 +259,7 @@ func TestWrongPIN_Rejected(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	// Use a wrong PIN — different session key, HMAC will not match.
@@ -290,7 +292,7 @@ func TestMaxAttempts_PINInvalidatedAfterExhaustion(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t, WithPairingMaxAttempts(2))
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	for i := range 2 {
@@ -317,7 +319,7 @@ func TestPairStart_NameTooLong(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte("000000"), 0, pairingCurve)
@@ -330,7 +332,7 @@ func TestPairStart_NameEmpty(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte("000000"), 0, pairingCurve)
@@ -353,7 +355,7 @@ func TestPairStart_PINExpired(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t, WithPairingPINTTL(5*time.Millisecond))
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 	time.Sleep(15 * time.Millisecond)
 
@@ -367,7 +369,7 @@ func TestPairFinish_SessionExpired(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t, WithPairingSessionTTL(5*time.Millisecond))
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
@@ -399,7 +401,7 @@ func TestPairFinish_ConcurrentCallsOneWins(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
@@ -467,7 +469,7 @@ func TestMaxClients_StartPairingFailsFast(t *testing.T) {
 	db.On("CountClients").Return(50, nil)
 	mgr := NewPairingManager(db, notifChan, WithPairingMaxClients(50))
 
-	_, _, err := mgr.StartPairing()
+	_, _, err := mgr.StartPairing("member")
 	require.ErrorIs(t, err, errTooManyClients)
 }
 
@@ -487,7 +489,7 @@ func TestMaxClients_FinishSessionDefenseInDepth(t *testing.T) {
 	db.On("CountClients").Return(50, nil)
 	mgr := NewPairingManager(db, notifChan, WithPairingMaxClients(50))
 
-	pin, _, err := mgr.StartPairing()
+	pin, _, err := mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
@@ -517,7 +519,7 @@ func TestStartPairing_WipesOldSessions(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	pin1, _, err := h.mgr.StartPairing()
+	pin1, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte(pin1), 0, pairingCurve)
@@ -528,7 +530,7 @@ func TestStartPairing_WipesOldSessions(t *testing.T) {
 	require.NoError(t, err)
 
 	h.mgr.CancelPairing()
-	_, _, err = h.mgr.StartPairing()
+	_, _, err = h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	// Old session should no longer be findable.
@@ -540,7 +542,7 @@ func TestHTTPHandlers_FullFlow(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	startHandler := h.mgr.HandlePairStart()
@@ -639,7 +641,7 @@ func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
 	t.Cleanup(func() { log.Logger = originalLogger })
 
 	h := newPairingHarness(t)
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	// Drive a wrong-PIN handshake at the HTTP layer so the handler runs
@@ -717,7 +719,7 @@ func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
 	t.Cleanup(func() { log.Logger = originalLogger })
 
 	h := newPairingHarness(t, WithPairingMaxAttempts(1))
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	// One allowed attempt → first failure trips errPairingExhausted.
@@ -812,7 +814,7 @@ func TestHTTPHandler_MalformedPakeMessage(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t)
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	// Valid base64 but invalid PAKE wire format JSON inside.
@@ -902,7 +904,7 @@ func TestCleanupExpired_RemovesOldSessions(t *testing.T) {
 		WithPairingSessionTTL(5*time.Millisecond),
 	)
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
@@ -925,7 +927,7 @@ func TestCleanupExpired_RemovesExpiredPIN(t *testing.T) {
 	t.Parallel()
 	h := newPairingHarness(t, WithPairingPINTTL(5*time.Millisecond))
 
-	_, _, err := h.mgr.StartPairing()
+	_, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	time.Sleep(15 * time.Millisecond)
@@ -1021,7 +1023,7 @@ func TestPairFinish_PINExhaustionInvalidatesOtherInFlightSessions(t *testing.T) 
 	// the cross-session blast radius.
 	h := newPairingHarness(t, WithPairingMaxAttempts(1))
 
-	pin, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	// Client A starts a session.

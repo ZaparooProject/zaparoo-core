@@ -55,6 +55,7 @@ func HandleClients(env requests.RequestEnv) (any, error) {
 		resp.Clients[i] = models.PairedClient{
 			ClientID:   c.ClientID,
 			ClientName: c.ClientName,
+			Role:       c.Role,
 			CreatedAt:  c.CreatedAt,
 			LastSeenAt: c.LastSeenAt,
 		}

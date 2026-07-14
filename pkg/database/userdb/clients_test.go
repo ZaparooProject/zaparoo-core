@@ -31,14 +31,14 @@ import (
 )
 
 const (
-	clientSelectByTokenRe = `SELECT DBID, ClientID, ClientName, AuthToken, ` +
+	clientSelectByTokenRe = `SELECT DBID, ClientID, ClientName, AuthToken, Role, ` +
 		`PairingKey, CreatedAt, LastSeenAt FROM Clients WHERE AuthToken = \?`
-	clientSelectListRe = `SELECT DBID, ClientID, ClientName, AuthToken, ` +
+	clientSelectListRe = `SELECT DBID, ClientID, ClientName, AuthToken, Role, ` +
 		`PairingKey, CreatedAt, LastSeenAt FROM Clients ORDER BY CreatedAt DESC`
 )
 
 var clientRowColumns = []string{
-	"DBID", "ClientID", "ClientName", "AuthToken", "PairingKey", "CreatedAt", "LastSeenAt",
+	"DBID", "ClientID", "ClientName", "AuthToken", "Role", "PairingKey", "CreatedAt", "LastSeenAt",
 }
 
 func newTestClient() *database.Client {
@@ -61,7 +61,7 @@ func TestSqlCreateClient_Success(t *testing.T) {
 
 	c := newTestClient()
 	mock.ExpectQuery(`INSERT INTO Clients`).
-		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).
+		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt).
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(int64(42)))
 
 	err = sqlCreateClient(context.Background(), db, c)
@@ -95,7 +95,7 @@ func TestSqlCreateClient_DatabaseError(t *testing.T) {
 
 	c := newTestClient()
 	mock.ExpectQuery(`INSERT INTO Clients`).
-		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).
+		WithArgs(c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlCreateClient(context.Background(), db, c)
@@ -114,7 +114,7 @@ func TestSqlGetClientByToken_Success(t *testing.T) {
 	mock.ExpectQuery(clientSelectByTokenRe).
 		WithArgs(c.AuthToken).
 		WillReturnRows(sqlmock.NewRows(clientRowColumns).
-			AddRow(int64(7), c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt))
+			AddRow(int64(7), c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt))
 
 	got, err := sqlGetClientByToken(context.Background(), db, c.AuthToken)
 	require.NoError(t, err)
@@ -155,8 +155,8 @@ func TestSqlListClients_Success(t *testing.T) {
 	key1 := []byte("key-1-key-1-key-1-key-1-key-1-12")
 	key2 := []byte("key-2-key-2-key-2-key-2-key-2-12")
 	rows := sqlmock.NewRows(clientRowColumns).
-		AddRow(int64(1), "id-1", "App One", "tok-1", key1, int64(1000), int64(2000)).
-		AddRow(int64(2), "id-2", "App Two", "tok-2", key2, int64(1100), int64(2100))
+		AddRow(int64(1), "id-1", "App One", "tok-1", "admin", key1, int64(1000), int64(2000)).
+		AddRow(int64(2), "id-2", "App Two", "tok-2", "member", key2, int64(1100), int64(2100))
 
 	mock.ExpectQuery(clientSelectListRe).WillReturnRows(rows)
 

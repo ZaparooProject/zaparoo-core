@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -119,6 +120,12 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 //nolint:gocritic // single-use parameter in API handler
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	log.Debug().Msg("received settings update request")
+
+	// Settings changes can weaken playtime limits (disable them, drop the
+	// require-profile gate), so they need the settings.write capability.
+	if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+		return nil, err
+	}
 
 	var params models.UpdateSettingsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {

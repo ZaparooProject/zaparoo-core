@@ -152,6 +152,9 @@ type Client struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
 	AuthToken  string `json:"-"`
+	// Role is the client's permission role ("admin" or "member"), chosen
+	// at pairing approval. See pkg/api/permissions.
+	Role       string `json:"role"`
 	PairingKey []byte `json:"-"`
 	DBID       int64  `json:"-"`
 	CreatedAt  int64  `json:"createdAt"`

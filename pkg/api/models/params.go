@@ -174,6 +174,13 @@ type DeleteClientParams struct {
 	ID string `json:"id" validate:"required,min=1"`
 }
 
+// ClientsPairStartParams configures a new pairing flow. Role is the
+// permission role the paired client will receive ("admin" or "member");
+// empty defaults to member.
+type ClientsPairStartParams struct {
+	Role string `json:"role" validate:"omitempty,oneof=admin member"`
+}
+
 // NewProfileParams creates a profile. Nil limit fields inherit the global
 // config; a "0" duration means explicitly unlimited.
 type NewProfileParams struct {
@@ -208,6 +215,15 @@ type DeleteProfileParams struct {
 // ProfileID or SwitchID selects the target; both omitted (or null) means
 // deactivate. PIN is required when the target profile has one set.
 type SwitchProfileParams struct {
+	ProfileID *string `json:"profileId"`
+	SwitchID  *string `json:"switchId"`
+	PIN       *string `json:"pin"`
+}
+
+// VerifyProfileParams verifies a profile credential without switching.
+// Exactly one of ProfileID (with PIN when the profile has one) or SwitchID
+// (a bearer credential) must be given.
+type VerifyProfileParams struct {
 	ProfileID *string `json:"profileId"`
 	SwitchID  *string `json:"switchId"`
 	PIN       *string `json:"pin"`

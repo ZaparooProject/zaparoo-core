@@ -60,7 +60,7 @@ func TestScanBehavior_RequireProfile_OffByDefault(t *testing.T) {
 }
 
 // TestScanBehavior_ProfileSwitchCard covers the signature card interaction:
-// scanning a **profile.switch token activates the profile with no PIN
+// scanning a **profile token activates the profile with no PIN
 // check, and **profile.clear deactivates it.
 func TestScanBehavior_ProfileSwitchCard(t *testing.T) {
 	t.Parallel()
@@ -76,11 +76,48 @@ func TestScanBehavior_ProfileSwitchCard(t *testing.T) {
 	env.userDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
 	env.userDB.On("DeleteDeviceState", database.DeviceStateKeyActiveProfile).Return(nil)
 
-	env.sendCommandScan("switch-card", "**profile.switch:corn-arm-truck")
+	env.sendCommandScan("switch-card", "**profile:corn-arm-truck")
 	env.waitForActiveProfile(t, "profile-1")
 
 	env.sendCommandScan("clear-card", "**profile.clear")
 	env.waitForNoActiveProfile(t)
+}
+
+// TestScanBehavior_RequireProfile_ComboCardSwitchThenLaunch covers a card
+// carrying both a profile switch and a game launch: the gate must let it
+// through because the switch activates a profile before the launch runs.
+func TestScanBehavior_RequireProfile_ComboCardSwitchThenLaunch(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	env.cfg.SetProfilesRequireForLaunch(true)
+
+	profile := &database.Profile{
+		ProfileID: "profile-1",
+		Name:      "Kid A",
+		SwitchID:  "corn-arm-truck",
+	}
+	env.userDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(profile, nil)
+	env.userDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+
+	env.sendCommandScan("combo-card",
+		"**profile:corn-arm-truck||**launch:"+env.gamePath("game1.gba"))
+	env.waitForLaunch(t)
+	env.waitForActiveProfile(t, "profile-1")
+}
+
+// TestScanBehavior_RequireProfile_LaunchBeforeSwitchStillBlocked pins the
+// gate's ordering rule: a profile switch AFTER the launch command does not
+// satisfy require_for_launch.
+func TestScanBehavior_RequireProfile_LaunchBeforeSwitchStillBlocked(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	env.cfg.SetProfilesRequireForLaunch(true)
+
+	env.sendCommandScan("backwards-combo-card",
+		"**launch:"+env.gamePath("game1.gba")+"||**profile:corn-arm-truck")
+	env.expectNoLaunch(t)
 }
 
 func (env *scanBehaviorEnv) waitForActiveProfile(t *testing.T, profileID string) {

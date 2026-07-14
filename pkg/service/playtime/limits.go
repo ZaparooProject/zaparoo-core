@@ -74,6 +74,18 @@ func (s SessionState) String() string {
 	return [...]string{"reset", "active", "cooldown"}[s]
 }
 
+// pinnedLimits captures the limits context in force when a game launched.
+// Everything about a running game belongs to the profile that launched it:
+// if the profile deactivates mid-game (switch to the shared profile), the
+// pinned values keep governing until the media stops, so clearing a
+// profile cannot be used to escape its limits.
+type pinnedLimits struct {
+	profileID string
+	daily     time.Duration
+	session   time.Duration
+	enabled   bool
+}
+
 // LimitsManager enforces time limits and warnings for gameplay sessions.
 type LimitsManager struct {
 	sessionStart          time.Time
@@ -89,9 +101,11 @@ type LimitsManager struct {
 	notificationsSend     chan<- models.Notification
 	cfg                   *config.Instance
 	limits                LimitsProvider
+	sessionLimits         *pinnedLimits // launch-time limits for the running game; nil between sessions
 	player                audio.Player
 	cancel                context.CancelFunc
 	sessionCancel         context.CancelFunc // cancels checkLoop for the current game session; nil between sessions
+	lastProfileID         string             // last-seen active profile ID, for identity-change detection
 	state                 SessionState
 	sessionCumulativeTime time.Duration
 	subscriptionID        int
@@ -156,6 +170,9 @@ func (tm *LimitsManager) Start(broker Broker, notificationsSend chan<- models.No
 	tm.notificationsSend = notificationsSend
 	tm.done = done
 	tm.stopping = false
+	// Seed identity-change detection with the boot-restored profile: its
+	// profiles.active notification fired before this subscription existed.
+	tm.lastProfileID = tm.limits.ActiveProfileID()
 	tm.mu.Unlock()
 
 	// Subscribe to broker for media lifecycle and profile-switch events only.
@@ -224,15 +241,122 @@ func (tm *LimitsManager) SetEnabled(enabled bool) {
 			tm.lastStopTime = time.Time{}
 			tm.sessionStartReliable = false
 			tm.warningsGiven = make(map[time.Duration]bool)
+			tm.sessionLimits = nil
 		}
 		tm.mu.Unlock()
 	}
 }
 
+// onProfileChanged handles a profiles.active notification. The session is
+// reset only when the profile *identity* changes to a different person:
+//
+//   - Re-activating the already-active profile (rescanning your own card)
+//     or editing the active profile (which refreshes the snapshot and
+//     re-broadcasts) does nothing — otherwise a rescan every 50 minutes
+//     would defeat a 1h session limit.
+//   - Deactivating (switching to the shared profile) never resets: a
+//     running game keeps its launch-pinned limits until it stops, and
+//     cooldown/cumulative time survives so scanning a **profile.clear
+//     card cannot be used to escape a session limit.
+//   - Switching to a different profile resets the session: a different
+//     person is playing. If a game is running, the session is re-pinned
+//     to the new profile and tracking restarts from now.
+func (tm *LimitsManager) onProfileChanged() {
+	current := tm.limits.ActiveProfileID()
+
+	tm.mu.Lock()
+	if current == tm.lastProfileID {
+		tm.mu.Unlock()
+		return
+	}
+	tm.lastProfileID = current
+
+	if current == "" {
+		tm.mu.Unlock()
+		log.Info().Msg("playtime: profile deactivated, session state retained")
+		return
+	}
+
+	if tm.state == StateActive {
+		// The running game now belongs to the new profile.
+		tm.sessionLimits = tm.snapshotLimits()
+	}
+	tm.mu.Unlock()
+
+	tm.ResetSession()
+}
+
+// snapshotLimits captures the provider's current values. Callers may hold
+// tm.mu: the provider reads service state under its own lock.
+func (tm *LimitsManager) snapshotLimits() *pinnedLimits {
+	return &pinnedLimits{
+		profileID: tm.limits.ActiveProfileID(),
+		enabled:   tm.limits.PlaytimeLimitsEnabled(),
+		daily:     tm.limits.DailyLimit(),
+		session:   tm.limits.SessionLimit(),
+	}
+}
+
+// pinned returns the launch-time limits when they should govern instead of
+// the live provider: a game session exists, it was launched (or re-pinned)
+// under a profile, and the device has since deactivated to the shared
+// profile. Returns nil when live values apply. Must be called without
+// tm.mu held.
+func (tm *LimitsManager) pinned() *pinnedLimits {
+	tm.mu.Lock()
+	p := tm.sessionLimits
+	tm.mu.Unlock()
+	if p == nil || p.profileID == "" {
+		return nil
+	}
+	if tm.limits.ActiveProfileID() != "" {
+		return nil
+	}
+	return p
+}
+
+// effectiveEnabled reports whether limits are enforced for the current
+// session, honoring launch-time pinning. Must be called without tm.mu held.
+func (tm *LimitsManager) effectiveEnabled() bool {
+	if p := tm.pinned(); p != nil {
+		return p.enabled
+	}
+	return tm.limits.PlaytimeLimitsEnabled()
+}
+
+// effectiveDailyLimit returns the daily limit for the current session,
+// honoring launch-time pinning. Must be called without tm.mu held.
+func (tm *LimitsManager) effectiveDailyLimit() time.Duration {
+	if p := tm.pinned(); p != nil {
+		return p.daily
+	}
+	return tm.limits.DailyLimit()
+}
+
+// effectiveSessionLimit returns the session limit for the current session,
+// honoring launch-time pinning. Must be called without tm.mu held.
+func (tm *LimitsManager) effectiveSessionLimit() time.Duration {
+	if p := tm.pinned(); p != nil {
+		return p.session
+	}
+	return tm.limits.SessionLimit()
+}
+
+// effectiveProfileID returns the profile whose history scopes daily usage
+// accounting, honoring launch-time pinning. Must be called without tm.mu
+// held.
+func (tm *LimitsManager) effectiveProfileID() string {
+	if p := tm.pinned(); p != nil {
+		return p.profileID
+	}
+	return tm.limits.ActiveProfileID()
+}
+
 // ResetSession starts a fresh limit session, called when the active
-// profile changes: a different person is playing, so accumulated session
-// time belongs to the previous profile. Daily usage is unaffected — it is
-// recalculated from the (profile-attributed) history on every check.
+// profile identity changes: a different person is playing, so accumulated
+// session time belongs to the previous profile. Daily usage is unaffected
+// — it is recalculated from the (profile-attributed) history on every
+// check.
 //
 // If a game is running, tracking restarts from now under the new profile's
 // limits rather than stopping: the running game's already-played time was
@@ -321,7 +445,7 @@ func (tm *LimitsManager) handleNotifications(notifChan <-chan models.Notificatio
 			case models.NotificationStopped:
 				tm.OnMediaStopped()
 			case models.NotificationProfilesActive:
-				tm.ResetSession()
+				tm.onProfileChanged()
 			}
 
 		case <-tm.ctx.Done():
@@ -376,6 +500,11 @@ func (tm *LimitsManager) OnMediaStarted() {
 	tm.sessionStartMono = time.Now() // Monotonic clock for accurate duration
 	tm.sessionStartReliable = helpers.IsClockReliable(now)
 	tm.warningsGiven = make(map[time.Duration]bool)
+
+	// Pin the launch-time limits context: everything about this game
+	// belongs to the profile that launched it, even if the profile
+	// deactivates mid-game.
+	tm.sessionLimits = tm.snapshotLimits()
 
 	// Cancel any stale check loop (defensive; shouldn't fire in normal state transitions).
 	if tm.sessionCancel != nil {
@@ -437,6 +566,7 @@ func (tm *LimitsManager) OnMediaStopped() {
 	tm.sessionStartMono = time.Time{} // Clear monotonic start
 	tm.sessionStartReliable = false
 	tm.warningsGiven = make(map[time.Duration]bool)
+	tm.sessionLimits = nil // launch-time pinning ends with the game
 
 	// Start cooldown timer if timeout is configured (read live from config).
 	if sessionResetTimeout := tm.cfg.SessionResetTimeout(); sessionResetTimeout > 0 {
@@ -511,8 +641,9 @@ func (tm *LimitsManager) checkLoop(ctx context.Context) {
 
 // checkLimits evaluates all rules and handles warnings/limits.
 func (tm *LimitsManager) checkLimits() {
-	// Respect both config and runtime enabled state
-	if !tm.limits.PlaytimeLimitsEnabled() {
+	// Enforcement is decided by the effective limits: the live provider,
+	// or the launch-pinned context after a mid-game deactivation.
+	if !tm.effectiveEnabled() {
 		return
 	}
 
@@ -623,7 +754,7 @@ func (tm *LimitsManager) buildRuleContext(
 	bothClocksReliable := sessionStartWasReliable && currentClockReliable
 
 	var dailyUsage time.Duration
-	if bothClocksReliable && tm.cfg.DailyLimit() > 0 {
+	if bothClocksReliable && tm.effectiveDailyLimit() > 0 {
 		// Both clocks appear valid and a daily limit is configured - calculate daily usage.
 		year, month, day := now.Date()
 		todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
@@ -696,7 +827,7 @@ func (tm *LimitsManager) calculateDailyUsage(
 ) (time.Duration, error) {
 	var completedSeconds int64
 	var err error
-	if profileID := tm.limits.ActiveProfileID(); profileID != "" {
+	if profileID := tm.effectiveProfileID(); profileID != "" {
 		completedSeconds, err = tm.db.UserDB.SumMediaPlayTimeForDayByProfile(todayStart, profileID)
 	} else {
 		completedSeconds, err = tm.db.UserDB.SumMediaPlayTimeForDay(todayStart)
@@ -711,11 +842,11 @@ func (tm *LimitsManager) calculateDailyUsage(
 func (tm *LimitsManager) createRules() []Rule {
 	rules := make([]Rule, 0, 2)
 
-	if limit := tm.limits.SessionLimit(); limit > 0 {
+	if limit := tm.effectiveSessionLimit(); limit > 0 {
 		rules = append(rules, &SessionLimitRule{Limit: limit})
 	}
 
-	if limit := tm.limits.DailyLimit(); limit > 0 {
+	if limit := tm.effectiveDailyLimit(); limit > 0 {
 		rules = append(rules, &DailyLimitRule{Limit: limit})
 	}
 
@@ -802,7 +933,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		// Calculate daily usage/remaining even during reset - this data is valid
 		// regardless of session state (the user has used time today and has
 		// time remaining in their daily allowance)
-		dailyLimit := tm.limits.DailyLimit()
+		dailyLimit := tm.effectiveDailyLimit()
 		if dailyLimit > 0 && helpers.IsClockReliable(now) {
 			year, month, day := now.Date()
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
@@ -834,8 +965,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 		// Calculate remaining times based on cumulative time
 		var sessionRemaining time.Duration
-		sessionLimit := tm.limits.SessionLimit()
-		dailyLimit := tm.limits.DailyLimit()
+		sessionLimit := tm.effectiveSessionLimit()
+		dailyLimit := tm.effectiveDailyLimit()
 
 		if sessionLimit > 0 {
 			sessionRemaining = sessionLimit - cumulativeTime
@@ -889,8 +1020,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 	// Calculate session remaining time
 	var sessionRemaining time.Duration
-	sessionLimit := tm.limits.SessionLimit()
-	dailyLimit := tm.limits.DailyLimit()
+	sessionLimit := tm.effectiveSessionLimit()
+	dailyLimit := tm.effectiveDailyLimit()
 
 	if sessionLimit > 0 {
 		sessionRemaining = sessionLimit - ctx.SessionDuration

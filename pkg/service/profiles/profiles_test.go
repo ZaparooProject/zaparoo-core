@@ -134,6 +134,8 @@ func TestActivateBySwitchID_BypassesPIN(t *testing.T) {
 	t.Parallel()
 	svc, mockDB, st := newTestService(t)
 
+	// The switch ID is a bearer credential: presenting it activates a
+	// PIN-protected profile with no PIN, on every path.
 	mockDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(pinProfile(t, "1234"), nil)
 	mockDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
 
@@ -141,16 +143,6 @@ func TestActivateBySwitchID_BypassesPIN(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "profile-1", snap.ProfileID)
 	require.NotNil(t, st.ActiveProfile())
-}
-
-func TestActivateBySwitchIDChecked_EnforcesPIN(t *testing.T) {
-	t.Parallel()
-	svc, mockDB, _ := newTestService(t)
-
-	mockDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(pinProfile(t, "1234"), nil)
-
-	_, err := svc.ActivateBySwitchIDChecked("corn-arm-truck", "")
-	require.ErrorIs(t, err, ErrPINRequired)
 }
 
 func TestDeactivate(t *testing.T) {
@@ -226,6 +218,13 @@ func TestCreate_RejectsBadDuration(t *testing.T) {
 	_, err := svc.Create(&models.NewProfileParams{Name: "Kid A", DailyLimit: &bad})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid limit duration")
+
+	// Negative durations would silently behave as "no limit" downstream —
+	// reject them at validation instead.
+	negative := "-5m"
+	_, err = svc.Create(&models.NewProfileParams{Name: "Kid A", SessionLimit: &negative})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be negative")
 }
 
 func TestUpdate_RefreshesActiveSnapshot(t *testing.T) {

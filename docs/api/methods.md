@@ -2615,11 +2615,13 @@ Returns `null` on success.
 
 ## Profiles
 
-Profiles are lightweight device profiles: named buckets of preferences and limits, with no passwords or accounts. One profile is active per device at a time, switched via the API or by scanning an NFC card containing the profile's switch ID (`**profile.switch:<switchId>`).
+Profiles are lightweight device profiles: named buckets of preferences and limits, with no passwords or accounts. One profile is active per device at a time, switched via the API or by scanning an NFC card containing the profile's switch ID (`**profile:<switchId>`).
 
-A profile may have an optional 4-8 digit PIN. Switching to a PIN-protected profile via the API requires the PIN; scanning the profile's physical card bypasses it (possession of the card is the authorization). Leaving a profile is always free — PINs gate entry only. To prevent a profile-less device from being an escape hatch, enable the `profilesRequireForLaunch` setting (see [settings](#settings)), which blocks media launches while no profile is active.
+When no personal profile is active the device is on the implicit **shared profile** — the device as it behaves when nobody is signed in. The shared profile's playtime limits are the global config limits, its history is unattributed, and it owns everything the device did before profiles existed. Deactivating means switching to the shared profile. To stop the shared profile launching media (parking the device until someone identifies themselves), enable the `profilesRequireForLaunch` setting (see [settings](#settings)).
 
-When no profile is active the device behaves exactly as it did before profiles existed: global playtime limits apply and history is unattributed.
+A profile's **switch ID is a bearer credential**: presenting it — by scanning the card it is written on, or by sending it over the API — authorizes switching to that profile with no PIN, on every path. Switch IDs are therefore only returned to privileged clients (local connections and admin-role paired clients) for card-writing; member clients never see them. The optional 4-8 digit **PIN** protects the remaining path: switching by `profileId` picked from the visible profile list. Leaving a profile is always free — PINs gate entry only.
+
+**Trust model.** Profiles are a household convenience boundary, comparable to TV parental controls — not account security. They protect against: gaming playtime limits through a member-role paired client (profile management needs the admin role), through cards (switch IDs are bearer secrets, protected by physical card control), or through rescans (re-activating the active profile does not reset session limits). They do NOT protect against anyone with OS access to the device, an admin-role client, or — while `service.encryption` is off — any unpaired client on the network, which retains full API access for compatibility. Enforcement against app users starts when `service.encryption` requires clients to pair.
 
 ##### Profile object
 
@@ -2627,7 +2629,7 @@ When no profile is active the device behaves exactly as it did before profiles e
 | :------------ | :------ | :------- | :------------------------------------------------------------------------------------------------------- |
 | profileId     | string  | Yes      | Unique identifier of the profile.                                                                        |
 | name          | string  | Yes      | Display name, e.g. "Dad" or "Kid A".                                                                     |
-| switchId      | string  | Yes      | Word phrase written to profile switch cards, e.g. `corn-arm-truck`. A selector, not a secret.            |
+| switchId      | string  | No       | Word phrase written to profile switch cards, e.g. `corn-arm-truck`. A bearer credential: presenting it switches to the profile with no PIN. Only returned to local connections and admin-role clients; omitted otherwise. |
 | hasPin        | boolean | Yes      | True when the profile has a PIN set. The PIN itself is never returned.                                   |
 | limitsEnabled | boolean | No       | Playtime limits enabled override. Omitted = inherit the global setting.                                  |
 | dailyLimit    | string  | No       | Daily playtime limit override as a duration string (e.g. `2h30m`). Omitted = inherit; `0` = unlimited.   |
@@ -2651,14 +2653,14 @@ None.
 
 ### profiles.new
 
-Create a new profile. The switch ID is generated automatically and returned in the result — write it to a card as `**profile.switch:<switchId>`.
+Create a new profile. Requires the admin role (or a local connection). The switch ID is generated automatically and returned in the result — write it to a card as `**profile:<switchId>`.
 
 #### Parameters
 
 | Key           | Type    | Required | Description                                                      |
 | :------------ | :------ | :------- | :---------------------------------------------------------------- |
 | name          | string  | Yes      | Display name.                                                    |
-| pin           | string  | No       | Optional 4-8 digit PIN required to switch to this profile via API. |
+| pin           | string  | No       | Optional 4-8 digit PIN required to switch to this profile by `profileId`. |
 | limitsEnabled | boolean | No       | Playtime limits enabled override.                                |
 | dailyLimit    | string  | No       | Daily limit duration override.                                   |
 | sessionLimit  | string  | No       | Session limit duration override.                                 |
@@ -2669,7 +2671,7 @@ The created [profile object](#profile-object).
 
 ### profiles.update
 
-Update a profile. Omitted fields are unchanged. If the updated profile is currently active, its limit changes apply immediately.
+Update a profile. Requires the admin role (or a local connection). Omitted fields are unchanged. If the updated profile is currently active, its limit changes apply immediately (without resetting the running session).
 
 #### Parameters
 
@@ -2691,7 +2693,7 @@ The updated [profile object](#profile-object).
 
 ### profiles.delete
 
-Delete a profile. If it is the active profile, the device deactivates. Past play history keeps its attribution to the deleted profile.
+Delete a profile. Requires the admin role (or a local connection). If it is the active profile, the device switches to the shared profile. Past play history keeps its attribution to the deleted profile.
 
 #### Parameters
 
@@ -2717,19 +2719,47 @@ The active profile (a subset of the [profile object](#profile-object) without `s
 
 ### profiles.switch
 
-Switch the device's active profile. Switching to a PIN-protected profile requires its PIN, whether selected by `profileId` or `switchId` — only physical card scans bypass the PIN. Calling with neither `profileId` nor `switchId` deactivates the current profile, which never requires a PIN.
+Switch the device's active profile. Switching by `profileId` requires the profile's PIN when one is set. Switching by `switchId` never requires a PIN: the switch ID is a bearer credential, and presenting it is equivalent to scanning the profile's card. Calling with neither `profileId` nor `switchId` switches to the shared profile (deactivates), which never requires a PIN.
+
+If a game is running when the profile changes, its playtime keeps counting against the profile that launched it: switching to another profile starts a fresh limit session for the new person, while deactivating leaves the launch profile's limits in force until the media stops.
 
 #### Parameters
 
 | Key       | Type   | Required | Description                                            |
 | :-------- | :----- | :------- | :------------------------------------------------------ |
-| profileId | string | No       | Profile to activate, by ID.                            |
-| switchId  | string | No       | Profile to activate, by switch ID.                     |
-| pin       | string | No       | The profile's PIN, when one is set.                    |
+| profileId | string | No       | Profile to activate, by ID. Requires `pin` when the profile has one. |
+| switchId  | string | No       | Profile to activate, by switch ID (bearer credential; no PIN needed). |
+| pin       | string | No       | The profile's PIN, for `profileId` switching.          |
 
 #### Result
 
-The new active profile, or null when deactivated.
+The new active profile, or null when deactivated (shared profile).
+
+### profiles.verify
+
+Verify a profile credential **without switching**: either a profile ID plus its PIN, or a switch ID (a bearer credential — resolving it is the verification, same as scanning the card). Success returns the profile's identity and changes nothing on the device: no session, no active-profile change, no server-side grant of any kind. Clients use this to gate their own ad-hoc UI items behind a credential — e.g. a kiosk frontend requiring a parent's PIN before opening its settings screen. The security of whatever the client unlocks is entirely the client's responsibility.
+
+PIN attempts share the same per-profile rate limiter as `profiles.switch`, so this method cannot be used to brute-force a PIN any faster than switching attempts could.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                              |
+| :-------- | :----- | :------- | :-------------------------------------------------------- |
+| profileId | string | No       | Profile to verify against. Requires `pin` when the profile has one. |
+| switchId  | string | No       | Verify by switch ID (bearer credential; no PIN needed).  |
+| pin       | string | No       | The profile's PIN, for `profileId` verification.         |
+
+Exactly one of `profileId` or `switchId` is required.
+
+#### Result
+
+| Key       | Type    | Required | Description                              |
+| :-------- | :------ | :------- | :---------------------------------------- |
+| profileId | string  | Yes      | ID of the verified profile.              |
+| name      | string  | Yes      | Display name of the verified profile.    |
+| hasPin    | boolean | Yes      | Whether the profile has a PIN set.       |
+
+Verification failure (wrong PIN, unknown profile or switch ID, rate limited) returns an error, using the same errors as `profiles.switch`.
 
 ## Mappings
 

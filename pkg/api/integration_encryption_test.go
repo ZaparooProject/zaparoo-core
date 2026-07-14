@@ -105,7 +105,7 @@ func pairAndDeriveKey(
 ) (storedClient *database.Client, pairingKey []byte) {
 	t.Helper()
 
-	pin, _, err := mgr.StartPairing()
+	pin, _, err := mgr.StartPairing("member")
 	require.NoError(t, err)
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pakeCurve)

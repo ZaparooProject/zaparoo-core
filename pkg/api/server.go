@@ -334,6 +334,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodProfilesDelete: methods.HandleProfilesDelete,
 		models.MethodProfilesActive: methods.HandleProfilesActive,
 		models.MethodProfilesSwitch: methods.HandleProfilesSwitch,
+		models.MethodProfilesVerify: methods.HandleProfilesVerify,
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
@@ -1099,6 +1100,9 @@ func handleWSMessage(
 			ScrapePauser:    scrapePauser,
 			IsLocal:         isLocal,
 			ClientID:        session.Request.RemoteAddr,
+		}
+		if cs != nil {
+			env.ClientRole = cs.ClientRole()
 		}
 
 		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {

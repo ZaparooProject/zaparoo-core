@@ -632,8 +632,12 @@ func processTokenQueue(
 
 			// When require_for_launch is enabled, media launches are blocked
 			// until a profile is active (profile switch commands still run —
-			// scanning a profile card is how the device gets unparked).
-			if hasMediaLaunchCmd && svc.Config.ProfilesRequireForLaunch() && svc.State.ActiveProfile() == nil {
+			// scanning a profile card is how the device gets unparked). A
+			// combo card that switches profile before launching passes: the
+			// switch activates a profile before the launch command runs, or
+			// fails and aborts the whole script.
+			if hasMediaLaunchCmd && svc.Config.ProfilesRequireForLaunch() &&
+				svc.State.ActiveProfile() == nil && !scriptActivatesProfileBeforeLaunch(&script) {
 				log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
 
 				path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))

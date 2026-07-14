@@ -32,12 +32,16 @@ import (
 )
 
 // Profile PINs are short convenience barriers, not credentials. They are
-// still stored only as PBKDF2-SHA256 hashes, with
-// brute force limited by the in-memory rate limiter in Service.
+// still stored only as PBKDF2-SHA256 hashes, with brute force limited by
+// the in-memory rate limiter in Service. The iteration count is modest by
+// design: a 4-8 digit keyspace falls instantly to offline cracking at any
+// feasible count (the online rate limiter is the real defense), and each
+// verify blocks an API handler on ARM-class device CPU. The count is
+// encoded in the hash, so raising it later costs nothing.
 const (
 	pinMinLen     = 4
 	pinMaxLen     = 8
-	pinIterations = 600_000
+	pinIterations = 50_000
 	pinSaltLen    = 16
 	pinKeyLen     = 32
 	pinHashPrefix = "pbkdf2-sha256"

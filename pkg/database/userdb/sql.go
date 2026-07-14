@@ -751,10 +751,10 @@ func sqlCreateClient(ctx context.Context, db *sql.DB, c *database.Client) error 
 	}
 	var dbid int64
 	err := db.QueryRowContext(ctx, `
-		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO Clients (ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		RETURNING DBID;
-	`, c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).Scan(&dbid)
+	`, c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt).Scan(&dbid)
 	if err != nil {
 		return fmt.Errorf("failed to insert client: %w", err)
 	}
@@ -764,13 +764,14 @@ func sqlCreateClient(ctx context.Context, db *sql.DB, c *database.Client) error 
 
 func sqlGetClientByToken(ctx context.Context, db *sql.DB, authToken string) (*database.Client, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT DBID, ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt
+		SELECT DBID, ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt
 		FROM Clients
 		WHERE AuthToken = ?;
 	`, authToken)
 
 	c := database.Client{}
-	err := row.Scan(&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.PairingKey, &c.CreatedAt, &c.LastSeenAt)
+	err := row.Scan(&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.Role,
+		&c.PairingKey, &c.CreatedAt, &c.LastSeenAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("client not found: %w", err)
@@ -784,7 +785,7 @@ func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) 
 	list := make([]database.Client, 0)
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT DBID, ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt
+		SELECT DBID, ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt
 		FROM Clients
 		ORDER BY CreatedAt DESC;
 	`)
@@ -800,7 +801,7 @@ func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) 
 	for rows.Next() {
 		c := database.Client{}
 		if scanErr := rows.Scan(
-			&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken,
+			&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.Role,
 			&c.PairingKey, &c.CreatedAt, &c.LastSeenAt,
 		); scanErr != nil {
 			return list, fmt.Errorf("failed to scan client row: %w", scanErr)

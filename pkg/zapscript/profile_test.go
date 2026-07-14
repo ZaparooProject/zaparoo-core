@@ -48,7 +48,7 @@ func TestCmdProfileSwitch_Success(t *testing.T) {
 	mockDB.On("GetProfileBySwitchID", "corn-arm-truck").
 		Return(&database.Profile{ProfileID: "p1", Name: "Kid A", SwitchID: "corn-arm-truck"}, nil)
 
-	result, err := cmdProfileSwitch(nil, profileCmdEnv(mockDB, "profile.switch", []string{"corn-arm-truck"}))
+	result, err := cmdProfile(nil, profileCmdEnv(mockDB, "profile", []string{"corn-arm-truck"}))
 	require.NoError(t, err)
 	require.NotNil(t, result.ProfileSwitch)
 	assert.Equal(t, "corn-arm-truck", result.ProfileSwitch.SwitchID)
@@ -62,7 +62,7 @@ func TestCmdProfileSwitch_UnknownSwitchID(t *testing.T) {
 	mockDB := helpers.NewMockUserDBI()
 	mockDB.On("GetProfileBySwitchID", "no-such-card").Return(nil, userdb.ErrProfileNotFound)
 
-	_, err := cmdProfileSwitch(nil, profileCmdEnv(mockDB, "profile.switch", []string{"no-such-card"}))
+	_, err := cmdProfile(nil, profileCmdEnv(mockDB, "profile", []string{"no-such-card"}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown profile switch ID")
 }
@@ -72,13 +72,13 @@ func TestCmdProfileSwitch_ArgValidation(t *testing.T) {
 
 	mockDB := helpers.NewMockUserDBI()
 
-	_, err := cmdProfileSwitch(nil, profileCmdEnv(mockDB, "profile.switch", nil))
+	_, err := cmdProfile(nil, profileCmdEnv(mockDB, "profile", nil))
 	require.ErrorIs(t, err, ErrArgCount)
 
-	_, err = cmdProfileSwitch(nil, profileCmdEnv(mockDB, "profile.switch", []string{""}))
+	_, err = cmdProfile(nil, profileCmdEnv(mockDB, "profile", []string{""}))
 	require.ErrorIs(t, err, ErrArgCount)
 
-	_, err = cmdProfileSwitch(nil, profileCmdEnv(mockDB, "profile.switch", []string{"a", "b"}))
+	_, err = cmdProfile(nil, profileCmdEnv(mockDB, "profile", []string{"a", "b"}))
 	require.ErrorIs(t, err, ErrArgCount)
 }
 
@@ -101,8 +101,8 @@ func TestProfileCommands_NotMediaLaunching(t *testing.T) {
 
 	// Profile switching must never be blocked by playtime limits — a kid
 	// who has hit their limit can still hand the device to a parent card.
-	assert.False(t, IsMediaLaunchingCommand(zapscript.ZapScriptCmdProfileSwitch))
+	assert.False(t, IsMediaLaunchingCommand(zapscript.ZapScriptCmdProfile))
 	assert.False(t, IsMediaLaunchingCommand(zapscript.ZapScriptCmdProfileClear))
-	assert.False(t, IsMediaDisruptingCommand(zapscript.ZapScriptCmdProfileSwitch))
+	assert.False(t, IsMediaDisruptingCommand(zapscript.ZapScriptCmdProfile))
 	assert.False(t, IsMediaDisruptingCommand(zapscript.ZapScriptCmdProfileClear))
 }

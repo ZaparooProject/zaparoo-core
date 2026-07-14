@@ -24,17 +24,22 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/rs/zerolog/log"
 )
 
 // PairingController is the subset of PairingManager needed by the RPC handlers.
 type PairingController interface {
-	StartPairing() (pin string, expiresAt time.Time, err error)
+	StartPairing(role string) (pin string, expiresAt time.Time, err error)
 	CancelPairing()
 }
 
 // HandleClientsPairStart returns a handler that initiates a new pairing flow.
-// Localhost-only — the user must have physical access to the device.
+// Localhost-only — the user must have physical access to the device. The
+// optional role param decides the permission role the paired client will
+// receive (default member); this is the approval step, so the person
+// physically at the device makes the choice.
 func HandleClientsPairStart(mgr PairingController) func(requests.RequestEnv) (any, error) {
 	return func(env requests.RequestEnv) (any, error) {
 		if !env.IsLocal {
@@ -43,7 +48,22 @@ func HandleClientsPairStart(mgr PairingController) func(requests.RequestEnv) (an
 
 		log.Info().Msg("received clients.pair.start request")
 
-		pin, expiresAt, err := mgr.StartPairing()
+		role := string(permissions.RoleMember)
+		if len(env.Params) > 0 {
+			var params models.ClientsPairStartParams
+			if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+				log.Warn().Err(err).Msg("invalid params")
+				return nil, models.ClientErrf("invalid params: %w", err)
+			}
+			if params.Role != "" {
+				if !permissions.ValidRole(params.Role) {
+					return nil, models.ClientErrf("invalid role: %s", params.Role)
+				}
+				role = params.Role
+			}
+		}
+
+		pin, expiresAt, err := mgr.StartPairing(role)
 		if err != nil {
 			return nil, models.ClientErrf("failed to start pairing: %w", err)
 		}

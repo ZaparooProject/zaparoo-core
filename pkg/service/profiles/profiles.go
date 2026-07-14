@@ -18,10 +18,17 @@
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // Package profiles implements device profiles: named buckets of preferences
-// and limits with no credentials. One profile is active per
-// device at a time. Switching via the API enforces an optional per-profile
-// PIN; switching by scanning a profile's physical card bypasses the PIN
-// (possession of the card is the authorization).
+// and limits. One profile is active per device at a time; the un-profiled
+// state is the implicit "shared profile" — the device as it behaves when
+// nobody is signed in, with global-config limits and unattributed history.
+//
+// A profile's switch ID is a bearer credential: presenting it (by scanning
+// the card it is written on, or by knowing its value) authorizes switching
+// to that profile with no PIN on every path. Switch IDs are therefore only
+// exposed over the API to privileged clients. The optional per-profile PIN
+// protects the remaining path: switching by profile ID picked from the
+// visible profile list. Leaving a profile is always free — PINs gate entry
+// only.
 package profiles
 
 import (
@@ -72,6 +79,9 @@ type Service struct {
 	now         func() time.Time
 	pinAttempts map[string][]time.Time
 	mu          syncutil.Mutex
+	// activateMu serializes activate/deactivate so the persisted device
+	// state and the in-memory snapshot cannot diverge under concurrency.
+	activateMu syncutil.Mutex
 }
 
 // NewService creates a profiles service backed by the user database and
@@ -224,23 +234,11 @@ func (s *Service) ActivateByID(profileID, pin string) (*models.ActiveProfile, er
 	return s.activate(p)
 }
 
-// ActivateBySwitchIDChecked switches to a profile selected by switch ID,
-// enforcing its PIN. Used when a switch ID arrives over the API rather
-// than from a physical scan.
-func (s *Service) ActivateBySwitchIDChecked(switchID, pin string) (*models.ActiveProfile, error) {
-	p, err := s.db.UserDB.GetProfileBySwitchID(switchID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get profile by switch ID: %w", err)
-	}
-	if err := s.checkPIN(p, pin); err != nil {
-		return nil, err
-	}
-	return s.activate(p)
-}
-
 // ActivateBySwitchID switches to a profile selected by switch ID without a
-// PIN check. This is the physical card-scan path: possession of the card
-// is the authorization.
+// PIN check. Switch IDs are bearer credentials: possessing the card or
+// knowing its content is the authorization, on every path (scan, run API,
+// profiles.switch). They are only readable via the API by privileged
+// clients.
 func (s *Service) ActivateBySwitchID(switchID string) (*models.ActiveProfile, error) {
 	p, err := s.db.UserDB.GetProfileBySwitchID(switchID)
 	if err != nil {
@@ -249,10 +247,40 @@ func (s *Service) ActivateBySwitchID(switchID string) (*models.ActiveProfile, er
 	return s.activate(p)
 }
 
+// VerifyByID checks a profile's PIN without switching to it. It shares the
+// PIN rate limiter with activation, so it cannot be used to brute-force a
+// PIN any faster than switching attempts could. Clients use this to gate
+// their own ad-hoc UI items behind a profile credential; success grants
+// nothing server-side.
+func (s *Service) VerifyByID(profileID, pin string) (*database.Profile, error) {
+	p, err := s.db.UserDB.GetProfile(profileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get profile: %w", err)
+	}
+	if err := s.checkPIN(p, pin); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// VerifyBySwitchID resolves a switch ID without switching. The switch ID
+// is a bearer credential, so resolving it IS the verification — no PIN.
+// Success grants nothing server-side.
+func (s *Service) VerifyBySwitchID(switchID string) (*database.Profile, error) {
+	p, err := s.db.UserDB.GetProfileBySwitchID(switchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get profile by switch ID: %w", err)
+	}
+	return p, nil
+}
+
 // Deactivate clears the active profile. Leaving a profile is always free
 // (PINs gate entry only); restricting what a profile-less device can do is
 // handled by the require-profile launch setting.
 func (s *Service) Deactivate() error {
+	s.activateMu.Lock()
+	defer s.activateMu.Unlock()
+
 	if err := s.db.UserDB.DeleteDeviceState(database.DeviceStateKeyActiveProfile); err != nil {
 		return fmt.Errorf("failed to clear active profile state: %w", err)
 	}
@@ -296,6 +324,11 @@ func (s *Service) RestoreOnBoot() error {
 }
 
 func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
+	// Serialize activations so two concurrent switches cannot interleave
+	// the persisted device state with the in-memory snapshot.
+	s.activateMu.Lock()
+	defer s.activateMu.Unlock()
+
 	if err := s.db.UserDB.SetDeviceState(database.DeviceStateKeyActiveProfile, p.ProfileID); err != nil {
 		return nil, fmt.Errorf("failed to persist active profile: %w", err)
 	}
@@ -307,7 +340,9 @@ func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
 }
 
 // checkPIN enforces a profile's PIN with per-profile rate limiting. A
-// profile without a PIN always passes.
+// profile without a PIN always passes. The expensive VerifyPIN runs
+// outside the mutex; attempt accounting re-reads state under a single lock
+// acquisition afterwards so concurrent failures cannot lose records.
 func (s *Service) checkPIN(p *database.Profile, pin string) error {
 	if p.PINHash == "" {
 		return nil
@@ -318,15 +353,9 @@ func (s *Service) checkPIN(p *database.Profile, pin string) error {
 
 	s.mu.Lock()
 	now := s.now()
-	attempts := s.pinAttempts[p.ProfileID]
-	recent := attempts[:0]
-	for _, at := range attempts {
-		if now.Sub(at) < pinAttemptWindow {
-			recent = append(recent, at)
-		}
-	}
+	recent := recentAttempts(s.pinAttempts[p.ProfileID], now)
+	s.pinAttempts[p.ProfileID] = recent
 	if len(recent) >= pinAttemptLimit {
-		s.pinAttempts[p.ProfileID] = recent
 		s.mu.Unlock()
 		return ErrPINRateLimited
 	}
@@ -334,7 +363,8 @@ func (s *Service) checkPIN(p *database.Profile, pin string) error {
 
 	if !VerifyPIN(pin, p.PINHash) {
 		s.mu.Lock()
-		s.pinAttempts[p.ProfileID] = append(recent, now)
+		now = s.now()
+		s.pinAttempts[p.ProfileID] = append(recentAttempts(s.pinAttempts[p.ProfileID], now), now)
 		s.mu.Unlock()
 		return ErrPINIncorrect
 	}
@@ -343,6 +373,19 @@ func (s *Service) checkPIN(p *database.Profile, pin string) error {
 	delete(s.pinAttempts, p.ProfileID)
 	s.mu.Unlock()
 	return nil
+}
+
+// recentAttempts filters attempt timestamps down to those still inside the
+// rate-limit window, returning a fresh slice so callers never alias the
+// old backing array.
+func recentAttempts(attempts []time.Time, now time.Time) []time.Time {
+	recent := make([]time.Time, 0, len(attempts))
+	for _, at := range attempts {
+		if now.Sub(at) < pinAttemptWindow {
+			recent = append(recent, at)
+		}
+	}
+	return recent
 }
 
 // insertWithSwitchID inserts a profile, generating a fresh switch ID and
@@ -407,15 +450,22 @@ func snapshot(p *database.Profile) *models.ActiveProfile {
 	}
 }
 
-// validateLimitDurations rejects unparseable limit duration strings. An
-// empty string is allowed (it means "clear to inherit" on update).
+// validateLimitDurations rejects unparseable and negative limit duration
+// strings. An empty string is allowed (it means "clear to inherit" on
+// update); "0" means explicitly unlimited. Negative values are rejected
+// rather than silently behaving as "no limit", which would invert the
+// intent of whoever typed them.
 func validateLimitDurations(durations ...*string) error {
 	for _, d := range durations {
 		if d == nil || *d == "" {
 			continue
 		}
-		if _, err := time.ParseDuration(*d); err != nil {
+		parsed, err := time.ParseDuration(*d)
+		if err != nil {
 			return fmt.Errorf("invalid limit duration %q: %w", *d, err)
+		}
+		if parsed < 0 {
+			return fmt.Errorf("invalid limit duration %q: must not be negative", *d)
 		}
 	}
 	return nil

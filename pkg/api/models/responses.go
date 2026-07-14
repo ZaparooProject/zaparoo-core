@@ -608,6 +608,7 @@ type InboxResponse struct {
 type PairedClient struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
+	Role       string `json:"role"`
 	CreatedAt  int64  `json:"createdAt"`
 	LastSeenAt int64  `json:"lastSeenAt"`
 }
@@ -636,16 +637,17 @@ type ClientsPairedNotification struct {
 }
 
 // ProfileResponse represents a device profile in API responses. The PIN
-// hash is never exposed — only whether a PIN is set. SwitchID is included:
-// it is a card selector, not a credential (API switching by SwitchID still
-// enforces the PIN; only physical card scans bypass it).
+// hash is never exposed — only whether a PIN is set. SwitchID is a bearer
+// credential (presenting it authorizes a PIN-free switch on every path),
+// so it is only included for privileged clients that need it for
+// card-writing UX; for other clients it is omitted.
 type ProfileResponse struct {
 	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
 	DailyLimit    *string `json:"dailyLimit,omitempty"`
 	SessionLimit  *string `json:"sessionLimit,omitempty"`
 	ProfileID     string  `json:"profileId"`
 	Name          string  `json:"name"`
-	SwitchID      string  `json:"switchId"`
+	SwitchID      string  `json:"switchId,omitempty"`
 	CreatedAt     int64   `json:"createdAt"`
 	LastUpdatedAt int64   `json:"lastUpdatedAt"`
 	HasPIN        bool    `json:"hasPin"`
@@ -654,6 +656,16 @@ type ProfileResponse struct {
 // ProfilesResponse is the response for the profiles RPC method.
 type ProfilesResponse struct {
 	Profiles []ProfileResponse `json:"profiles"`
+}
+
+// ProfileVerifyResponse is the response for the profiles.verify RPC
+// method: the identity of the profile whose credential was verified.
+// Verification grants nothing server-side — the client owns whatever it
+// unlocks with it.
+type ProfileVerifyResponse struct {
+	ProfileID string `json:"profileId"`
+	Name      string `json:"name"`
+	HasPIN    bool   `json:"hasPin"`
 }
 
 // ActiveProfile is a snapshot of the device's active profile, held in

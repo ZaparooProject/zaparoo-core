@@ -100,6 +100,7 @@ const (
 	MethodProfilesDelete        = "profiles.delete"
 	MethodProfilesActive        = "profiles.active"
 	MethodProfilesSwitch        = "profiles.switch"
+	MethodProfilesVerify        = "profiles.verify"
 	MethodSystems               = "systems"
 	MethodLaunchers             = "launchers"
 	MethodLaunchersRefresh      = "launchers.refresh"

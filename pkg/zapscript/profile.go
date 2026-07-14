@@ -26,7 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// cmdProfileSwitch handles **profile.switch:<switchId> — the card-scan path
+// cmdProfile handles **profile:<switchId> — the card-scan path
 // for changing the device's active profile. The switch ID is resolved here
 // so an unknown card fails the script (and plays the fail sound); the
 // actual activation is applied by the service layer from the returned
@@ -34,7 +34,7 @@ import (
 // authorization.
 //
 //nolint:gocritic // single-use parameter in command handler
-func cmdProfileSwitch(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdProfile(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) != 1 || env.Cmd.Args[0] == "" {
 		return platforms.CmdResult{}, ErrArgCount
 	}

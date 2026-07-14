@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -189,4 +190,191 @@ func TestResetSession_CooldownResets(t *testing.T) {
 	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
 	assert.Nil(t, tm.cooldownTimer)
 	assert.True(t, tm.lastStopTime.IsZero())
+}
+
+// swappableProvider is a LimitsProvider whose values tests mutate to
+// simulate profile switches at runtime.
+type swappableProvider struct {
+	cur stubProvider
+	mu  syncutil.Mutex
+}
+
+func (s *swappableProvider) set(p stubProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur = p
+}
+
+func (s *swappableProvider) get() stubProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur
+}
+
+func (s *swappableProvider) PlaytimeLimitsEnabled() bool       { return s.get().enabled }
+func (s *swappableProvider) DailyLimit() time.Duration         { return s.get().daily }
+func (s *swappableProvider) SessionLimit() time.Duration       { return s.get().session }
+func (s *swappableProvider) WarningIntervals() []time.Duration { return s.get().warnings }
+func (s *swappableProvider) ActiveProfileID() string           { return s.get().profileID }
+
+// captureBroker records the method filter passed to Subscribe.
+type captureBroker struct {
+	ch      chan models.Notification
+	methods []string
+}
+
+func (b *captureBroker) Subscribe(_ int, methods ...string) (notifChan <-chan models.Notification, id int) {
+	b.methods = methods
+	b.ch = make(chan models.Notification)
+	return b.ch, 1
+}
+
+func (*captureBroker) Unsubscribe(int) {}
+
+func TestStart_SubscribesToProfileNotifications(t *testing.T) {
+	t.Parallel()
+
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{},
+		clockwork.NewFakeClockAt(time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)), newNoOpMockPlayer())
+	b := &captureBroker{}
+	tm.Start(b, nil)
+	defer tm.Stop()
+
+	// The broker filter must include profiles.active or profile switches
+	// silently never reach the limits manager.
+	assert.Contains(t, b.methods, models.NotificationProfilesActive)
+	assert.Contains(t, b.methods, models.NotificationStarted)
+	assert.Contains(t, b.methods, models.NotificationStopped)
+}
+
+func TestOnProfileChanged_SameProfileDoesNotResetSession(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{},
+		clockwork.NewFakeClockAt(now), newNoOpMockPlayer())
+	provider := &swappableProvider{}
+	provider.set(stubProvider{enabled: true, session: time.Hour, profileID: "kid-a"})
+	tm.SetLimitsProvider(provider)
+
+	sessionStart := now.Add(-50 * time.Minute)
+	tm.mu.Lock()
+	tm.lastProfileID = "kid-a"
+	tm.state = StateActive
+	tm.sessionStart = sessionStart
+	tm.sessionStartMono = time.Now().Add(-50 * time.Minute)
+	tm.sessionCumulativeTime = 10 * time.Minute
+	tm.mu.Unlock()
+
+	// Rescanning your own profile card re-broadcasts profiles.active with
+	// the same identity — the session must NOT restart, or rescanning
+	// every 50 minutes defeats a 1h session limit.
+	tm.onProfileChanged()
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	assert.True(t, tm.sessionStart.Equal(sessionStart), "session start unchanged")
+	assert.Equal(t, 10*time.Minute, tm.sessionCumulativeTime)
+}
+
+func TestOnProfileChanged_DifferentProfileResetsAndRepins(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{},
+		clockwork.NewFakeClockAt(now), newNoOpMockPlayer())
+	provider := &swappableProvider{}
+	provider.set(stubProvider{enabled: true, session: 2 * time.Hour, profileID: "kid-b"})
+	tm.SetLimitsProvider(provider)
+
+	tm.mu.Lock()
+	tm.lastProfileID = "kid-a"
+	tm.state = StateActive
+	tm.sessionStart = now.Add(-50 * time.Minute)
+	tm.sessionStartMono = time.Now().Add(-50 * time.Minute)
+	tm.sessionCumulativeTime = 10 * time.Minute
+	tm.sessionLimits = &pinnedLimits{profileID: "kid-a", enabled: true, session: time.Hour}
+	tm.mu.Unlock()
+
+	tm.onProfileChanged()
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	assert.Equal(t, "kid-b", tm.lastProfileID)
+	assert.True(t, tm.sessionStart.Equal(now), "session restarts for the new person")
+	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime)
+	require.NotNil(t, tm.sessionLimits)
+	assert.Equal(t, "kid-b", tm.sessionLimits.profileID, "running game re-pinned to the new profile")
+	assert.Equal(t, 2*time.Hour, tm.sessionLimits.session)
+}
+
+func TestOnProfileChanged_DeactivationMidGameKeepsLaunchLimits(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{},
+		clockwork.NewFakeClockAt(now), newNoOpMockPlayer())
+	provider := &swappableProvider{}
+	provider.set(stubProvider{enabled: true, session: time.Hour, daily: 2 * time.Hour, profileID: "kid-a"})
+	tm.SetLimitsProvider(provider)
+
+	sessionStart := now.Add(-30 * time.Minute)
+	tm.mu.Lock()
+	tm.lastProfileID = "kid-a"
+	tm.state = StateActive
+	tm.sessionStart = sessionStart
+	tm.sessionStartMono = time.Now().Add(-30 * time.Minute)
+	tm.sessionLimits = &pinnedLimits{
+		profileID: "kid-a", enabled: true, session: time.Hour, daily: 2 * time.Hour,
+	}
+	tm.mu.Unlock()
+
+	// Scan a **profile.clear card mid-game: live limits drop to the shared
+	// profile (disabled here), but the running game keeps its launch
+	// profile's limits and identity.
+	provider.set(stubProvider{enabled: false, profileID: ""})
+	tm.onProfileChanged()
+
+	tm.mu.Lock()
+	assert.True(t, tm.sessionStart.Equal(sessionStart), "deactivation does not reset the session")
+	assert.Empty(t, tm.lastProfileID)
+	tm.mu.Unlock()
+
+	assert.True(t, tm.effectiveEnabled(), "pinned enablement survives deactivation")
+	assert.Equal(t, time.Hour, tm.effectiveSessionLimit())
+	assert.Equal(t, 2*time.Hour, tm.effectiveDailyLimit())
+	assert.Equal(t, "kid-a", tm.effectiveProfileID(), "daily usage stays scoped to the launch profile")
+
+	// Once the game stops, pinning ends and live (shared) limits apply.
+	tm.OnMediaStopped()
+	assert.False(t, tm.effectiveEnabled())
+	assert.Empty(t, tm.effectiveProfileID())
+}
+
+func TestOnProfileChanged_DeactivationInCooldownRetainsCumulative(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	clock := clockwork.NewFakeClockAt(now)
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{}, clock, newNoOpMockPlayer())
+	provider := &swappableProvider{}
+	provider.set(stubProvider{enabled: false, profileID: ""})
+	tm.SetLimitsProvider(provider)
+
+	tm.mu.Lock()
+	tm.lastProfileID = "kid-a"
+	tm.state = StateCooldown
+	tm.sessionCumulativeTime = 50 * time.Minute
+	tm.lastStopTime = now.Add(-time.Minute)
+	tm.mu.Unlock()
+
+	// Stop the game, clear the profile, relaunch: cumulative session time
+	// must survive the deactivation or the cooldown mechanism is
+	// escapable with a **profile.clear card.
+	tm.onProfileChanged()
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	assert.Equal(t, StateCooldown, tm.state)
+	assert.Equal(t, 50*time.Minute, tm.sessionCumulativeTime)
 }

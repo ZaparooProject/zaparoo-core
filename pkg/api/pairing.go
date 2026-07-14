@@ -40,6 +40,7 @@ import (
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/google/uuid"
@@ -112,6 +113,7 @@ type pairingSession struct {
 	pake       *pake.Pake
 	sessionID  string
 	name       string
+	role       string // permission role the paired client will receive
 	msgA       []byte // raw bytes received from client at /pair/start
 	msgB       []byte // raw bytes sent to client at /pair/start
 	sessionKey []byte // raw PAKE session key
@@ -124,6 +126,7 @@ type PairingManager struct {
 	notifChan       chan<- models.Notification
 	sessions        map[string]*pairingSession
 	pin             string
+	pendingRole     string // role granted to the client paired with the current PIN
 	pinAttempts     int
 	maxClients      int
 	maxAttempts     int
@@ -215,7 +218,9 @@ func (m *PairingManager) PendingPIN() (pin string, expiresAt time.Time) {
 }
 
 // StartPairing generates a new PIN (fails fast if clients are at max).
-func (m *PairingManager) StartPairing() (pin string, expiresAt time.Time, err error) {
+// role is the permission role the paired client will receive; it is chosen
+// at this approval step because starting a pairing is a local-only action.
+func (m *PairingManager) StartPairing(role string) (pin string, expiresAt time.Time, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -239,6 +244,7 @@ func (m *PairingManager) StartPairing() (pin string, expiresAt time.Time, err er
 	m.pin = pin
 	m.pinExpiresAt = time.Now().Add(m.pinTTL)
 	m.pinAttempts = 0
+	m.pendingRole = role
 	// Drop any leftover sessions from a previous PIN — they cannot succeed.
 	m.sessions = make(map[string]*pairingSession)
 	return pin, m.pinExpiresAt, nil
@@ -350,6 +356,7 @@ func (m *PairingManager) startSession(name string, msgA []byte) (sessionID strin
 		msgA:       append([]byte(nil), msgA...),
 		msgB:       append([]byte(nil), msgB...),
 		name:       name,
+		role:       m.pendingRole,
 		createdAt:  time.Now(),
 	}
 	return sessionID, msgB, nil
@@ -437,11 +444,16 @@ func (m *PairingManager) finishSessionLocked(
 		return nil, nil, errTooManyClients
 	}
 
+	role := sess.role
+	if !permissions.ValidRole(role) {
+		role = string(permissions.RoleMember)
+	}
 	now := time.Now().Unix()
 	c := &database.Client{
 		ClientID:   uuid.New().String(),
 		ClientName: sess.name,
 		AuthToken:  uuid.New().String(),
+		Role:       role,
 		PairingKey: derivedPairingKey,
 		CreatedAt:  now,
 		LastSeenAt: now,
