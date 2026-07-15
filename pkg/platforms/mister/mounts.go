@@ -36,6 +36,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var mountInfoPath = filepath.Join(string(filepath.Separator), "proc", "self", "mountinfo")
+
 // mountEntry is one line of /proc/self/mountinfo, reduced to the fields
 // mount ownership decisions need. Entries appear in mount order, so of two
 // entries with the same Mountpoint the later one shadows the earlier.
@@ -59,7 +61,7 @@ type mounter interface {
 type sysMounter struct{}
 
 func (sysMounter) Mounts() ([]mountEntry, error) {
-	data, err := os.ReadFile("/proc/self/mountinfo")
+	data, err := os.ReadFile(mountInfoPath) //nolint:gosec // fixed procfs path assembled from constants
 	if err != nil {
 		return nil, fmt.Errorf("failed to read mountinfo: %w", err)
 	}

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -351,10 +352,19 @@ func TestUpdate_ClearLimitsThenSet(t *testing.T) {
 func TestDelete_ActiveProfileDeactivates(t *testing.T) {
 	t.Parallel()
 	svc, mockDB, st := newTestService(t)
+	swapper := &fakeSwapper{}
+	coord := NewDataSwapCoordinator(&config.Instance{}, st, swapper)
+	coord.Start(&stubBroker{}, make(chan models.Notification, 4))
+	t.Cleanup(coord.Stop)
+	svc.dataSwap = coord
 
 	st.SetActiveProfile(&models.ActiveProfile{ProfileID: "profile-1", Name: "Kid A"})
 	mockDB.On("DeleteProfile", "profile-1").Return(nil)
 
 	require.NoError(t, svc.Delete("profile-1"))
 	assert.Nil(t, st.ActiveProfile())
+	require.Eventually(t, func() bool { return swapper.applyCount() == 1 },
+		time.Second, 5*time.Millisecond)
+	ref, _ := swapper.lastApply()
+	assert.Empty(t, ref.ID)
 }

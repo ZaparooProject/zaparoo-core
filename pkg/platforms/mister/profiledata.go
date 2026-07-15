@@ -60,16 +60,19 @@ const (
 	// that storage we can reach.
 	nasPoolDirName = ".zaparoo-profiles"
 
+	// usbRootCount matches main's isUSBMounted probe of /media/usb0-3.
+	usbRootCount = 4
+)
+
+var (
 	// mountLedgerPath records the binds we own. On tmpfs so it lives and
 	// dies with the kernel mount state it describes.
-	mountLedgerPath = "/run/zaparoo/mounts.json"
+	mountLedgerPath = filepath.Join(string(filepath.Separator), "run", "zaparoo", "mounts.json")
 
 	// deviceBinPath is where main's OSD Storage menu persists the storage
 	// root selection (FileSave of an int: 0 = SD, nonzero = USB).
-	deviceBinPath = misterconfig.CoreConfigFolder + "/device.bin"
-
-	// usbRootCount matches main's isUSBMounted probe of /media/usb0-3.
-	usbRootCount = 4
+	deviceBinPath = filepath.Join(misterconfig.CoreConfigFolder, "device.bin")
+	mediaRootPath = filepath.Join(string(filepath.Separator), "media")
 )
 
 func profileItemDir(item string) string {
@@ -233,7 +236,7 @@ func (d *profileDataManager) resolveStorageRoot(mounts []mountEntry) (string, er
 	}
 
 	for i := range usbRootCount {
-		path := fmt.Sprintf("/media/usb%d", i)
+		path := filepath.Join(mediaRootPath, fmt.Sprintf("usb%d", i))
 		stack := mountsAt(mounts, path)
 		if len(stack) == 0 {
 			continue
@@ -309,9 +312,7 @@ func (d *profileDataManager) applyItem(plan *profileItemPlan) error {
 		// Ownership must be durable before reporting success. Undo the bind;
 		// otherwise a service restart could no longer prove it is ours.
 		unmountErr := d.m.Unmount(plan.target)
-		if unmountErr == nil {
-			d.ledger.removeInMemory(&top)
-		}
+		d.ledger.removeInMemory(&top)
 		return errors.Join(
 			fmt.Errorf("failed to record profile bind: %w", ledgerErr),
 			unmountErr,
@@ -343,7 +344,7 @@ func (d *profileDataManager) writeNameFile(profileDir string, ref platforms.Prof
 // root drive appearing late, or a manual unmount.
 func (*Platform) WatchProfileData(ctx context.Context, onChange func()) {
 	go func() {
-		file, err := os.Open("/proc/self/mountinfo")
+		file, err := os.Open(mountInfoPath)
 		if err != nil {
 			log.Error().Err(err).Msg("profiles: mount watcher unavailable")
 			return
@@ -391,7 +392,7 @@ func (*Platform) WatchProfileData(ctx context.Context, onChange func()) {
 // mountInfoSum fingerprints the current mount table so poll wakeups that
 // end up changing nothing (mount + matching unmount) don't trigger work.
 func mountInfoSum() [32]byte {
-	data, err := os.ReadFile("/proc/self/mountinfo")
+	data, err := os.ReadFile(mountInfoPath)
 	if err != nil {
 		return [32]byte{}
 	}

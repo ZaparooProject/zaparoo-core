@@ -20,6 +20,7 @@
 package userdb
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -267,7 +268,7 @@ func TestMediaHistory_ProfileAttribution(t *testing.T) {
 		EndTime:    &attributedEnd,
 		SystemID:   "SNES",
 		SystemName: "Super Nintendo",
-		MediaPath:  "snes/game.sfc",
+		MediaPath:  filepath.Join("snes", "game.sfc"),
 		MediaName:  "Game",
 		LauncherID: "test",
 		PlayTime:   120,
@@ -285,7 +286,7 @@ func TestMediaHistory_ProfileAttribution(t *testing.T) {
 		EndTime:    &unattributedEnd,
 		SystemID:   "NES",
 		SystemName: "Nintendo",
-		MediaPath:  "nes/other.nes",
+		MediaPath:  filepath.Join("nes", "other.nes"),
 		MediaName:  "Other",
 		LauncherID: "test",
 		PlayTime:   60,

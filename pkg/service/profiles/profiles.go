@@ -262,9 +262,11 @@ func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile,
 
 	// Refresh the active snapshot if this profile is active so limit
 	// changes take effect without a re-switch.
+	s.activateMu.Lock()
 	if active := s.st.ActiveProfile(); active != nil && active.ProfileID == p.ProfileID {
 		s.st.SetActiveProfile(snapshot(p))
 	}
+	s.activateMu.Unlock()
 	return p, nil
 }
 
@@ -274,13 +276,22 @@ func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile,
 func (s *Service) Delete(profileID string) error {
 	s.manageMu.Lock()
 	defer s.manageMu.Unlock()
+	s.activateMu.Lock()
+	defer s.activateMu.Unlock()
 
+	wasActive := false
+	if active := s.st.ActiveProfile(); active != nil {
+		wasActive = active.ProfileID == profileID
+	}
 	if err := s.db.UserDB.DeleteProfile(profileID); err != nil {
 		return fmt.Errorf("failed to delete profile: %w", err)
 	}
 
-	if active := s.st.ActiveProfile(); active != nil && active.ProfileID == profileID {
+	if wasActive {
 		s.st.SetActiveProfile(nil)
+		if s.dataSwap != nil {
+			s.dataSwap.RequestSwitch(platforms.ProfileRef{})
+		}
 	}
 	return nil
 }

@@ -454,9 +454,7 @@ func (m *PairingManager) finishSessionLocked(
 	}
 
 	role := sess.role
-	if count == 0 {
-		role = string(permissions.RoleAdmin)
-	} else if !permissions.ValidRole(role) {
+	if !permissions.ValidRole(role) {
 		role = string(permissions.RoleMember)
 	}
 	now := time.Now().Unix()

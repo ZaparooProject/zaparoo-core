@@ -198,6 +198,29 @@ func TestDataSwap_DeferredSwitchesCoalesce(t *testing.T) {
 	assert.Equal(t, 1, swapper.applyCount())
 }
 
+func TestDataSwap_StaleDeferredTargetCannotDisplaceNewerSwitch(t *testing.T) {
+	t.Parallel()
+	swapper := &fakeSwapper{}
+	fix := newTestCoordinator(t, swapper)
+
+	fix.st.SetActiveMedia(&models.ActiveMedia{SystemID: "SNES", Path: "game.sfc", Name: "Game"})
+	fix.coord.RequestSwitch(platforms.ProfileRef{ID: "profile-1", Name: "Kid A"})
+
+	// Simulate media.stopped extracting A immediately before a concurrent
+	// direct switch to B. Enqueueing extracted A afterwards must be rejected.
+	stale := fix.coord.takePending()
+	fix.st.SetActiveMedia(nil)
+	fix.coord.RequestSwitch(platforms.ProfileRef{ID: "profile-2", Name: "Kid B"})
+	fix.coord.enqueuePending(stale)
+
+	require.Eventually(t, func() bool { return swapper.applyCount() == 1 },
+		2*time.Second, 5*time.Millisecond)
+	ref, _ := swapper.lastApply()
+	assert.Equal(t, "profile-2", ref.ID)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, swapper.applyCount())
+}
+
 func TestDataSwap_DisabledConvergesToShared(t *testing.T) {
 	t.Parallel()
 	swapper := &fakeSwapper{}

@@ -21,6 +21,8 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,14 +172,7 @@ func TestDefaultSettingsService_DeleteAndSwitchProfile(t *testing.T) {
 
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
-		found := false
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !strings.Contains(s, sub) {
 			return false
 		}
 	}
@@ -563,6 +558,27 @@ func TestBuildProfilesPage_EmptyState_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("no profiles", 100*time.Millisecond),
 		"empty state should explain profile setup")
 	assert.True(t, runner.ContainsText("New"), "stable New action should be visible")
+}
+
+func TestBuildProfileEditPage_ProfileLookupFailureFailsClosed_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("GetProfiles", mock.Anything).Return(nil, errors.New("database unavailable"))
+
+	runner.Start(pages)
+	runner.Draw()
+	runner.QueueUpdateDraw(func() {
+		buildProfileEditPage(mockSvc, pages, runner.App(), nil)
+	})
+
+	require.True(t, runner.WaitForText("Failed to load profiles", 100*time.Millisecond))
+	assert.False(t, runner.ContainsText("initial administrator"))
+	mockSvc.AssertNotCalled(t, "NewProfile", mock.Anything, mock.Anything)
 }
 
 func TestBuildProfileEditPage_New_Integration(t *testing.T) {

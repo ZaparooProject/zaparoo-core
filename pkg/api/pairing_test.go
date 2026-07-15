@@ -38,6 +38,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/rs/zerolog"
@@ -127,8 +128,8 @@ func (h *pairingTestHarness) runHandshake(
 	expectedServer := computePairingHMAC(confirmKeyB, "server", name, msgA, msgB)
 	require.Equal(t, expectedServer, result.ServerHMAC, "server HMAC must match what client computes")
 	require.Equal(t, derivedPairingKey, result.Client.PairingKey, "pairing keys must agree")
-	require.Equal(t, "admin", result.Client.Role,
-		"first paired client must become administrator")
+	require.Equal(t, "member", result.Client.Role,
+		"pairing completion must preserve the role chosen at approval")
 
 	return result.Client, result.Client.PairingKey
 }
@@ -179,6 +180,16 @@ func TestStartPairing_AfterExpiry(t *testing.T) {
 
 	_, _, err = h.mgr.StartPairing("member")
 	require.NoError(t, err, "expired PIN should not block a new one")
+}
+
+func TestSuccessfulHandshake_InvalidRoleFallsBackToMember(t *testing.T) {
+	t.Parallel()
+	h := newPairingHarness(t)
+
+	pin, _, err := h.mgr.StartPairing("invalid")
+	require.NoError(t, err)
+	client, _ := h.runHandshake(t, pin, "Test App")
+	assert.Equal(t, string(permissions.RoleMember), client.Role)
 }
 
 func TestPendingPIN_Empty(t *testing.T) {

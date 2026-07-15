@@ -223,21 +223,30 @@ func TestSqlDeleteClient_NotFound(t *testing.T) {
 }
 
 func TestSqlDeleteClient_LastAdminProtected(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	first := newTestClient()
+	second := newTestClient()
+	second.ClientID = "client-uuid-2"
+	second.ClientName = "Second Admin"
+	second.AuthToken = "auth-token-uuid-2"
+	require.NoError(t, db.CreateClient(first))
+	require.NoError(t, db.CreateClient(second))
+
+	err := sqlDeleteClient(context.Background(), db.sql.Load(), first.ClientID)
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	_, err = db.GetClientByToken(first.AuthToken)
+	require.Error(t, err)
 
-	mock.ExpectExec(`DELETE FROM Clients WHERE ClientID = \?`).
-		WithArgs("admin-client").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT Role FROM Clients WHERE ClientID = \?`).
-		WithArgs("admin-client").
-		WillReturnRows(sqlmock.NewRows([]string{"Role"}).AddRow("admin"))
-
-	err = sqlDeleteClient(context.Background(), db, "admin-client")
+	err = sqlDeleteClient(context.Background(), db.sql.Load(), second.ClientID)
 	require.ErrorIs(t, err, ErrLastClientAdmin)
-	assert.NoError(t, mock.ExpectationsWereMet())
+	remaining, err := db.GetClientByToken(second.AuthToken)
+	require.NoError(t, err)
+	assert.Equal(t, second.ClientID, remaining.ClientID)
 }
 
 func TestSqlUpdateClientLastSeen_Success(t *testing.T) {

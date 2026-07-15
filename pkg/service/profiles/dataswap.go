@@ -54,6 +54,11 @@ type swapRequest struct {
 	emitSuccess bool
 }
 
+type pendingSwap struct {
+	ref      platforms.ProfileRef
+	sequence uint64
+}
+
 // DataSwapCoordinator applies profile data swaps through a platform's
 // ProfileDataSwapper. The profile switch itself is instant and never fails
 // because of file operations: swaps run in a worker goroutine, switches
@@ -67,8 +72,9 @@ type DataSwapCoordinator struct {
 	targetCh chan swapRequest
 	quit     chan struct{}
 	done     chan struct{}
-	pending  *platforms.ProfileRef
+	pending  *pendingSwap
 	mu       syncutil.Mutex
+	sequence uint64
 	subID    int
 	started  bool
 }
@@ -98,6 +104,8 @@ func (c *DataSwapCoordinator) Start(broker Broker, notificationsSend chan<- mode
 	c.quit = make(chan struct{})
 	c.done = make(chan struct{})
 	c.started = true
+	c.pending = nil
+	c.sequence = 0
 	done := c.done
 	c.mu.Unlock()
 
@@ -163,8 +171,10 @@ func (c *DataSwapCoordinator) RequestSwitch(ref platforms.ProfileRef) {
 		c.mu.Unlock()
 		return
 	}
+	c.sequence++
+	sequence := c.sequence
 	if c.st.ActiveMedia() != nil {
-		c.pending = &ref
+		c.pending = &pendingSwap{ref: ref, sequence: sequence}
 		notify := c.notify
 		c.mu.Unlock()
 		log.Info().Str("profileId", ref.ID).
@@ -178,7 +188,8 @@ func (c *DataSwapCoordinator) RequestSwitch(ref platforms.ProfileRef) {
 	c.pending = nil
 	c.mu.Unlock()
 
-	done := c.enqueue(swapRequest{ref: ref, emitSuccess: true, done: make(chan struct{})})
+	done := c.enqueueCurrent(
+		swapRequest{ref: ref, emitSuccess: true, done: make(chan struct{})}, sequence)
 	select {
 	case <-done:
 	case <-time.After(switchApplyTimeout):
@@ -207,29 +218,52 @@ func (c *DataSwapCoordinator) Reconcile() {
 		c.mu.Unlock()
 		return
 	}
+	c.sequence++
+	sequence := c.sequence
 	if c.st.ActiveMedia() != nil {
-		c.pending = &ref
+		c.pending = &pendingSwap{ref: ref, sequence: sequence}
 		c.mu.Unlock()
 		return
 	}
 	c.pending = nil
-	c.mu.Unlock()
-
 	c.enqueue(swapRequest{ref: ref, emitSuccess: false, done: make(chan struct{})})
+	c.mu.Unlock()
 }
 
-func (c *DataSwapCoordinator) onMediaStopped() {
+func (c *DataSwapCoordinator) takePending() *pendingSwap {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	pending := c.pending
 	c.pending = nil
-	c.mu.Unlock()
+	return pending
+}
 
+func (c *DataSwapCoordinator) enqueuePending(pending *pendingSwap) {
 	if pending == nil {
 		return
 	}
 	// Re-resolve against config in case swap_data flipped while deferred.
-	ref := c.effectiveRef(*pending)
+	ref := c.effectiveRef(pending.ref)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.started || pending.sequence != c.sequence {
+		return
+	}
 	c.enqueue(swapRequest{ref: ref, emitSuccess: true, done: make(chan struct{})})
+}
+
+func (c *DataSwapCoordinator) onMediaStopped() {
+	c.enqueuePending(c.takePending())
+}
+
+func (c *DataSwapCoordinator) enqueueCurrent(req swapRequest, sequence uint64) <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.started || sequence != c.sequence {
+		close(req.done)
+		return req.done
+	}
+	return c.enqueue(req)
 }
 
 // effectiveRef maps the requested profile to the shared profile when data

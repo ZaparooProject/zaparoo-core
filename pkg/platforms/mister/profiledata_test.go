@@ -43,6 +43,7 @@ import (
 // the topmost entry at a target.
 type fakeMounter struct {
 	bindErr       error
+	unmountErr    error
 	mounts        []mountEntry
 	binds         int
 	bindAttempts  int
@@ -98,6 +99,9 @@ func (f *fakeMounter) BindMount(source, target string) (mountEntry, error) {
 }
 
 func (f *fakeMounter) Unmount(target string) error {
+	if f.unmountErr != nil {
+		return f.unmountErr
+	}
 	for i := len(f.mounts) - 1; i >= 0; i-- {
 		if f.mounts[i].Mountpoint == target {
 			f.mounts = append(f.mounts[:i], f.mounts[i+1:]...)
@@ -205,14 +209,17 @@ func TestApply_SDPlainDir(t *testing.T) {
 	require.NoError(t, d.apply(kidA(), allItems()))
 
 	// Both items bind their pool dirs over the live dirs.
-	saves := mountsAt(m.mounts, "/media/fat/saves")
+	mediaRoot := filepath.Join(string(filepath.Separator), "media", "fat")
+	liveSaves := filepath.Join(mediaRoot, "saves")
+	liveStates := filepath.Join(mediaRoot, "savestates")
+	poolDir := filepath.Join(mediaRoot, "zaparoo", "profiles", kidA().ID)
+	saves := mountsAt(m.mounts, liveSaves)
 	require.Len(t, saves, 1)
-	assert.Equal(t, "/media/fat/zaparoo/profiles/"+kidA().ID+"/saves", saves[0].Root)
-	states := mountsAt(m.mounts, "/media/fat/savestates")
+	assert.Equal(t, filepath.Join(poolDir, "saves"), saves[0].Root)
+	states := mountsAt(m.mounts, liveStates)
 	require.Len(t, states, 1)
 
 	// Pool dirs and the human-readable label exist.
-	poolDir := "/media/fat/zaparoo/profiles/" + kidA().ID
 	name, err := afero.ReadFile(fs, filepath.Join(poolDir, "name.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "Kid A\n", string(name))
@@ -224,12 +231,12 @@ func TestApply_SDPlainDir(t *testing.T) {
 	binds := m.binds
 	require.NoError(t, d.apply(kidA(), allItems()))
 	assert.Equal(t, binds, m.binds)
-	assert.Len(t, mountsAt(m.mounts, "/media/fat/saves"), 1)
+	assert.Len(t, mountsAt(m.mounts, liveSaves), 1)
 
 	// Deactivating removes our binds and only ours.
 	require.NoError(t, d.apply(platforms.ProfileRef{}, allItems()))
-	assert.Empty(t, mountsAt(m.mounts, "/media/fat/saves"))
-	assert.Empty(t, mountsAt(m.mounts, "/media/fat/savestates"))
+	assert.Empty(t, mountsAt(m.mounts, liveSaves))
+	assert.Empty(t, mountsAt(m.mounts, liveStates))
 	assert.Empty(t, d.ledger.entries)
 }
 
@@ -303,6 +310,19 @@ func TestApply_LedgerFailureRollsBackNewBind(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to record profile bind")
 	assert.Empty(t, mountsAt(m.mounts, "/media/fat/saves"))
 	assert.Empty(t, d.ledger.entries)
+}
+
+func TestApply_LedgerAndUnmountFailureDropsOwnership(t *testing.T) {
+	t.Parallel()
+	m := &fakeMounter{unmountErr: errors.New("injected unmount failure")}
+	d, fs := newTestManager(m)
+	d.ledger.fs = afero.NewReadOnlyFs(fs)
+
+	err := d.apply(kidA(), []string{profileDataItemSaves})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to record profile bind")
+	assert.Contains(t, err.Error(), "injected unmount failure")
+	assert.Empty(t, d.ledger.entries, "failed bind must not remain owned in memory")
 }
 
 func TestApply_USBRoot(t *testing.T) {

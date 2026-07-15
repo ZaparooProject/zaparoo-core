@@ -29,6 +29,20 @@ import (
 
 const settingsTextEditModalPage = "settings_text_edit_modal"
 
+// SettingsTextEditOptions configures a text-value row and its edit modal.
+type SettingsTextEditOptions struct {
+	App            *tview.Application
+	AcceptanceFunc func(string, rune) bool
+	DisplayValue   func(string) string
+	Validate       func(string) error
+	Title          string
+	HelpText       string
+	Placeholder    string
+	EmptyDisplay   string
+	FieldWidth     int
+	MaskCharacter  rune
+}
+
 func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
 	field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
 	field.SetFocusFunc(func() {
@@ -119,14 +133,15 @@ func formatToggle(value bool, label string, selected bool) string {
 // formatCycle renders a cycle value. When selected, label and value are highlighted.
 func formatTextValue(label, value string, selected bool) string {
 	t := CurrentTheme()
+	escapedValue := tview.Escape(value)
 	if selected {
 		return fmt.Sprintf("[%s:%s]- [%s:%s]%s: %s[-:%s]",
 			t.AccentColorName, t.BgColorName,
-			t.HighlightFgName, t.HighlightBgName, label, value, t.BgColorName)
+			t.HighlightFgName, t.HighlightBgName, label, escapedValue, t.BgColorName)
 	}
 	return fmt.Sprintf("[%s:%s]- [%s:%s]%s: %s[-:-]",
 		t.AccentColorName, t.BgColorName,
-		t.TextColorName, t.BgColorName, label, value)
+		t.TextColorName, t.BgColorName, label, escapedValue)
 }
 
 func formatCycle(label, currentValue string, selected bool) string {
@@ -439,20 +454,6 @@ func (sl *SettingsList) AddValueAction(
 	})
 	sl.AddItem(formatTextValue(label, display(), selected), formatDesc(description), 0, action)
 	return sl
-}
-
-// SettingsTextEditOptions configures a text-value row and its edit modal.
-type SettingsTextEditOptions struct {
-	App            *tview.Application
-	AcceptanceFunc func(string, rune) bool
-	DisplayValue   func(string) string
-	Validate       func(string) error
-	Title          string
-	HelpText       string
-	Placeholder    string
-	EmptyDisplay   string
-	FieldWidth     int
-	MaskCharacter  rune
 }
 
 // AddTextEdit adds a text-value row that opens a focused edit modal.

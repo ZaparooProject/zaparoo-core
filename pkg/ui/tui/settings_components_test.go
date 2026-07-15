@@ -28,6 +28,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFormatTextValue_EscapesDynamicValue(t *testing.T) {
+	t.Parallel()
+	value := "[red]Injected[-]"
+
+	formatted := formatTextValue("Name", value, false)
+
+	assert.Contains(t, formatted, tview.Escape(value))
+	assert.NotContains(t, formatted, "Name: "+value)
+}
+
 func TestFormatToggle(t *testing.T) {
 	t.Parallel()
 

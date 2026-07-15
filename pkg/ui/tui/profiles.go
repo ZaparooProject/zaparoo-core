@@ -33,14 +33,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	profileListHelp          = "Select a profile to edit. Use New to create one or Switch to change active profile."
+	profileSwitchModalPage   = "profile_switch_modal"
+	profilePINModalPage      = "profile_pin_modal"
+	profilePINEditModalPage  = "profile_pin_edit_modal"
+	profileSwitchIDModalPage = "profile_switch_id_modal"
+)
+
 // profileCardZapScript builds the ZapScript written to a profile switch
 // card. Profile lists keep the bearer credential hidden; the verified
 // profile editor reveals it only through an intentional modal action.
 func profileCardZapScript(switchID string) string {
 	return "**" + zapscript.ZapScriptCmdProfile + ":" + switchID
 }
-
-const profileListHelp = "Select a profile to edit. Use New to create one or Switch to change active profile."
 
 func profileRoleLabel(role string) string {
 	switch role {
@@ -75,14 +81,6 @@ func formatProfileLastUsed(lastUsedAt *int64, now time.Time) string {
 		return "Last used " + used.In(now.Location()).Format("Jan 2, 2006")
 	}
 }
-
-// Overlay page names used by profile switching.
-const (
-	profileSwitchModalPage   = "profile_switch_modal"
-	profilePINModalPage      = "profile_pin_modal"
-	profilePINEditModalPage  = "profile_pin_edit_modal"
-	profileSwitchIDModalPage = "profile_switch_id_modal"
-)
 
 func numericPINAcceptance(text string, _ rune) bool {
 	if len(text) > 8 {
@@ -613,7 +611,10 @@ func buildProfileEditPage(
 	profilesResp, profilesErr := svc.GetProfiles(ctx)
 	cancel()
 	if profilesErr != nil {
-		profilesResp = &models.ProfilesResponse{}
+		ShowErrorModal(pages, app, "Failed to load profiles", func() {
+			BuildProfilesPage(svc, pages, app)
+		})
+		return
 	}
 	adminSetup := !hasAdminProfile(profilesResp.Profiles)
 
