@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -147,6 +148,14 @@ func HandleRunRest(
 		log.Info().Msg("received REST run request")
 
 		text := chi.URLParam(r, "*")
+		if r.URL.RawPath != "" {
+			var err error
+			text, err = url.PathUnescape(text)
+			if err != nil {
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+		}
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
 			log.Warn().Msg("REST run not allowed")

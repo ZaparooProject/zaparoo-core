@@ -78,6 +78,110 @@ func TestHandleRunRestReturnsWhenServiceContextCancelled(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
 
+// Literal parentheses make net/url preserve RawPath, so chi returns an
+// encoded wildcard even though URL.Path is already decoded.
+func TestHandleRunRestDecodesPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		requestPath string
+		remoteAddr  string
+		allowRun    string
+		wantText    string
+	}{
+		{
+			name:        "plain path with encoded space",
+			requestPath: "/run/SNES/Super%20Metroid.sfc",
+			wantText:    "SNES/Super Metroid.sfc",
+		},
+		{
+			name:        "path with parentheses and encoded space",
+			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
+			wantText:    "_Arcade/Youjyuden (JP).mra",
+		},
+		{
+			name:        "literal percent escape is not decoded twice",
+			requestPath: "/run/_Arcade/Percent%2520Name.mra",
+			wantText:    "_Arcade/Percent%20Name.mra",
+		},
+		{
+			name:        "decoded path is used for remote authorization",
+			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
+			remoteAddr:  "192.0.2.1:1234",
+			allowRun:    "[service]\nallow_run = ['\\*\\*launch:_Arcade/Youjyuden \\(JP\\)\\.mra']",
+			wantText:    "_Arcade/Youjyuden (JP).mra",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Instance{}
+			if tt.allowRun != "" {
+				require.NoError(t, cfg.LoadTOML(tt.allowRun))
+			}
+
+			platform := mocks.NewMockPlatform()
+			platform.SetupBasicMock()
+			st, _ := state.NewState(platform, "test-boot-uuid")
+			t.Cleanup(st.StopService)
+
+			tokenQueue := make(chan tokens.Token, 1)
+			router := chi.NewRouter()
+			router.Get("/run/*", HandleRunRest(cfg, st, tokenQueue))
+
+			req := httptest.NewRequestWithContext(
+				context.Background(), http.MethodGet, tt.requestPath, http.NoBody,
+			)
+			req.RemoteAddr = tt.remoteAddr
+			if req.RemoteAddr == "" {
+				req.RemoteAddr = "127.0.0.1:1234"
+			}
+			recorder := httptest.NewRecorder()
+
+			router.ServeHTTP(recorder, req)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			select {
+			case token := <-tokenQueue:
+				assert.Equal(t, tt.wantText, token.Text)
+			default:
+				t.Fatal("REST run handler did not send token to queue")
+			}
+		})
+	}
+}
+
+func TestHandleRunRestRejectsMalformedEscapedPath(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	tokenQueue := make(chan tokens.Token, 1)
+	handler := HandleRunRest(&config.Instance{}, st, tokenQueue)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/run/invalid", http.NoBody)
+	req.URL.RawPath = "/run/%ZZ"
+
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("*", "%ZZ")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	select {
+	case token := <-tokenQueue:
+		t.Fatalf("REST run handler queued malformed token: %q", token.Text)
+	default:
+	}
+}
+
 func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
 	t.Parallel()
 
