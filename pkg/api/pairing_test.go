@@ -91,7 +91,7 @@ func newPairingHarness(t *testing.T, opts ...PairingOption) *pairingTestHarness 
 // that need wrong-PIN behavior can call the lower-level methods directly.
 func (h *pairingTestHarness) runHandshake(
 	t *testing.T,
-	pin, name string,
+	pin, name, expectedRole string,
 ) (clientResp *database.Client, pairingKey []byte) {
 	t.Helper()
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
@@ -128,10 +128,21 @@ func (h *pairingTestHarness) runHandshake(
 	expectedServer := computePairingHMAC(confirmKeyB, "server", name, msgA, msgB)
 	require.Equal(t, expectedServer, result.ServerHMAC, "server HMAC must match what client computes")
 	require.Equal(t, derivedPairingKey, result.Client.PairingKey, "pairing keys must agree")
-	require.Equal(t, "member", result.Client.Role,
+	require.Equal(t, expectedRole, result.Client.Role,
 		"pairing completion must preserve the role chosen at approval")
 
 	return result.Client, result.Client.PairingKey
+}
+
+func TestSuccessfulHandshake_AdminRole(t *testing.T) {
+	t.Parallel()
+	h := newPairingHarness(t)
+
+	pin, _, err := h.mgr.StartPairing("admin")
+	require.NoError(t, err)
+
+	client, _ := h.runHandshake(t, pin, "Admin App", string(permissions.RoleAdmin))
+	assert.Equal(t, string(permissions.RoleAdmin), client.Role)
 }
 
 func TestStartPairing_GeneratesPIN(t *testing.T) {
@@ -188,7 +199,7 @@ func TestSuccessfulHandshake_InvalidRoleFallsBackToMember(t *testing.T) {
 
 	pin, _, err := h.mgr.StartPairing("invalid")
 	require.NoError(t, err)
-	client, _ := h.runHandshake(t, pin, "Test App")
+	client, _ := h.runHandshake(t, pin, "Test App", string(permissions.RoleMember))
 	assert.Equal(t, string(permissions.RoleMember), client.Role)
 }
 
@@ -246,7 +257,7 @@ func TestSuccessfulHandshake(t *testing.T) {
 	pin, _, err := h.mgr.StartPairing("member")
 	require.NoError(t, err)
 
-	c, pairingKey := h.runHandshake(t, pin, "Test App")
+	c, pairingKey := h.runHandshake(t, pin, "Test App", string(permissions.RoleMember))
 
 	assert.NotEmpty(t, c.ClientID)
 	assert.NotEmpty(t, c.AuthToken)

@@ -43,6 +43,21 @@ type SettingsTextEditOptions struct {
 	MaskCharacter  rune
 }
 
+// settingsItem stores data for a single list item.
+type settingsItem struct {
+	toggleValue    *bool
+	toggleOnChange func(bool)
+	textValue      *string
+	textDisplay    func(string) string
+	valueDisplay   func() string
+	cycleIndex     *int
+	cycleOnChange  func(string, int)
+	itemType       string
+	label          string
+	description    string
+	cycleOptions   []string
+}
+
 func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
 	field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
 	field.SetFocusFunc(func() {
@@ -185,21 +200,6 @@ func formatNavAction(label string, selected bool) string {
 // formatDesc renders a description with 2-space indent.
 func formatDesc(desc string) string {
 	return "  " + desc
-}
-
-// settingsItem stores data for a single list item.
-type settingsItem struct {
-	toggleValue    *bool
-	toggleOnChange func(bool)
-	textValue      *string
-	textDisplay    func(string) string
-	valueDisplay   func() string
-	cycleIndex     *int
-	cycleOnChange  func(string, int)
-	itemType       string
-	label          string
-	description    string
-	cycleOptions   []string
 }
 
 // SettingsList wraps a tview.List with consistent navigation and manual highlight management.
