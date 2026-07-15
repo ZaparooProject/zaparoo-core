@@ -108,6 +108,7 @@ type Platform struct {
 	activeMedia         func() *models.ActiveMedia
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
+	profileData         *profileDataManager
 	launchShortCore     func(string) error
 	closeConsole        func() error
 	lastLauncher        platforms.Launcher
@@ -125,6 +126,7 @@ func NewPlatform() *Platform {
 		launchShortCore: mgls.LaunchShortCore,
 	}
 	p.consoleManager = newConsoleManager(p)
+	p.profileData = newProfileDataManager(p.fs)
 	return p
 }
 

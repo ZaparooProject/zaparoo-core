@@ -21,6 +21,7 @@ package userdb
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -211,10 +212,31 @@ func TestSqlDeleteClient_NotFound(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM Clients WHERE ClientID = \?`).
 		WithArgs("missing").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT Role FROM Clients WHERE ClientID = \?`).
+		WithArgs("missing").
+		WillReturnError(sql.ErrNoRows)
 
 	err = sqlDeleteClient(context.Background(), db, "missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "client not found")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteClient_LastAdminProtected(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Clients WHERE ClientID = \?`).
+		WithArgs("admin-client").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT Role FROM Clients WHERE ClientID = \?`).
+		WithArgs("admin-client").
+		WillReturnRows(sqlmock.NewRows([]string{"Role"}).AddRow("admin"))
+
+	err = sqlDeleteClient(context.Background(), db, "admin-client")
+	require.ErrorIs(t, err, ErrLastClientAdmin)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

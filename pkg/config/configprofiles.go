@@ -22,6 +22,7 @@ package config
 // Profiles configures device profile behavior.
 type Profiles struct {
 	RequireForLaunch *bool `toml:"require_for_launch,omitempty"`
+	SwapData         *bool `toml:"swap_data,omitempty"`
 }
 
 // ProfilesRequireForLaunch returns true when media launches are blocked
@@ -42,4 +43,23 @@ func (c *Instance) SetProfilesRequireForLaunch(required bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Profiles.RequireForLaunch = &required
+}
+
+// ProfilesSwapData returns true when profile switches also swap
+// profile-scoped data (save files, save states) on platforms that support
+// it. Defaults to true: data ownership is the point of profiles.
+func (c *Instance) ProfilesSwapData() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Profiles.SwapData == nil {
+		return true
+	}
+	return *c.vals.Profiles.SwapData
+}
+
+// SetProfilesSwapData enables or disables profile data swapping.
+func (c *Instance) SetProfilesSwapData(swap bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Profiles.SwapData = &swap
 }

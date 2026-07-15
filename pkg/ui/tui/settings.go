@@ -104,6 +104,12 @@ func BuildSettingsMainMenuWithService(
 		AddNavAction("TUI", "Theme and display preferences", func() {
 			buildTUISettingsMenu(pages, app, pl, rebuildSettingsMain)
 		}).
+		AddNavAction("Profiles", "Profile-wide launch behavior", func() {
+			buildProfilesSettingsMenu(svc, pages, app)
+		}).
+		AddNavAction("Clients", "Pair and revoke client devices", func() {
+			BuildClientsPage(svc, pages, app)
+		}).
 		AddNavAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)
 		}).
@@ -120,6 +126,75 @@ func BuildSettingsMainMenuWithService(
 	frame.SetupContentToButtonNavigation()
 
 	pages.AddAndSwitchToPage(PageSettingsMain, frame, true)
+}
+
+// buildProfilesSettingsMenu creates profile-wide behavior settings.
+func buildProfilesSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) {
+	ctx, cancel := tuiContext()
+	settings, err := svc.GetSettings(ctx)
+	cancel()
+	if err != nil {
+		ShowErrorModal(pages, app, "Failed to load profile settings", func() {
+			pages.SwitchToPage(PageSettingsMain)
+		})
+		return
+	}
+	ctx, cancel = tuiContext()
+	profiles, err := svc.GetProfiles(ctx)
+	cancel()
+	if err != nil {
+		ShowErrorModal(pages, app, "Failed to load profiles", func() {
+			pages.SwitchToPage(PageSettingsMain)
+		})
+		return
+	}
+
+	frame := NewPageFrame(app).SetTitle("Settings", "Profiles")
+	goBack := func() { pages.SwitchToPage(PageSettingsMain) }
+	frame.SetOnEscape(goBack)
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	requireForLaunch := settings.ProfilesRequireForLaunch
+	menu := NewSettingsList(pages, PageSettingsMain)
+	menu.SetDynamicHelpMode(true).
+		SetHelpCallback(func(help string) {
+			frame.SetHelpText(help)
+		})
+	menu.AddToggle(
+		"Require profile for launch",
+		"Block media launches until a profile is active; profile switch cards still work normally",
+		&requireForLaunch,
+		func(value bool) {
+			restore := func() {
+				requireForLaunch = !value
+				menu.refreshAllItems(menu.GetCurrentItem())
+				app.SetFocus(menu.List)
+			}
+			promptProfileManagement(svc, pages, app, profiles.Profiles, func() {
+				ctx, cancel := tuiContext()
+				err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
+					ProfilesRequireForLaunch: &value,
+				})
+				cancel()
+				if err != nil {
+					restore()
+					ShowErrorModal(pages, app, "Failed to save profile settings", func() {
+						app.SetFocus(menu.List)
+					})
+					return
+				}
+				app.SetFocus(menu.List)
+			}, restore)
+		},
+	)
+
+	frame.SetContent(menu.List)
+	menu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
+	pages.AddAndSwitchToPage(PageSettingsProfiles, frame, true)
 }
 
 // buildAudioSettingsMenu creates the audio settings submenu.

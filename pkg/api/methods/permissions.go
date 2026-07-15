@@ -47,3 +47,13 @@ func requireCapability(env *requests.RequestEnv, capability permissions.Capabili
 	}
 	return nil
 }
+
+// requireProfileManagement permits trusted local UI requests and requires
+// the profile-management capability from remote clients. Local profile PIN
+// prompts are a UI nuisance barrier, not API authorization.
+func requireProfileManagement(env *requests.RequestEnv) error {
+	if env.IsLocal || requestGrant(env).Has(permissions.CapProfilesManage) {
+		return nil
+	}
+	return models.ClientErrf("%w", ErrForbidden)
+}

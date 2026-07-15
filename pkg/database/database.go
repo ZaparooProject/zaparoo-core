@@ -133,8 +133,10 @@ type Profile struct {
 	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
 	DailyLimit    *string `json:"dailyLimit,omitempty"`
 	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	LastUsedAt    *int64  `json:"lastUsedAt,omitempty"`
 	ProfileID     string  `json:"profileId"`
 	Name          string  `json:"name"`
+	Role          string  `json:"role"`
 	SwitchID      string  `json:"switchId"`
 	PINHash       string  `json:"-"`
 	DBID          int64   `json:"-"`
@@ -828,6 +830,7 @@ type UserDBI interface {
 	GetProfileBySwitchID(switchID string) (*Profile, error)
 	ListProfiles() ([]Profile, error)
 	UpdateProfile(p *Profile) error
+	ActivateProfile(profileID string, lastUsedAt int64) error
 	DeleteProfile(profileID string) error
 	SetDeviceState(key, value string) error
 	GetDeviceState(key string) (string, bool, error)

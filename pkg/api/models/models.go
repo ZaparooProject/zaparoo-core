@@ -40,6 +40,15 @@ const (
 	NotificationInboxAdded           = "inbox.added"
 	NotificationClientsPaired        = "clients.paired"
 	NotificationProfilesActive       = "profiles.active"
+	NotificationProfilesData         = "profiles.data"
+)
+
+// Profile data swap statuses reported by the profiles.data notification.
+const (
+	ProfilesDataApplied     = "applied"
+	ProfilesDataDeferred    = "deferred"
+	ProfilesDataFailed      = "failed"
+	ProfilesDataUnavailable = "unavailable"
 )
 
 const (

@@ -138,3 +138,10 @@ func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNo
 func ProfilesActiveChanged(ns chan<- models.Notification, payload models.ProfilesActiveNotification) {
 	sendNotification(ns, models.NotificationProfilesActive, payload)
 }
+
+// ProfilesDataChanged broadcasts the state of profile data swapping after
+// a profile change (applied, deferred until media stops, failed, or
+// unavailable on this platform/storage setup).
+func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesDataNotification) {
+	sendNotification(ns, models.NotificationProfilesData, payload)
+}

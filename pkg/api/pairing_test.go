@@ -127,8 +127,8 @@ func (h *pairingTestHarness) runHandshake(
 	expectedServer := computePairingHMAC(confirmKeyB, "server", name, msgA, msgB)
 	require.Equal(t, expectedServer, result.ServerHMAC, "server HMAC must match what client computes")
 	require.Equal(t, derivedPairingKey, result.Client.PairingKey, "pairing keys must agree")
-	require.Equal(t, "member", result.Client.Role,
-		"client role must match the role chosen at StartPairing approval")
+	require.Equal(t, "admin", result.Client.Role,
+		"first paired client must become administrator")
 
 	return result.Client, result.Client.PairingKey
 }

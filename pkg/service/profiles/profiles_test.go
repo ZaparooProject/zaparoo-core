@@ -69,9 +69,11 @@ func pinProfile(t *testing.T, pin string) *database.Profile {
 func TestActivateByID_NoPIN(t *testing.T) {
 	t.Parallel()
 	svc, mockDB, st := newTestService(t)
+	usedAt := time.Date(2026, 7, 15, 1, 2, 3, 0, time.UTC)
+	svc.now = func() time.Time { return usedAt }
 
 	mockDB.On("GetProfile", "profile-1").Return(pinProfile(t, ""), nil)
-	mockDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	mockDB.On("ActivateProfile", "profile-1", usedAt.Unix()).Return(nil)
 
 	snap, err := svc.ActivateByID("profile-1", "")
 	require.NoError(t, err)
@@ -98,7 +100,7 @@ func TestActivateByID_PINEnforced(t *testing.T) {
 
 	assert.Nil(t, st.ActiveProfile())
 
-	mockDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	mockDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
 	snap, err := svc.ActivateByID("profile-1", "1234")
 	require.NoError(t, err)
 	assert.True(t, snap.HasPIN)
@@ -125,7 +127,7 @@ func TestActivateByID_RateLimited(t *testing.T) {
 
 	// After the window passes, attempts work again.
 	now = now.Add(pinAttemptWindow + time.Second)
-	mockDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	mockDB.On("ActivateProfile", "profile-1", now.Unix()).Return(nil)
 	_, err = svc.ActivateByID("profile-1", "1234")
 	require.NoError(t, err)
 }
@@ -137,7 +139,7 @@ func TestActivateBySwitchID_BypassesPIN(t *testing.T) {
 	// The switch ID is a bearer credential: presenting it activates a
 	// PIN-protected profile with no PIN, on every path.
 	mockDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(pinProfile(t, "1234"), nil)
-	mockDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	mockDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
 
 	snap, err := svc.ActivateBySwitchID("corn-arm-truck")
 	require.NoError(t, err)
@@ -197,6 +199,7 @@ func TestCreate_GeneratesSwitchIDAndHashesPIN(t *testing.T) {
 	svc, mockDB, _ := newTestService(t)
 
 	pin := "1234"
+	mockDB.On("ListProfiles").Return([]database.Profile{}, nil)
 	mockDB.On("CreateProfile", mock.MatchedBy(func(p *database.Profile) bool {
 		return p.ProfileID != "" &&
 			len(strings.Split(p.SwitchID, "-")) == switchIDWords &&
@@ -208,6 +211,44 @@ func TestCreate_GeneratesSwitchIDAndHashesPIN(t *testing.T) {
 	assert.Equal(t, "Kid A", p.Name)
 	assert.True(t, VerifyPIN("1234", p.PINHash))
 	mockDB.AssertExpectations(t)
+}
+
+func TestCreate_FirstProfileIsAdminAndRequiresPIN(t *testing.T) {
+	t.Parallel()
+	svc, mockDB, _ := newTestService(t)
+	mockDB.On("ListProfiles").Return([]database.Profile{}, nil)
+
+	_, err := svc.Create(&models.NewProfileParams{Name: "Parent"})
+	require.ErrorIs(t, err, ErrAdminPINRequired)
+	mockDB.AssertNotCalled(t, "CreateProfile", mock.Anything)
+}
+
+func TestCreate_SubsequentProfileDefaultsMember(t *testing.T) {
+	t.Parallel()
+	svc, mockDB, _ := newTestService(t)
+	admin := *pinProfile(t, "1234")
+	admin.Role = ProfileRoleAdmin
+	mockDB.On("ListProfiles").Return([]database.Profile{admin}, nil)
+	mockDB.On("CreateProfile", mock.MatchedBy(func(p *database.Profile) bool {
+		return p.Role == ProfileRoleMember
+	})).Return(nil)
+
+	created, err := svc.Create(&models.NewProfileParams{Name: "Kid"})
+	require.NoError(t, err)
+	assert.Equal(t, ProfileRoleMember, created.Role)
+	mockDB.AssertExpectations(t)
+}
+
+func TestUpdate_AdminCannotClearPIN(t *testing.T) {
+	t.Parallel()
+	svc, mockDB, _ := newTestService(t)
+	admin := pinProfile(t, "1234")
+	admin.Role = ProfileRoleAdmin
+	mockDB.On("GetProfile", admin.ProfileID).Return(admin, nil)
+
+	_, err := svc.Update(&models.UpdateProfileParams{ProfileID: admin.ProfileID, ClearPIN: true})
+	require.ErrorIs(t, err, ErrAdminPINRequired)
+	mockDB.AssertNotCalled(t, "UpdateProfile", mock.Anything)
 }
 
 func TestCreate_RejectsBadDuration(t *testing.T) {
@@ -270,6 +311,39 @@ func TestUpdate_ClearLimits(t *testing.T) {
 	})).Return(nil)
 
 	_, err := svc.Update(&models.UpdateProfileParams{ProfileID: "profile-1", ClearLimits: true})
+	require.NoError(t, err)
+	mockDB.AssertExpectations(t)
+}
+
+// TestUpdate_ClearLimitsThenSet pins the clear-then-set contract: a form
+// can submit its full desired limit state in one call by combining
+// ClearLimits with the fields that should remain set.
+func TestUpdate_ClearLimitsThenSet(t *testing.T) {
+	t.Parallel()
+	svc, mockDB, _ := newTestService(t)
+
+	existing := pinProfile(t, "")
+	enabled := true
+	daily := "1h"
+	session := "30m"
+	existing.LimitsEnabled = &enabled
+	existing.DailyLimit = &daily
+	existing.SessionLimit = &session
+
+	newDaily := "2h"
+	mockDB.On("GetProfile", "profile-1").Return(existing, nil)
+	mockDB.On("UpdateProfile", mock.MatchedBy(func(p *database.Profile) bool {
+		// DailyLimit is re-set after the clear; the other overrides are
+		// back to inherit.
+		return p.DailyLimit != nil && *p.DailyLimit == newDaily &&
+			p.LimitsEnabled == nil && p.SessionLimit == nil
+	})).Return(nil)
+
+	_, err := svc.Update(&models.UpdateProfileParams{
+		ProfileID:   "profile-1",
+		ClearLimits: true,
+		DailyLimit:  &newDaily,
+	})
 	require.NoError(t, err)
 	mockDB.AssertExpectations(t)
 }

@@ -29,6 +29,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -271,6 +272,28 @@ func TestHandleSettings_EmptyReaderConnections(t *testing.T) {
 
 // TestHandleSettingsUpdate_ReaderConnections tests that HandleSettingsUpdate
 // properly updates reader connection configuration.
+func TestHandleSettingsUpdate_RemoteMemberCannotChangeProfileGate(t *testing.T) {
+	t.Parallel()
+	env := requests.RequestEnv{
+		ClientRole: string(permissions.RoleMember),
+		Params:     json.RawMessage(`{"profilesRequireForLaunch":false}`),
+	}
+
+	_, err := HandleSettingsUpdate(env)
+	require.ErrorIs(t, err, ErrForbidden)
+}
+
+func TestHandlePlaytimeLimitsUpdate_RemoteMemberForbidden(t *testing.T) {
+	t.Parallel()
+	env := requests.RequestEnv{
+		ClientRole: string(permissions.RoleMember),
+		Params:     json.RawMessage(`{"enabled":false}`),
+	}
+
+	_, err := HandlePlaytimeLimitsUpdate(env)
+	require.ErrorIs(t, err, ErrForbidden)
+}
+
 func TestHandleSettingsUpdate_ReaderConnections(t *testing.T) {
 	t.Parallel()
 

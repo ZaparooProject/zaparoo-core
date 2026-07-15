@@ -66,6 +66,7 @@ func testProfileRow(t *testing.T, pin string) *database.Profile {
 	p := &database.Profile{
 		ProfileID: "profile-1",
 		Name:      "Kid A",
+		Role:      profiles.ProfileRoleMember,
 		SwitchID:  "corn-arm-truck",
 		CreatedAt: 1700000000,
 		UpdatedAt: 1700000000,
@@ -78,7 +79,7 @@ func testProfileRow(t *testing.T, pin string) *database.Profile {
 	return p
 }
 
-func TestHandleProfiles_List_LocalSeesSwitchIDs(t *testing.T) {
+func TestHandleProfiles_ListLocalIncludesSwitchIDButNeverPINHash(t *testing.T) {
 	t.Parallel()
 	env, mockUserDB, _ := newProfilesEnv(t)
 	env.IsLocal = true
@@ -98,6 +99,27 @@ func TestHandleProfiles_List_LocalSeesSwitchIDs(t *testing.T) {
 	raw, err := json.Marshal(resp)
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "pbkdf2")
+}
+
+func TestHandleProfiles_LocalSeesSwitchIDs(t *testing.T) {
+	t.Parallel()
+	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
+	admin := testProfileRow(t, "1234")
+	admin.Role = profiles.ProfileRoleAdmin
+	lastUsedAt := int64(1784079000)
+	admin.LastUsedAt = &lastUsedAt
+	mockUserDB.On("ListProfiles").Return([]database.Profile{*admin}, nil)
+
+	result, err := HandleProfiles(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.ProfilesResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Profiles, 1)
+	assert.Equal(t, admin.SwitchID, resp.Profiles[0].SwitchID)
+	assert.Equal(t, profiles.ProfileRoleAdmin, resp.Profiles[0].Role)
+	require.NotNil(t, resp.Profiles[0].LastUsedAt)
+	assert.Equal(t, lastUsedAt, *resp.Profiles[0].LastUsedAt)
 }
 
 func TestHandleProfiles_List_MemberOmitsSwitchIDs(t *testing.T) {
@@ -170,7 +192,10 @@ func TestHandleProfilesNew(t *testing.T) {
 	env, mockUserDB, _ := newProfilesEnv(t)
 	env.IsLocal = true
 
-	mockUserDB.On("CreateProfile", mock.Anything).Return(nil)
+	mockUserDB.On("ListProfiles").Return([]database.Profile{}, nil).Once()
+	mockUserDB.On("CreateProfile", mock.Anything).Run(func(args mock.Arguments) {
+		args.Get(0).(*database.Profile).Role = profiles.ProfileRoleAdmin
+	}).Return(nil)
 
 	env.Params = json.RawMessage(`{"name": "Kid A", "pin": "1234", "dailyLimit": "2h"}`)
 	result, err := HandleProfilesNew(env)
@@ -179,6 +204,7 @@ func TestHandleProfilesNew(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "Kid A", resp.Name)
 	assert.NotEmpty(t, resp.SwitchID)
+	assert.Equal(t, profiles.ProfileRoleAdmin, resp.Role)
 	assert.True(t, resp.HasPIN)
 	require.NotNil(t, resp.DailyLimit)
 	assert.Equal(t, "2h", *resp.DailyLimit)
@@ -224,7 +250,7 @@ func TestHandleProfilesSwitch_PINFlow(t *testing.T) {
 	assert.Nil(t, st.ActiveProfile())
 
 	// Correct PIN.
-	mockUserDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	mockUserDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
 	env.Params = json.RawMessage(`{"profileId": "profile-1", "pin": "1234"}`)
 	result, err := HandleProfilesSwitch(env)
 	require.NoError(t, err)
@@ -239,7 +265,7 @@ func TestHandleProfilesSwitch_BySwitchIDNeedsNoPIN(t *testing.T) {
 	env, mockUserDB, st := newProfilesEnv(t)
 
 	mockUserDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(testProfileRow(t, "1234"), nil)
-	mockUserDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	mockUserDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
 
 	// The switch ID is a bearer credential: presenting it authorizes the
 	// switch with no PIN, identically to scanning the card it's written on.
@@ -297,6 +323,27 @@ func TestHandleProfilesDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, NoContent{}, result)
 	assert.Nil(t, st.ActiveProfile(), "deleting the active profile deactivates it")
+}
+
+func TestHandleProfilesUpdate_LocalRecoveryPromotesAdmin(t *testing.T) {
+	t.Parallel()
+	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
+	member := testProfileRow(t, "")
+	member.Role = profiles.ProfileRoleMember
+	mockUserDB.On("ListProfiles").Return([]database.Profile{*member}, nil)
+	mockUserDB.On("GetProfile", member.ProfileID).Return(member, nil)
+	mockUserDB.On("UpdateProfile", mock.MatchedBy(func(p *database.Profile) bool {
+		return p.Role == profiles.ProfileRoleAdmin && p.PINHash != ""
+	})).Return(nil)
+	env.Params = json.RawMessage(`{"profileId":"profile-1","role":"admin","pin":"1234"}`)
+
+	result, err := HandleProfilesUpdate(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.ProfileResponse)
+	require.True(t, ok)
+	assert.Equal(t, profiles.ProfileRoleAdmin, resp.Role)
+	assert.True(t, resp.HasPIN)
 }
 
 func TestHandleProfilesUpdate_ClearPIN(t *testing.T) {

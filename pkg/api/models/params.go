@@ -155,6 +155,7 @@ type UpdateSettingsParams struct {
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
 	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  *bool               `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          *bool               `json:"profilesSwapData"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -189,11 +190,13 @@ type NewProfileParams struct {
 	DailyLimit    *string `json:"dailyLimit" validate:"omitempty,duration"`
 	SessionLimit  *string `json:"sessionLimit" validate:"omitempty,duration"`
 	Name          string  `json:"name" validate:"required,min=1,max=255"`
+	Role          string  `json:"role" validate:"omitempty,oneof=admin member"`
 }
 
 // UpdateProfileParams updates a profile. Omitted fields are unchanged.
 // ClearPIN removes the PIN; ClearLimits resets all limit overrides back to
-// inheriting global config; RegenerateSwitchID issues a new switch ID
+// inheriting global config before any limit fields in the same request are
+// applied (clear-then-set); RegenerateSwitchID issues a new switch ID
 // (lost-card replacement).
 type UpdateProfileParams struct {
 	Name               *string `json:"name" validate:"omitempty,min=1,max=255"`
@@ -201,6 +204,7 @@ type UpdateProfileParams struct {
 	LimitsEnabled      *bool   `json:"limitsEnabled"`
 	DailyLimit         *string `json:"dailyLimit" validate:"omitempty,duration"`
 	SessionLimit       *string `json:"sessionLimit" validate:"omitempty,duration"`
+	Role               *string `json:"role" validate:"omitempty,oneof=admin member"`
 	ProfileID          string  `json:"profileId" validate:"required,min=1"`
 	ClearPIN           bool    `json:"clearPin"`
 	ClearLimits        bool    `json:"clearLimits"`

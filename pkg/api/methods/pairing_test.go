@@ -34,11 +34,18 @@ type mockPairingController struct {
 	expiresAt time.Time
 	err       error
 	pin       string
+	role      string
+	count     int
 	cancelled bool
 }
 
-func (m *mockPairingController) StartPairing(_ string) (string, time.Time, error) {
+func (m *mockPairingController) StartPairing(role string) (string, time.Time, error) {
+	m.role = role
 	return m.pin, m.expiresAt, m.err
+}
+
+func (m *mockPairingController) CountClients() (int, error) {
+	return m.count, nil
 }
 
 func (m *mockPairingController) CancelPairing() {
@@ -58,6 +65,31 @@ func TestHandleClientsPairStart_Success(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "123456", resp.PIN)
 	assert.Equal(t, expires.Unix(), resp.ExpiresAt)
+	assert.Equal(t, "admin", mgr.role, "first client is forced to administrator")
+}
+
+func TestHandleClientsPairStart_AdditionalAdminAllowedLocally(t *testing.T) {
+	t.Parallel()
+	mgr := &mockPairingController{pin: "123456", expiresAt: time.Now(), count: 1}
+	handler := HandleClientsPairStart(mgr)
+	env := requests.RequestEnv{
+		IsLocal: true,
+		Params:  []byte(`{"role":"admin"}`),
+	}
+
+	_, err := handler(env)
+	require.NoError(t, err)
+	assert.Equal(t, "admin", mgr.role)
+}
+
+func TestHandleClientsPairStart_AdditionalClientDefaultsMember(t *testing.T) {
+	t.Parallel()
+	mgr := &mockPairingController{pin: "123456", expiresAt: time.Now(), count: 1}
+	handler := HandleClientsPairStart(mgr)
+
+	_, err := handler(requests.RequestEnv{IsLocal: true})
+	require.NoError(t, err)
+	assert.Equal(t, "member", mgr.role)
 }
 
 func TestHandleClientsPairStart_RemoteRejected(t *testing.T) {

@@ -634,6 +634,14 @@ func (m *MockUserDBI) UpdateProfile(p *database.Profile) error {
 	return nil
 }
 
+func (m *MockUserDBI) ActivateProfile(profileID string, lastUsedAt int64) error {
+	args := m.Called(profileID, lastUsedAt)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI activate profile failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) DeleteProfile(profileID string) error {
 	args := m.Called(profileID)
 	if err := args.Error(0); err != nil {

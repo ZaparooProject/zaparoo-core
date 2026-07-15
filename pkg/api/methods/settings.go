@@ -76,6 +76,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
 		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
+		ProfilesSwapData:          env.Config.ProfilesSwapData(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -121,16 +122,17 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	log.Debug().Msg("received settings update request")
 
-	// Settings changes can weaken playtime limits (disable them, drop the
-	// require-profile gate), so they need the settings.write capability.
-	if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
-		return nil, err
-	}
-
 	var params models.UpdateSettingsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	// Remote settings changes need an admin client. Local profile PIN prompts
+	// are enforced by the UI before sensitive settings requests.
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
 	}
 
 	// Pre-flight validation of inputs that depend on runtime state. Run before
@@ -234,6 +236,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ProfilesRequireForLaunch != nil {
 		log.Debug().Bool("profilesRequireForLaunch", *params.ProfilesRequireForLaunch).Msg("updating setting")
 		env.Config.SetProfilesRequireForLaunch(*params.ProfilesRequireForLaunch)
+	}
+
+	if params.ProfilesSwapData != nil {
+		log.Debug().Bool("profilesSwapData", *params.ProfilesSwapData).Msg("updating setting")
+		env.Config.SetProfilesSwapData(*params.ProfilesSwapData)
+		// Converge mounts immediately: turning swapping off restores the
+		// shared data state rather than waiting for the next switch.
+		if env.Profiles != nil {
+			env.Profiles.ReconcileData()
+		}
 	}
 
 	if params.ReadersConnect != nil {
@@ -353,6 +365,11 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
 	}
 
 	// Reload config from disk before applying mutations so that external

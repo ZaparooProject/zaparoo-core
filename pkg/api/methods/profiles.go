@@ -40,7 +40,7 @@ var errProfilesUnavailable = errors.New("profiles service not available")
 // a PIN-free switch on every path — so they are only exposed where the
 // card-writing UX needs them.
 func canSeeSwitchIDs(env *requests.RequestEnv) bool {
-	return requestGrant(env).Has(permissions.CapProfilesManage)
+	return env.IsLocal || requestGrant(env).Has(permissions.CapProfilesManage)
 }
 
 // profileResponse renders a profile for API responses. SwitchID is a
@@ -49,10 +49,12 @@ func profileResponse(p *database.Profile, includeSwitchID bool) models.ProfileRe
 	resp := models.ProfileResponse{
 		ProfileID:     p.ProfileID,
 		Name:          p.Name,
+		Role:          p.Role,
 		HasPIN:        p.PINHash != "",
 		LimitsEnabled: p.LimitsEnabled,
 		DailyLimit:    p.DailyLimit,
 		SessionLimit:  p.SessionLimit,
+		LastUsedAt:    p.LastUsedAt,
 		CreatedAt:     p.CreatedAt,
 		LastUpdatedAt: p.UpdatedAt,
 	}
@@ -70,6 +72,9 @@ func profileError(err error) error {
 		errors.Is(err, profiles.ErrPINIncorrect),
 		errors.Is(err, profiles.ErrPINRateLimited),
 		errors.Is(err, profiles.ErrInvalidPINFormat),
+		errors.Is(err, profiles.ErrAdminPINRequired),
+		errors.Is(err, profiles.ErrInvalidRole),
+		errors.Is(err, profiles.ErrLastAdmin),
 		errors.Is(err, profiles.ErrNotFound):
 		return models.ClientErrf("%w", err)
 	default:
@@ -110,14 +115,14 @@ func HandleProfilesNew(env requests.RequestEnv) (any, error) {
 	if env.Profiles == nil {
 		return nil, errProfilesUnavailable
 	}
-	if err := requireCapability(&env, permissions.CapProfilesManage); err != nil {
-		return nil, err
-	}
 
 	var params models.NewProfileParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if err := requireProfileManagement(&env); err != nil {
+		return nil, err
 	}
 
 	p, err := env.Profiles.Create(&params)
@@ -135,14 +140,14 @@ func HandleProfilesUpdate(env requests.RequestEnv) (any, error) {
 	if env.Profiles == nil {
 		return nil, errProfilesUnavailable
 	}
-	if err := requireCapability(&env, permissions.CapProfilesManage); err != nil {
-		return nil, err
-	}
 
 	var params models.UpdateProfileParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if err := requireProfileManagement(&env); err != nil {
+		return nil, err
 	}
 
 	p, err := env.Profiles.Update(&params)
@@ -161,14 +166,14 @@ func HandleProfilesDelete(env requests.RequestEnv) (any, error) {
 	if env.Profiles == nil {
 		return nil, errProfilesUnavailable
 	}
-	if err := requireCapability(&env, permissions.CapProfilesManage); err != nil {
-		return nil, err
-	}
-
 	var params models.DeleteProfileParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	if err := requireProfileManagement(&env); err != nil {
+		return nil, err
 	}
 
 	if err := env.Profiles.Delete(params.ProfileID); err != nil {
@@ -233,6 +238,7 @@ func HandleProfilesVerify(env requests.RequestEnv) (any, error) {
 	return models.ProfileVerifyResponse{
 		ProfileID: p.ProfileID,
 		Name:      p.Name,
+		Role:      p.Role,
 		HasPIN:    p.PINHash != "",
 	}, nil
 }

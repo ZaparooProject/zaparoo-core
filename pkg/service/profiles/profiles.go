@@ -41,12 +41,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
 const (
+	ProfileRoleAdmin  = "admin"
+	ProfileRoleMember = "member"
+
 	// pinAttemptWindow and pinAttemptLimit bound PIN guesses per profile:
 	// at most pinAttemptLimit failures within pinAttemptWindow.
 	pinAttemptWindow = time.Minute
@@ -68,6 +72,13 @@ var (
 	ErrPINRateLimited = errors.New("too many PIN attempts, try again later")
 	// ErrNotFound is returned when a profile does not exist.
 	ErrNotFound = userdb.ErrProfileNotFound
+	// ErrAdminPINRequired is returned when an administrator profile would
+	// have no PIN protecting management authorization.
+	ErrAdminPINRequired = errors.New("admin profiles require a PIN")
+	// ErrLastAdmin is returned when deleting or demoting the final admin.
+	ErrLastAdmin = userdb.ErrLastProfileAdmin
+	// ErrInvalidRole is returned for unknown profile roles.
+	ErrInvalidRole = errors.New("invalid profile role")
 )
 
 // Service owns the device's profile lifecycle: CRUD, the active-profile
@@ -76,9 +87,12 @@ var (
 type Service struct {
 	db          *database.Database
 	st          *state.State
+	dataSwap    *DataSwapCoordinator
 	now         func() time.Time
 	pinAttempts map[string][]time.Time
 	mu          syncutil.Mutex
+	// manageMu serializes CRUD/bootstrap decisions around profile roles.
+	manageMu syncutil.Mutex
 	// activateMu serializes activate/deactivate so the persisted device
 	// state and the in-memory snapshot cannot diverge under concurrency.
 	activateMu syncutil.Mutex
@@ -92,6 +106,20 @@ func NewService(db *database.Database, st *state.State) *Service {
 		st:          st,
 		now:         time.Now,
 		pinAttempts: make(map[string][]time.Time),
+	}
+}
+
+// SetDataSwap attaches the data swap coordinator. Optional: without it,
+// profile switches change limits and attribution only.
+func (s *Service) SetDataSwap(c *DataSwapCoordinator) {
+	s.dataSwap = c
+}
+
+// ReconcileData re-applies the active profile's data state, e.g. after the
+// swap_data setting changes. No-op when data swapping is not wired.
+func (s *Service) ReconcileData() {
+	if s.dataSwap != nil {
+		s.dataSwap.Reconcile()
 	}
 }
 
@@ -114,16 +142,37 @@ func (s *Service) Get(profileID string) (*database.Profile, error) {
 }
 
 // Create creates a new profile with a generated profile ID and switch ID,
-// hashing the PIN if one is given. Limit duration strings must already be
-// validated by the caller (API layer) or empty.
+// hashing the PIN if one is given. The first profile is always an explicit
+// administrator and therefore must have a PIN; later profiles default member.
 func (s *Service) Create(params *models.NewProfileParams) (*database.Profile, error) {
+	s.manageMu.Lock()
+	defer s.manageMu.Unlock()
+
 	if err := validateLimitDurations(params.DailyLimit, params.SessionLimit); err != nil {
 		return nil, err
+	}
+
+	list, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	role := params.Role
+	if len(list) == 0 {
+		role = ProfileRoleAdmin
+	} else if role == "" {
+		role = ProfileRoleMember
+	}
+	if role != ProfileRoleAdmin && role != ProfileRoleMember {
+		return nil, ErrInvalidRole
+	}
+	if role == ProfileRoleAdmin && (params.PIN == nil || *params.PIN == "") {
+		return nil, ErrAdminPINRequired
 	}
 
 	p := &database.Profile{
 		ProfileID:     uuid.New().String(),
 		Name:          params.Name,
+		Role:          role,
 		LimitsEnabled: params.LimitsEnabled,
 		DailyLimit:    params.DailyLimit,
 		SessionLimit:  params.SessionLimit,
@@ -150,6 +199,9 @@ func (s *Service) Create(params *models.NewProfileParams) (*database.Profile, er
 // active, the in-memory snapshot is refreshed so changed limits apply
 // immediately.
 func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile, error) {
+	s.manageMu.Lock()
+	defer s.manageMu.Unlock()
+
 	if err := validateLimitDurations(params.DailyLimit, params.SessionLimit); err != nil {
 		return nil, err
 	}
@@ -162,6 +214,12 @@ func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile,
 	if params.Name != nil {
 		p.Name = *params.Name
 	}
+	if params.Role != nil {
+		if *params.Role != ProfileRoleAdmin && *params.Role != ProfileRoleMember {
+			return nil, ErrInvalidRole
+		}
+		p.Role = *params.Role
+	}
 	switch {
 	case params.ClearPIN:
 		p.PINHash = ""
@@ -172,20 +230,25 @@ func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile,
 		}
 		p.PINHash = hash
 	}
+	if p.Role == ProfileRoleAdmin && p.PINHash == "" {
+		return nil, ErrAdminPINRequired
+	}
+	// ClearLimits resets all overrides back to inherit, then any limit
+	// fields in the same request are applied on top. This lets a form
+	// submit its full desired state in one call: clear-then-set.
 	if params.ClearLimits {
 		p.LimitsEnabled = nil
 		p.DailyLimit = nil
 		p.SessionLimit = nil
-	} else {
-		if params.LimitsEnabled != nil {
-			p.LimitsEnabled = params.LimitsEnabled
-		}
-		if params.DailyLimit != nil {
-			p.DailyLimit = params.DailyLimit
-		}
-		if params.SessionLimit != nil {
-			p.SessionLimit = params.SessionLimit
-		}
+	}
+	if params.LimitsEnabled != nil {
+		p.LimitsEnabled = params.LimitsEnabled
+	}
+	if params.DailyLimit != nil {
+		p.DailyLimit = params.DailyLimit
+	}
+	if params.SessionLimit != nil {
+		p.SessionLimit = params.SessionLimit
 	}
 	p.UpdatedAt = s.now().Unix()
 
@@ -202,7 +265,6 @@ func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile,
 	if active := s.st.ActiveProfile(); active != nil && active.ProfileID == p.ProfileID {
 		s.st.SetActiveProfile(snapshot(p))
 	}
-
 	return p, nil
 }
 
@@ -210,6 +272,9 @@ func (s *Service) Update(params *models.UpdateProfileParams) (*database.Profile,
 // deactivates (the persisted active state is cleared transactionally by
 // the database layer).
 func (s *Service) Delete(profileID string) error {
+	s.manageMu.Lock()
+	defer s.manageMu.Unlock()
+
 	if err := s.db.UserDB.DeleteProfile(profileID); err != nil {
 		return fmt.Errorf("failed to delete profile: %w", err)
 	}
@@ -217,7 +282,6 @@ func (s *Service) Delete(profileID string) error {
 	if active := s.st.ActiveProfile(); active != nil && active.ProfileID == profileID {
 		s.st.SetActiveProfile(nil)
 	}
-
 	return nil
 }
 
@@ -285,6 +349,9 @@ func (s *Service) Deactivate() error {
 		return fmt.Errorf("failed to clear active profile state: %w", err)
 	}
 	s.st.SetActiveProfile(nil)
+	if s.dataSwap != nil {
+		s.dataSwap.RequestSwitch(platforms.ProfileRef{})
+	}
 	return nil
 }
 
@@ -329,13 +396,18 @@ func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
 
-	if err := s.db.UserDB.SetDeviceState(database.DeviceStateKeyActiveProfile, p.ProfileID); err != nil {
+	lastUsedAt := s.now().Unix()
+	if err := s.db.UserDB.ActivateProfile(p.ProfileID, lastUsedAt); err != nil {
 		return nil, fmt.Errorf("failed to persist active profile: %w", err)
 	}
+	p.LastUsedAt = &lastUsedAt
 	snap := snapshot(p)
 	s.st.SetActiveProfile(snap)
 	log.Info().Str("profileId", p.ProfileID).Str("name", p.Name).
 		Msg("switched active profile")
+	if s.dataSwap != nil {
+		s.dataSwap.RequestSwitch(platforms.ProfileRef{ID: p.ProfileID, Name: p.Name})
+	}
 	return snap, nil
 }
 
@@ -443,6 +515,7 @@ func snapshot(p *database.Profile) *models.ActiveProfile {
 	return &models.ActiveProfile{
 		ProfileID:     p.ProfileID,
 		Name:          p.Name,
+		Role:          p.Role,
 		HasPIN:        p.PINHash != "",
 		LimitsEnabled: p.LimitsEnabled,
 		DailyLimit:    p.DailyLimit,

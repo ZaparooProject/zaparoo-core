@@ -82,6 +82,9 @@ func HandleClientsDelete(env requests.RequestEnv) (any, error) {
 	if params.ClientID == "" {
 		return nil, models.ClientErrf("clientId is required")
 	}
+	if err := requireProfileManagement(&env); err != nil {
+		return nil, err
+	}
 
 	if err := env.Database.UserDB.DeleteClient(params.ClientID); err != nil {
 		return nil, models.ClientErrf("failed to delete client: %w", err)

@@ -113,10 +113,10 @@ type SettingsResponse struct {
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
 	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
-	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
+	AudioVolume               int                `json:"audioVolume"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
-	AudioVolume               int                `json:"audioVolume"`
+	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
@@ -125,6 +125,7 @@ type SettingsResponse struct {
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          bool               `json:"profilesSwapData"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -645,8 +646,10 @@ type ProfileResponse struct {
 	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
 	DailyLimit    *string `json:"dailyLimit,omitempty"`
 	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	LastUsedAt    *int64  `json:"lastUsedAt,omitempty"`
 	ProfileID     string  `json:"profileId"`
 	Name          string  `json:"name"`
+	Role          string  `json:"role"`
 	SwitchID      string  `json:"switchId,omitempty"`
 	CreatedAt     int64   `json:"createdAt"`
 	LastUpdatedAt int64   `json:"lastUpdatedAt"`
@@ -665,6 +668,7 @@ type ProfilesResponse struct {
 type ProfileVerifyResponse struct {
 	ProfileID string `json:"profileId"`
 	Name      string `json:"name"`
+	Role      string `json:"role"`
 	HasPIN    bool   `json:"hasPin"`
 }
 
@@ -678,6 +682,7 @@ type ActiveProfile struct {
 	SessionLimit  *string `json:"sessionLimit,omitempty"`
 	ProfileID     string  `json:"profileId"`
 	Name          string  `json:"name"`
+	Role          string  `json:"role"`
 	HasPIN        bool    `json:"hasPin"`
 }
 
@@ -685,6 +690,17 @@ type ActiveProfile struct {
 // notification. Profile is null when the device has no active profile.
 type ProfilesActiveNotification struct {
 	Profile *ActiveProfile `json:"profile"`
+}
+
+// ProfilesDataNotification is the payload for the profiles.data
+// notification, reporting the state of profile data swapping (save files
+// etc.) after a profile change. ProfileID is empty for the shared profile.
+// Status is one of the ProfilesData* constants; Reason is a human-readable
+// explanation for failed/unavailable statuses.
+type ProfilesDataNotification struct {
+	ProfileID string `json:"profileId"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type SettingsAuthClaimResponse struct {

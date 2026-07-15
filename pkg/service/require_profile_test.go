@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,7 +74,7 @@ func TestScanBehavior_ProfileSwitchCard(t *testing.T) {
 		PINHash:   "pbkdf2-sha256$1$AAAA$AAAA", // PIN set, but card scans bypass it
 	}
 	env.userDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(profile, nil)
-	env.userDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	env.userDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
 	env.userDB.On("DeleteDeviceState", database.DeviceStateKeyActiveProfile).Return(nil)
 
 	env.sendCommandScan("switch-card", "**profile:corn-arm-truck")
@@ -98,7 +99,7 @@ func TestScanBehavior_RequireProfile_ComboCardSwitchThenLaunch(t *testing.T) {
 		SwitchID:  "corn-arm-truck",
 	}
 	env.userDB.On("GetProfileBySwitchID", "corn-arm-truck").Return(profile, nil)
-	env.userDB.On("SetDeviceState", database.DeviceStateKeyActiveProfile, "profile-1").Return(nil)
+	env.userDB.On("ActivateProfile", "profile-1", mock.AnythingOfType("int64")).Return(nil)
 
 	env.sendCommandScan("combo-card",
 		"**profile:corn-arm-truck||**launch:"+env.gamePath("game1.gba"))

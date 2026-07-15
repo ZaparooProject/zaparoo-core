@@ -30,8 +30,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ErrProfileNotFound is returned when a profile lookup matches no row.
-var ErrProfileNotFound = errors.New("profile not found")
+var (
+	// ErrProfileNotFound is returned when a profile lookup matches no row.
+	ErrProfileNotFound = errors.New("profile not found")
+	// ErrLastProfileAdmin is returned when an operation would remove the
+	// final administrator profile.
+	ErrLastProfileAdmin = errors.New("cannot remove the last admin profile")
+)
 
 func (db *UserDB) CreateProfile(p *database.Profile) error {
 	if db.sql.Load() == nil {
@@ -66,6 +71,14 @@ func (db *UserDB) UpdateProfile(p *database.Profile) error {
 		return ErrNullSQL
 	}
 	return sqlUpdateProfile(db.ctx, db.sql.Load(), p)
+}
+
+// ActivateProfile atomically records profile use and persists it as active.
+func (db *UserDB) ActivateProfile(profileID string, lastUsedAt int64) error {
+	if db.sql.Load() == nil {
+		return ErrNullSQL
+	}
+	return sqlActivateProfile(db.ctx, db.sql.Load(), profileID, lastUsedAt)
 }
 
 // DeleteProfile removes a profile. If the profile is the device's active
@@ -104,19 +117,21 @@ func (db *UserDB) DeleteDeviceState(key string) error {
  * Internal SQL functions
  */
 
-const profileColumns = `DBID, ProfileID, Name, SwitchID, PINHash, LimitsEnabled,
-	DailyLimit, SessionLimit, CreatedAt, UpdatedAt`
+const profileColumns = `DBID, ProfileID, Name, Role, SwitchID, PINHash, LimitsEnabled,
+	DailyLimit, SessionLimit, CreatedAt, UpdatedAt, LastUsedAt`
 
 func sqlCreateProfile(ctx context.Context, db *sql.DB, p *database.Profile) error {
 	var dbid int64
 	err := db.QueryRowContext(ctx, `
-		INSERT INTO Profiles (ProfileID, Name, SwitchID, PINHash, LimitsEnabled,
+		INSERT INTO Profiles (ProfileID, Name, Role, SwitchID, PINHash, LimitsEnabled,
 			DailyLimit, SessionLimit, CreatedAt, UpdatedAt)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		RETURNING DBID;
-	`, p.ProfileID, p.Name, p.SwitchID, nullableString(p.PINHash),
+		VALUES (?, ?,
+			CASE WHEN NOT EXISTS (SELECT 1 FROM Profiles) THEN 'admin' ELSE ? END,
+			?, ?, ?, ?, ?, ?, ?)
+		RETURNING DBID, Role;
+	`, p.ProfileID, p.Name, p.Role, p.SwitchID, nullableString(p.PINHash),
 		nullableBool(p.LimitsEnabled), p.DailyLimit, p.SessionLimit,
-		p.CreatedAt, p.UpdatedAt).Scan(&dbid)
+		p.CreatedAt, p.UpdatedAt).Scan(&dbid, &p.Role)
 	if err != nil {
 		return fmt.Errorf("failed to insert profile: %w", err)
 	}
@@ -176,11 +191,13 @@ func sqlListProfiles(ctx context.Context, db *sql.DB) ([]database.Profile, error
 func sqlUpdateProfile(ctx context.Context, db *sql.DB, p *database.Profile) error {
 	result, err := db.ExecContext(ctx, `
 		UPDATE Profiles
-		SET Name = ?, SwitchID = ?, PINHash = ?, LimitsEnabled = ?,
+		SET Name = ?, Role = ?, SwitchID = ?, PINHash = ?, LimitsEnabled = ?,
 		    DailyLimit = ?, SessionLimit = ?, UpdatedAt = ?
-		WHERE ProfileID = ?;
-	`, p.Name, p.SwitchID, nullableString(p.PINHash), nullableBool(p.LimitsEnabled),
-		p.DailyLimit, p.SessionLimit, p.UpdatedAt, p.ProfileID)
+		WHERE ProfileID = ?
+		  AND (Role <> 'admin' OR ? = 'admin' OR
+		       (SELECT COUNT(*) FROM Profiles WHERE Role = 'admin') > 1);
+	`, p.Name, p.Role, p.SwitchID, nullableString(p.PINHash), nullableBool(p.LimitsEnabled),
+		p.DailyLimit, p.SessionLimit, p.UpdatedAt, p.ProfileID, p.Role)
 	if err != nil {
 		return fmt.Errorf("failed to execute profile update: %w", err)
 	}
@@ -190,7 +207,54 @@ func sqlUpdateProfile(ctx context.Context, db *sql.DB, p *database.Profile) erro
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("%w: %s", ErrProfileNotFound, p.ProfileID)
+		var role string
+		queryErr := db.QueryRowContext(ctx, `SELECT Role FROM Profiles WHERE ProfileID = ?;`, p.ProfileID).Scan(&role)
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, p.ProfileID)
+		}
+		if queryErr != nil {
+			return fmt.Errorf("failed to inspect rejected profile update: %w", queryErr)
+		}
+		return ErrLastProfileAdmin
+	}
+	return nil
+}
+
+func sqlActivateProfile(ctx context.Context, db *sql.DB, profileID string, lastUsedAt int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin profile activation transaction: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			log.Warn().Err(rollbackErr).Msg("failed to rollback profile activation transaction")
+		}
+	}()
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE Profiles SET LastUsedAt = ? WHERE ProfileID = ?;
+	`, lastUsedAt, profileID)
+	if err != nil {
+		return fmt.Errorf("failed to update profile last used time: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get profile activation rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO DeviceState (Key, Value, UpdatedAt)
+		VALUES (?, ?, ?)
+		ON CONFLICT(Key) DO UPDATE SET Value = excluded.Value, UpdatedAt = excluded.UpdatedAt;
+	`, database.DeviceStateKeyActiveProfile, profileID, lastUsedAt)
+	if err != nil {
+		return fmt.Errorf("failed to persist active profile state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit profile activation transaction: %w", err)
 	}
 	return nil
 }
@@ -206,7 +270,12 @@ func sqlDeleteProfile(ctx context.Context, db *sql.DB, profileID string) error {
 		}
 	}()
 
-	result, err := tx.ExecContext(ctx, `DELETE FROM Profiles WHERE ProfileID = ?;`, profileID)
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM Profiles
+		WHERE ProfileID = ?
+		  AND (Role <> 'admin' OR
+		       (SELECT COUNT(*) FROM Profiles WHERE Role = 'admin') > 1);
+	`, profileID)
 	if err != nil {
 		return fmt.Errorf("failed to execute profile delete: %w", err)
 	}
@@ -216,7 +285,15 @@ func sqlDeleteProfile(ctx context.Context, db *sql.DB, profileID string) error {
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		var role string
+		queryErr := tx.QueryRowContext(ctx, `SELECT Role FROM Profiles WHERE ProfileID = ?;`, profileID).Scan(&role)
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		if queryErr != nil {
+			return fmt.Errorf("failed to inspect rejected profile delete: %w", queryErr)
+		}
+		return ErrLastProfileAdmin
 	}
 
 	_, err = tx.ExecContext(ctx, `
@@ -270,10 +347,11 @@ func scanProfile(scan func(dest ...any) error) (*database.Profile, error) {
 	var pinHash sql.NullString
 	var limitsEnabled sql.NullBool
 	var dailyLimit, sessionLimit sql.NullString
+	var lastUsedAt sql.NullInt64
 
 	err := scan(
-		&p.DBID, &p.ProfileID, &p.Name, &p.SwitchID, &pinHash,
-		&limitsEnabled, &dailyLimit, &sessionLimit, &p.CreatedAt, &p.UpdatedAt,
+		&p.DBID, &p.ProfileID, &p.Name, &p.Role, &p.SwitchID, &pinHash,
+		&limitsEnabled, &dailyLimit, &sessionLimit, &p.CreatedAt, &p.UpdatedAt, &lastUsedAt,
 	)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // callers wrap with query context
@@ -290,6 +368,9 @@ func scanProfile(scan func(dest ...any) error) (*database.Profile, error) {
 	}
 	if sessionLimit.Valid {
 		p.SessionLimit = &sessionLimit.String
+	}
+	if lastUsedAt.Valid {
+		p.LastUsedAt = &lastUsedAt.Int64
 	}
 	return &p, nil
 }

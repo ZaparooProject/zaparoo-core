@@ -440,3 +440,31 @@ The profile object contains `profileId`, `name`, `hasPin` and any playtime limit
   }
 }
 ```
+
+### profiles.data
+
+Sent when a profile data swap (save files, save states) changes state on
+platforms that support data swapping. The profile switch itself always
+succeeds independently of data swapping; this notification reports the
+data side.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                          |
+| :-------- | :----- | :------- | :-------------------------------------------------------------------- |
+| profileId | string | Yes      | Profile whose data the swap targets. Empty for the shared profile.   |
+| status    | string | Yes      | One of `applied`, `deferred` (media is running; applies when it stops), `failed`, or `unavailable` (the storage setup does not permit swapping, e.g. a read-only network share). |
+| reason    | string | No       | Human-readable explanation for `failed`/`unavailable`.               |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "profiles.data",
+  "params": {
+    "profileId": "1ad28b9a-7aef-11ef-9817-020304050607",
+    "status": "deferred"
+  }
+}
+```

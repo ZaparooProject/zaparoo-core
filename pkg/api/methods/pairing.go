@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -32,6 +33,7 @@ import (
 // PairingController is the subset of PairingManager needed by the RPC handlers.
 type PairingController interface {
 	StartPairing(role string) (pin string, expiresAt time.Time, err error)
+	CountClients() (int, error)
 	CancelPairing()
 }
 
@@ -48,18 +50,30 @@ func HandleClientsPairStart(mgr PairingController) func(requests.RequestEnv) (an
 
 		log.Info().Msg("received clients.pair.start request")
 
-		role := string(permissions.RoleMember)
+		var params models.ClientsPairStartParams
 		if len(env.Params) > 0 {
-			var params models.ClientsPairStartParams
 			if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 				log.Warn().Err(err).Msg("invalid params")
 				return nil, models.ClientErrf("invalid params: %w", err)
 			}
-			if params.Role != "" {
-				if !permissions.ValidRole(params.Role) {
-					return nil, models.ClientErrf("invalid role: %s", params.Role)
-				}
-				role = params.Role
+		}
+
+		count, err := mgr.CountClients()
+		if err != nil {
+			return nil, fmt.Errorf("failed to count paired clients: %w", err)
+		}
+		role := params.Role
+		if count == 0 {
+			role = string(permissions.RoleAdmin)
+		} else if role == "" {
+			role = string(permissions.RoleMember)
+		}
+		if !permissions.ValidRole(role) {
+			return nil, models.ClientErrf("invalid role: %s", role)
+		}
+		if count > 0 && role == string(permissions.RoleAdmin) {
+			if authErr := requireProfileManagement(&env); authErr != nil {
+				return nil, authErr
 			}
 		}
 

@@ -217,6 +217,15 @@ func (m *PairingManager) PendingPIN() (pin string, expiresAt time.Time) {
 	return m.pin, m.pinExpiresAt
 }
 
+// CountClients returns the number of currently paired clients.
+func (m *PairingManager) CountClients() (int, error) {
+	count, err := m.db.CountClients()
+	if err != nil {
+		return 0, fmt.Errorf("count paired clients: %w", err)
+	}
+	return count, nil
+}
+
 // StartPairing generates a new PIN (fails fast if clients are at max).
 // role is the permission role the paired client will receive; it is chosen
 // at this approval step because starting a pairing is a local-only action.
@@ -445,7 +454,9 @@ func (m *PairingManager) finishSessionLocked(
 	}
 
 	role := sess.role
-	if !permissions.ValidRole(role) {
+	if count == 0 {
+		role = string(permissions.RoleAdmin)
+	} else if !permissions.ValidRole(role) {
 		role = string(permissions.RoleMember)
 	}
 	now := time.Now().Unix()

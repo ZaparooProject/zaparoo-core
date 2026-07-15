@@ -54,6 +54,7 @@ func TestProfiles_CRUD_Integration(t *testing.T) {
 
 	require.NoError(t, db.CreateProfile(p))
 	assert.Positive(t, p.DBID)
+	assert.Equal(t, "admin", p.Role, "first profile is atomically assigned admin")
 
 	got, err := db.GetProfile("profile-uuid-1")
 	require.NoError(t, err)
@@ -88,9 +89,46 @@ func TestProfiles_CRUD_Integration(t *testing.T) {
 	assert.Nil(t, updated.LimitsEnabled)
 	assert.Nil(t, updated.DailyLimit)
 
+	backupAdmin := newTestProfile("profile-uuid-2", "blue-fox-lamp")
+	backupAdmin.Role = "admin"
+	require.NoError(t, db.CreateProfile(backupAdmin))
 	require.NoError(t, db.DeleteProfile("profile-uuid-1"))
 	_, err = db.GetProfile("profile-uuid-1")
 	require.ErrorIs(t, err, ErrProfileNotFound)
+}
+
+func TestProfiles_ActivateTracksLastUsed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	profile := newTestProfile("p1", "switch-one")
+	require.NoError(t, db.CreateProfile(profile))
+	got, err := db.GetProfile(profile.ProfileID)
+	require.NoError(t, err)
+	assert.Nil(t, got.LastUsedAt)
+
+	const usedAt int64 = 1784079000
+	require.NoError(t, db.ActivateProfile(profile.ProfileID, usedAt))
+	got, err = db.GetProfile(profile.ProfileID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastUsedAt)
+	assert.Equal(t, usedAt, *got.LastUsedAt)
+
+	activeID, found, err := db.GetDeviceState(database.DeviceStateKeyActiveProfile)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, profile.ProfileID, activeID)
+
+	// Ordinary profile edits must not overwrite usage tracking with stale data.
+	profile.Name = "Renamed"
+	require.NoError(t, db.UpdateProfile(profile))
+	got, err = db.GetProfile(profile.ProfileID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastUsedAt)
+	assert.Equal(t, usedAt, *got.LastUsedAt)
 }
 
 func TestProfiles_NotFoundErrors(t *testing.T) {
@@ -109,8 +147,30 @@ func TestProfiles_NotFoundErrors(t *testing.T) {
 	err = db.UpdateProfile(newTestProfile("missing", "a-b-c"))
 	require.ErrorIs(t, err, ErrProfileNotFound)
 
+	err = db.ActivateProfile("missing", 1700000000)
+	require.ErrorIs(t, err, ErrProfileNotFound)
+
 	err = db.DeleteProfile("missing")
 	require.ErrorIs(t, err, ErrProfileNotFound)
+}
+
+func TestProfiles_LastAdminProtected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	admin := newTestProfile("admin", "admin-switch")
+	require.NoError(t, db.CreateProfile(admin))
+	require.Equal(t, "admin", admin.Role)
+
+	err := db.DeleteProfile(admin.ProfileID)
+	require.ErrorIs(t, err, ErrLastProfileAdmin)
+
+	admin.Role = "member"
+	err = db.UpdateProfile(admin)
+	require.ErrorIs(t, err, ErrLastProfileAdmin)
 }
 
 func TestProfiles_SwitchIDUnique(t *testing.T) {
@@ -134,7 +194,9 @@ func TestProfiles_DeleteClearsActiveState(t *testing.T) {
 	defer cleanup()
 
 	require.NoError(t, db.CreateProfile(newTestProfile("p1", "switch-one")))
-	require.NoError(t, db.CreateProfile(newTestProfile("p2", "switch-two")))
+	p2 := newTestProfile("p2", "switch-two")
+	p2.Role = "admin"
+	require.NoError(t, db.CreateProfile(p2))
 	require.NoError(t, db.SetDeviceState(database.DeviceStateKeyActiveProfile, "p1"))
 
 	// Deleting a non-active profile keeps the active state.
@@ -143,6 +205,11 @@ func TestProfiles_DeleteClearsActiveState(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, found)
 	assert.Equal(t, "p1", value)
+
+	// Keep a second administrator before deleting the active admin.
+	p3 := newTestProfile("p3", "switch-three")
+	p3.Role = "admin"
+	require.NoError(t, db.CreateProfile(p3))
 
 	// Deleting the active profile clears it.
 	require.NoError(t, db.DeleteProfile("p1"))

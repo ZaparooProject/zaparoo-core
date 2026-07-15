@@ -52,10 +52,14 @@ const (
 	PageSettingsAudioMenu     = "settings_audio_menu"
 	PageSettingsReadersMenu   = "settings_readers_menu"
 	PageSettingsTUI           = "settings_tui"
+	PageSettingsProfiles      = "settings_profiles"
 	PageSettingsAbout         = "settings_about"
 	PageSearchMedia           = "search_media"
 	PageExportLog             = "export_log"
 	PageGenerateDB            = "generate_db"
+	PageProfilesList          = "profiles_list"
+	PageProfilesEdit          = "profiles_edit"
+	PageClients               = "clients"
 )
 
 // ButtonGridItem represents a button in the grid with its help text.
@@ -697,6 +701,10 @@ func BuildMainPage(
 		saveFocus()
 		BuildSettingsMainMenu(cfg, pages, app, pl, rebuildMainPage, logDestPath, logDestName)
 	})
+	profilesButton := tview.NewButton("Profiles").SetSelectedFunc(func() {
+		saveFocus()
+		BuildProfilesPage(svc, pages, app)
+	})
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
 		notifyCancel()
 		app.Stop()
@@ -708,6 +716,7 @@ func BuildMainPage(
 		writeButton.SetDisabled(true)
 		updateDBButton.SetDisabled(true)
 		settingsButton.SetDisabled(true)
+		profilesButton.SetDisabled(true)
 	}
 
 	exitHelpText := "Exit TUI app"
@@ -722,7 +731,7 @@ func BuildMainPage(
 	)
 	buttonGrid.AddRow(
 		&ButtonGridItem{settingsButton, "Manage settings for Core service", disableRow1},
-		nil,
+		&ButtonGridItem{profilesButton, "Manage device profiles and write switch cards", disableRow1},
 		&ButtonGridItem{exitButton, exitHelpText, false},
 	)
 	buttonGrid.SetOnHelp(func(text string) {

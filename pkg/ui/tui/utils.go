@@ -91,7 +91,8 @@ func ResponsiveMaxWidget(maxWidth, maxHeight int, p tview.Primitive) tview.Primi
 
 // Draw implements tview.Primitive.
 func (r *responsiveWrapper) Draw(screen tcell.Screen) {
-	r.DrawForSubclass(screen, r)
+	// The wrapper only positions its child. Drawing its Box would fill the
+	// entire terminal with the theme background outside the centered dialog.
 	x, y, width, height := r.GetInnerRect()
 
 	actualWidth := r.maxWidth

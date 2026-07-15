@@ -816,7 +816,12 @@ func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) 
 }
 
 func sqlDeleteClient(ctx context.Context, db *sql.DB, clientID string) error {
-	result, err := db.ExecContext(ctx, `DELETE FROM Clients WHERE ClientID = ?;`, clientID)
+	result, err := db.ExecContext(ctx, `
+		DELETE FROM Clients
+		WHERE ClientID = ?
+		  AND (Role <> 'admin' OR
+		       (SELECT COUNT(*) FROM Clients WHERE Role = 'admin') > 1);
+	`, clientID)
 	if err != nil {
 		return fmt.Errorf("failed to execute client delete: %w", err)
 	}
@@ -827,7 +832,15 @@ func sqlDeleteClient(ctx context.Context, db *sql.DB, clientID string) error {
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("client not found: %s", clientID)
+		var role string
+		queryErr := db.QueryRowContext(ctx, `SELECT Role FROM Clients WHERE ClientID = ?;`, clientID).Scan(&role)
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return fmt.Errorf("client not found: %s", clientID)
+		}
+		if queryErr != nil {
+			return fmt.Errorf("failed to inspect rejected client delete: %w", queryErr)
+		}
+		return ErrLastClientAdmin
 	}
 	return nil
 }

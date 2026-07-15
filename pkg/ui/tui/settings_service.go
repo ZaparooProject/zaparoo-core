@@ -22,6 +22,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
@@ -53,6 +54,42 @@ type SettingsService interface {
 
 	// SearchMedia searches for media matching the given parameters.
 	SearchMedia(ctx context.Context, params models.SearchParams) (*models.SearchResults, error)
+
+	// GetProfiles fetches profiles without privileged switch IDs.
+	GetProfiles(ctx context.Context) (*models.ProfilesResponse, error)
+
+	// VerifyProfileManagement verifies one admin credential as a UI gate.
+	VerifyProfileManagement(ctx context.Context, profileID, pin string) error
+
+	// GetActiveProfile fetches the active profile, or nil when the device
+	// is on the shared profile.
+	GetActiveProfile(ctx context.Context) (*models.ActiveProfile, error)
+
+	// NewProfile creates a profile and returns it (including its
+	// generated switch ID).
+	NewProfile(ctx context.Context, params *models.NewProfileParams) (*models.ProfileResponse, error)
+
+	// UpdateProfile updates a profile.
+	UpdateProfile(ctx context.Context, params *models.UpdateProfileParams) (*models.ProfileResponse, error)
+
+	// DeleteProfile removes a profile.
+	DeleteProfile(ctx context.Context, profileID string) error
+
+	// SwitchProfile switches the active profile. Nil params deactivates
+	// (switches to the shared profile).
+	SwitchProfile(ctx context.Context, params *models.SwitchProfileParams) error
+
+	// GetClients fetches paired clients.
+	GetClients(ctx context.Context) (*models.ClientsResponse, error)
+
+	// StartClientPairing starts a local pairing approval flow.
+	StartClientPairing(ctx context.Context, role string) (*models.ClientsPairStartResponse, error)
+
+	// CancelClientPairing cancels an active pairing flow.
+	CancelClientPairing(ctx context.Context) error
+
+	// DeleteClient revokes a paired client.
+	DeleteClient(ctx context.Context, clientID string) error
 }
 
 // DefaultSettingsService implements SettingsService using an APIClient.
@@ -171,4 +208,182 @@ func (s *DefaultSettingsService) SearchMedia(
 		return nil, fmt.Errorf("failed to parse search results: %w", err)
 	}
 	return &results, nil
+}
+
+// VerifyProfileManagement checks one administrator credential without
+// retaining any client-side authorization state.
+func (s *DefaultSettingsService) VerifyProfileManagement(
+	ctx context.Context, profileID, pin string,
+) error {
+	data, err := json.Marshal(models.VerifyProfileParams{ProfileID: &profileID, PIN: &pin})
+	if err != nil {
+		return fmt.Errorf("failed to marshal management verification: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodProfilesVerify, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to verify profile management: %w", err)
+	}
+	var verified models.ProfileVerifyResponse
+	if err := json.Unmarshal([]byte(resp), &verified); err != nil {
+		return fmt.Errorf("failed to parse management verification: %w", err)
+	}
+	if verified.Role != "admin" {
+		return errors.New("administrator profile required")
+	}
+	return nil
+}
+
+// GetProfiles fetches profiles without privileged switch IDs.
+func (s *DefaultSettingsService) GetProfiles(ctx context.Context) (*models.ProfilesResponse, error) {
+	return s.callProfiles(ctx, "")
+}
+
+func (s *DefaultSettingsService) callProfiles(ctx context.Context, params string) (*models.ProfilesResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodProfiles, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get profiles: %w", err)
+	}
+	var profiles models.ProfilesResponse
+	if err := json.Unmarshal([]byte(resp), &profiles); err != nil {
+		return nil, fmt.Errorf("failed to parse profiles: %w", err)
+	}
+	return &profiles, nil
+}
+
+// GetActiveProfile fetches the active profile, or nil when the device is
+// on the shared profile.
+func (s *DefaultSettingsService) GetActiveProfile(ctx context.Context) (*models.ActiveProfile, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodProfilesActive, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active profile: %w", err)
+	}
+	var active *models.ActiveProfile
+	if resp != "" {
+		if err := json.Unmarshal([]byte(resp), &active); err != nil {
+			return nil, fmt.Errorf("failed to parse active profile: %w", err)
+		}
+	}
+	return active, nil
+}
+
+// NewProfile creates a profile.
+func (s *DefaultSettingsService) NewProfile(
+	ctx context.Context,
+	params *models.NewProfileParams,
+) (*models.ProfileResponse, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal profile params: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodProfilesNew, string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create profile: %w", err)
+	}
+	var profile models.ProfileResponse
+	if err := json.Unmarshal([]byte(resp), &profile); err != nil {
+		return nil, fmt.Errorf("failed to parse profile: %w", err)
+	}
+	return &profile, nil
+}
+
+// UpdateProfile updates a profile.
+func (s *DefaultSettingsService) UpdateProfile(
+	ctx context.Context,
+	params *models.UpdateProfileParams,
+) (*models.ProfileResponse, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal profile params: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodProfilesUpdate, string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to update profile: %w", err)
+	}
+	var profile models.ProfileResponse
+	if err := json.Unmarshal([]byte(resp), &profile); err != nil {
+		return nil, fmt.Errorf("failed to parse profile: %w", err)
+	}
+	return &profile, nil
+}
+
+// DeleteProfile removes a profile.
+func (s *DefaultSettingsService) DeleteProfile(ctx context.Context, profileID string) error {
+	data, err := json.Marshal(models.DeleteProfileParams{ProfileID: profileID})
+	if err != nil {
+		return fmt.Errorf("failed to marshal profile params: %w", err)
+	}
+	_, err = s.apiClient.Call(ctx, models.MethodProfilesDelete, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to delete profile: %w", err)
+	}
+	return nil
+}
+
+// SwitchProfile switches the active profile. Nil params deactivates.
+func (s *DefaultSettingsService) SwitchProfile(ctx context.Context, params *models.SwitchProfileParams) error {
+	paramsJSON := ""
+	if params != nil {
+		data, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("failed to marshal switch params: %w", err)
+		}
+		paramsJSON = string(data)
+	}
+	_, err := s.apiClient.Call(ctx, models.MethodProfilesSwitch, paramsJSON)
+	if err != nil {
+		return fmt.Errorf("failed to switch profile: %w", err)
+	}
+	return nil
+}
+
+// GetClients fetches paired clients.
+func (s *DefaultSettingsService) GetClients(ctx context.Context) (*models.ClientsResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodClients, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get paired clients: %w", err)
+	}
+	var clients models.ClientsResponse
+	if err := json.Unmarshal([]byte(resp), &clients); err != nil {
+		return nil, fmt.Errorf("failed to parse paired clients: %w", err)
+	}
+	return &clients, nil
+}
+
+// StartClientPairing starts a local pairing approval flow.
+func (s *DefaultSettingsService) StartClientPairing(
+	ctx context.Context, role string,
+) (*models.ClientsPairStartResponse, error) {
+	data, err := json.Marshal(models.ClientsPairStartParams{Role: role})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal pairing params: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodClientsPairStart, string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to start client pairing: %w", err)
+	}
+	var pairing models.ClientsPairStartResponse
+	if err := json.Unmarshal([]byte(resp), &pairing); err != nil {
+		return nil, fmt.Errorf("failed to parse pairing response: %w", err)
+	}
+	return &pairing, nil
+}
+
+// CancelClientPairing cancels an active pairing flow.
+func (s *DefaultSettingsService) CancelClientPairing(ctx context.Context) error {
+	if _, err := s.apiClient.Call(ctx, models.MethodClientsPairCancel, ""); err != nil {
+		return fmt.Errorf("failed to cancel client pairing: %w", err)
+	}
+	return nil
+}
+
+// DeleteClient revokes a paired client.
+func (s *DefaultSettingsService) DeleteClient(ctx context.Context, clientID string) error {
+	data, err := json.Marshal(models.ClientsDeleteParams{ClientID: clientID})
+	if err != nil {
+		return fmt.Errorf("failed to marshal client delete params: %w", err)
+	}
+	if _, err := s.apiClient.Call(ctx, models.MethodClientsDelete, string(data)); err != nil {
+		return fmt.Errorf("failed to delete paired client: %w", err)
+	}
+	return nil
 }

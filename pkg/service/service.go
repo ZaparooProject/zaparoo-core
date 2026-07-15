@@ -264,6 +264,22 @@ func Start(
 		limitsManager.SetEnabled(true)
 	}
 
+	// Data swapping: on platforms with the capability, profile switches
+	// also swap profile-scoped data (saves, save states). The boot
+	// reconcile runs after profile and session restore so a game already
+	// running across a service restart defers the swap until it stops.
+	var dataSwapper platforms.ProfileDataSwapper
+	if swapper, ok := pl.(platforms.ProfileDataSwapper); ok {
+		dataSwapper = swapper
+	}
+	dataSwap := profiles.NewDataSwapCoordinator(cfg, st, dataSwapper)
+	dataSwap.Start(notifBroker, st.Notifications)
+	profilesSvc.SetDataSwap(dataSwap)
+	dataSwap.Reconcile()
+	if watcher, ok := pl.(platforms.ProfileDataWatcher); ok && dataSwapper != nil {
+		watcher.WatchProfileData(st.GetContext(), dataSwap.Reconcile)
+	}
+
 	svc := &ServiceContext{
 		Platform:            pl,
 		Config:              cfg,
@@ -348,6 +364,7 @@ func Start(
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
+		dataSwap.Stop()
 		notifBroker.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -547,6 +564,7 @@ func Start(
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
 		limitsManager.Stop()
+		dataSwap.Stop()
 		notifBroker.Stop()
 		<-historyListenDone
 		<-historyUpdateDone
