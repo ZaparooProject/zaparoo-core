@@ -78,22 +78,16 @@ func TestHandleRunRestReturnsWhenServiceContextCancelled(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
 
-// TestHandleRunRestDecodesPathWithParentheses is a regression test for
-// https://github.com/ZaparooProject/zaparoo-core/issues/1099 — filenames
-// containing parentheses (e.g. "Youjyuden (JP).mra") were failing to load
-// via the REST /run endpoint. Go's net/http populates r.URL.RawPath only
-// when its default re-escaping of r.URL.Path would not reproduce the
-// original request target exactly; a percent-escaped space combined with
-// literal parentheses is one such case. chi.URLParam(r, "*") returns the
-// wildcard segment from RawPath when present, so the token text ended up
-// still percent-encoded (e.g. "Youjyuden%20(JP).mra") instead of decoded
-// (e.g. "Youjyuden (JP).mra"), which broke file lookups downstream.
-func TestHandleRunRestDecodesPathWithParentheses(t *testing.T) {
+// Literal parentheses make net/url preserve RawPath, so chi returns an
+// encoded wildcard even though URL.Path is already decoded.
+func TestHandleRunRestDecodesPath(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name        string
 		requestPath string
+		remoteAddr  string
+		allowRun    string
 		wantText    string
 	}{
 		{
@@ -106,6 +100,18 @@ func TestHandleRunRestDecodesPathWithParentheses(t *testing.T) {
 			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
 			wantText:    "_Arcade/Youjyuden (JP).mra",
 		},
+		{
+			name:        "literal percent escape is not decoded twice",
+			requestPath: "/run/_Arcade/Percent%2520Name.mra",
+			wantText:    "_Arcade/Percent%20Name.mra",
+		},
+		{
+			name:        "decoded path is used for remote authorization",
+			requestPath: "/run/_Arcade/Youjyuden%20(JP).mra",
+			remoteAddr:  "192.0.2.1:1234",
+			allowRun:    "[service]\nallow_run = ['\\*\\*launch:_Arcade/Youjyuden \\(JP\\)\\.mra']",
+			wantText:    "_Arcade/Youjyuden (JP).mra",
+		},
 	}
 
 	for _, tt := range tests {
@@ -113,6 +119,10 @@ func TestHandleRunRestDecodesPathWithParentheses(t *testing.T) {
 			t.Parallel()
 
 			cfg := &config.Instance{}
+			if tt.allowRun != "" {
+				require.NoError(t, cfg.LoadTOML(tt.allowRun))
+			}
+
 			platform := mocks.NewMockPlatform()
 			platform.SetupBasicMock()
 			st, _ := state.NewState(platform, "test-boot-uuid")
@@ -125,26 +135,20 @@ func TestHandleRunRestDecodesPathWithParentheses(t *testing.T) {
 			req := httptest.NewRequestWithContext(
 				context.Background(), http.MethodGet, tt.requestPath, http.NoBody,
 			)
-			req.RemoteAddr = "127.0.0.1:1234"
+			req.RemoteAddr = tt.remoteAddr
+			if req.RemoteAddr == "" {
+				req.RemoteAddr = "127.0.0.1:1234"
+			}
 			recorder := httptest.NewRecorder()
 
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				router.ServeHTTP(recorder, req)
-			}()
+			router.ServeHTTP(recorder, req)
 
+			require.Equal(t, http.StatusOK, recorder.Code)
 			select {
 			case token := <-tokenQueue:
 				assert.Equal(t, tt.wantText, token.Text)
-			case <-time.After(time.Second):
+			default:
 				t.Fatal("REST run handler did not send token to queue")
-			}
-
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("REST run handler did not return")
 			}
 		})
 	}
