@@ -2171,8 +2171,11 @@ None.
 | readersScanExitDelay      | number                                    | Yes      | Delay before exiting scan mode in seconds.                      |
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
+| encryption                | boolean                                   | Yes      | Whether paired encryption is required for remote WebSocket connections. Localhost remains exempt. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
+| profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
+| profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
 
 ##### Reader connection object
 
@@ -2218,6 +2221,7 @@ None.
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
+    "encryption": false,
     "readersConnect": [],
     "systemDefaults": [
       {
@@ -2249,8 +2253,11 @@ An object containing any of the following optional keys:
 | readersScanExitDelay      | number                                    | No       | Delay before exiting scan mode in seconds.                      |
 | readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
+| encryption                | boolean                                   | No       | Require paired encryption for remote WebSocket connections. This setting can only be changed from localhost. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
+| profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
+| profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
 
 #### Result
 
@@ -2612,6 +2619,161 @@ Returns `null` on success.
   "result": null
 }
 ```
+
+## Profiles
+
+Profiles are lightweight runtime identities: named buckets of preferences, limits, and profile-owned data. One profile is active per device at a time, switched via the API or by scanning an NFC card containing the profile's switch ID (`**profile:<switchId>`). Profile roles (`admin` or `member`) are separate from paired-client roles: profile roles identify who may authorize local household management, while client roles describe which remote device may call privileged APIs.
+
+When no personal profile is active the device is on the implicit **shared profile** — the device as it behaves when nobody is signed in. The shared profile's playtime limits are the global config limits, its history is unattributed, and it owns everything the device did before profiles existed. Deactivating means switching to the shared profile. To stop the shared profile launching media (parking the device until someone identifies themselves), enable the `profilesRequireForLaunch` setting (see [settings](#settings)).
+
+A profile's **switch ID is a bearer credential**: presenting it — by scanning the card it is written on, or by sending it over the API — authorizes switching to that profile with no PIN, on every path. Switch IDs are therefore only returned to privileged clients (local connections and admin-role paired clients) for card-writing; member clients never see them. The optional 4-8 digit **PIN** protects the remaining path: switching by `profileId` picked from the visible profile list. Leaving a profile is always free — PINs gate entry only.
+
+**Data swapping.** On platforms that support it (currently MiSTer), the active profile also owns its save files and save states. Switching profiles makes that profile's data live; the shared profile's data is simply the default locations, so creating profiles never moves existing saves. On MiSTer this is done with bind mounts — nothing on the SD card is ever moved, copied, or rewritten, the card keeps a completely standard layout, and the per-profile data lives in plain directories under `zaparoo/profiles/<profileId>/`. The mechanism follows main's own storage rules: a USB storage root (`device.bin`) is respected, and NAS-mounted saves (cifs mount over `saves/`) are layered on — the profile pool is created inside the share (`saves/.zaparoo-profiles/<profileId>/`) so saves stay centralized, and the user's mount is never touched. A swap requested while a game is running is deferred until the game stops (the running game keeps the data it launched with, matching the playtime pinning rule). Progress and failures are reported by the [`profiles.data`](notifications.md#profilesdata) notification; the `profilesSwapData` setting turns swapping off. What never swaps: core configs and input mappings (device properties), the Recently Played lists, arcade nvram, and computer-core disk images (saves live inside the shared image). Per-profile MiSTer INI setups need no data swap — write a combo card like `**profile:<switchId>||mister.ini:2` to switch profile and INI together. Deleting a profile never deletes its data directory. Note that profile data lives under the `zaparoo/` directory: deleting a Zaparoo install directory deletes profile saves with it.
+
+**Administration and trust model.** The first profile is created as `admin` and must have a PIN; later profiles default `member`. The first paired client is `admin`; later pairings default `member`. Sensitive local UIs call `profiles.verify`, confirm the returned profile has the `admin` role, then send the ordinary management request. This is a client-side nuisance gate for parental and kiosk controls, not cryptographic request authorization; no unlock session is retained. Admin paired clients use their client capability directly. The last admin profile/client cannot be removed or demoted. Profiles remain a household convenience boundary, comparable to TV parental controls — not OS account security. Anyone with OS access still owns the device, and while `service.encryption` is off an unpaired remote client retains legacy admin API capability. Enabling encryption makes paired-client restrictions enforceable.
+
+### Profile object
+
+| Key           | Type    | Required | Description                                                                                              |
+| :------------ | :------ | :------- | :------------------------------------------------------------------------------------------------------- |
+| profileId     | string  | Yes      | Unique identifier of the profile.                                                                        |
+| name          | string  | Yes      | Display name, e.g. "Dad" or "Kid A".                                                                     |
+| role          | string  | Yes      | `admin` or `member`. Admin profiles may authorize local management and must have a PIN.                     |
+| switchId      | string  | No       | Word phrase written to profile switch cards, e.g. `corn-arm-truck`. A bearer credential: presenting it switches to the profile with no PIN. Returned to local callers and admin clients; omitted for remote member clients. |
+| hasPin        | boolean | Yes      | True when the profile has a PIN set. The PIN itself is never returned.                                   |
+| limitsEnabled | boolean | No       | Playtime limits enabled override. Omitted = inherit the global setting.                                  |
+| dailyLimit    | string  | No       | Daily playtime limit override as a duration string (e.g. `2h30m`). Omitted = inherit; `0` = unlimited.   |
+| sessionLimit  | string  | No       | Session playtime limit override as a duration string. Omitted = inherit; `0` = unlimited.                |
+| lastUsedAt    | number  | No       | Unix timestamp of most recent successful profile activation. Omitted if never activated.                |
+| createdAt     | number  | Yes      | Unix timestamp of profile creation.                                                                      |
+| lastUpdatedAt | number  | Yes      | Unix timestamp of last modification.                                                                     |
+
+### profiles
+
+List all profiles.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type                         | Required | Description       |
+| :------- | :--------------------------- | :------- | :---------------- |
+| profiles | [Profile](#profile-object)[] | Yes      | List of profiles. |
+
+### profiles.new
+
+Create a new profile. Remote callers require an admin client; local UIs may use `profiles.verify` as a nuisance gate. The switch ID is generated automatically; write it to a card as `**profile:<switchId>`.
+
+#### Parameters
+
+| Key           | Type    | Required | Description                                                      |
+| :------------ | :------ | :------- | :---------------------------------------------------------------- |
+| name          | string  | Yes      | Display name.                                                    |
+| role          | string  | No       | `admin` or `member`; later profiles default member. First profile is always admin. |
+| pin           | string  | No       | Optional 4-8 digit PIN required to switch by `profileId`; mandatory for admin profiles. |
+| limitsEnabled | boolean | No       | Playtime limits enabled override.                                |
+| dailyLimit    | string  | No       | Daily limit duration override.                                   |
+| sessionLimit  | string  | No       | Session limit duration override.                                 |
+
+#### Result
+
+The created [profile object](#profile-object).
+
+### profiles.update
+
+Update a profile. Remote callers require an admin client; local UIs may gate this action with `profiles.verify`. Migrated profiles without an administrator may still be recovered locally. Omitted fields are unchanged. If the updated profile is currently active, its limit changes apply immediately (without resetting the running session).
+
+#### Parameters
+
+| Key                | Type    | Required | Description                                                            |
+| :----------------- | :------ | :------- | :---------------------------------------------------------------------- |
+| profileId          | string  | Yes      | Profile to update.                                                     |
+| name               | string  | No       | New display name.                                                      |
+| role               | string  | No       | Change between `admin` and `member`; final admin cannot be demoted.    |
+| pin                | string  | No       | Set or replace the PIN; admin profiles must retain one.                |
+| clearPin           | boolean | No       | Remove the PIN.                                                        |
+| limitsEnabled      | boolean | No       | Playtime limits enabled override.                                      |
+| dailyLimit         | string  | No       | Daily limit duration override.                                         |
+| sessionLimit       | string  | No       | Session limit duration override.                                       |
+| clearLimits        | boolean | No       | Reset all limit overrides back to inheriting the global config, before any limit fields in the same request are applied. |
+| regenerateSwitchId | boolean | No       | Issue a new switch ID (lost-card replacement). Old cards stop working. |
+
+#### Result
+
+The updated [profile object](#profile-object).
+
+### profiles.delete
+
+Delete a profile. Remote callers require an admin client; local UIs may gate this action with `profiles.verify`. The final admin profile cannot be deleted. If it is active, the device switches to the shared profile. Past play history keeps its attribution.
+
+#### Parameters
+
+| Key       | Type   | Required | Description        |
+| :-------- | :----- | :------- | :----------------- |
+| profileId       | string | Yes      | Profile to delete.                                      |
+
+#### Result
+
+Null.
+
+### profiles.active
+
+Get the device's currently active profile.
+
+#### Parameters
+
+None.
+
+#### Result
+
+The active profile (a subset of the [profile object](#profile-object) without `switchId` and timestamps), or null when no profile is active.
+
+### profiles.switch
+
+Switch the device's active profile. Switching by `profileId` requires the profile's PIN when one is set. Switching by `switchId` never requires a PIN: the switch ID is a bearer credential, and presenting it is equivalent to scanning the profile's card. Calling with neither `profileId` nor `switchId` switches to the shared profile (deactivates), which never requires a PIN. Providing both is an error.
+
+If a game is running when the profile changes, its playtime keeps counting against the profile that launched it: switching to another profile starts a fresh limit session for the new person, while deactivating leaves the launch profile's limits in force until the media stops.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                            |
+| :-------- | :----- | :------- | :------------------------------------------------------ |
+| profileId | string | No       | Profile to activate, by ID. Requires `pin` when the profile has one. |
+| switchId  | string | No       | Profile to activate, by switch ID (bearer credential; no PIN needed). |
+| pin       | string | No       | The profile's PIN, for `profileId` switching.          |
+
+#### Result
+
+The new active profile, or null when deactivated (shared profile).
+
+### profiles.verify
+
+Verify a profile credential **without switching**: either a profile ID plus its PIN, or a switch ID (a bearer credential — resolving it is the verification, same as scanning the card). Success returns the profile's identity and changes nothing on the device: no session, no active-profile change, no server-side grant of any kind. Clients use this to gate their own ad-hoc UI items behind a credential — e.g. a kiosk frontend requiring a parent's PIN before opening its settings screen. The security of whatever the client unlocks is entirely the client's responsibility.
+
+PIN attempts share the same per-profile rate limiter as `profiles.switch`, so this method cannot be used to brute-force a PIN any faster than switching attempts could.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                              |
+| :-------- | :----- | :------- | :-------------------------------------------------------- |
+| profileId | string | No       | Profile to verify against. Requires `pin` when the profile has one. |
+| switchId  | string | No       | Verify by switch ID (bearer credential; no PIN needed).  |
+| pin       | string | No       | The profile's PIN, for `profileId` verification.         |
+
+Exactly one of `profileId` or `switchId` is required.
+
+#### Result
+
+| Key       | Type    | Required | Description                              |
+| :-------- | :------ | :------- | :---------------------------------------- |
+| profileId | string  | Yes      | ID of the verified profile.              |
+| name      | string  | Yes      | Display name of the verified profile.    |
+| role      | string  | Yes      | Profile role (`admin` or `member`).      |
+| hasPin    | boolean | Yes      | Whether the profile has a PIN set.       |
+
+Verification failure (wrong PIN, unknown profile or switch ID, rate limited) returns an error, using the same errors as `profiles.switch`.
 
 ## Mappings
 

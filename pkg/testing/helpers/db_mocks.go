@@ -452,6 +452,18 @@ func (m *MockUserDBI) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) 
 	return total, nil
 }
 
+func (m *MockUserDBI) SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error) {
+	args := m.Called(dayStart, profileID)
+	total, ok := args.Get(0).(int64)
+	if !ok {
+		total = 0
+	}
+	if err := args.Error(1); err != nil {
+		return total, fmt.Errorf("mock UserDBI sum media play time for day by profile failed: %w", err)
+	}
+	return total, nil
+}
+
 func (m *MockUserDBI) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
 	args := m.Called(msg)
 	if result, ok := args.Get(0).(*database.InboxMessage); ok {
@@ -562,6 +574,108 @@ func (m *MockUserDBI) CountClients() (int, error) {
 		return count, fmt.Errorf("mock UserDBI count clients failed: %w", err)
 	}
 	return count, nil
+}
+
+func (m *MockUserDBI) CreateProfile(p *database.Profile) error {
+	args := m.Called(p)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI create profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetProfile(profileID string) (*database.Profile, error) {
+	args := m.Called(profileID)
+	if result, ok := args.Get(0).(*database.Profile); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI get profile failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get profile failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no profile is configured
+}
+
+func (m *MockUserDBI) GetProfileBySwitchID(switchID string) (*database.Profile, error) {
+	args := m.Called(switchID)
+	if result, ok := args.Get(0).(*database.Profile); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI get profile by switch ID failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get profile by switch ID failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no profile is configured
+}
+
+func (m *MockUserDBI) ListProfiles() ([]database.Profile, error) {
+	args := m.Called()
+	if profiles, ok := args.Get(0).([]database.Profile); ok {
+		if err := args.Error(1); err != nil {
+			return profiles, fmt.Errorf("mock UserDBI list profiles failed: %w", err)
+		}
+		return profiles, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list profiles failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) UpdateProfile(p *database.Profile) error {
+	args := m.Called(p)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ActivateProfile(profileID string, lastUsedAt int64) error {
+	args := m.Called(profileID, lastUsedAt)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI activate profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteProfile(profileID string) error {
+	args := m.Called(profileID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete profile failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) SetDeviceState(key, value string) error {
+	args := m.Called(key, value)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set device state failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetDeviceState(key string) (value string, found bool, err error) {
+	args := m.Called(key)
+	if v, ok := args.Get(0).(string); ok {
+		value = v
+	}
+	found = args.Bool(1)
+	if err := args.Error(2); err != nil {
+		return value, found, fmt.Errorf("mock UserDBI get device state failed: %w", err)
+	}
+	return value, found, nil
+}
+
+func (m *MockUserDBI) DeleteDeviceState(key string) error {
+	args := m.Called(key)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete device state failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, error) {

@@ -39,6 +39,16 @@ const (
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
 	NotificationInboxAdded           = "inbox.added"
 	NotificationClientsPaired        = "clients.paired"
+	NotificationProfilesActive       = "profiles.active"
+	NotificationProfilesData         = "profiles.data"
+)
+
+// Profile data swap statuses reported by the profiles.data notification.
+const (
+	ProfilesDataApplied     = "applied"
+	ProfilesDataDeferred    = "deferred"
+	ProfilesDataFailed      = "failed"
+	ProfilesDataUnavailable = "unavailable"
 )
 
 const (
@@ -93,6 +103,13 @@ const (
 	MethodClientsDelete         = "clients.delete"
 	MethodClientsPairStart      = "clients.pair.start"
 	MethodClientsPairCancel     = "clients.pair.cancel"
+	MethodProfiles              = "profiles"
+	MethodProfilesNew           = "profiles.new"
+	MethodProfilesUpdate        = "profiles.update"
+	MethodProfilesDelete        = "profiles.delete"
+	MethodProfilesActive        = "profiles.active"
+	MethodProfilesSwitch        = "profiles.switch"
+	MethodProfilesVerify        = "profiles.verify"
 	MethodSystems               = "systems"
 	MethodLaunchers             = "launchers"
 	MethodLaunchersRefresh      = "launchers.refresh"

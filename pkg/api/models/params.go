@@ -143,6 +143,7 @@ type UpdateSettingsParams struct {
 	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
 	ErrorReporting            *bool               `json:"errorReporting"`
+	Encryption                *bool               `json:"encryption"`
 	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
@@ -154,6 +155,8 @@ type UpdateSettingsParams struct {
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
 	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  *bool               `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          *bool               `json:"profilesSwapData"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -171,6 +174,64 @@ type NewClientParams struct {
 
 type DeleteClientParams struct {
 	ID string `json:"id" validate:"required,min=1"`
+}
+
+// ClientsPairStartParams configures a new pairing flow. Role is the
+// permission role the paired client will receive ("admin" or "member");
+// empty defaults to member.
+type ClientsPairStartParams struct {
+	Role string `json:"role" validate:"omitempty,oneof=admin member"`
+}
+
+// NewProfileParams creates a profile. Nil limit fields inherit the global
+// config; a "0" duration means explicitly unlimited.
+type NewProfileParams struct {
+	PIN           *string `json:"pin" validate:"omitempty,numeric,min=4,max=8"`
+	LimitsEnabled *bool   `json:"limitsEnabled"`
+	DailyLimit    *string `json:"dailyLimit" validate:"omitempty,duration"`
+	SessionLimit  *string `json:"sessionLimit" validate:"omitempty,duration"`
+	Name          string  `json:"name" validate:"required,min=1,max=255"`
+	Role          string  `json:"role" validate:"omitempty,oneof=admin member"`
+}
+
+// UpdateProfileParams updates a profile. Omitted fields are unchanged.
+// ClearPIN removes the PIN; ClearLimits resets all limit overrides back to
+// inheriting global config before any limit fields in the same request are
+// applied (clear-then-set); RegenerateSwitchID issues a new switch ID
+// (lost-card replacement).
+type UpdateProfileParams struct {
+	Name               *string `json:"name" validate:"omitempty,min=1,max=255"`
+	PIN                *string `json:"pin" validate:"omitempty,numeric,min=4,max=8"`
+	LimitsEnabled      *bool   `json:"limitsEnabled"`
+	DailyLimit         *string `json:"dailyLimit" validate:"omitempty,duration"`
+	SessionLimit       *string `json:"sessionLimit" validate:"omitempty,duration"`
+	Role               *string `json:"role" validate:"omitempty,oneof=admin member"`
+	ProfileID          string  `json:"profileId" validate:"required,min=1"`
+	ClearPIN           bool    `json:"clearPin"`
+	ClearLimits        bool    `json:"clearLimits"`
+	RegenerateSwitchID bool    `json:"regenerateSwitchId"`
+}
+
+type DeleteProfileParams struct {
+	ProfileID string `json:"profileId" validate:"required,min=1"`
+}
+
+// SwitchProfileParams switches the device's active profile. Exactly one of
+// ProfileID or SwitchID selects the target; both omitted (or null) means
+// deactivate. PIN is required when the target profile has one set.
+type SwitchProfileParams struct {
+	ProfileID *string `json:"profileId"`
+	SwitchID  *string `json:"switchId"`
+	PIN       *string `json:"pin"`
+}
+
+// VerifyProfileParams verifies a profile credential without switching.
+// Exactly one of ProfileID (with PIN when the profile has one) or SwitchID
+// (a bearer credential) must be given.
+type VerifyProfileParams struct {
+	ProfileID *string `json:"profileId"`
+	SwitchID  *string `json:"switchId"`
+	PIN       *string `json:"pin"`
 }
 
 type MediaStartedParams struct {

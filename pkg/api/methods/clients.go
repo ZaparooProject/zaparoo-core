@@ -55,6 +55,7 @@ func HandleClients(env requests.RequestEnv) (any, error) {
 		resp.Clients[i] = models.PairedClient{
 			ClientID:   c.ClientID,
 			ClientName: c.ClientName,
+			Role:       c.Role,
 			CreatedAt:  c.CreatedAt,
 			LastSeenAt: c.LastSeenAt,
 		}
@@ -80,6 +81,9 @@ func HandleClientsDelete(env requests.RequestEnv) (any, error) {
 	}
 	if params.ClientID == "" {
 		return nil, models.ClientErrf("clientId is required")
+	}
+	if err := requireProfileManagement(&env); err != nil {
+		return nil, err
 	}
 
 	if err := env.Database.UserDB.DeleteClient(params.ClientID); err != nil {

@@ -21,6 +21,7 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -42,20 +43,23 @@ import (
 )
 
 type Flags struct {
-	Write      *string
-	Read       *bool
-	Run        *string
-	Launch     *string
-	API        *string
-	Version    *bool
-	Config     *bool
-	ShowLoader *string
-	ShowPicker *string
-	Reload     *bool
-	Pair       *bool
-	Backup     *bool
-	Backups    *bool
-	Restore    *string
+	Write                *string
+	Read                 *bool
+	Run                  *string
+	Launch               *string
+	API                  *string
+	Version              *bool
+	Config               *bool
+	ShowLoader           *string
+	ShowPicker           *string
+	Reload               *bool
+	Pair                 *bool
+	Backup               *bool
+	Backups              *bool
+	Restore              *string
+	Profiles             *bool
+	ProfileResetPIN      *string
+	ProfileResetSwitchID *string
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -120,6 +124,21 @@ func SetupFlags() *Flags {
 			"restore",
 			"",
 			"restore the database from the named backup",
+		),
+		Profiles: flag.Bool(
+			"profiles",
+			false,
+			"list profiles for host recovery",
+		),
+		ProfileResetPIN: flag.String(
+			"profile-reset-pin",
+			"",
+			"reset profile PIN to a generated value",
+		),
+		ProfileResetSwitchID: flag.String(
+			"profile-reset-switch-id",
+			"",
+			"regenerate profile switch ID",
 		),
 	}
 }
@@ -314,6 +333,44 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		_, _ = fmt.Fprint(os.Stderr, "Pairing successful!\n")
 		_, _ = fmt.Println(sanitizeForOutput(result))
+		os.Exit(0)
+	case *f.Profiles:
+		if err := listProfiles(context.Background(), cfg, os.Stdout, client.LocalClient); err != nil {
+			logClientCommandError(err, "error listing profiles")
+			_, _ = fmt.Fprintf(os.Stderr, "Error listing profiles: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	case isFlagPassed("profile-reset-pin"):
+		if *f.ProfileResetPIN == "" {
+			_, _ = fmt.Fprint(os.Stderr, "Error: profile-reset-pin requires a profile ID\n")
+			os.Exit(1)
+		}
+		pin, err := resetProfilePIN(
+			context.Background(), cfg, *f.ProfileResetPIN, rand.Reader, client.LocalClient,
+		)
+		if err != nil {
+			logClientCommandError(err, "error resetting profile PIN")
+			_, _ = fmt.Fprintf(os.Stderr, "Error resetting profile PIN: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Printf("Profile %s PIN: %s\n", sanitizeForOutput(*f.ProfileResetPIN), pin)
+		os.Exit(0)
+	case isFlagPassed("profile-reset-switch-id"):
+		if *f.ProfileResetSwitchID == "" {
+			_, _ = fmt.Fprint(os.Stderr, "Error: profile-reset-switch-id requires a profile ID\n")
+			os.Exit(1)
+		}
+		switchID, err := resetProfileSwitchID(
+			context.Background(), cfg, *f.ProfileResetSwitchID, client.LocalClient,
+		)
+		if err != nil {
+			logClientCommandError(err, "error resetting profile switch ID")
+			_, _ = fmt.Fprintf(os.Stderr, "Error resetting profile switch ID: %v\n", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Printf("Profile %s switch ID: %s\n",
+			sanitizeForOutput(*f.ProfileResetSwitchID), sanitizeForOutput(switchID))
 		os.Exit(0)
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")

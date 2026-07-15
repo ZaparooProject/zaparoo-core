@@ -46,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -240,15 +241,43 @@ func Start(
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
+	// Initialize profiles and restore the persisted active profile before
+	// the limits manager starts, so limit checks see the right profile.
+	log.Info().Msg("initializing profiles service")
+	profilesSvc := profiles.NewService(db, st)
+	if restoreErr := profilesSvc.RestoreOnBoot(); restoreErr != nil {
+		log.Error().Err(restoreErr).Msg("error restoring active profile")
+	}
+
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
+	limitsResolver := profiles.NewLimitsResolver(cfg, st)
+	limitsManager.SetLimitsProvider(limitsResolver)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
-	// the cooldown window. Must run after CloseHangingMediaHistory (called above).
+	// the cooldown window. Must run after CloseHangingMediaHistory (called above)
+	// and after the active profile is restored, so the session is judged
+	// against the right profile's limits.
 	limitsManager.RestoreSessionFromHistory(time.Now())
-	if cfg.PlaytimeLimitsEnabled() {
+	if limitsResolver.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
+	}
+
+	// Data swapping: on platforms with the capability, profile switches
+	// also swap profile-scoped data (saves, save states). The boot
+	// reconcile runs after profile and session restore so a game already
+	// running across a service restart defers the swap until it stops.
+	var dataSwapper platforms.ProfileDataSwapper
+	if swapper, ok := pl.(platforms.ProfileDataSwapper); ok {
+		dataSwapper = swapper
+	}
+	dataSwap := profiles.NewDataSwapCoordinator(cfg, st, dataSwapper)
+	dataSwap.Start(notifBroker, st.Notifications)
+	profilesSvc.SetDataSwap(dataSwap)
+	dataSwap.Reconcile()
+	if watcher, ok := pl.(platforms.ProfileDataWatcher); ok && dataSwapper != nil {
+		watcher.WatchProfileData(st.GetContext(), dataSwap.Reconcile)
 	}
 
 	svc := &ServiceContext{
@@ -256,6 +285,7 @@ func Start(
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		Profiles:            profilesSvc,
 		PlaybackManager:     playbackManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
@@ -318,7 +348,7 @@ func Start(
 	apiDone := make(chan error, 1)
 	go func() {
 		apiDone <- api.StartWithReady(
-			pl, cfg, st, itq, cfq, db, limitsManager,
+			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
 			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
 			idleSched, apiReady,
 		)
@@ -334,6 +364,7 @@ func Start(
 			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
 		}
 		limitsManager.Stop()
+		dataSwap.Stop()
 		notifBroker.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -533,6 +564,7 @@ func Start(
 			log.Error().Err(apiErr).Msg("API service stopped with error")
 		}
 		limitsManager.Stop()
+		dataSwap.Stop()
 		notifBroker.Stop()
 		<-historyListenDone
 		<-historyUpdateDone

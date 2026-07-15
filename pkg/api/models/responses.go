@@ -113,17 +113,20 @@ type SettingsResponse struct {
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
 	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
-	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
+	AudioVolume               int                `json:"audioVolume"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
-	AudioVolume               int                `json:"audioVolume"`
+	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
+	Encryption                bool               `json:"encryption"`
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
+	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
+	ProfilesSwapData          bool               `json:"profilesSwapData"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -607,6 +610,7 @@ type InboxResponse struct {
 type PairedClient struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
+	Role       string `json:"role"`
 	CreatedAt  int64  `json:"createdAt"`
 	LastSeenAt int64  `json:"lastSeenAt"`
 }
@@ -632,6 +636,72 @@ type ClientsPairStartResponse struct {
 type ClientsPairedNotification struct {
 	ClientID   string `json:"clientId"`
 	ClientName string `json:"clientName"`
+}
+
+// ProfileResponse represents a device profile in API responses. The PIN
+// hash is never exposed — only whether a PIN is set. SwitchID is a bearer
+// credential (presenting it authorizes a PIN-free switch on every path),
+// so it is only included for privileged clients that need it for
+// card-writing UX; for other clients it is omitted.
+type ProfileResponse struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	LastUsedAt    *int64  `json:"lastUsedAt,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	Role          string  `json:"role"`
+	SwitchID      string  `json:"switchId,omitempty"`
+	CreatedAt     int64   `json:"createdAt"`
+	LastUpdatedAt int64   `json:"lastUpdatedAt"`
+	HasPIN        bool    `json:"hasPin"`
+}
+
+// ProfilesResponse is the response for the profiles RPC method.
+type ProfilesResponse struct {
+	Profiles []ProfileResponse `json:"profiles"`
+}
+
+// ProfileVerifyResponse is the response for the profiles.verify RPC
+// method: the identity of the profile whose credential was verified.
+// Verification grants nothing server-side — the client owns whatever it
+// unlocks with it.
+type ProfileVerifyResponse struct {
+	ProfileID string `json:"profileId"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	HasPIN    bool   `json:"hasPin"`
+}
+
+// ActiveProfile is a snapshot of the device's active profile, held in
+// service state and broadcast on the profiles.active notification. It
+// carries the resolved limit overrides so the playtime hot path never
+// touches the database. Nil limit fields mean "inherit global config".
+type ActiveProfile struct {
+	LimitsEnabled *bool   `json:"limitsEnabled,omitempty"`
+	DailyLimit    *string `json:"dailyLimit,omitempty"`
+	SessionLimit  *string `json:"sessionLimit,omitempty"`
+	ProfileID     string  `json:"profileId"`
+	Name          string  `json:"name"`
+	Role          string  `json:"role"`
+	HasPIN        bool    `json:"hasPin"`
+}
+
+// ProfilesActiveNotification is the payload for the profiles.active
+// notification. Profile is null when the device has no active profile.
+type ProfilesActiveNotification struct {
+	Profile *ActiveProfile `json:"profile"`
+}
+
+// ProfilesDataNotification is the payload for the profiles.data
+// notification, reporting the state of profile data swapping (save files
+// etc.) after a profile change. ProfileID is empty for the shared profile.
+// Status is one of the ProfilesData* constants; Reason is a human-readable
+// explanation for failed/unavailable statuses.
+type ProfilesDataNotification struct {
+	ProfileID string `json:"profileId"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type SettingsAuthClaimResponse struct {

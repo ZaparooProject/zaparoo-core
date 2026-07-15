@@ -69,6 +69,7 @@ type State struct {
 	Notifications         chan<- models.Notification
 	activeMedia           *models.ActiveMedia
 	backgroundMedia       *models.ActiveMedia
+	activeProfile         *models.ActiveProfile
 	activePlaylist        *playlists.Playlist
 	backgroundPlaylist    *playlists.Playlist
 	activeMediaReadyCh    chan struct{}
@@ -143,6 +144,49 @@ func (s *State) GetActiveCard() tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeToken
+}
+
+// SetActiveProfile sets or clears (nil) the device's active profile and
+// broadcasts a profiles.active notification. The snapshot is stored by
+// value internally so callers cannot mutate state through the pointer.
+func (s *State) SetActiveProfile(profile *models.ActiveProfile) {
+	s.mu.Lock()
+
+	if profile == nil && s.activeProfile == nil {
+		// ignore duplicate deactivations
+		s.mu.Unlock()
+		return
+	}
+
+	var stored *models.ActiveProfile
+	if profile != nil {
+		profileCopy := *profile
+		stored = &profileCopy
+	}
+	s.activeProfile = stored
+
+	// Prepare notification payload inside lock, send outside
+	var payload *models.ActiveProfile
+	if stored != nil {
+		payloadCopy := *stored
+		payload = &payloadCopy
+	}
+
+	s.mu.Unlock()
+
+	notifications.ProfilesActiveChanged(s.Notifications, models.ProfilesActiveNotification{Profile: payload})
+}
+
+// ActiveProfile returns a copy of the device's active profile snapshot, or
+// nil when no profile is active.
+func (s *State) ActiveProfile() *models.ActiveProfile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.activeProfile == nil {
+		return nil
+	}
+	profileCopy := *s.activeProfile
+	return &profileCopy
 }
 
 func (s *State) GetLastScanned() tokens.Token {

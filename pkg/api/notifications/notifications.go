@@ -132,3 +132,16 @@ func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
 	sendNotification(ns, models.NotificationClientsPaired, payload)
 }
+
+// ProfilesActiveChanged broadcasts a change of the device's active profile.
+// The payload profile is null when the device deactivated to no profile.
+func ProfilesActiveChanged(ns chan<- models.Notification, payload models.ProfilesActiveNotification) {
+	sendNotification(ns, models.NotificationProfilesActive, payload)
+}
+
+// ProfilesDataChanged broadcasts the state of profile data swapping after
+// a profile change (applied, deferred until media stops, failed, or
+// unavailable on this platform/storage setup).
+func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesDataNotification) {
+	sendNotification(ns, models.NotificationProfilesData, payload)
+}

@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -70,10 +71,13 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersConnect:            readersConnect,
 		SystemDefaults:            systemDefaults,
 		ErrorReporting:            env.Config.ErrorReporting(),
+		Encryption:                env.Config.EncryptionEnabled(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
 		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
+		ProfilesRequireForLaunch:  env.Config.ProfilesRequireForLaunch(),
+		ProfilesSwapData:          env.Config.ProfilesSwapData(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -123,6 +127,18 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	// Encryption policy can only be changed from the device itself. Remote
+	// settings changes otherwise require an admin client.
+	if params.Encryption != nil && !env.IsLocal {
+		return nil, models.ClientErrf("encryption setting: %w", ErrLocalhostOnly)
+	}
+	// Local profile PIN prompts are enforced by the UI before sensitive
+	// settings requests.
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
 	}
 
 	// Pre-flight validation of inputs that depend on runtime state. Run before
@@ -183,6 +199,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetErrorReporting(*params.ErrorReporting)
 	}
 
+	if params.Encryption != nil {
+		log.Debug().Bool("encryption", *params.Encryption).Msg("updating setting")
+		env.Config.SetEncryptionEnabled(*params.Encryption)
+	}
+
 	if params.ReadersScanMode != nil {
 		log.Debug().Str("readersScanMode", *params.ReadersScanMode).Msg("updating setting")
 		// empty string defaults to tap mode
@@ -221,6 +242,21 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LaunchGuardRequireConfirm != nil {
 		log.Debug().Bool("launchGuardRequireConfirm", *params.LaunchGuardRequireConfirm).Msg("updating setting")
 		env.Config.SetLaunchGuardRequireConfirm(*params.LaunchGuardRequireConfirm)
+	}
+
+	if params.ProfilesRequireForLaunch != nil {
+		log.Debug().Bool("profilesRequireForLaunch", *params.ProfilesRequireForLaunch).Msg("updating setting")
+		env.Config.SetProfilesRequireForLaunch(*params.ProfilesRequireForLaunch)
+	}
+
+	if params.ProfilesSwapData != nil {
+		log.Debug().Bool("profilesSwapData", *params.ProfilesSwapData).Msg("updating setting")
+		env.Config.SetProfilesSwapData(*params.ProfilesSwapData)
+		// Converge mounts immediately: turning swapping off restores the
+		// shared data state rather than waiting for the next switch.
+		if env.Profiles != nil {
+			env.Profiles.ReconcileData()
+		}
 	}
 
 	if params.ReadersConnect != nil {
@@ -340,6 +376,11 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+	if !env.IsLocal {
+		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
+			return nil, err
+		}
 	}
 
 	// Reload config from disk before applying mutations so that external

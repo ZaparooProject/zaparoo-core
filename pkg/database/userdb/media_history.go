@@ -61,7 +61,7 @@ func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) (
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistory(db.ctx, db.sql.Load(), systemIDs, lastID, limit)
+	return sqlGetMediaHistory(db.ctx, db.sql.Load(), systemIDs, nil, lastID, limit)
 }
 
 // GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
@@ -117,7 +117,19 @@ func (db *UserDB) SumMediaPlayTimeForDay(dayStart time.Time) (int64, error) {
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart)
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart, nil)
+}
+
+// SumMediaPlayTimeForDayByProfile is SumMediaPlayTimeForDay scoped to
+// history attributed to a single profile. History with no profile (the
+// shared profile) is counted by SumMediaPlayTimeForDay, which sums all
+// rows: shared limits are device-level, so deactivating a profile must not
+// grant a fresh daily allowance.
+func (db *UserDB) SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlSumMediaPlayTimeForDay(db.ctx, db.sql.Load(), dayStart, &profileID)
 }
 
 /*
@@ -129,8 +141,8 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		INSERT INTO MediaHistory(
 			ID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history insert statement: %w", err)
@@ -144,6 +156,10 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 	var deviceID any
 	if entry.DeviceID != nil {
 		deviceID = *entry.DeviceID
+	}
+	var profileID any
+	if entry.ProfileID != nil {
+		profileID = *entry.ProfileID
 	}
 
 	result, err := stmt.ExecContext(ctx,
@@ -165,6 +181,7 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		entry.CreatedAt.Unix(),
 		entry.UpdatedAt.Unix(),
 		deviceID,
+		profileID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute media history insert: %w", err)
@@ -228,7 +245,7 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 }
 
 func sqlGetMediaHistory(
-	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
+	ctx context.Context, db *sql.DB, systemIDs []string, profileID *string, lastID int64, limit int,
 ) ([]database.MediaHistoryEntry, error) {
 	if limit <= 0 {
 		limit = 25
@@ -245,7 +262,7 @@ func sqlGetMediaHistory(
 	}
 
 	conditions := []string{"DBID < ?"}
-	args := make([]any, 0, len(systemIDs)+2)
+	args := make([]any, 0, len(systemIDs)+3)
 	args = append(args, lastID)
 
 	if len(systemIDs) == 1 {
@@ -260,6 +277,11 @@ func sqlGetMediaHistory(
 		conditions = append(conditions, "SystemID IN ("+strings.Join(placeholders, ", ")+")")
 	}
 
+	if profileID != nil {
+		conditions = append(conditions, "ProfileID = ?")
+		args = append(args, *profileID)
+	}
+
 	where := strings.Join(conditions, " AND ")
 	args = append(args, limit)
 	queryStarted := time.Now()
@@ -270,7 +292,7 @@ func sqlGetMediaHistory(
 			DBID, ID, StartTime, EndTime, SystemID, SystemName,
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID
 		FROM MediaHistory
 		WHERE %s
 		ORDER BY DBID DESC
@@ -303,7 +325,7 @@ func sqlGetMediaHistory(
 		var endTimeUnix sql.NullInt64
 		var createdAtUnix, updatedAtUnix int64
 		var id, clockSource sql.NullString
-		var deviceID sql.NullString
+		var deviceID, rowProfileID sql.NullString
 
 		err = rows.Scan(
 			&entry.DBID,
@@ -326,6 +348,7 @@ func sqlGetMediaHistory(
 			&createdAtUnix,
 			&updatedAtUnix,
 			&deviceID,
+			&rowProfileID,
 		)
 		if err != nil {
 			return list, fmt.Errorf("failed to scan media history row: %w", err)
@@ -340,6 +363,10 @@ func sqlGetMediaHistory(
 		if deviceID.Valid {
 			deviceStr := deviceID.String
 			entry.DeviceID = &deviceStr
+		}
+		if rowProfileID.Valid {
+			profileStr := rowProfileID.String
+			entry.ProfileID = &profileStr
 		}
 
 		entry.StartTime = time.Unix(startTimeUnix, 0)
@@ -463,13 +490,13 @@ func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) 
 	return rowsAffected, nil
 }
 
-func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Time) (int64, error) {
+func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Time, profileID *string) (int64, error) {
 	dayStartUnix := dayStart.Unix()
 
 	// Sum completed sessions that overlap [dayStart, ∞).
 	// Sessions spanning midnight are pro-rated: only the portion after dayStart counts.
 	// The active session (EndTime IS NULL) is excluded; callers add it separately.
-	stmt, err := db.PrepareContext(ctx, `
+	query := `
 		SELECT COALESCE(SUM(
 		    CASE
 		        WHEN StartTime < ? THEN EndTime - ?
@@ -478,8 +505,16 @@ func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Ti
 		), 0)
 		FROM MediaHistory
 		WHERE EndTime IS NOT NULL
-		  AND EndTime > ?;
-	`)
+		  AND EndTime > ?`
+	args := []any{dayStartUnix, dayStartUnix, dayStartUnix}
+	if profileID != nil {
+		query += `
+		  AND ProfileID = ?`
+		args = append(args, *profileID)
+	}
+	query += ";"
+
+	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare daily play time sum statement: %w", err)
 	}
@@ -490,7 +525,7 @@ func sqlSumMediaPlayTimeForDay(ctx context.Context, db *sql.DB, dayStart time.Ti
 	}()
 
 	var total int64
-	if scanErr := stmt.QueryRowContext(ctx, dayStartUnix, dayStartUnix, dayStartUnix).Scan(&total); scanErr != nil {
+	if scanErr := stmt.QueryRowContext(ctx, args...).Scan(&total); scanErr != nil {
 		return 0, fmt.Errorf("failed to scan daily play time sum: %w", scanErr)
 	}
 

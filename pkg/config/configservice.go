@@ -52,8 +52,8 @@ type Service struct {
 	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
 	Publishers     Publishers `toml:"publishers,omitempty"`
 	// Encryption enables PAKE pairing + AES-256-GCM on the WebSocket
-	// transport. False (the default) accepts plaintext WebSocket connections
-	// with API key authentication. True requires paired clients for remote
+	// transport. False (the default) accepts plaintext and encrypted WebSocket
+	// connections. True requires paired clients for remote
 	// WebSocket connections; localhost is always exempt.
 	Encryption bool `toml:"encryption,omitempty"`
 }

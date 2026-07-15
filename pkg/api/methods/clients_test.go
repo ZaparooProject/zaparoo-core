@@ -125,18 +125,13 @@ func TestHandleClients_RemoteRejected(t *testing.T) {
 func TestHandleClientsDelete_Success(t *testing.T) {
 	t.Parallel()
 
-	mockUserDB := helpers.NewMockUserDBI()
+	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
 	mockUserDB.On("DeleteClient", "client-uuid").Return(nil)
 
 	params, err := json.Marshal(models.ClientsDeleteParams{ClientID: "client-uuid"})
 	require.NoError(t, err)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-		Params:   params,
-	}
+	env.Params = params
 
 	result, err := HandleClientsDelete(env)
 	require.NoError(t, err)
@@ -167,18 +162,13 @@ func TestHandleClientsDelete_MissingClientID(t *testing.T) {
 func TestHandleClientsDelete_DatabaseError(t *testing.T) {
 	t.Parallel()
 
-	mockUserDB := helpers.NewMockUserDBI()
+	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
 	mockUserDB.On("DeleteClient", "client-uuid").Return(errors.New("not found"))
 
 	params, err := json.Marshal(models.ClientsDeleteParams{ClientID: "client-uuid"})
 	require.NoError(t, err)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-		Params:   params,
-	}
+	env.Params = params
 
 	_, err = HandleClientsDelete(env)
 	require.Error(t, err)

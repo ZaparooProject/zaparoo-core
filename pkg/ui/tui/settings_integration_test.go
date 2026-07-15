@@ -97,6 +97,71 @@ func TestSettingsList_ToggleActivation_Integration(t *testing.T) {
 	assert.True(t, toggleValue, "toggle value should be true after activation")
 }
 
+func TestSettingsList_TextEditActivation_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+	value := ""
+	changed := make(chan string, 1)
+	sl.AddTextEdit("Name", "Profile name", &value, &SettingsTextEditOptions{
+		App:          runner.App(),
+		EmptyDisplay: "Not set",
+		HelpText:     "Enter the profile display name.",
+	}, func(text string) {
+		changed <- text
+	})
+
+	pages.AddPage("settings", sl.List, true, true)
+	runner.Start(pages)
+	runner.Draw()
+
+	assert.True(t, runner.ContainsText("Name: Not set"))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Edit Name", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Enter the profile display name."))
+	runner.SimulateString("Kid A")
+	runner.SimulateEnter()
+
+	select {
+	case got := <-changed:
+		assert.Equal(t, "Kid A", got)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for text edit")
+	}
+	require.True(t, runner.WaitForText("Name: Kid A", 100*time.Millisecond))
+	assert.Equal(t, "Kid A", value)
+}
+
+func TestSettingsList_LeftRightAdjustValues_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+	toggle := false
+	cycle := 1
+	sl.AddToggle("Enabled", "Toggle value", &toggle, func(bool) {})
+	sl.AddCycle("Mode", "Cycle value", []string{"A", "B", "C"}, &cycle, func(string, int) {})
+	pages.AddPage("settings", sl.List, true, true)
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.SimulateArrowRight()
+	assert.True(t, toggle)
+	runner.SimulateArrowLeft()
+	assert.False(t, toggle)
+	runner.SimulateArrowDown()
+	runner.SimulateArrowLeft()
+	assert.Equal(t, 0, cycle)
+	runner.SimulateArrowRight()
+	assert.Equal(t, 1, cycle)
+}
+
 func TestSettingsList_EscapeGoesBack_Integration(t *testing.T) {
 	t.Parallel()
 

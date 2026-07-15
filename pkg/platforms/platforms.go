@@ -164,11 +164,24 @@ type CmdEnv struct {
 	Unsafe            bool
 }
 
+// ProfileSwitchRequest asks the script runner to change the device's
+// active profile. SwitchID selects a profile by its card switch ID; Clear
+// deactivates the current profile instead.
+type ProfileSwitchRequest struct {
+	SwitchID string
+	Clear    bool
+}
+
 // CmdResult returns a summary of what global side effects may or may not have
 // happened as a result of a single ZapScript command running.
 type CmdResult struct {
 	// Playlist is the result of the playlist change.
 	Playlist *playlists.Playlist
+	// ProfileSwitch requests the active profile be changed. Commands return
+	// the request as intent; the service layer applies it (same pattern as
+	// Playlist). The scan path activates without a PIN check — possession
+	// of the card is the authorization.
+	ProfileSwitch *ProfileSwitchRequest
 	// Strategy indicates which matching strategy was used for title-based launches.
 	// Empty for non-title commands. Used for testing and debugging title resolution.
 	Strategy string

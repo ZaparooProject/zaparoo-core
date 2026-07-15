@@ -250,6 +250,7 @@ func TestPairedClient_JSONShape(t *testing.T) {
 	pc := PairedClient{
 		ClientID:   "client-123",
 		ClientName: "Test Client",
+		Role:       "member",
 		CreatedAt:  1700000000,
 		LastSeenAt: 1700001000,
 	}
@@ -262,6 +263,7 @@ func TestPairedClient_JSONShape(t *testing.T) {
 	expectedKeys := map[string]bool{
 		"clientId":   true,
 		"clientName": true,
+		"role":       true,
 		"createdAt":  true,
 		"lastSeenAt": true,
 	}

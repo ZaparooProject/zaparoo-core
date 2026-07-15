@@ -91,7 +91,8 @@ func ResponsiveMaxWidget(maxWidth, maxHeight int, p tview.Primitive) tview.Primi
 
 // Draw implements tview.Primitive.
 func (r *responsiveWrapper) Draw(screen tcell.Screen) {
-	r.DrawForSubclass(screen, r)
+	// The wrapper only positions its child. Drawing its Box would fill the
+	// entire terminal with the theme background outside the centered dialog.
 	x, y, width, height := r.GetInnerRect()
 
 	actualWidth := r.maxWidth
@@ -149,8 +150,11 @@ const (
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
-// onDismiss is called when the modal is closed and should restore focus.
-func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message string, onDismiss func()) {
+// onDismiss is called when the modal is closed and should restore focus. The
+// returned modal supports callers that need to update displayed information.
+func ShowInfoModal(
+	pages *tview.Pages, app *tview.Application, title, message string, onDismiss func(),
+) *tview.Modal {
 	modal := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"OK"}).
@@ -166,6 +170,7 @@ func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message st
 		SetTitleAlign(tview.AlignCenter)
 	pages.AddPage(infoModalPage, modal, false, true)
 	app.SetFocus(modal)
+	return modal
 }
 
 // ShowErrorModal displays an error message modal to the user.

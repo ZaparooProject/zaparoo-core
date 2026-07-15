@@ -20,8 +20,13 @@
 package userdb
 
 import (
+	"errors"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
+
+// ErrLastClientAdmin is returned when deleting the final admin client.
+var ErrLastClientAdmin = errors.New("cannot delete the last admin client")
 
 func (db *UserDB) CreateClient(c *database.Client) error {
 	return sqlCreateClient(db.ctx, db.sql.Load(), c)

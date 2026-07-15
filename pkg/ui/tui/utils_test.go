@@ -212,6 +212,29 @@ func TestResponsiveMaxWidget(t *testing.T) {
 	assert.Equal(t, content, rw.child)
 }
 
+func TestResponsiveWrapper_DrawLeavesOuterBackgroundUntouched(t *testing.T) {
+	t.Parallel()
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	require.NoError(t, screen.Init())
+	defer screen.Fini()
+	screen.SetSize(120, 40)
+	screen.Fill(' ', tcell.StyleDefault.Background(tcell.ColorBlack))
+
+	content := tview.NewBox().SetBackgroundColor(tcell.ColorBlue)
+	wrapper := ResponsiveMaxWidget(100, 30, content)
+	wrapper.SetRect(0, 0, 120, 40)
+	wrapper.Draw(screen)
+
+	_, outerStyle, _ := screen.Get(0, 0)
+	_, outerBG, _ := outerStyle.Decompose()
+	assert.Equal(t, tcell.ColorBlack, outerBG, "space outside centered dialog must keep terminal background")
+
+	_, innerStyle, _ := screen.Get(10, 5)
+	_, innerBG, _ := innerStyle.Decompose()
+	assert.Equal(t, tcell.ColorBlue, innerBG, "centered child must draw its own background")
+}
+
 func TestResponsiveWrapper_Focus(t *testing.T) {
 	t.Parallel()
 

@@ -52,6 +52,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -326,6 +327,14 @@ func NewMethodMap() *MethodMap {
 		// clients (paired API clients)
 		models.MethodClients:       methods.HandleClients,
 		models.MethodClientsDelete: methods.HandleClientsDelete,
+
+		models.MethodProfiles:       methods.HandleProfiles,
+		models.MethodProfilesNew:    methods.HandleProfilesNew,
+		models.MethodProfilesUpdate: methods.HandleProfilesUpdate,
+		models.MethodProfilesDelete: methods.HandleProfilesDelete,
+		models.MethodProfilesActive: methods.HandleProfilesActive,
+		models.MethodProfilesSwitch: methods.HandleProfilesSwitch,
+		models.MethodProfilesVerify: methods.HandleProfilesVerify,
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
@@ -970,6 +979,7 @@ func handleWSMessage(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	player audio.Player,
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
@@ -1080,6 +1090,7 @@ func handleWSMessage(
 			State:           st,
 			Database:        db,
 			LimitsManager:   limitsManager,
+			Profiles:        profilesSvc,
 			LauncherCache:   helpers.GlobalLauncherCache,
 			Player:          player,
 			PlaybackManager: playbackManager,
@@ -1089,6 +1100,9 @@ func handleWSMessage(
 			ScrapePauser:    scrapePauser,
 			IsLocal:         isLocal,
 			ClientID:        session.Request.RemoteAddr,
+		}
+		if cs != nil {
+			env.ClientRole = cs.ClientRole()
 		}
 
 		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
@@ -1280,6 +1294,7 @@ func handlePostRequest(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	player audio.Player,
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
@@ -1335,6 +1350,7 @@ func handlePostRequest(
 			State:           st,
 			Database:        db,
 			LimitsManager:   limitsManager,
+			Profiles:        profilesSvc,
 			LauncherCache:   helpers.GlobalLauncherCache,
 			Player:          player,
 			PlaybackManager: playbackManager,
@@ -1404,6 +1420,7 @@ func Start(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
@@ -1413,7 +1430,7 @@ func Start(
 	tracker RequestTracker,
 ) error {
 	return StartWithReady(
-		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
+		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
 		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, tracker, nil,
 	)
 }
@@ -1429,6 +1446,7 @@ func StartWithReady(
 	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	profilesSvc *profiles.Service,
 	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
@@ -1699,7 +1717,7 @@ func StartWithReady(
 		postHandler := handlePostRequest(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
-			db, limitsManager, player, playbackManager,
+			db, limitsManager, profilesSvc, player, playbackManager,
 			indexPauser, scrapePauser, tracker,
 		)
 		r.Post("/api", postHandler)
@@ -1742,7 +1760,7 @@ func StartWithReady(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, player, playbackManager, indexPauser, scrapePauser, encGateway,
+			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, encGateway,
 			lastSeenTracker, tracker,
 		),
 	))

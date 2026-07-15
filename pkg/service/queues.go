@@ -247,6 +247,12 @@ func runTokenZapScript(
 			}
 		}
 
+		if result.ProfileSwitch != nil {
+			if profileErr := applyProfileSwitch(svc, result.ProfileSwitch); profileErr != nil {
+				return profileErr
+			}
+		}
+
 		if result.Unsafe {
 			log.Warn().Msg("token has been flagged as unsafe")
 			token.Unsafe = true
@@ -260,6 +266,25 @@ func runTokenZapScript(
 		}
 	}
 
+	return nil
+}
+
+// applyProfileSwitch applies a profile switch requested by a ZapScript
+// command. This is the physical-scan path, so activation bypasses any
+// profile PIN — possession of the card is the authorization.
+func applyProfileSwitch(svc *ServiceContext, req *platforms.ProfileSwitchRequest) error {
+	if svc.Profiles == nil {
+		return errors.New("profiles service not available")
+	}
+	if req.Clear {
+		if err := svc.Profiles.Deactivate(); err != nil {
+			return fmt.Errorf("failed to clear active profile: %w", err)
+		}
+		return nil
+	}
+	if _, err := svc.Profiles.ActivateBySwitchID(req.SwitchID); err != nil {
+		return fmt.Errorf("failed to switch profile: %w", err)
+	}
 	return nil
 }
 
@@ -604,6 +629,28 @@ func processTokenQueue(
 
 			// Check if any command in the script launches media
 			hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
+
+			// When require_for_launch is enabled, media launches are blocked
+			// until a profile is active (profile switch commands still run —
+			// scanning a profile card is how the device gets unparked). A
+			// combo card that switches profile before launching passes: the
+			// switch activates a profile before the launch command runs, or
+			// fails and aborts the whole script.
+			if hasMediaLaunchCmd && svc.Config.ProfilesRequireForLaunch() &&
+				svc.State.ActiveProfile() == nil && !scriptActivatesProfileBeforeLaunch(&script) {
+				log.Warn().Msg("profiles: launch blocked, no active profile and require_for_launch is set")
+
+				path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+				helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+
+				he.Success = false
+				if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+					log.Error().Err(histErr).Msgf("error adding history")
+				}
+
+				// Skip launch
+				continue
+			}
 
 			// Only check playtime limits if the script contains media-launching commands
 			if hasMediaLaunchCmd {

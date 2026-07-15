@@ -72,6 +72,26 @@ func scriptHasMediaLaunchingCommand(script *zapscript.Script) bool {
 	return false
 }
 
+// scriptActivatesProfileBeforeLaunch reports whether the script contains a
+// profile command before its first media-launching command. Such a
+// combo card (profile switch + favorite game in one scan) satisfies the
+// require-profile launch gate: by the time the launch command runs, the
+// switch will have activated a profile, or failed and aborted the script.
+func scriptActivatesProfileBeforeLaunch(script *zapscript.Script) bool {
+	if script == nil {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if cmd.Name == zapscript.ZapScriptCmdProfile {
+			return true
+		}
+		if zscript.IsMediaLaunchingCommand(cmd.Name) {
+			return false
+		}
+	}
+	return false
+}
+
 // scriptHasMediaDisruptingCommand checks if any command in the script would
 // change or stop the currently playing media. Used by launch guard.
 func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {

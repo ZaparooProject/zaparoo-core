@@ -234,3 +234,122 @@ func (m *MockSettingsService) SetupSearchMedia(results *models.SearchResults) {
 func (m *MockSettingsService) SetupSearchMediaError(err error) {
 	m.On("SearchMedia", mock.Anything, mock.Anything).Return(nil, err)
 }
+
+// VerifyProfileManagement mocks one administrator credential check.
+func (m *MockSettingsService) VerifyProfileManagement(ctx context.Context, profileID, pin string) error {
+	args := m.Called(ctx, profileID, pin)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetProfiles mocks fetching profiles.
+func (m *MockSettingsService) GetProfiles(ctx context.Context) (*models.ProfilesResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	profiles, ok := args.Get(0).(*models.ProfilesResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return profiles, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetActiveProfile mocks fetching the active profile.
+func (m *MockSettingsService) GetActiveProfile(ctx context.Context) (*models.ActiveProfile, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	active, ok := args.Get(0).(*models.ActiveProfile)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return active, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// NewProfile mocks creating a profile.
+func (m *MockSettingsService) NewProfile(
+	ctx context.Context,
+	params *models.NewProfileParams,
+) (*models.ProfileResponse, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	profile, ok := args.Get(0).(*models.ProfileResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return profile, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// UpdateProfile mocks updating a profile.
+func (m *MockSettingsService) UpdateProfile(
+	ctx context.Context,
+	params *models.UpdateProfileParams,
+) (*models.ProfileResponse, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	profile, ok := args.Get(0).(*models.ProfileResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return profile, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// DeleteProfile mocks removing a profile.
+func (m *MockSettingsService) DeleteProfile(ctx context.Context, profileID string) error {
+	args := m.Called(ctx, profileID)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SwitchProfile mocks switching the active profile.
+func (m *MockSettingsService) SwitchProfile(ctx context.Context, params *models.SwitchProfileParams) error {
+	args := m.Called(ctx, params)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SetupGetProfiles configures the mock to return profiles.
+func (m *MockSettingsService) SetupGetProfiles(profiles *models.ProfilesResponse) {
+	m.On("GetProfiles", mock.Anything).Return(profiles, nil)
+}
+
+// SetupGetActiveProfile configures the mock to return the active profile
+// (nil means the shared profile).
+func (m *MockSettingsService) SetupGetActiveProfile(active *models.ActiveProfile) {
+	m.On("GetActiveProfile", mock.Anything).Return(active, nil)
+}
+
+// GetClients mocks fetching paired clients.
+func (m *MockSettingsService) GetClients(ctx context.Context) (*models.ClientsResponse, error) {
+	args := m.Called(ctx)
+	if clients, ok := args.Get(0).(*models.ClientsResponse); ok {
+		return clients, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// StartClientPairing mocks starting client pairing.
+func (m *MockSettingsService) StartClientPairing(
+	ctx context.Context, role string,
+) (*models.ClientsPairStartResponse, error) {
+	args := m.Called(ctx, role)
+	if pairing, ok := args.Get(0).(*models.ClientsPairStartResponse); ok {
+		return pairing, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// CancelClientPairing mocks canceling pairing.
+func (m *MockSettingsService) CancelClientPairing(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// DeleteClient mocks revoking a paired client.
+func (m *MockSettingsService) DeleteClient(ctx context.Context, clientID string) error {
+	args := m.Called(ctx, clientID)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}

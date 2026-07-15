@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
@@ -45,6 +46,7 @@ type RequestEnv struct {
 	State           *state.State
 	Database        *database.Database
 	LimitsManager   *playtime.LimitsManager
+	Profiles        *profiles.Service
 	LauncherCache   *helpers.LauncherCache
 	Player          audio.Player
 	PlaybackManager audio.PlaybackManager
@@ -53,6 +55,10 @@ type RequestEnv struct {
 	IndexPauser     *syncutil.Pauser
 	ScrapePauser    *syncutil.Pauser
 	ClientID        string
-	Params          json.RawMessage
-	IsLocal         bool
+	// ClientRole is the paired client's permission role ("admin" or
+	// "member"), or "" when the request carries no paired identity (local
+	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.
+	ClientRole string
+	Params     json.RawMessage
+	IsLocal    bool
 }

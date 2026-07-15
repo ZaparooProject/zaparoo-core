@@ -61,7 +61,7 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 	})
 	m.HandleMessage(handleWSMessage(
 		methodMap, nil, cfg, st, nil, nil,
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil,
 	))
 

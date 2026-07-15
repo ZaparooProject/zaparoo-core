@@ -27,6 +27,37 @@ import (
 	"github.com/rivo/tview"
 )
 
+const settingsTextEditModalPage = "settings_text_edit_modal"
+
+// SettingsTextEditOptions configures a text-value row and its edit modal.
+type SettingsTextEditOptions struct {
+	App            *tview.Application
+	AcceptanceFunc func(string, rune) bool
+	DisplayValue   func(string) string
+	Validate       func(string) error
+	Title          string
+	HelpText       string
+	Placeholder    string
+	EmptyDisplay   string
+	FieldWidth     int
+	MaskCharacter  rune
+}
+
+// settingsItem stores data for a single list item.
+type settingsItem struct {
+	toggleValue    *bool
+	toggleOnChange func(bool)
+	textValue      *string
+	textDisplay    func(string) string
+	valueDisplay   func() string
+	cycleIndex     *int
+	cycleOnChange  func(string, int)
+	itemType       string
+	label          string
+	description    string
+	cycleOptions   []string
+}
+
 func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
 	field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
 	field.SetFocusFunc(func() {
@@ -115,6 +146,19 @@ func formatToggle(value bool, label string, selected bool) string {
 }
 
 // formatCycle renders a cycle value. When selected, label and value are highlighted.
+func formatTextValue(label, value string, selected bool) string {
+	t := CurrentTheme()
+	escapedValue := tview.Escape(value)
+	if selected {
+		return fmt.Sprintf("[%s:%s]- [%s:%s]%s: %s[-:%s]",
+			t.AccentColorName, t.BgColorName,
+			t.HighlightFgName, t.HighlightBgName, label, escapedValue, t.BgColorName)
+	}
+	return fmt.Sprintf("[%s:%s]- [%s:%s]%s: %s[-:-]",
+		t.AccentColorName, t.BgColorName,
+		t.TextColorName, t.BgColorName, label, escapedValue)
+}
+
 func formatCycle(label, currentValue string, selected bool) string {
 	t := CurrentTheme()
 	if selected {
@@ -156,16 +200,6 @@ func formatNavAction(label string, selected bool) string {
 // formatDesc renders a description with 2-space indent.
 func formatDesc(desc string) string {
 	return "  " + desc
-}
-
-// settingsItem stores data for a single list item.
-type settingsItem struct {
-	toggleValue  *bool
-	cycleIndex   *int
-	itemType     string
-	label        string
-	description  string
-	cycleOptions []string
 }
 
 // SettingsList wraps a tview.List with consistent navigation and manual highlight management.
@@ -212,11 +246,43 @@ func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 	})
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
+		switch event.Key() {
+		case tcell.KeyEscape:
 			sl.goBack()
 			return nil
+		case tcell.KeyLeft, tcell.KeyRight:
+			index := sl.GetCurrentItem()
+			if index < 0 || index >= len(sl.items) {
+				return event
+			}
+			item := &sl.items[index]
+			switch item.itemType {
+			case "toggle":
+				value := event.Key() == tcell.KeyRight
+				if *item.toggleValue != value {
+					*item.toggleValue = value
+					if item.toggleOnChange != nil {
+						item.toggleOnChange(value)
+					}
+				}
+			case "cycle":
+				delta := 1
+				if event.Key() == tcell.KeyLeft {
+					delta = -1
+				}
+				count := len(item.cycleOptions)
+				*item.cycleIndex = (*item.cycleIndex + delta + count) % count
+				if item.cycleOnChange != nil {
+					item.cycleOnChange(item.cycleOptions[*item.cycleIndex], *item.cycleIndex)
+				}
+			default:
+				return event
+			}
+			sl.refreshAllItems(index)
+			return nil
+		default:
+			return event
 		}
-		return event
 	})
 
 	return sl
@@ -281,7 +347,8 @@ func (sl *SettingsList) goBack() {
 
 // refreshAllItems updates all items to reflect current selection state.
 func (sl *SettingsList) refreshAllItems(selectedIndex int) {
-	for i, item := range sl.items {
+	for i := range sl.items {
+		item := &sl.items[i]
 		// Only show highlight when the list has focus
 		selected := sl.hasFocus && i == selectedIndex
 		desc := formatDesc(item.description)
@@ -292,6 +359,10 @@ func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 			mainText = formatToggle(*item.toggleValue, item.label, selected)
 		case "cycle":
 			mainText = formatCycle(item.label, item.cycleOptions[*item.cycleIndex], selected)
+		case "text":
+			mainText = formatTextValue(item.label, item.textDisplay(*item.textValue), selected)
+		case "value":
+			mainText = formatTextValue(item.label, item.valueDisplay(), selected)
 		case "action":
 			mainText = formatAction(item.label, selected)
 		case "nav":
@@ -318,10 +389,11 @@ func (sl *SettingsList) AddToggle(
 	selected := index == 0 // First item is selected by default
 
 	sl.items = append(sl.items, settingsItem{
-		itemType:    "toggle",
-		label:       label,
-		description: description,
-		toggleValue: value,
+		itemType:       "toggle",
+		label:          label,
+		description:    description,
+		toggleValue:    value,
+		toggleOnChange: onChange,
 	})
 
 	sl.AddItem(formatToggle(*value, label, selected), formatDesc(description), 0, func() {
@@ -345,20 +417,170 @@ func (sl *SettingsList) AddCycle(
 	selected := index == 0
 
 	sl.items = append(sl.items, settingsItem{
-		itemType:     "cycle",
-		label:        label,
-		description:  description,
-		cycleOptions: options,
-		cycleIndex:   currentIndex,
+		itemType:      "cycle",
+		label:         label,
+		description:   description,
+		cycleOptions:  options,
+		cycleIndex:    currentIndex,
+		cycleOnChange: onChange,
 	})
 
 	sl.AddItem(formatCycle(label, options[*currentIndex], selected), formatDesc(description), 0, func() {
 		*currentIndex = (*currentIndex + 1) % len(options)
-		onChange(options[*currentIndex], *currentIndex)
+		if onChange != nil {
+			onChange(options[*currentIndex], *currentIndex)
+		}
 		sl.refreshAllItems(sl.GetCurrentItem())
 	})
 
 	return sl
+}
+
+// AddValueAction adds a read-only value row that opens a contextual action.
+// The display callback is evaluated on every refresh so staged state is shown.
+func (sl *SettingsList) AddValueAction(
+	label string,
+	description string,
+	display func() string,
+	action func(),
+) *SettingsList {
+	index := sl.GetItemCount()
+	selected := index == 0
+	sl.items = append(sl.items, settingsItem{
+		itemType:     "value",
+		label:        label,
+		description:  description,
+		valueDisplay: display,
+	})
+	sl.AddItem(formatTextValue(label, display(), selected), formatDesc(description), 0, action)
+	return sl
+}
+
+// AddTextEdit adds a text-value row that opens a focused edit modal.
+func (sl *SettingsList) AddTextEdit(
+	label string,
+	description string,
+	value *string,
+	options *SettingsTextEditOptions,
+	onChange func(string),
+) *SettingsList {
+	if options == nil || options.App == nil {
+		panic("SettingsTextEditOptions.App is required")
+	}
+	if options.Title == "" {
+		options.Title = "Edit " + label
+	}
+	if options.FieldWidth <= 0 {
+		options.FieldWidth = 30
+	}
+	display := options.DisplayValue
+	if display == nil {
+		display = func(text string) string {
+			if text == "" && options.EmptyDisplay != "" {
+				return options.EmptyDisplay
+			}
+			return text
+		}
+	}
+
+	index := sl.GetItemCount()
+	selected := index == 0
+	item := settingsItem{
+		itemType:    "text",
+		label:       label,
+		description: description,
+		textValue:   value,
+		textDisplay: display,
+	}
+	sl.items = append(sl.items, item)
+	sl.AddItem(formatTextValue(label, display(*value), selected), formatDesc(description), 0, func() {
+		sl.showTextEditModal(label, value, options, onChange)
+	})
+	return sl
+}
+
+func (sl *SettingsList) showTextEditModal(
+	label string,
+	value *string,
+	options *SettingsTextEditOptions,
+	onChange func(string),
+) {
+	input := tview.NewInputField().
+		SetText(*value).
+		SetFieldWidth(options.FieldWidth).
+		SetPlaceholder(options.Placeholder)
+	if options.MaskCharacter != 0 {
+		input.SetMaskCharacter(options.MaskCharacter)
+	}
+	if options.AcceptanceFunc != nil {
+		input.SetAcceptanceFunc(options.AcceptanceFunc)
+	}
+	SetInputLabel(input, label)
+	setupInputFieldFocus(input)
+
+	cleanup := func() {
+		sl.pages.HidePage(settingsTextEditModalPage)
+		sl.pages.RemovePage(settingsTextEditModalPage)
+	}
+	commit := func() {
+		text := input.GetText()
+		if options.Validate != nil {
+			if err := options.Validate(text); err != nil {
+				ShowErrorModal(sl.pages, options.App, err.Error(), func() {
+					options.App.SetFocus(input)
+				})
+				return
+			}
+		}
+		*value = text
+		if onChange != nil {
+			onChange(text)
+		}
+		cleanup()
+		sl.refreshAllItems(sl.GetCurrentItem())
+		options.App.SetFocus(sl.List)
+	}
+	cancel := func() {
+		cleanup()
+		options.App.SetFocus(sl.List)
+	}
+
+	input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEnter:
+			if config.GetTUIConfig().OnScreenKeyboard {
+				ShowOSKModal(sl.pages, options.App, input.GetText(), func(text string) {
+					input.SetText(text)
+					commit()
+				}, func() {
+					options.App.SetFocus(input)
+				})
+				return nil
+			}
+			commit()
+			return nil
+		case tcell.KeyEscape:
+			cancel()
+			return nil
+		default:
+			return event
+		}
+	})
+
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(input, 1, 0, true)
+	modalWidth := max(options.FieldWidth+8, 32)
+	modalHeight := 4
+	if options.HelpText != "" {
+		content.AddItem(tview.NewTextView().SetWordWrap(true).SetText(options.HelpText), 2, 0, false)
+		modalWidth = max(modalWidth, 56)
+		modalHeight += 2
+	}
+	content.AddItem(tview.NewTextView().SetText("Enter to save · Esc to cancel"), 1, 0, false)
+	content.SetBorder(true)
+	SetBoxTitle(content.Box, options.Title)
+	sl.pages.AddPage(settingsTextEditModalPage, CenterWidget(modalWidth, modalHeight, content), true, true)
+	options.App.SetFocus(input)
 }
 
 // AddAction adds a simple action item (like a submenu link or button).
