@@ -154,6 +154,34 @@ func TestHandleRunRestDecodesPath(t *testing.T) {
 	}
 }
 
+func TestHandleRunRestRejectsMalformedEscapedPath(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	tokenQueue := make(chan tokens.Token, 1)
+	handler := HandleRunRest(&config.Instance{}, st, tokenQueue)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/run/invalid", http.NoBody)
+	req.URL.RawPath = "/run/%ZZ"
+
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("*", "%ZZ")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	select {
+	case token := <-tokenQueue:
+		t.Fatalf("REST run handler queued malformed token: %q", token.Text)
+	default:
+	}
+}
+
 func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
 	t.Parallel()
 
