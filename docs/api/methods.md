@@ -2171,6 +2171,7 @@ None.
 | readersScanExitDelay      | number                                    | Yes      | Delay before exiting scan mode in seconds.                      |
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
+| encryption                | boolean                                   | Yes      | Whether paired encryption is required for remote WebSocket connections. Localhost remains exempt. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
@@ -2220,6 +2221,7 @@ None.
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
+    "encryption": false,
     "readersConnect": [],
     "systemDefaults": [
       {
@@ -2251,6 +2253,7 @@ An object containing any of the following optional keys:
 | readersScanExitDelay      | number                                    | No       | Delay before exiting scan mode in seconds.                      |
 | readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
+| encryption                | boolean                                   | No       | Require paired encryption for remote WebSocket connections. This setting can only be changed from localhost. |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
 | systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |

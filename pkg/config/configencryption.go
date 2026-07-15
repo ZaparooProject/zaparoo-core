@@ -22,8 +22,8 @@ package config
 // EncryptionEnabled returns whether WebSocket encryption is enabled. When
 // true, remote WebSocket clients must send an encrypted first frame derived
 // from a paired key; plaintext WebSocket connections from non-loopback
-// addresses are rejected. When false (the default), all WebSocket
-// connections are accepted as plaintext and API key authentication applies.
+// addresses are rejected. When false (the default), plaintext and encrypted
+// WebSocket connections are both accepted.
 //
 // Localhost connections are always allowed plaintext regardless of this
 // setting.

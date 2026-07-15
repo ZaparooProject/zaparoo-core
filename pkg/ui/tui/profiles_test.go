@@ -260,7 +260,7 @@ func TestBuildProfilesSettingsMenu_ToggleRequiresAdminPIN_Integration(t *testing
 	})
 
 	require.True(t, runner.WaitForText("Require profile for launch", 100*time.Millisecond))
-	assert.True(t, runner.ContainsText("Block media launches until a profile is active"))
+	assert.True(t, runner.ContainsText("Block launches until a profile is active"))
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
 	runner.SimulateString("1234")
@@ -304,7 +304,7 @@ func TestBuildProfilesPage_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("Member"), "member role should be title-cased in the row")
 	assert.True(t, runner.ContainsText("Last used 3h ago"), "recent usage should be shown in the row")
 	assert.True(t, runner.ContainsText("Never used"), "profiles without usage should be identified")
-	assert.True(t, runner.ContainsText("Select a profile to edit"), "profile rows should use static page help")
+	assert.True(t, runner.ContainsText("Select profile to edit"), "profile rows should use static page help")
 	assert.True(t, runner.ContainsText("New"), "stable New action should be visible")
 	// Bearer credentials and PIN status must never render in the list: a
 	// bystander watching someone use this menu must not learn them.
@@ -440,6 +440,17 @@ func TestProfileSwitchModal_ProtectedProfileRequiresPIN_Integration(t *testing.T
 		t.Fatal("timed out waiting for protected profile switch")
 	}
 	mockSvc.AssertExpectations(t)
+}
+
+func TestPromptProfileManagement_NoProfilesAllowsLocalAction(t *testing.T) {
+	t.Parallel()
+
+	authorized := false
+	promptProfileManagement(NewMockSettingsService(), nil, nil, nil, func() {
+		authorized = true
+	}, nil)
+
+	assert.True(t, authorized)
 }
 
 func TestPromptProfileManagement_Integration(t *testing.T) {

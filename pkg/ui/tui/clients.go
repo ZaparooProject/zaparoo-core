@@ -21,6 +21,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -29,6 +30,69 @@ import (
 )
 
 const clientRoleModalPage = "client_role_modal"
+
+func formatPairingPIN(pin string) string {
+	if len(pin) != 6 {
+		return pin
+	}
+	return pin[:3] + " " + pin[3:]
+}
+
+func formatPairingRole(role string) string {
+	if role == "" {
+		return ""
+	}
+	return strings.ToUpper(role[:1]) + role[1:]
+}
+
+func formatPairingCountdown(expiresAt, now time.Time) string {
+	remaining := expiresAt.Sub(now)
+	if remaining <= 0 {
+		return "0:00"
+	}
+	seconds := int64((remaining + time.Second - 1) / time.Second)
+	return fmt.Sprintf("%d:%02d", seconds/60, seconds%60)
+}
+
+func showClientPairingModal(
+	pages *tview.Pages,
+	app *tview.Application,
+	pairing *models.ClientsPairStartResponse,
+	role string,
+	onDone func(),
+) {
+	expiresAt := time.Unix(pairing.ExpiresAt, 0)
+	message := func(now time.Time) string {
+		return fmt.Sprintf("Pairing PIN: %s\nRole: %s\nExpires in: %s\n\nEnter this PIN in the client app.",
+			formatPairingPIN(pairing.PIN), formatPairingRole(role), formatPairingCountdown(expiresAt, now))
+	}
+
+	done := make(chan struct{})
+	modal := ShowInfoModal(pages, app, "Pair Client", message(time.Now()), func() {
+		close(done)
+		if onDone != nil {
+			onDone()
+		}
+	})
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case now := <-ticker.C:
+				app.QueueUpdateDraw(func() {
+					modal.SetText(message(now))
+				})
+				if !now.Before(expiresAt) {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+}
 
 func startClientPairing(
 	svc SettingsService,
@@ -44,10 +108,7 @@ func startClientPairing(
 		ShowErrorModal(pages, app, "Failed to start pairing: "+err.Error(), onDone)
 		return
 	}
-	expires := time.Unix(pairing.ExpiresAt, 0).Format("15:04:05")
-	ShowInfoModal(pages, app, "Pair Client",
-		fmt.Sprintf("Pairing PIN: %s\nRole: %s\nExpires: %s\n\nEnter this PIN in the client app.",
-			pairing.PIN, role, expires), onDone)
+	showClientPairingModal(pages, app, pairing, role, onDone)
 }
 
 func showClientRolePicker(
@@ -97,6 +158,15 @@ func BuildClientsPage(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		return
 	}
 	ctx, cancel = tuiContext()
+	settings, err := svc.GetSettings(ctx)
+	cancel()
+	if err != nil {
+		ShowErrorModal(pages, app, "Failed to load encryption setting", func() {
+			pages.SwitchToPage(PageSettingsMain)
+		})
+		return
+	}
+	ctx, cancel = tuiContext()
 	profilesResp, profilesErr := svc.GetProfiles(ctx)
 	cancel()
 	if profilesErr != nil {
@@ -114,6 +184,49 @@ func BuildClientsPage(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	})
 
 	rebuild := func() { BuildClientsPage(svc, pages, app) }
+	encryption := settings.Encryption
+	menu.AddToggle("Require encryption",
+		"Require paired encryption remotely; local connections remain allowed",
+		&encryption, func(value bool) {
+			currentIdx := menu.GetCurrentItem()
+			if value {
+				encryption = false
+				menu.refreshAllItems(currentIdx)
+				ShowConfirmModal(pages, app,
+					"Require encrypted remote connections?\n\n"+
+						"Unpaired remote clients will disconnect. Local connections remain available.",
+					func() {
+						enabled := true
+						ctx, cancel := tuiContext()
+						err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{Encryption: &enabled})
+						cancel()
+						if err != nil {
+							ShowErrorModal(pages, app, "Failed to require encryption", func() {
+								app.SetFocus(menu.List)
+							})
+							return
+						}
+						encryption = true
+						menu.refreshAllItems(currentIdx)
+						app.SetFocus(menu.List)
+					}, func() {
+						app.SetFocus(menu.List)
+					})
+				return
+			}
+
+			ctx, cancel := tuiContext()
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{Encryption: &value})
+			cancel()
+			if err != nil {
+				encryption = true
+				menu.refreshAllItems(currentIdx)
+				ShowErrorModal(pages, app, "Failed to allow plaintext connections", func() {
+					app.SetFocus(menu.List)
+				})
+			}
+		})
+
 	for i := range clientsResp.Clients {
 		paired := clientsResp.Clients[i]
 		menu.AddAction(paired.ClientName+" ("+paired.Role+")", "Revoke this paired client", func() {
@@ -169,5 +282,6 @@ func BuildClientsPage(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	menu.TriggerInitialHelp()
 	frame.SetupContentToButtonNavigation()
 	pages.AddAndSwitchToPage(PageClients, frame, true)
+	app.SetFocus(menu.List)
 	log.Debug().Int("clients", len(clientsResp.Clients)).Msg("built paired clients page")
 }

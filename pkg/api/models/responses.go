@@ -122,6 +122,7 @@ type SettingsResponse struct {
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
 	ErrorReporting            bool               `json:"errorReporting"`
+	Encryption                bool               `json:"encryption"`
 	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`

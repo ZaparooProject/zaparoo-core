@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	profileListHelp          = "Select a profile to edit. Use New to create one or Switch to change active profile."
+	profileListHelp          = "Select profile to edit; use New to create or Switch to activate"
 	profileSwitchModalPage   = "profile_switch_modal"
 	profilePINModalPage      = "profile_pin_modal"
 	profilePINEditModalPage  = "profile_pin_edit_modal"
@@ -305,6 +305,11 @@ func promptProfileManagement(
 	onAuthorized func(),
 	onCancel func(),
 ) {
+	if len(profiles) == 0 {
+		onAuthorized()
+		return
+	}
+
 	admins := make([]models.ProfileResponse, 0, len(profiles))
 	for i := range profiles {
 		if profiles[i].Role == "admin" {
@@ -766,7 +771,7 @@ func buildProfileEditPage(
 			App:          app,
 			FieldWidth:   12,
 			EmptyDisplay: "Inherit",
-			HelpText:     "Examples: 30m, 2h, 2h30m. Empty inherits the global limit; 0 means unlimited.",
+			HelpText:     "Examples: 30m, 2h30m. Empty inherits; 0 means unlimited.",
 			Validate:     durationValidator,
 		}
 	}

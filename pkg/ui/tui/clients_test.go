@@ -30,6 +30,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPairingDisplayFormatting(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "123 456", formatPairingPIN("123456"))
+	assert.Equal(t, "Admin", formatPairingRole("admin"))
+	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
+	assert.Equal(t, "1:05", formatPairingCountdown(now.Add(65*time.Second), now))
+	assert.Equal(t, "0:00", formatPairingCountdown(now, now))
+}
+
 func TestBuildClientsPage_FirstClientAdmin_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -40,9 +50,10 @@ func TestBuildClientsPage_FirstClientAdmin_Integration(t *testing.T) {
 
 	mockSvc := NewMockSettingsService()
 	mockSvc.On("GetClients", mock.Anything).Return(&models.ClientsResponse{}, nil)
+	mockSvc.SetupGetSettings(&models.SettingsResponse{})
 	mockSvc.SetupGetProfiles(&models.ProfilesResponse{})
 	mockSvc.On("StartClientPairing", mock.Anything, "admin").
-		Return(&models.ClientsPairStartResponse{PIN: "123456", ExpiresAt: time.Now().Add(time.Minute).Unix()}, nil)
+		Return(&models.ClientsPairStartResponse{PIN: "123456", ExpiresAt: time.Now().Add(2 * time.Second).Unix()}, nil)
 
 	runner.Start(pages)
 	runner.Draw()
@@ -60,8 +71,94 @@ func TestBuildClientsPage_FirstClientAdmin_Integration(t *testing.T) {
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("first paired client", 100*time.Millisecond))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Pairing PIN: 123456", 100*time.Millisecond))
-	assert.True(t, runner.ContainsText("Role: admin"))
+	require.True(t, runner.WaitForText("Pairing PIN: 123 456", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Role: Admin"))
+	assert.True(t, runner.ContainsText("Expires in:"))
+	require.True(t, runner.WaitForText("Expires in: 0:00", 3*time.Second))
+	runner.SimulateEnter()
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBuildClientsPage_RequireEncryptionConfirmation_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	pages.AddPage(PageSettingsMain, tview.NewTextView().SetText("Settings"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("GetClients", mock.Anything).Return(&models.ClientsResponse{}, nil)
+	mockSvc.SetupGetSettings(&models.SettingsResponse{})
+	mockSvc.SetupGetProfiles(&models.ProfilesResponse{})
+	mockSvc.On("UpdateSettings", mock.Anything, mock.MatchedBy(func(params *models.UpdateSettingsParams) bool {
+		return params.Encryption != nil && *params.Encryption
+	})).Return(nil)
+
+	runner.Start(pages)
+	runner.Draw()
+	runner.QueueUpdateDraw(func() {
+		BuildClientsPage(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Require encryption", 100*time.Millisecond))
+	runner.SimulateArrowRight()
+	require.True(t, runner.WaitForText("Require encrypted remote", 100*time.Millisecond))
+	runner.SimulateEnter()
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBuildClientsPage_DisableEncryptionImmediately_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	pages.AddPage(PageSettingsMain, tview.NewTextView().SetText("Settings"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("GetClients", mock.Anything).Return(&models.ClientsResponse{}, nil)
+	mockSvc.SetupGetSettings(&models.SettingsResponse{Encryption: true})
+	mockSvc.SetupGetProfiles(&models.ProfilesResponse{})
+	mockSvc.On("UpdateSettings", mock.Anything, mock.MatchedBy(func(params *models.UpdateSettingsParams) bool {
+		return params.Encryption != nil && !*params.Encryption
+	})).Return(nil)
+
+	runner.Start(pages)
+	runner.Draw()
+	runner.QueueUpdateDraw(func() {
+		BuildClientsPage(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Require encryption", 100*time.Millisecond))
+	runner.SimulateArrowLeft()
+	mockSvc.AssertExpectations(t)
+}
+
+func TestShowClientRolePicker_AdminWithoutProfilesStartsPairing_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	pages.AddPage(PageClients, tview.NewTextView().SetText("Clients"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("StartClientPairing", mock.Anything, "admin").
+		Return(&models.ClientsPairStartResponse{PIN: "654321", ExpiresAt: time.Now().Add(time.Minute).Unix()}, nil)
+
+	runner.Start(pages)
+	runner.Draw()
+	runner.QueueUpdateDraw(func() {
+		showClientRolePicker(mockSvc, pages, runner.App(), nil, func() {})
+	})
+
+	require.True(t, runner.WaitForText("Client Role", 100*time.Millisecond))
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Pairing PIN: 654 321", 100*time.Millisecond))
+	assert.False(t, runner.ContainsText("Profile PIN"))
+	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
 }
 
@@ -91,6 +188,7 @@ func TestShowClientRolePicker_AdminPromptsCredential_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
 	runner.SimulateString("1234")
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Pairing PIN: 654321", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Pairing PIN: 654 321", 100*time.Millisecond))
+	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
 }

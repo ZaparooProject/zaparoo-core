@@ -238,6 +238,24 @@ func TestHandleSettings_ReaderConnections(t *testing.T) {
 	assert.Empty(t, resp.ReadersConnect[1].Path)
 }
 
+func TestHandleSettings_ReportsEncryptionSetting(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Service: config.Service{Encryption: true},
+	})
+	require.NoError(t, err)
+	mockPlatform := mocks.NewMockPlatform()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	result, err := HandleSettings(requests.RequestEnv{Config: cfg, State: appState})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.True(t, resp.Encryption)
+}
+
 // TestHandleSettings_EmptyReaderConnections tests that HandleSettings returns
 // an empty slice when no reader connections are configured.
 func TestHandleSettings_EmptyReaderConnections(t *testing.T) {
@@ -281,6 +299,30 @@ func TestHandleSettingsUpdate_RemoteMemberCannotChangeProfileGate(t *testing.T) 
 
 	_, err := HandleSettingsUpdate(env)
 	require.ErrorIs(t, err, ErrForbidden)
+}
+
+func TestHandleSettingsUpdate_EncryptionLocalOnly(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	params, err := json.Marshal(models.UpdateSettingsParams{Encryption: &enabled})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		ClientRole: string(permissions.RoleAdmin),
+		Params:     params,
+	})
+	require.ErrorIs(t, err, ErrLocalhostOnly)
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Config:  cfg,
+		IsLocal: true,
+		Params:  params,
+	})
+	require.NoError(t, err)
+	assert.True(t, cfg.EncryptionEnabled())
 }
 
 func TestHandlePlaytimeLimitsUpdate_RemoteMemberForbidden(t *testing.T) {

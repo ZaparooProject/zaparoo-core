@@ -165,7 +165,7 @@ func buildProfilesSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 		})
 	menu.AddToggle(
 		"Require profile for launch",
-		"Block media launches until a profile is active; profile switch cards still work normally",
+		"Block launches until a profile is active; switch cards still work",
 		&requireForLaunch,
 		func(value bool) {
 			restore := func() {

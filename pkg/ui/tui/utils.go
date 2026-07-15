@@ -150,8 +150,11 @@ const (
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
-// onDismiss is called when the modal is closed and should restore focus.
-func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message string, onDismiss func()) {
+// onDismiss is called when the modal is closed and should restore focus. The
+// returned modal supports callers that need to update displayed information.
+func ShowInfoModal(
+	pages *tview.Pages, app *tview.Application, title, message string, onDismiss func(),
+) *tview.Modal {
 	modal := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"OK"}).
@@ -167,6 +170,7 @@ func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message st
 		SetTitleAlign(tview.AlignCenter)
 	pages.AddPage(infoModalPage, modal, false, true)
 	app.SetFocus(modal)
+	return modal
 }
 
 // ShowErrorModal displays an error message modal to the user.

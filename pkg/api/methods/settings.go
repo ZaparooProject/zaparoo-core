@@ -71,6 +71,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersConnect:            readersConnect,
 		SystemDefaults:            systemDefaults,
 		ErrorReporting:            env.Config.ErrorReporting(),
+		Encryption:                env.Config.EncryptionEnabled(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
 		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
@@ -127,8 +128,13 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
-	// Remote settings changes need an admin client. Local profile PIN prompts
-	// are enforced by the UI before sensitive settings requests.
+	// Encryption policy can only be changed from the device itself. Remote
+	// settings changes otherwise require an admin client.
+	if params.Encryption != nil && !env.IsLocal {
+		return nil, models.ClientErrf("encryption setting: %w", ErrLocalhostOnly)
+	}
+	// Local profile PIN prompts are enforced by the UI before sensitive
+	// settings requests.
 	if !env.IsLocal {
 		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
 			return nil, err
@@ -191,6 +197,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ErrorReporting != nil {
 		log.Debug().Bool("errorReporting", *params.ErrorReporting).Msg("updating setting")
 		env.Config.SetErrorReporting(*params.ErrorReporting)
+	}
+
+	if params.Encryption != nil {
+		log.Debug().Bool("encryption", *params.Encryption).Msg("updating setting")
+		env.Config.SetEncryptionEnabled(*params.Encryption)
 	}
 
 	if params.ReadersScanMode != nil {

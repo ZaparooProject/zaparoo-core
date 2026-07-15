@@ -15,7 +15,7 @@ Set `encryption` in `[service]` of `config.toml`:
 
 | Value | Behavior |
 |---|---|
-| `false` (default) | No encryption. All WebSocket connections accepted as plaintext. |
+| `false` (default) | Encryption is optional. Plaintext and encrypted WebSocket connections are accepted. |
 | `true` | Remote WebSocket connections must send an encrypted first frame from a paired client. Localhost plaintext connections still work without pairing. |
 
 ## Pairing flow
