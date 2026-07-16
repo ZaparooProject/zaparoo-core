@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -312,6 +313,180 @@ func mediaBySlugAndPath(slug string, title *database.MediaTitle, rows ...databas
 	indexes := mediaByPath(rows...)
 	indexes.TitlesBySlug[slug] = *title
 	return indexes
+}
+
+func newCustomGamelistConfig(t *testing.T, customPath string) *config.Instance {
+	t.Helper()
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(
+		"[scraper.gamelist_xml]\ncustom_path = "+strconv.Quote(customPath)+"\n",
+	))
+	return cfg
+}
+
+func propertyByType(props []database.MediaProperty, typeTag string) (database.MediaProperty, bool) {
+	for i := range props {
+		if props[i].TypeTag == typeTag {
+			return props[i], true
+		}
+	}
+	return database.MediaProperty{}, false
+}
+
+func TestLoadRecords_CustomGamelistBundle(t *testing.T) {
+	t.Parallel()
+
+	romRoot := t.TempDir()
+	mirrorRoot := t.TempDir()
+	customRoot := t.TempDir()
+	customSystemDir := filepath.Join(customRoot, "nes")
+	require.NoError(t, os.MkdirAll(filepath.Join(romRoot, "media", "boxart"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(mirrorRoot, "media", "screenshots"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(customSystemDir, "assets"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(customSystemDir, "media", "images"), 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(customSystemDir, "assets", "screen.png"), []byte("screen"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(customSystemDir, "media", "images", "Game.png"), []byte("fallback"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(filepath.Join(customSystemDir, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./Game.nes</path>
+    <name>Game</name>
+    <image>./assets/missing.png</image>
+    <screenshot>./assets/screen.png</screenshot>
+  </game>
+</gameList>`), 0o600))
+
+	s := &GamelistXMLScraper{cfg: newCustomGamelistConfig(t, customRoot)}
+	records, err := s.LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{romRoot, mirrorRoot}},
+		mediaByPath(database.Media{
+			DBID: 12, MediaTitleDBID: 23, Path: filepath.Join(romRoot, "Game.nes"),
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	record := records[0]
+	assert.Equal(t, romRoot, record.SystemRootPath)
+	assert.Equal(t, customSystemDir, record.AssetRootPath)
+	assert.True(t, record.RequireExistingImage)
+	require.Len(t, record.MediaDirsByRoot, 3)
+	assert.Equal(t, filepath.Join(customSystemDir, "media", "images"), record.MediaDirsByRoot[0]["images"])
+	assert.Equal(t, filepath.Join(romRoot, "media", "boxart"), record.MediaDirsByRoot[1]["boxart"])
+	assert.Equal(t, filepath.Join(mirrorRoot, "media", "screenshots"), record.MediaDirsByRoot[2]["screenshots"])
+
+	mapped := s.MapToDB(record)
+	imageType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	image, ok := propertyByType(mapped.MediaProps, imageType)
+	require.True(t, ok)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(customSystemDir, "media", "images", "Game.png")), image.Text)
+
+	screenshotType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageScreenshot)
+	screenshot, ok := propertyByType(mapped.MediaProps, screenshotType)
+	require.True(t, ok)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(customSystemDir, "assets", "screen.png")), screenshot.Text)
+}
+
+func TestMapToDB_MissingImagePolicyDependsOnGamelistSource(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	imageType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+
+	regular := (&GamelistXMLScraper{}).MapToDB(&GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Image: "./assets/missing.png"},
+	})
+	regularImage, ok := propertyByType(regular.MediaProps, imageType)
+	require.True(t, ok)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "assets", "missing.png")), regularImage.Text)
+
+	custom := (&GamelistXMLScraper{}).MapToDB(&GamelistRecord{
+		SystemRootPath:       root,
+		AssetRootPath:        root,
+		RequireExistingImage: true,
+		Game:                 esapi.Game{Image: "./assets/missing.png"},
+	})
+	_, ok = propertyByType(custom.MediaProps, imageType)
+	assert.False(t, ok)
+}
+
+func TestLoadRecords_RegularGamelistTakesPrecedenceOverCustom(t *testing.T) {
+	t.Parallel()
+
+	romRoot := t.TempDir()
+	customRoot := t.TempDir()
+	customSystemDir := filepath.Join(customRoot, "nes")
+	require.NoError(t, os.MkdirAll(customSystemDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(romRoot, "gamelist.xml"), []byte(`
+<gameList><game><path>./Game.nes</path><name>Regular</name></game></gameList>`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customSystemDir, "gamelist.xml"), []byte(`
+<gameList><game><path>./Game.nes</path><name>Custom</name></game></gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{cfg: newCustomGamelistConfig(t, customRoot)}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{romRoot}},
+		mediaByPath(database.Media{
+			DBID: 12, MediaTitleDBID: 23, Path: filepath.Join(romRoot, "Game.nes"),
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "Regular", records[0].Game.Name)
+	assert.Empty(t, records[0].AssetRootPath)
+}
+
+func TestLoadParsedGamelistSystem_SkipsMalformedCustomFile(t *testing.T) {
+	t.Parallel()
+
+	customRoot := t.TempDir()
+	customSystemDir := filepath.Join(customRoot, "nes")
+	require.NoError(t, os.MkdirAll(customSystemDir, 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(customSystemDir, "gamelist.xml"), []byte("<gameList>"), 0o600,
+	))
+
+	parsed, err := (&GamelistXMLScraper{cfg: newCustomGamelistConfig(t, customRoot)}).
+		loadParsedGamelistSystem(context.Background(), scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{t.TempDir()}})
+	require.NoError(t, err)
+	assert.Empty(t, parsed.Files)
+}
+
+func TestCompanionParent_CustomGamelistAssetPolicy(t *testing.T) {
+	t.Parallel()
+
+	customRoot := t.TempDir()
+	customSystemDir := filepath.Join(customRoot, "nes")
+	require.NoError(t, os.MkdirAll(filepath.Join(customSystemDir, "assets"), 0o750))
+	imagePath := filepath.Join(customSystemDir, "assets", "parent.png")
+	require.NoError(t, os.WriteFile(imagePath, []byte("image"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customSystemDir, "gamelist.xml"), []byte(`
+<gameList>
+  <game id="42" source="ZaparooCompanion">
+    <name>Parent</name><image>./assets/parent.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	s := &GamelistXMLScraper{cfg: newCustomGamelistConfig(t, customRoot)}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{t.TempDir()}}
+	parsed, err := s.loadParsedGamelistSystem(context.Background(), system)
+	require.NoError(t, err)
+	parents, children := companionEntriesFromParsed(context.Background(), system, parsed)
+	require.Len(t, parents, 1)
+	assert.Empty(t, children)
+	assert.Equal(t, customSystemDir, parents[0].AssetRootPath)
+	assert.True(t, parents[0].RequireExistingImage)
+
+	mapped := s.mapCompanionParentToResult(&parents[0])
+	imageType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	image, ok := propertyByType(mapped.TitleProps, imageType)
+	require.True(t, ok)
+	assert.Equal(t, filepath.ToSlash(imagePath), image.Text)
 }
 
 func TestLoadRecords_PathMatch(t *testing.T) {
@@ -1321,16 +1496,16 @@ func TestMapToDB_ScreenScraperID_NeitherSet(t *testing.T) {
 	}
 }
 
-// TestPathProp_NormalizesSlashes verifies that pathProp returns forward-slash
+// TestPathProp_NormalizesSlashes verifies that pathPropFS returns forward-slash
 // paths regardless of the OS separator. The MediaDB stores paths with
 // filepath.ToSlash (see indexing_pipeline.go), so artwork paths must match.
 func TestPathProp_NormalizesSlashes(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	p := pathProp("prop:image", "./images/mario.png", root, nil)
+	p := pathPropFS(afero.NewOsFs(), "prop:image", "./images/mario.png", root, nil, false)
 	require.NotNil(t, p, "expected non-nil property")
 	if strings.Contains(p.Text, "\\") {
-		t.Errorf("pathProp returned backslashes in path: %q", p.Text)
+		t.Errorf("pathPropFS returned backslashes in path: %q", p.Text)
 	}
 }
 

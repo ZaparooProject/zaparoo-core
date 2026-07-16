@@ -65,6 +65,7 @@ type Values struct {
 	Playtime       Playtime  `toml:"playtime,omitempty"`
 	Profiles       Profiles  `toml:"profiles,omitempty"`
 	Media          Media     `toml:"media,omitempty"`
+	Scraper        Scraper   `toml:"scraper,omitempty"`
 	ZapScript      ZapScript `toml:"zapscript,omitempty"`
 	Mappings       Mappings  `toml:"mappings,omitempty"`
 	Systems        Systems   `toml:"systems,omitempty"`

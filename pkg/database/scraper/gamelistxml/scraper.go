@@ -56,13 +56,15 @@ import (
 // root path and the DB identifiers of the matched MediaTitle and one of its
 // Media rows (used as the sentinel write target).
 type GamelistRecord struct {
-	MediaDirsByRoot     []map[string]string
-	SystemRootPath      string
-	MatchKind           gamelistMatchKind
-	Game                esapi.Game
-	MatchedMediaDBID    int64
-	MatchedTitleDBID    int64
-	MediaLevelWriteSafe bool
+	MediaDirsByRoot      []map[string]string
+	SystemRootPath       string
+	AssetRootPath        string
+	MatchKind            gamelistMatchKind
+	Game                 esapi.Game
+	MatchedMediaDBID     int64
+	MatchedTitleDBID     int64
+	MediaLevelWriteSafe  bool
+	RequireExistingImage bool
 }
 
 type gamelistMatchKind string
@@ -307,9 +309,11 @@ func resolveSystemsFromPlatform(
 }
 
 type parsedGamelistFile struct {
-	RootPath     string
-	GamelistPath string
-	Games        []esapi.Game
+	RootPath             string
+	AssetRootPath        string
+	GamelistPath         string
+	Games                []esapi.Game
+	RequireExistingImage bool
 }
 
 type parsedGamelistSystem struct {
@@ -350,7 +354,57 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 			Games:        gl.Games,
 		})
 	}
+
+	select {
+	case <-ctx.Done():
+		return parsed, ctx.Err()
+	default:
+	}
+	if customFile, ok := g.loadCustomGamelistFile(system); ok {
+		parsed.Files = append(parsed.Files, customFile)
+	}
 	return parsed, nil
+}
+
+// loadCustomGamelistFile loads the optional per-system metadata bundle. ROM
+// paths remain relative to the system's first ROM root, while asset paths are
+// relative to the bundle's system directory. Bundle image references are
+// treated as optional and only mapped when their files currently exist.
+func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem) (parsedGamelistFile, bool) {
+	customBase := g.cfg.ScraperGamelistXMLCustomPath()
+	if customBase == "" {
+		return parsedGamelistFile{}, false
+	}
+
+	customSystemDir := filepath.Join(customBase, system.ID)
+	gamelistPath := filepath.Join(customSystemDir, "gamelist.xml")
+	exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
+	if statErr != nil || !exists {
+		return parsedGamelistFile{}, false
+	}
+
+	gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
+	if err != nil {
+		log.Warn().Err(err).Str("path", gamelistPath).
+			Msg("gamelistxml: failed to read custom gamelist.xml, skipping")
+		return parsedGamelistFile{}, false
+	}
+
+	rootPath := customSystemDir
+	if len(system.ROMPaths) > 0 {
+		rootPath = system.ROMPaths[0]
+	}
+	log.Info().
+		Str("path", gamelistPath).
+		Int("entries", len(gl.Games)).
+		Msg("gamelistxml: loaded custom gamelist.xml")
+	return parsedGamelistFile{
+		RootPath:             rootPath,
+		AssetRootPath:        customSystemDir,
+		GamelistPath:         gamelistPath,
+		Games:                gl.Games,
+		RequireExistingImage: true,
+	}, true
 }
 
 // LoadRecords iterates gamelist.xml files found under each ROM root path for
@@ -390,6 +444,12 @@ outer:
 		default:
 		}
 
+		fileMediaDirsByRoot := mediaDirsByRoot
+		if file.AssetRootPath != "" {
+			fileMediaDirsByRoot = make([]map[string]string, 0, len(mediaDirsByRoot)+1)
+			fileMediaDirsByRoot = append(fileMediaDirsByRoot, statMediaDirsFS(g.filesystem(), file.AssetRootPath))
+			fileMediaDirsByRoot = append(fileMediaDirsByRoot, mediaDirsByRoot...)
+		}
 		gamelistFiles++
 		gamelistEntries += len(file.Games)
 
@@ -423,13 +483,15 @@ outer:
 					slugMatches++
 					slugPathSelections++
 					records = append(records, &GamelistRecord{
-						SystemRootPath:      file.RootPath,
-						MediaDirsByRoot:     mediaDirsByRoot,
-						Game:                *game,
-						MatchKind:           gamelistMatchSlugPath,
-						MatchedTitleDBID:    title.DBID,
-						MatchedMediaDBID:    pathMedia.DBID,
-						MediaLevelWriteSafe: true,
+						SystemRootPath:       file.RootPath,
+						AssetRootPath:        file.AssetRootPath,
+						MediaDirsByRoot:      fileMediaDirsByRoot,
+						Game:                 *game,
+						MatchKind:            gamelistMatchSlugPath,
+						MatchedTitleDBID:     title.DBID,
+						MatchedMediaDBID:     pathMedia.DBID,
+						MediaLevelWriteSafe:  true,
+						RequireExistingImage: file.RequireExistingImage,
 					})
 					delete(indexes.MediaByPathFold, matchedPathKey)
 					continue
@@ -458,13 +520,15 @@ outer:
 					mediaLevelWriteSafe = selection.mediaLevelSafe
 				}
 				records = append(records, &GamelistRecord{
-					SystemRootPath:      file.RootPath,
-					MediaDirsByRoot:     mediaDirsByRoot,
-					Game:                *game,
-					MatchKind:           selection.matchKind,
-					MatchedTitleDBID:    title.DBID,
-					MatchedMediaDBID:    selection.media.DBID,
-					MediaLevelWriteSafe: mediaLevelWriteSafe,
+					SystemRootPath:       file.RootPath,
+					AssetRootPath:        file.AssetRootPath,
+					MediaDirsByRoot:      fileMediaDirsByRoot,
+					Game:                 *game,
+					MatchKind:            selection.matchKind,
+					MatchedTitleDBID:     title.DBID,
+					MatchedMediaDBID:     selection.media.DBID,
+					MediaLevelWriteSafe:  mediaLevelWriteSafe,
+					RequireExistingImage: file.RequireExistingImage,
 				})
 				delete(indexes.TitlesBySlug, pf.Slug)
 			case pathOK:
@@ -479,13 +543,15 @@ outer:
 					Int64("mediaTitleDBID", pathMedia.MediaTitleDBID).
 					Msg("gamelistxml: path-only fallback matched record")
 				records = append(records, &GamelistRecord{
-					SystemRootPath:      file.RootPath,
-					MediaDirsByRoot:     mediaDirsByRoot,
-					Game:                *game,
-					MatchKind:           gamelistMatchPathOnly,
-					MatchedTitleDBID:    pathMedia.MediaTitleDBID,
-					MatchedMediaDBID:    pathMedia.DBID,
-					MediaLevelWriteSafe: true,
+					SystemRootPath:       file.RootPath,
+					AssetRootPath:        file.AssetRootPath,
+					MediaDirsByRoot:      fileMediaDirsByRoot,
+					Game:                 *game,
+					MatchKind:            gamelistMatchPathOnly,
+					MatchedTitleDBID:     pathMedia.MediaTitleDBID,
+					MatchedMediaDBID:     pathMedia.DBID,
+					MediaLevelWriteSafe:  true,
+					RequireExistingImage: file.RequireExistingImage,
 				})
 				delete(indexes.MediaByPathFold, matchedPathKey)
 			case titleSlugKnown(indexes, pf.Slug):
@@ -1070,6 +1136,10 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 
 	propType := string(tags.TagTypeProperty)
 	root := record.SystemRootPath
+	assetRoot := record.AssetRootPath
+	if assetRoot == "" {
+		assetRoot = root
+	}
 
 	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
@@ -1092,7 +1162,9 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// the pre-stated media sub-directories for a matching <stem>.png file.
 	appendImageProp := func(propValue tags.TagValue, xmlPath string) {
 		key := propType + ":" + string(propValue)
-		p := pathProp(key, xmlPath, root, g.externalAssetRoots)
+		p := pathPropFS(
+			g.filesystem(), key, xmlPath, assetRoot, g.externalAssetRoots, record.RequireExistingImage,
+		)
 		if p == nil {
 			p = findMediaFilePropAcrossRootsFS(
 				g.filesystem(), key, fallbackNames,
@@ -1127,10 +1199,16 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	appendImageProp(tags.TagPropertyImageTitleshot, titleshotXML)
 	appendImageProp(tags.TagPropertyImageMap, game.Map)
 
-	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root, g.externalAssetRoots); p != nil {
+	if p := pathPropFS(
+		g.filesystem(), propType+":"+string(tags.TagPropertyVideo), game.Video,
+		assetRoot, g.externalAssetRoots, false,
+	); p != nil {
 		mediaProps = append(mediaProps, *p)
 	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root, g.externalAssetRoots); p != nil {
+	if p := pathPropFS(
+		g.filesystem(), propType+":"+string(tags.TagPropertyManual), game.Manual,
+		assetRoot, g.externalAssetRoots, false,
+	); p != nil {
 		mediaProps = append(mediaProps, *p)
 	}
 
@@ -1247,16 +1325,29 @@ func appendNormalizedTag(tagInfos []database.TagInfo, tagType, raw, label string
 	return append(tagInfos, database.TagInfo{Type: tagType, Tag: normalized, Label: label})
 }
 
-// pathProp resolves esPath to an absolute path and returns a MediaProperty for
-// the given typeTag. Returns nil if the path cannot be resolved (skipped cleanly).
-func pathProp(typeTag, esPath, systemRootPath string, externalAssetRoots []string) *database.MediaProperty {
+// pathPropFS resolves esPath to an absolute path and returns a MediaProperty
+// for typeTag. When requireExists is true, unresolved and missing paths are
+// skipped so another artwork source can provide the property.
+func pathPropFS(
+	fs afero.Fs,
+	typeTag, esPath, systemRootPath string,
+	externalAssetRoots []string,
+	requireExists bool,
+) *database.MediaProperty {
 	if esPath == "" {
 		return nil
 	}
-	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath, externalAssetRoots))
-	if abs == "" {
+	resolved := resolveESAssetPath(esPath, systemRootPath, externalAssetRoots)
+	if resolved == "" {
 		return nil
 	}
+	if requireExists {
+		exists, err := afero.Exists(fs, resolved)
+		if err != nil || !exists {
+			return nil
+		}
+	}
+	abs := filepath.ToSlash(resolved)
 	return &database.MediaProperty{
 		TypeTag:     typeTag,
 		Text:        abs,
@@ -1665,9 +1756,11 @@ func isCompanionGame(game *esapi.Game) bool {
 // Parent records carry full metadata but no ROM path; they represent the canonical game
 // title shared by multiple regional ROM releases.
 type companionParent struct {
-	SystemRootPath string
-	GameID         string
-	Game           esapi.Game
+	SystemRootPath       string
+	AssetRootPath        string
+	GameID               string
+	Game                 esapi.Game
+	RequireExistingImage bool
 }
 
 // companionChild holds a ZaparooCompanion ROM child record parsed from a gamelist.xml.
@@ -1722,9 +1815,11 @@ func companionEntriesFromParsed(
 			switch {
 			case game.ScreenScraperIDAttr != "" && game.Path == "":
 				parents = append(parents, companionParent{
-					Game:           game,
-					SystemRootPath: file.RootPath,
-					GameID:         game.ScreenScraperIDAttr,
+					Game:                 game,
+					SystemRootPath:       file.RootPath,
+					AssetRootPath:        file.AssetRootPath,
+					GameID:               game.ScreenScraperIDAttr,
+					RequireExistingImage: file.RequireExistingImage,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
 				resolved := esmedia.ResolvePath(game.Path, file.RootPath)
@@ -1903,8 +1998,10 @@ func resolveCompanionSlugConflicts(
 // dirs are therefore not needed here.
 func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scraper.MapResult {
 	result := g.MapToDB(&GamelistRecord{
-		SystemRootPath: p.SystemRootPath,
-		Game:           p.Game,
+		SystemRootPath:       p.SystemRootPath,
+		AssetRootPath:        p.AssetRootPath,
+		Game:                 p.Game,
+		RequireExistingImage: p.RequireExistingImage,
 	})
 	result.TitleProps = append(result.TitleProps, result.MediaProps...)
 	result.MediaProps = nil
