@@ -145,3 +145,5 @@ require (
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
+
+replace github.com/ZaparooProject/go-pn532 => ../go-pn532

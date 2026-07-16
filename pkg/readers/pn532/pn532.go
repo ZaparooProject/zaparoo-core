@@ -368,6 +368,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 	r.name = device.ConnectionString()
 	log.Debug().Msgf("opening PN532 device: %s", r.name)
 
+	// When debug logging is enabled, forward go-pn532's raw tag byte dumps
+	// (readNDEFHeader / TLV scan output) into Core's log for diagnosing NDEF
+	// read failures. Safe to call repeatedly; installs the writer once.
+	if r.cfg != nil && r.cfg.DebugLogging() {
+		enablePN532DebugLogging()
+	}
+
 	// Create PN532 device
 	r.device, err = r.deviceFactory(transport)
 	if err != nil {

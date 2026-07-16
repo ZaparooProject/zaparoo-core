@@ -64,6 +64,11 @@ tasks:
         sh: go env GOMODCACHE || echo "{{.HOME}}/go"
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
+      # TEMPORARY: mount a sibling ../go-pn532 checkout at /go-pn532 so a local
+      # `replace => ../go-pn532` in go.mod resolves inside the container. Inert
+      # when the directory does not exist. Remove with the go.mod replace.
+      GOPN532_MOUNT:
+        sh: 'DIR="${PWD}/../go-pn532"; if [ -d "$DIR" ]; then echo "-v $(cd "$DIR" && pwd):/go-pn532"; fi'
     cmds:
       - '{{if eq OS "windows"}}cmd /c if not exist "{{.BUILDCACHE}}" mkdir "{{.BUILDCACHE}}"{{else}}mkdir -p "{{.BUILDCACHE}}"{{end}}'
       - '{{if eq OS "windows"}}cmd /c if not exist "{{.GOCACHE}}" mkdir "{{.GOCACHE}}"{{else}}mkdir -p "{{.GOCACHE}}"{{end}}'
@@ -73,6 +78,7 @@ tasks:
         -v "{{.BUILDCACHE}}:{{.IMG_BUILDCACHE}}"
         -v "{{.GOCACHE}}:{{.IMG_GOCACHE}}"
         -v "${PWD}:/build"
+        {{.GOPN532_MOUNT}}
         -e PLATFORM={{.PLATFORM}}
         -e APP_BIN={{.APP_BIN}}
         -e APP_VERSION="{{.APP_VERSION}}"
