@@ -95,7 +95,7 @@ Host platform and all connected clients may render same event in parallel. First
 
 | Key      | Type   | Required | Description |
 | :------- | :----- | :------- | :---------- |
-| revision | number | Yes      | Monotonic process-local state revision. Track per connection and ignore older values. |
+| revision | number | Yes      | Monotonic revision of process-wide UI state shared across clients. Ignore older values. |
 | events   | object[] | Yes    | Complete active event snapshot. Initial implementation contains zero or one event. |
 | resolved | object[] | Yes    | Terminal resolutions associated with this transition. |
 

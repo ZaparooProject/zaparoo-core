@@ -156,7 +156,9 @@ func BenchmarkScanToLaunch_ExactMatch(b *testing.B) {
 			_, err = zapscript.RunCommand(
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
-				len(script.Cmds), i, env.db, env.lm, nil, nil, nil, &env.exprEnv,
+				len(script.Cmds), i, env.db,
+				zapscript.RunCommandOptions{LauncherManager: env.lm},
+				&env.exprEnv,
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -198,7 +200,9 @@ func BenchmarkScanToLaunch_DirectPath(b *testing.B) {
 			_, err = zapscript.RunCommand(
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
-				len(script.Cmds), i, env.db, env.lm, nil, nil, nil, &env.exprEnv,
+				len(script.Cmds), i, env.db,
+				zapscript.RunCommandOptions{LauncherManager: env.lm},
+				&env.exprEnv,
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -252,7 +256,9 @@ func BenchmarkScanToLaunch_WithMapping(b *testing.B) {
 			_, err = zapscript.RunCommand(
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
-				len(script.Cmds), i, env.db, env.lm, nil, nil, nil, &env.exprEnv,
+				len(script.Cmds), i, env.db,
+				zapscript.RunCommandOptions{LauncherManager: env.lm},
+				&env.exprEnv,
 			)
 			if err != nil {
 				b.Fatal(err)

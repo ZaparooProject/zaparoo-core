@@ -37,26 +37,28 @@ var criticalNotifications = map[string]bool{
 	models.NotificationReadersDisconnected: true,
 	models.NotificationStarted:             true,
 	models.NotificationStopped:             true,
-	models.NotificationUIChanged:           true,
+}
+
+func newNotification(method string, payload any) (models.Notification, bool) {
+	if payload == nil {
+		return models.Notification{Method: method}, true
+	}
+
+	params, err := json.Marshal(payload)
+	if err != nil {
+		log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
+		return models.Notification{}, false
+	}
+	return models.Notification{
+		Method: method,
+		Params: params,
+	}, true
 }
 
 func sendNotification(ns chan<- models.Notification, method string, payload any) {
-	var notification models.Notification
-
-	if payload != nil {
-		params, err := json.Marshal(payload)
-		if err != nil {
-			log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
-			return
-		}
-		notification = models.Notification{
-			Method: method,
-			Params: params,
-		}
-	} else {
-		notification = models.Notification{
-			Method: method,
-		}
+	notification, ok := newNotification(method, payload)
+	if !ok {
+		return
 	}
 
 	// Use non-blocking send to prevent back-pressure from freezing callers.
@@ -130,9 +132,13 @@ func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 	sendNotification(ns, models.NotificationInboxAdded, payload)
 }
 
-//nolint:gocritic // notification payload is copied before asynchronous fan-out
-func UIChanged(ns chan<- models.Notification, payload models.UIStateResponse) {
-	sendNotification(ns, models.NotificationUIChanged, payload)
+//nolint:gocritic // notification payload is copied before synchronous broker fan-out
+func UIChanged(publish func(models.Notification), payload models.UIStateResponse) {
+	notification, ok := newNotification(models.NotificationUIChanged, payload)
+	if !ok {
+		return
+	}
+	publish(notification)
 }
 
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {

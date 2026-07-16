@@ -289,7 +289,7 @@ func TestServiceValidatesResponses(t *testing.T) {
 	require.NoError(t, picker.Complete(models.UIOutcomeCancelled))
 }
 
-func TestServiceRejectsResponsesAndCompletionAfterExpiry(t *testing.T) {
+func TestServiceRejectsOperationsAfterExpiry(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -306,6 +306,13 @@ func TestServiceRejectsResponsesAndCompletionAfterExpiry(t *testing.T) {
 			name: "producer completion",
 			resolve: func(_ *Service, handle *Handle) error {
 				return handle.Complete(models.UIOutcomeCompleted)
+			},
+		},
+		{
+			name: "producer update",
+			resolve: func(_ *Service, handle *Handle) error {
+				message := "too late"
+				return handle.Update(Update{Message: &message})
 			},
 		},
 	}

@@ -47,6 +47,14 @@ import (
 	"github.com/spf13/afero"
 )
 
+// RunCommandOptions groups optional services used by specific command types.
+type RunCommandOptions struct {
+	WaitForMediaReady func(context.Context) error
+	PlaybackManager   audio.PlaybackManager
+	UI                *uievents.Service
+	LauncherManager   *state.LauncherManager
+}
+
 var (
 	ErrArgCount      = errors.New("invalid number of arguments")
 	ErrRequiredArgs  = errors.New("arguments are required")
@@ -391,9 +399,6 @@ func GetExprEnv(
 }
 
 // RunCommand parses and runs a single ZapScript command.
-// The lm parameter is only needed for media-launching commands (launch guard);
-// pass nil for contexts where media launches are not allowed (e.g. control scripts).
-
 func RunCommand(
 	serviceCtx context.Context,
 	pl platforms.Platform,
@@ -404,10 +409,7 @@ func RunCommand(
 	totalCmds int,
 	currentIndex int,
 	db *database.Database,
-	lm *state.LauncherManager,
-	waitForMediaReady func(context.Context) error,
-	playbackManager audio.PlaybackManager,
-	ui *uievents.Service,
+	opts RunCommandOptions,
 	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
@@ -472,9 +474,9 @@ func RunCommand(
 		Cmd:               cmd,
 		Cfg:               cfg,
 		ServiceCtx:        serviceCtx,
-		WaitForMediaReady: waitForMediaReady,
-		PlaybackManager:   playbackManager,
-		UI:                ui,
+		WaitForMediaReady: opts.WaitForMediaReady,
+		PlaybackManager:   opts.PlaybackManager,
+		UI:                opts.UI,
 		Playlist:          plsc,
 		Source:            token.Source,
 		TotalCommands:     totalCmds,
@@ -484,8 +486,8 @@ func RunCommand(
 		ExprEnv:           exprEnv,
 	}
 
-	if lm != nil {
-		env.LauncherCtx = lm.GetContext()
+	if opts.LauncherManager != nil {
+		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
 
 	cmdFn, ok := lookupCmd(cmd.Name)
@@ -499,14 +501,14 @@ func RunCommand(
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
 	if IsMediaLaunchingCommand(cmd.Name) {
-		if lm == nil {
+		if opts.LauncherManager == nil {
 			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
 		}
-		if guardErr := lm.TryStartLaunch(); guardErr != nil {
+		if guardErr := opts.LauncherManager.TryStartLaunch(); guardErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 		}
-		defer lm.EndLaunch()
-		env.LauncherCtx = lm.GetContext()
+		defer opts.LauncherManager.EndLaunch()
+		env.LauncherCtx = opts.LauncherManager.GetContext()
 	}
 
 	logCmd := cmd.String()

@@ -101,7 +101,12 @@ func showPreNotice(
 	}
 	if handle.MinimumDisplay > 0 {
 		log.Debug().Dur("delay", handle.MinimumDisplay).Msg("delaying pre-notice")
-		time.Sleep(handle.MinimumDisplay)
+		timer := time.NewTimer(handle.MinimumDisplay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+		}
 	}
 	if err = handle.Complete(models.UIOutcomeCompleted); err != nil {
 		return fmt.Errorf("error completing pre-notice: %w", err)

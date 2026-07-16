@@ -157,6 +157,12 @@ func (b *Broker) Start() {
 	}()
 }
 
+// Publish broadcasts directly to subscribers, bypassing source-channel
+// back-pressure. Coalesceable methods retain latest-state delivery semantics.
+func (b *Broker) Publish(notif models.Notification) {
+	b.broadcast(notif)
+}
+
 // broadcast sends a notification to all subscribers whose method filter admits it.
 // For coalesceable methods: tries a direct non-blocking send; if the channel is
 // full, stores the latest payload in the subscriber's coalesced slot and wakes

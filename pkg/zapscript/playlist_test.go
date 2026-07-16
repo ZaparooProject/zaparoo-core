@@ -316,6 +316,66 @@ func TestCmdPlaylistOpen_UsesGlobalUIEvent(t *testing.T) {
 	require.NoError(t, ui.Respond(event.ID, apimodels.UIResponseActionDismiss, ""))
 }
 
+func TestCmdPlaylistOpen_PickerUnavailableKeepsPlaylistUpdate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ui   func() *uievents.Service
+		name string
+	}{
+		{name: "missing service"},
+		{
+			name: "closed service",
+			ui: func() *uievents.Service {
+				service := uievents.New(clockwork.NewFakeClock(), nil, nil)
+				service.Shutdown()
+				return service
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var ui *uievents.Service
+			if tt.ui != nil {
+				ui = tt.ui()
+			}
+			active := &playlists.Playlist{
+				ID:    "test-playlist",
+				Name:  "Test Playlist",
+				Items: []playlists.PlaylistItem{{Name: "Item", ZapScript: "**test"}},
+			}
+			queue := make(chan *playlists.Playlist, 1)
+			env := platforms.CmdEnv{
+				ServiceCtx: t.Context(),
+				UI:         ui,
+				Cmd:        zapscript.Command{Name: "playlist.open"},
+				Cfg:        &config.Instance{},
+				Playlist: playlists.PlaylistController{
+					Active: active,
+					Queue:  queue,
+				},
+			}
+
+			result, err := cmdPlaylistOpen(newPlaylistTestPlatform(), env)
+			require.NoError(t, err)
+			assert.True(t, result.PlaylistChanged)
+			assert.Equal(t, active, result.Playlist)
+			select {
+			case queued := <-queue:
+				assert.Equal(t, active, queued)
+			case <-time.After(time.Second):
+				t.Fatal("playlist update was not queued")
+			}
+			if ui != nil {
+				assert.Empty(t, ui.State().Events)
+			}
+		})
+	}
+}
+
 func TestRunPickerResult_ExecutesPrivateActionOnce(t *testing.T) {
 	t.Parallel()
 

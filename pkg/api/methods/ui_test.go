@@ -22,6 +22,7 @@ package methods
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -69,8 +70,12 @@ func TestHandleUIRespondResolvesEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, NoContent{}, response)
 
-	result := <-handle.Results
-	assert.Equal(t, models.UIOutcomeConfirmed, result.Resolution.Outcome)
+	select {
+	case result := <-handle.Results:
+		assert.Equal(t, models.UIOutcomeConfirmed, result.Resolution.Outcome)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for UI event resolution")
+	}
 }
 
 func TestHandleUIRespondRejectsInvalidParams(t *testing.T) {

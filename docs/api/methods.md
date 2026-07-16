@@ -148,7 +148,7 @@ None.
 
 | Key      | Type                 | Required | Description |
 | :------- | :------------------- | :------- | :---------- |
-| revision | number               | Yes      | Monotonic state revision for current connection. Ignore older snapshots. |
+| revision | number               | Yes      | Monotonic revision of global UI state shared across clients. Ignore older snapshots. |
 | events   | [UI event](#ui-event-object)[] | Yes | Active events. Initial implementation contains zero or one event. |
 | resolved | [UI resolution](#ui-resolution-object)[] | Yes | Always empty in query response; terminal resolutions are delivered by `ui.changed`. |
 

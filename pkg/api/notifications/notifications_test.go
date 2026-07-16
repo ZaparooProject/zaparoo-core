@@ -337,8 +337,10 @@ func TestPlaytimeLimitWarning_Payload(t *testing.T) {
 func TestUIChanged_Payload(t *testing.T) {
 	t.Parallel()
 
-	ns := make(chan models.Notification, 1)
-	UIChanged(ns, models.UIStateResponse{
+	var notification models.Notification
+	UIChanged(func(published models.Notification) {
+		notification = published
+	}, models.UIStateResponse{
 		Revision: 4,
 		Events: []models.UIEvent{{
 			ID:   "event-1",
@@ -347,7 +349,6 @@ func TestUIChanged_Payload(t *testing.T) {
 		Resolved: []models.UIResolution{},
 	})
 
-	notification := <-ns
 	assert.Equal(t, models.NotificationUIChanged, notification.Method)
 	require.NotNil(t, notification.Params)
 

@@ -606,11 +606,13 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
+	result := platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}
 	if env.UI == nil {
-		return platforms.CmdResult{
-			PlaylistChanged: true,
-			Playlist:        pls,
-		}, errors.New("UI event service is unavailable")
+		log.Warn().Msg("UI event service unavailable, skipping playlist picker")
+		return result, nil
 	}
 	handle, openErr := env.UI.Open(env.ServiceCtx, &uievents.Request{
 		Kind:           apimodels.UIEventKindPicker,
@@ -621,16 +623,11 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		Dismissible:    true,
 	})
 	if openErr != nil {
-		return platforms.CmdResult{
-			PlaylistChanged: true,
-			Playlist:        pls,
-		}, fmt.Errorf("failed to open picker: %w", openErr)
+		log.Warn().Err(openErr).Msg("failed to open playlist picker")
+		return result, nil
 	}
 	go runPickerResult(env.Cfg, handle, client.LocalClient)
-	return platforms.CmdResult{
-		PlaylistChanged: true,
-		Playlist:        pls,
-	}, nil
+	return result, nil
 }
 
 func runPickerResult(

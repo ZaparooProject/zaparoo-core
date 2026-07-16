@@ -200,8 +200,8 @@ func Start(
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
 	// Create and start notification broker to broadcast to all consumers.
-	// media.indexing is coalesceable: bursts during index/resume collapse to
-	// latest-wins so slow WebSocket consumers don't drop discrete events.
+	// Coalesceable methods collapse bursts to latest state for slow consumers.
+	// UI state publishes directly to broker so source-queue pressure cannot drop it.
 	notifBroker := broker.NewBroker(
 		st.GetContext(), ns,
 		models.NotificationMediaIndexing,
@@ -214,7 +214,7 @@ func Start(
 		uiRenderer = renderer
 	}
 	uiEvents := uievents.New(clockwork.NewRealClock(), uiRenderer, func(payload models.UIStateResponse) {
-		notifications.UIChanged(st.Notifications, payload)
+		notifications.UIChanged(notifBroker.Publish, payload)
 	})
 	st.SetUIEvents(uiEvents)
 

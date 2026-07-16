@@ -582,6 +582,21 @@ func TestPresentUIRejectsUnsupportedKind(t *testing.T) {
 	assert.Nil(t, closeFn)
 }
 
+func TestPresentUIPreviousEventDelayRespectsCancellation(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.lastUIHidden = time.Now()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	start := time.Now()
+	closeFn, err := p.PresentUI(ctx, &models.UIEvent{Kind: models.UIEventKindNotice})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, closeFn)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
 // TestPresentUI_NoDeadlockWithActiveMedia guards against holding platformMu
 // while renderer startup calls StopActiveLauncher, which also needs platformMu.
 func TestPresentUI_NoDeadlockWithActiveMedia(t *testing.T) {

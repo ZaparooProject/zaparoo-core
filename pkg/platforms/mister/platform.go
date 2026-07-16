@@ -1438,7 +1438,7 @@ func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {
 }
 
 func (p *Platform) PresentUI(
-	_ context.Context,
+	ctx context.Context,
 	event *models.UIEvent,
 ) (func() error, error) {
 	const orphanTimeoutSeconds = int(time.Hour / time.Second)
@@ -1448,7 +1448,13 @@ func (p *Platform) PresentUI(
 	p.platformMu.Unlock()
 	if needsDelay {
 		log.Debug().Msg("waiting for previous UI event to finish")
-		time.Sleep(3 * time.Second)
+		timer := time.NewTimer(3 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	closeEvent := func(argsPath string) func() error {

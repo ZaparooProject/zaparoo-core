@@ -45,9 +45,12 @@ import (
 )
 
 const (
-	DefaultTimeout = 30 // seconds
-	PIDFilename    = "widget.pid"
+	DefaultTimeout    = 30 // seconds
+	PIDFilename       = "widget.pid"
+	uiResponseTimeout = 5 * time.Second
 )
+
+type localClientFunc func(context.Context, *config.Instance, string, string) (string, error)
 
 func runningFromZapScript() bool {
 	return os.Getenv("ZAPAROO_RUN_SCRIPT") == "2"
@@ -168,6 +171,7 @@ func sendUIResponse(
 	eventID string,
 	action models.UIResponseAction,
 	choiceID string,
+	localClient localClientFunc,
 ) error {
 	params, err := json.Marshal(models.UIRespondParams{
 		ID:       eventID,
@@ -177,7 +181,9 @@ func sendUIResponse(
 	if err != nil {
 		return fmt.Errorf("failed to marshal UI response: %w", err)
 	}
-	if _, err = client.LocalClient(context.Background(), cfg, models.MethodUIRespond, string(params)); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), uiResponseTimeout)
+	defer cancel()
+	if _, err = localClient(ctx, cfg, models.MethodUIRespond, string(params)); err != nil {
 		return fmt.Errorf("failed to send UI response: %w", err)
 	}
 	return nil
@@ -205,9 +211,19 @@ func watchCompletion(app *tview.Application, completePath string) {
 
 func NoticeUIBuilder(
 	cfg *config.Instance,
+	pl platforms.Platform,
+	argsPath string,
+	loader bool,
+) (*tview.Application, error) {
+	return buildNoticeUI(cfg, pl, argsPath, loader, client.LocalClient)
+}
+
+func buildNoticeUI(
+	cfg *config.Instance,
 	_ platforms.Platform,
 	argsPath string,
 	loader bool,
+	localClient localClientFunc,
 ) (*tview.Application, error) {
 	var noticeArgs widgetmodels.NoticeArgs
 
@@ -256,7 +272,9 @@ func NoticeUIBuilder(
 			return nil
 		}
 		go func() {
-			if err := sendUIResponse(cfg, noticeArgs.EventID, models.UIResponseActionDismiss, ""); err != nil {
+			if err := sendUIResponse(
+				cfg, noticeArgs.EventID, models.UIResponseActionDismiss, "", localClient,
+			); err != nil {
 				log.Error().Err(err).Msg("failed to dismiss UI notice")
 				return
 			}
@@ -321,7 +339,20 @@ func NoticeUI(cfg *config.Instance, pl platforms.Platform, argsPath string, load
 	return nil
 }
 
-func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
+func PickerUIBuilder(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	argsPath string,
+) (*tview.Application, error) {
+	return buildPickerUI(cfg, pl, argsPath, client.LocalClient)
+}
+
+func buildPickerUI(
+	cfg *config.Instance,
+	_ platforms.Platform,
+	argsPath string,
+	localClient localClientFunc,
+) (*tview.Application, error) {
 	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -350,7 +381,9 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 				action = models.UIResponseActionSelect
 			}
 			go func() {
-				if responseErr := sendUIResponse(cfg, pickerArgs.EventID, action, item.ID); responseErr != nil {
+				if responseErr := sendUIResponse(
+					cfg, pickerArgs.EventID, action, item.ID, localClient,
+				); responseErr != nil {
 					log.Error().Err(responseErr).Msg("failed to send picker response")
 					return
 				}
@@ -371,7 +404,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 			return
 		}
 
-		if _, runErr := client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps)); runErr != nil {
+		if _, runErr := localClient(context.Background(), cfg, models.MethodRun, string(ps)); runErr != nil {
 			log.Error().Err(runErr).Msg("error running local client")
 		}
 
@@ -388,7 +421,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		}
 		go func() {
 			if responseErr := sendUIResponse(
-				cfg, pickerArgs.EventID, models.UIResponseActionDismiss, "",
+				cfg, pickerArgs.EventID, models.UIResponseActionDismiss, "", localClient,
 			); responseErr != nil {
 				log.Error().Err(responseErr).Msg("failed to dismiss picker")
 				return

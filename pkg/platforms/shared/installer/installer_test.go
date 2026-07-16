@@ -398,6 +398,21 @@ func TestShowPreNotice_CompletesAfterRendererDelay(t *testing.T) {
 	assert.Equal(t, models.UIOutcomeCompleted, resolved.Resolved[0].Outcome)
 }
 
+func TestShowPreNotice_RendererDelayRespectsCancellation(t *testing.T) {
+	t.Parallel()
+
+	ui := uievents.New(clockwork.NewRealClock(), &delayedUIRenderer{delay: time.Minute}, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	start := time.Now()
+	require.NoError(t, showPreNotice(ctx, ui, "Test notice"))
+	assert.Less(t, time.Since(start), time.Second)
+	assert.Eventually(t, func() bool {
+		return len(ui.State().Events) == 0
+	}, time.Second, time.Millisecond)
+}
+
 func TestNamesFromURL(t *testing.T) {
 	t.Parallel()
 

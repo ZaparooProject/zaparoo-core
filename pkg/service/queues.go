@@ -194,10 +194,14 @@ func runTokenZapScript(
 			len(script.Cmds),
 			i,
 			svc.DB,
-			svc.State.LauncherManager(),
-			func(ctx context.Context) error { return waitForMediaReady(ctx, svc, mediaReadyGen) },
-			svc.PlaybackManager,
-			svc.UI,
+			zapscript.RunCommandOptions{
+				LauncherManager: svc.State.LauncherManager(),
+				WaitForMediaReady: func(ctx context.Context) error {
+					return waitForMediaReady(ctx, svc, mediaReadyGen)
+				},
+				PlaybackManager: svc.PlaybackManager,
+				UI:              svc.UI,
+			},
 			&cmdEnv,
 		)
 		if err != nil {

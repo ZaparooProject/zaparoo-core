@@ -108,7 +108,9 @@ func setupReaderManagerWithRenderer(
 		uiClock = clockwork.NewRealClock()
 	}
 	ui := uievents.New(uiClock, renderer, func(payload models.UIStateResponse) {
-		notifications.UIChanged(st.Notifications, payload)
+		notifications.UIChanged(func(notification models.Notification) {
+			st.Notifications <- notification
+		}, payload)
 	})
 	st.SetUIEvents(ui)
 

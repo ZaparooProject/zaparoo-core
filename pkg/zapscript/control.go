@@ -120,10 +120,7 @@ func RunControlScript(
 			len(parsed.Cmds),
 			i,
 			db,
-			nil, // lm not needed — control commands cannot launch media
-			nil,
-			nil,
-			nil,
+			RunCommandOptions{}, // Control commands use no optional launch or UI services.
 			&env,
 		)
 		if err != nil {

@@ -85,10 +85,12 @@ type Choice struct {
 // Request describes one transient UI interaction. A positive Timeout creates
 // authoritative expiry; zero or negative values leave event open until resolved.
 type Request struct {
-	Kind           models.UIEventKind
-	Title          string
-	Message        string
-	Choices        []Choice
+	Kind    models.UIEventKind
+	Title   string
+	Message string
+	Choices []Choice
+	// SelectedChoice is picker choice index. Zero selects first choice; use -1
+	// explicitly when no choice should be preselected.
 	SelectedChoice int
 	Timeout        time.Duration
 	Dismissible    bool
@@ -293,6 +295,14 @@ func (s *Service) Update(id string, update Update) error {
 	if err != nil {
 		s.mu.Unlock()
 		return err
+	}
+	if s.eventExpired(entry) {
+		state, resolution := s.expireLocked(entry)
+		s.mu.Unlock()
+		closeRenderer(entry)
+		s.publishState(state)
+		s.deliverResult(entry, Result{Resolution: resolution})
+		return ErrEventExpired
 	}
 
 	if update.Title != nil {

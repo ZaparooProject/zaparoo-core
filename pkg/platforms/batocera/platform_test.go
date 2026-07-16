@@ -24,6 +24,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPresentUIForwardsPassiveEvents(t *testing.T) {
+	// MockESAPIServer binds to hardcoded port 1234.
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	p := &Platform{}
+
+	tests := []struct {
+		name  string
+		event models.UIEvent
+	}{
+		{
+			name: "notice message",
+			event: models.UIEvent{
+				Kind:    models.UIEventKindNotice,
+				Title:   "Ignored title",
+				Message: "Notice message",
+			},
+		},
+		{
+			name: "loader title fallback",
+			event: models.UIEvent{
+				Kind:  models.UIEventKindLoader,
+				Title: "Loading",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			closeFn, err := p.PresentUI(t.Context(), &tt.event)
+			require.NoError(t, err)
+			require.NotNil(t, closeFn)
+			require.NoError(t, closeFn())
+		})
+	}
+
+	assert.Equal(t, []string{"Notice message", "Loading"}, mockESAPI.Notifications())
+}
+
 func TestPresentUIRejectsInteractiveEvents(t *testing.T) {
 	t.Parallel()
 
