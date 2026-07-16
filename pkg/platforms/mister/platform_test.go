@@ -565,6 +565,23 @@ func TestGamepadPress_ValidButtonsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestMinimumUIDisplay(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	assert.Equal(t, 5*time.Second, p.MinimumUIDisplay(models.UIEventKindNotice))
+	assert.Zero(t, p.MinimumUIDisplay(models.UIEventKindLoader))
+}
+
+func TestPresentUIRejectsUnsupportedKind(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	closeFn, err := p.PresentUI(t.Context(), &models.UIEvent{Kind: "future"})
+	require.ErrorIs(t, err, platforms.ErrNotSupported)
+	assert.Nil(t, closeFn)
+}
+
 // TestPresentUI_NoDeadlockWithActiveMedia guards against holding platformMu
 // while renderer startup calls StopActiveLauncher, which also needs platformMu.
 func TestPresentUI_NoDeadlockWithActiveMedia(t *testing.T) {

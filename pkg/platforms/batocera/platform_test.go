@@ -24,6 +24,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPresentUIRejectsInteractiveEvents(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+	for _, kind := range []models.UIEventKind{
+		models.UIEventKindPicker,
+		models.UIEventKindConfirm,
+	} {
+		closeFn, err := p.PresentUI(t.Context(), &models.UIEvent{Kind: kind})
+		require.ErrorIs(t, err, platforms.ErrNotSupported)
+		assert.Nil(t, closeFn)
+	}
+}
+
 // TestKodiLocalLauncherExists tests that KodiLocal launcher exists
 func TestKodiLocalLauncherExists(t *testing.T) {
 	t.Parallel()

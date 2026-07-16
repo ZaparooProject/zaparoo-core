@@ -1075,6 +1075,22 @@ func TestReaderManager_LaunchGuard_OpensGlobalConfirmEvent(t *testing.T) {
 	assert.WithinDuration(t, fakeClock.Now().Add(15*time.Second), *event.ExpiresAt, time.Microsecond)
 }
 
+func TestReaderManager_LaunchGuard_UsesUIDWhenTokenTextIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	env := setupReaderManager(t, withLaunchGuard)
+	env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes"})
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token:  &tokens.Token{UID: "card-without-text", ScanTime: time.Now()},
+	})
+	env.expectNoToken(t)
+
+	uiState := env.ui.State()
+	require.Len(t, uiState.Events, 1)
+	assert.Equal(t, "card-without-text", uiState.Events[0].Message)
+}
+
 func TestReaderManager_LaunchGuard_DoesNotRenderConfirmOnHost(t *testing.T) {
 	t.Parallel()
 

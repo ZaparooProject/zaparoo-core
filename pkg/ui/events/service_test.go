@@ -271,10 +271,82 @@ func TestServiceValidatesResponses(t *testing.T) {
 
 	require.ErrorIs(t, service.Respond(handle.ID, models.UIResponseActionDismiss, ""), ErrNotDismissible)
 	require.ErrorIs(t, service.Respond(handle.ID, models.UIResponseActionConfirm, ""), ErrInvalidAction)
+	require.ErrorIs(t, service.Respond(handle.ID, models.UIResponseActionSelect, "choice"), ErrInvalidAction)
+	require.ErrorIs(t, service.Respond(handle.ID, "unknown", ""), ErrInvalidAction)
 	require.ErrorIs(t, service.Respond("stale", models.UIResponseActionDismiss, ""), ErrEventNotActive)
-
 	require.NoError(t, handle.Complete(models.UIOutcomeCompleted))
 	require.ErrorIs(t, service.Respond(handle.ID, models.UIResponseActionDismiss, ""), ErrNoActiveEvent)
+
+	picker, err := service.Open(t.Context(), &Request{
+		Kind:        models.UIEventKindPicker,
+		Choices:     []Choice{{Label: "Game"}},
+		Dismissible: true,
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, service.Respond(picker.ID, models.UIResponseActionSelect, ""), ErrChoiceRequired)
+	require.ErrorIs(t, service.Respond(picker.ID, models.UIResponseActionSelect, "unknown"), ErrChoiceNotFound)
+	require.ErrorIs(t, service.Respond(picker.ID, models.UIResponseActionConfirm, ""), ErrInvalidAction)
+	require.NoError(t, picker.Complete(models.UIOutcomeCancelled))
+}
+
+func TestServiceRejectsResponsesAndCompletionAfterExpiry(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		resolve func(*Service, *Handle) error
+		name    string
+	}{
+		{
+			name: "API response",
+			resolve: func(service *Service, handle *Handle) error {
+				return service.Respond(handle.ID, models.UIResponseActionConfirm, "")
+			},
+		},
+		{
+			name: "producer completion",
+			resolve: func(_ *Service, handle *Handle) error {
+				return handle.Complete(models.UIOutcomeCompleted)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			clock := clockwork.NewFakeClock()
+			service, published := newTestService(clock, nil)
+			handle, err := service.Open(t.Context(), &Request{Kind: models.UIEventKindConfirm})
+			require.NoError(t, err)
+			_ = receiveState(t, published)
+
+			expiresAt := clock.Now()
+			service.mu.Lock()
+			service.active.event.ExpiresAt = &expiresAt
+			service.mu.Unlock()
+
+			require.ErrorIs(t, tt.resolve(service, handle), ErrEventExpired)
+			assert.Equal(t, models.UIOutcomeTimedOut, receiveResult(t, handle.Results).Resolution.Outcome)
+			resolved := receiveState(t, published)
+			assert.Empty(t, resolved.Events)
+			require.Len(t, resolved.Resolved, 1)
+			assert.Equal(t, models.UIOutcomeTimedOut, resolved.Resolved[0].Outcome)
+		})
+	}
+}
+
+func TestServiceCancelAndProducerOutcomeValidation(t *testing.T) {
+	t.Parallel()
+
+	service, _ := newTestService(clockwork.NewFakeClock(), nil)
+	handle, err := service.Open(t.Context(), &Request{Kind: models.UIEventKindLoader})
+	require.NoError(t, err)
+
+	require.ErrorIs(t, handle.Complete(models.UIOutcomeTimedOut), ErrInvalidOutcome)
+	require.Len(t, service.State().Events, 1)
+	require.NoError(t, service.Cancel(handle.ID))
+	assert.Equal(t, models.UIOutcomeCancelled, receiveResult(t, handle.Results).Resolution.Outcome)
+	require.ErrorIs(t, service.Cancel(handle.ID), ErrNoActiveEvent)
 }
 
 func TestServiceRendererFailureKeepsEventActive(t *testing.T) {
@@ -356,38 +428,140 @@ func TestServiceContextCancellationAndShutdown(t *testing.T) {
 func TestServiceUpdateNotifiesRenderer(t *testing.T) {
 	t.Parallel()
 
+	clock := clockwork.NewFakeClock()
 	renderer := &testRenderer{}
-	service, published := newTestService(clockwork.NewFakeClock(), renderer)
-	handle, err := service.Open(t.Context(), &Request{Kind: models.UIEventKindLoader})
+	service, published := newTestService(clock, renderer)
+	handle, err := service.Open(t.Context(), &Request{
+		Kind:    models.UIEventKindLoader,
+		Timeout: 10 * time.Second,
+	})
 	require.NoError(t, err)
 	_ = receiveState(t, published)
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
 
+	title := "Download"
 	message := "Halfway"
-	require.NoError(t, handle.Update(Update{Message: &message}))
+	dismissible := true
+	noTimeout := time.Duration(0)
+	require.NoError(t, handle.Update(Update{
+		Title:       &title,
+		Message:     &message,
+		Timeout:     &noTimeout,
+		Dismissible: &dismissible,
+	}))
 	state := receiveState(t, published)
-	assert.Equal(t, "Halfway", state.Events[0].Message)
+	require.Len(t, state.Events, 1)
+	assert.Equal(t, title, state.Events[0].Title)
+	assert.Equal(t, message, state.Events[0].Message)
+	assert.True(t, state.Events[0].Dismissible)
+	assert.Nil(t, state.Events[0].ExpiresAt)
 	assert.Equal(t, int32(1), renderer.updated.Load())
+
+	clock.Advance(20 * time.Second)
+	require.Len(t, service.State().Events, 1, "removing timeout must stop previous timer")
+
+	revision := service.State().Revision
+	tooLong := strings.Repeat("x", MaxMessageBytes+1)
+	require.ErrorIs(t, handle.Update(Update{Message: &tooLong}), ErrInvalidRequest)
+	assert.Equal(t, revision, service.State().Revision)
+
+	require.NoError(t, handle.Complete(models.UIOutcomeCompleted))
+	require.ErrorIs(t, handle.Update(Update{Title: &title}), ErrNoActiveEvent)
 }
 
 func TestValidateRequestLimitsAndKinds(t *testing.T) {
 	t.Parallel()
 
-	service, _ := newTestService(clockwork.NewFakeClock(), nil)
-	_, err := service.Open(t.Context(), &Request{Kind: "unknown"})
-	require.ErrorIs(t, err, ErrInvalidKind)
+	tooManyChoices := make([]Choice, MaxChoices+1)
+	for i := range tooManyChoices {
+		tooManyChoices[i].Label = "Choice"
+	}
+	tests := []struct {
+		request *Request
+		wantErr error
+		name    string
+	}{
+		{name: "nil request", request: nil, wantErr: ErrInvalidRequest},
+		{name: "unknown kind", request: &Request{Kind: "unknown"}, wantErr: ErrInvalidKind},
+		{
+			name: "long title",
+			request: &Request{
+				Kind:  models.UIEventKindNotice,
+				Title: strings.Repeat("x", MaxTitleBytes+1),
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "long message",
+			request: &Request{
+				Kind:    models.UIEventKindNotice,
+				Message: strings.Repeat("x", MaxMessageBytes+1),
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "too many choices",
+			request: &Request{
+				Kind:    models.UIEventKindPicker,
+				Choices: tooManyChoices,
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name:    "picker without choices",
+			request: &Request{Kind: models.UIEventKindPicker},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "choices on notice",
+			request: &Request{
+				Kind:    models.UIEventKindNotice,
+				Choices: []Choice{{Label: "Choice"}},
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "empty choice label",
+			request: &Request{
+				Kind:    models.UIEventKindPicker,
+				Choices: []Choice{{Label: ""}},
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "long choice label",
+			request: &Request{
+				Kind:    models.UIEventKindPicker,
+				Choices: []Choice{{Label: strings.Repeat("x", MaxLabelBytes+1)}},
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "selected choice below range",
+			request: &Request{
+				Kind:           models.UIEventKindPicker,
+				Choices:        []Choice{{Label: "Choice"}},
+				SelectedChoice: -2,
+			},
+			wantErr: ErrInvalidRequest,
+		},
+		{
+			name: "selected choice above range",
+			request: &Request{
+				Kind:           models.UIEventKindPicker,
+				Choices:        []Choice{{Label: "Choice"}},
+				SelectedChoice: 1,
+			},
+			wantErr: ErrInvalidRequest,
+		},
+	}
 
-	_, err = service.Open(t.Context(), &Request{
-		Kind:  models.UIEventKindNotice,
-		Title: strings.Repeat("x", MaxTitleBytes+1),
-	})
-	require.ErrorIs(t, err, ErrInvalidRequest)
-
-	_, err = service.Open(t.Context(), &Request{Kind: models.UIEventKindPicker})
-	require.ErrorIs(t, err, ErrInvalidRequest)
-
-	_, err = service.Open(t.Context(), &Request{
-		Kind:    models.UIEventKindPicker,
-		Choices: []Choice{{Label: ""}},
-	})
-	require.ErrorIs(t, err, ErrInvalidRequest)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			service, _ := newTestService(clockwork.NewFakeClock(), nil)
+			_, err := service.Open(t.Context(), tt.request)
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
 }
