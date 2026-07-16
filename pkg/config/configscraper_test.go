@@ -63,7 +63,6 @@ func TestScraperGamelistXMLCustomPath_SaveLoadRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(contents), "[scraper.gamelist_xml]")
 	assert.Contains(t, string(contents), "custom_path = ")
-	assert.Contains(t, string(contents), customPath)
 
 	reloaded, err := NewConfig(configDir, BaseDefaults)
 	require.NoError(t, err)

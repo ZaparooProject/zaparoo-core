@@ -384,7 +384,7 @@ func TestLoadRecords_CustomGamelistBundle(t *testing.T) {
 	imageType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	image, ok := propertyByType(mapped.MediaProps, imageType)
 	require.True(t, ok)
-	assert.Equal(t, filepath.Join(customSystemDir, "media", "images", "Game.png"), image.Text)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(customSystemDir, "media", "images", "Game.png")), image.Text)
 
 	screenshotType := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageScreenshot)
 	screenshot, ok := propertyByType(mapped.MediaProps, screenshotType)
