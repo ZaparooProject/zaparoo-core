@@ -29,7 +29,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -53,7 +52,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 )
@@ -253,27 +251,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
-}
-
-func (*Platform) ShowNotice(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	return nil, 0, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowLoader(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, error) {
-	return nil, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {

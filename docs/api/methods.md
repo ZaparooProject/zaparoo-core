@@ -130,6 +130,129 @@ Returns `null` on success. Returns an error if no token is currently staged.
 }
 ```
 
+## UI
+
+Core exposes transient UI requests so connected clients—and host platform when appropriate—can render same notice, loader, picker, or confirmation in parallel. Core initially keeps at most one active request, but API uses arrays for future expansion. First valid response for event ID wins; stale responses fail.
+
+UI events are intended for small, non-sensitive interactions. They are broadcast to every permitted connected client. Never use them for PINs, passwords, recovery codes, or other secrets.
+
+### ui
+
+Returns authoritative UI event state. Clients should call this after connecting or reconnecting.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type                 | Required | Description |
+| :------- | :------------------- | :------- | :---------- |
+| revision | number               | Yes      | Monotonic revision of global UI state shared across clients. Ignore older snapshots. |
+| events   | [UI event](#ui-event-object)[] | Yes | Active events. Initial implementation contains zero or one event. |
+| resolved | [UI resolution](#ui-resolution-object)[] | Yes | Always empty in query response; terminal resolutions are delivered by `ui.changed`. |
+
+##### UI event object
+
+| Key             | Type      | Required | Description |
+| :-------------- | :-------- | :------- | :---------- |
+| id              | string    | Yes      | Opaque event ID required by `ui.respond`. |
+| kind            | string    | Yes      | `notice`, `loader`, `picker`, or `confirm`. |
+| title           | string    | No       | Optional heading. |
+| message         | string    | No       | Optional body text. |
+| choices         | object[]  | No       | Picker choices containing opaque `id` and display `label`. |
+| selectedChoiceId | string   | No       | Initially selected picker choice. |
+| dismissible     | boolean   | Yes      | Whether `dismiss` is accepted. |
+| createdAt       | string    | Yes      | RFC3339 creation timestamp. |
+| expiresAt       | string    | No       | Authoritative RFC3339 expiry. Omitted for producer-controlled events such as loaders. |
+
+Choice IDs are presentation-safe. Executable ZapScript and private choice values remain inside Core.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-state-1",
+  "method": "ui"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-state-1",
+  "result": {
+    "revision": 8,
+    "events": [
+      {
+        "id": "56969e9c-f863-4cc8-9c2c-d7512bf10d4d",
+        "kind": "confirm",
+        "title": "Change game?",
+        "message": "**launch.system:snes",
+        "dismissible": true,
+        "createdAt": "2026-07-16T12:00:00Z",
+        "expiresAt": "2026-07-16T12:00:15Z"
+      }
+    ],
+    "resolved": []
+  }
+}
+```
+
+### ui.respond
+
+Responds to active UI event. First valid response wins globally and closes host/client renderers.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| id       | string | Yes      | Active event ID. |
+| action   | string | Yes      | `dismiss`, `select`, or `confirm`. |
+| choiceId | string | No       | Required for picker `select`; must identify one published choice. |
+
+Allowed actions:
+
+- `notice`: `dismiss` when dismissible
+- `loader`: `dismiss` only when explicitly dismissible
+- `picker`: `select` with `choiceId`, or `dismiss`
+- `confirm`: `confirm`, or `dismiss` when dismissible
+
+Returns `null` when accepted. Returns client error for stale event ID, invalid action, missing/unknown choice, expired event, or non-dismissible event.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-response-1",
+  "method": "ui.respond",
+  "params": {
+    "id": "56969e9c-f863-4cc8-9c2c-d7512bf10d4d",
+    "action": "confirm"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ui-response-1",
+  "result": null
+}
+```
+
+Top-level `confirm` remains launch-guard-specific for compatibility. It cannot confirm unrelated generic UI event.
+
+##### UI resolution object
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| id      | string | Yes      | Resolved event ID. |
+| outcome | string | Yes      | `confirmed`, `selected`, `dismissed`, `timed_out`, `completed`, `superseded`, or `cancelled`. |
+| choiceId | string | No     | Selected opaque choice ID for `selected`. |
+
 ## Tokens
 
 ### tokens

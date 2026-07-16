@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -33,7 +32,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -231,46 +229,6 @@ func (m *MockPlatform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return []platforms.Launcher{}
 }
 
-// ShowNotice displays a string on-screen of the platform device
-func (m *MockPlatform) ShowNotice(cfg *config.Instance, args widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	callArgs := m.Called(cfg, args)
-	var fn func() error
-	var duration time.Duration
-	if f, ok := callArgs.Get(0).(func() error); ok {
-		fn = f
-	}
-	if d, ok := callArgs.Get(1).(time.Duration); ok {
-		duration = d
-	}
-	if err := callArgs.Error(2); err != nil {
-		return fn, duration, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return fn, duration, nil
-}
-
-// ShowLoader displays a string on-screen alongside an animation
-func (m *MockPlatform) ShowLoader(cfg *config.Instance, args widgetmodels.NoticeArgs) (func() error, error) {
-	callArgs := m.Called(cfg, args)
-	var fn func() error
-	if f, ok := callArgs.Get(0).(func() error); ok {
-		fn = f
-	}
-	if err := callArgs.Error(1); err != nil {
-		return fn, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return fn, nil
-}
-
-// ShowPicker displays a list picker on-screen of the platform device
-func (m *MockPlatform) ShowPicker(cfg *config.Instance, args widgetmodels.PickerArgs) error {
-	callArgs := m.Called(cfg, args)
-	if err := callArgs.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
 func (m *MockPlatform) ConsoleManager() platforms.ConsoleManager {
 	args := m.Called()
 	if manager, ok := args.Get(0).(platforms.ConsoleManager); ok {
@@ -361,11 +319,4 @@ func (m *MockPlatform) SetupBasicMock() {
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
 	m.On("ManagedByPackageManager").Return(false)
 	m.On("Scrapers", mock.AnythingOfType("*config.Instance")).Return(map[string]platforms.Scraper{})
-
-	// Setup common stub functions for UI methods
-	noopFunc := func() error { return nil }
-	m.On("ShowNotice", mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("widgetmodels.NoticeArgs")).Return(noopFunc, time.Duration(0), nil)
-	m.On("ShowLoader", mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("widgetmodels.NoticeArgs")).Return(noopFunc, nil)
 }

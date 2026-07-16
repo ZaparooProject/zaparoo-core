@@ -21,11 +21,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -34,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -50,8 +54,21 @@ type readerManagerEnv struct {
 	scanQueue    chan readers.Scan
 	itq          chan tokens.Token
 	confirmQueue chan chan error
+	ui           *uievents.Service
 	notifCh      <-chan models.Notification
 	clock        clockwork.Clock
+}
+
+type countingUIRenderer struct {
+	presented atomic.Int32
+}
+
+func (r *countingUIRenderer) PresentUI(
+	_ context.Context,
+	_ *models.UIEvent,
+) (func() error, error) {
+	r.presented.Add(1)
+	return func() error { return nil }, nil
 }
 
 func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerManagerEnv {
@@ -59,6 +76,15 @@ func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerMan
 }
 
 func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func(*config.Instance)) *readerManagerEnv {
+	return setupReaderManagerWithRenderer(t, clk, nil, opts...)
+}
+
+func setupReaderManagerWithRenderer(
+	t *testing.T,
+	clk clockwork.Clock,
+	renderer uievents.Renderer,
+	opts ...func(*config.Instance),
+) *readerManagerEnv {
 	t.Helper()
 
 	fs := testhelpers.NewMemoryFS()
@@ -77,6 +103,16 @@ func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func
 	mockPlatform.On("LookupMapping", mock.Anything).Return("", false)
 
 	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
+	uiClock := clk
+	if uiClock == nil {
+		uiClock = clockwork.NewRealClock()
+	}
+	ui := uievents.New(uiClock, renderer, func(payload models.UIStateResponse) {
+		notifications.UIChanged(func(notification models.Notification) {
+			st.Notifications <- notification
+		}, payload)
+	})
+	st.SetUIEvents(ui)
 
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
@@ -90,6 +126,7 @@ func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func
 	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 	cfq := make(chan chan error, 10)
+	lgcq := make(chan struct{}, 1)
 
 	svc := &ServiceContext{
 		Platform:            mockPlatform,
@@ -99,7 +136,15 @@ func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
+		LaunchGuardCancel:   lgcq,
+		UI:                  ui,
 	}
+	st.SetOnMediaStopHook(func() {
+		select {
+		case lgcq <- struct{}{}:
+		default:
+		}
+	})
 
 	go readerManager(svc, itq, scanQueue, mockPlayer, clk)
 
@@ -119,6 +164,7 @@ func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func
 		scanQueue:    scanQueue,
 		itq:          itq,
 		confirmQueue: cfq,
+		ui:           ui,
 		notifCh:      notifCh,
 		clock:        clk,
 	}
@@ -159,6 +205,30 @@ func (env *readerManagerEnv) expectNotification(t *testing.T, method string) {
 			}
 		case <-timeout:
 			t.Fatalf("timed out waiting for %s notification", method)
+		}
+	}
+}
+
+func (env *readerManagerEnv) expectUIState(
+	t *testing.T,
+	matches func(models.UIStateResponse) bool,
+) models.UIStateResponse {
+	t.Helper()
+	timeout := time.After(tokenTimeout)
+	for {
+		select {
+		case notif := <-env.notifCh:
+			if notif.Method != models.NotificationUIChanged {
+				continue
+			}
+			var uiState models.UIStateResponse
+			require.NoError(t, json.Unmarshal(notif.Params, &uiState))
+			if matches(uiState) {
+				return uiState
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for matching ui.changed notification")
+			return models.UIStateResponse{}
 		}
 	}
 }
@@ -731,9 +801,14 @@ func TestReaderManager_LaunchGuard_APIConfirm(t *testing.T) {
 	err := <-result
 	require.NoError(t, err)
 
-	// Token should now be on itq
+	// Token should now be on itq and legacy confirm must close global UI.
 	tok := env.expectToken(t)
 	assert.Equal(t, "card-b", tok.UID)
+	uiState := env.expectUIState(t, func(snapshot models.UIStateResponse) bool {
+		return len(snapshot.Events) == 0 && len(snapshot.Resolved) == 1 &&
+			snapshot.Resolved[0].Outcome == models.UIOutcomeConfirmed
+	})
+	assert.Empty(t, uiState.Events)
 }
 
 func TestReaderManager_LaunchGuard_APIConfirmNoStaged(t *testing.T) {
@@ -974,6 +1049,153 @@ func TestReaderManager_LaunchGuard_EmitsStagedNotification(t *testing.T) {
 			t.Fatal("expected tokens.staged notification")
 		}
 	}
+}
+
+func TestReaderManager_LaunchGuard_OpensGlobalConfirmEvent(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuard)
+	env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes", Name: "Current Game"})
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "**launch.system:snes",
+			ScanTime: fakeClock.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	uiState := env.ui.State()
+	require.Len(t, uiState.Events, 1)
+	event := uiState.Events[0]
+	assert.Equal(t, models.UIEventKindConfirm, event.Kind)
+	assert.Equal(t, "Change game?", event.Title)
+	assert.Equal(t, "**launch.system:snes", event.Message)
+	require.NotNil(t, event.ExpiresAt)
+	assert.WithinDuration(t, fakeClock.Now().Add(15*time.Second), *event.ExpiresAt, time.Microsecond)
+}
+
+func TestReaderManager_LaunchGuard_UsesUIDWhenTokenTextIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	env := setupReaderManager(t, withLaunchGuard)
+	env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes"})
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token:  &tokens.Token{UID: "card-without-text", ScanTime: time.Now()},
+	})
+	env.expectNoToken(t)
+
+	uiState := env.ui.State()
+	require.Len(t, uiState.Events, 1)
+	assert.Equal(t, "card-without-text", uiState.Events[0].Message)
+}
+
+func TestReaderManager_LaunchGuard_DoesNotRenderConfirmOnHost(t *testing.T) {
+	t.Parallel()
+
+	renderer := &countingUIRenderer{}
+	env := setupReaderManagerWithRenderer(t, nil, renderer, withLaunchGuard)
+	env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes", Name: "Current Game"})
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	require.Len(t, env.ui.State().Events, 1)
+	assert.Equal(t, int32(0), renderer.presented.Load())
+}
+
+func TestReaderManager_LaunchGuard_UIConfirmAndDismiss(t *testing.T) {
+	t.Parallel()
+
+	t.Run("confirm launches", func(t *testing.T) {
+		env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+		env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes"})
+		env.sendScan(readers.Scan{
+			Source: "test-reader",
+			Token:  &tokens.Token{UID: "card-a", Text: "**launch.system:snes", ScanTime: time.Now()},
+		})
+		env.expectNoToken(t)
+
+		event := env.ui.State().Events[0]
+		require.NoError(t, env.ui.Respond(event.ID, models.UIResponseActionConfirm, ""))
+		assert.Equal(t, "card-a", env.expectToken(t).UID)
+	})
+
+	t.Run("dismiss clears stage", func(t *testing.T) {
+		env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+		env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes"})
+		env.sendScan(readers.Scan{
+			Source: "test-reader",
+			Token:  &tokens.Token{UID: "card-a", Text: "**launch.system:snes", ScanTime: time.Now()},
+		})
+		env.expectNoToken(t)
+
+		event := env.ui.State().Events[0]
+		require.NoError(t, env.ui.Respond(event.ID, models.UIResponseActionDismiss, ""))
+		result := make(chan error, 1)
+		env.confirmQueue <- result
+		require.ErrorIs(t, <-result, ErrNoStagedToken)
+		env.expectNoToken(t)
+	})
+}
+
+func TestReaderManager_LaunchGuard_MediaStopCancelsGlobalEvent(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+	env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes"})
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token:  &tokens.Token{UID: "card-a", Text: "**launch.system:snes", ScanTime: time.Now()},
+	})
+	env.expectNoToken(t)
+	require.Len(t, env.ui.State().Events, 1)
+
+	env.st.SetActiveMedia(nil)
+	uiState := env.expectUIState(t, func(snapshot models.UIStateResponse) bool {
+		return len(snapshot.Events) == 0 && len(snapshot.Resolved) == 1 &&
+			snapshot.Resolved[0].Outcome == models.UIOutcomeCancelled
+	})
+	assert.Empty(t, uiState.Events)
+
+	result := make(chan error, 1)
+	env.confirmQueue <- result
+	require.ErrorIs(t, <-result, ErrNoStagedToken)
+	env.expectNoToken(t)
+}
+
+func TestReaderManager_LaunchGuard_DelayResetUpdatesSameEvent(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuardDelay)
+	env.st.SetActiveMedia(&models.ActiveMedia{LauncherID: "test", SystemID: "nes"})
+	card := &tokens.Token{UID: "card-a", Text: "**launch.system:snes", ScanTime: fakeClock.Now()}
+
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	original := env.ui.State()
+	require.Len(t, original.Events, 1)
+
+	fakeClock.Advance(time.Second)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	env.expectNoToken(t)
+	updated := env.ui.State()
+	require.Len(t, updated.Events, 1)
+	assert.Equal(t, original.Events[0].ID, updated.Events[0].ID)
+	assert.Greater(t, updated.Revision, original.Revision)
+	require.NotNil(t, updated.Events[0].ExpiresAt)
+	assert.WithinDuration(
+		t, fakeClock.Now().Add(15*time.Second), *updated.Events[0].ExpiresAt, time.Microsecond,
+	)
 }
 
 // Utility commands pass through launch guard without staging

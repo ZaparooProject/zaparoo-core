@@ -81,6 +81,76 @@ A token was removed from a connected reader.
 
 Returns `null`.
 
+## UI
+
+### ui.changed
+
+Authoritative global UI state changed. Sent when event opens, updates, is replaced, or resolves. Clients should replace local event snapshot with `events` from newest revision rather than applying incremental patches.
+
+Host platform and all connected clients may render same event in parallel. First valid response wins. A terminal update removes event from `events` and describes it in `resolved`, instructing every renderer to close.
+
+`ui.changed` is latest-wins coalescible. Clients that reconnect or suspect missed notifications should query [`ui`](./methods#ui).
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| revision | number | Yes      | Monotonic revision of process-wide UI state shared across clients. Ignore older values. |
+| events   | object[] | Yes    | Complete active event snapshot. Initial implementation contains zero or one event. |
+| resolved | object[] | Yes    | Terminal resolutions associated with this transition. |
+
+Event and resolution fields are defined under [`ui`](./methods#ui-event-object) and [`ui.respond`](./methods#ui-resolution-object).
+
+#### Picker opened
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "ui.changed",
+  "params": {
+    "revision": 12,
+    "events": [
+      {
+        "id": "68bb6f25-dbd4-46a0-a3ac-e4fb54928ac2",
+        "kind": "picker",
+        "title": "Favorites",
+        "choices": [
+          {"id": "e88560a7-76bb-4ab4-a914-da4be745778d", "label": "Game One"},
+          {"id": "ce99379a-b803-4489-9da4-e752e96471e9", "label": "Game Two"}
+        ],
+        "selectedChoiceId": "e88560a7-76bb-4ab4-a914-da4be745778d",
+        "dismissible": true,
+        "createdAt": "2026-07-16T12:00:00Z",
+        "expiresAt": "2026-07-16T12:00:30Z"
+      }
+    ],
+    "resolved": []
+  }
+}
+```
+
+#### Picker resolved
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "ui.changed",
+  "params": {
+    "revision": 13,
+    "events": [],
+    "resolved": [
+      {
+        "id": "68bb6f25-dbd4-46a0-a3ac-e4fb54928ac2",
+        "outcome": "selected",
+        "choiceId": "ce99379a-b803-4489-9da4-e752e96471e9"
+      }
+    ]
+  }
+}
+```
+
+Launch guard continues emitting `tokens.staged` and `tokens.staged.ready` for compatibility while also opening a global `confirm` UI event for API clients. Core does not present this specific confirmation through host platform renderer, preserving existing sound and card re-tap behavior during active media.
+
 ## Media
 
 ### media.started

@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,12 +34,14 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -570,7 +573,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		}
 	}
 
-	items := make([]widgetmodels.PickerItem, 0, len(pls.Items))
+	choices := make([]uievents.Choice, 0, len(pls.Items))
 	for i, m := range pls.Items {
 		var name string
 
@@ -592,9 +595,9 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "?slot=" + slot + "||**playlist.play?slot=" + slot
 
-		items = append(items, widgetmodels.PickerItem{
-			Name:      name,
-			ZapScript: zapscript,
+		choices = append(choices, uievents.Choice{
+			Label: name,
+			Value: zapscript,
 		})
 	}
 
@@ -603,20 +606,52 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	if err := pl.ShowPicker(env.Cfg, widgetmodels.PickerArgs{
-		Title:    pls.Name,
-		Items:    items,
-		Selected: pls.Index,
-	}); err != nil {
-		return platforms.CmdResult{
-			PlaylistChanged: true,
-			Playlist:        pls,
-		}, fmt.Errorf("failed to show picker: %w", err)
-	}
-	return platforms.CmdResult{
+	result := platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        pls,
-	}, nil
+	}
+	if env.UI == nil {
+		log.Warn().Msg("UI event service unavailable, skipping playlist picker")
+		return result, nil
+	}
+	handle, openErr := env.UI.Open(env.ServiceCtx, &uievents.Request{
+		Kind:           apimodels.UIEventKindPicker,
+		Title:          pls.Name,
+		Choices:        choices,
+		SelectedChoice: pls.Index,
+		Timeout:        30 * time.Second,
+		Dismissible:    true,
+	})
+	if openErr != nil {
+		log.Warn().Err(openErr).Msg("failed to open playlist picker")
+		return result, nil
+	}
+	go runPickerResult(env.Cfg, handle, client.LocalClient)
+	return result, nil
+}
+
+func runPickerResult(
+	cfg *config.Instance,
+	handle *uievents.Handle,
+	run func(context.Context, *config.Instance, string, string) (string, error),
+) {
+	result, ok := <-handle.Results
+	if !ok || result.Resolution.Outcome != apimodels.UIOutcomeSelected {
+		return
+	}
+	script, ok := result.Value.(string)
+	if !ok || script == "" {
+		log.Error().Str("event_id", handle.ID).Msg("picker returned invalid private action")
+		return
+	}
+	params, err := json.Marshal(apimodels.RunParams{Text: &script})
+	if err != nil {
+		log.Error().Err(err).Str("event_id", handle.ID).Msg("failed to marshal picker action")
+		return
+	}
+	if _, err = run(context.Background(), cfg, apimodels.MethodRun, string(params)); err != nil {
+		log.Error().Err(err).Str("event_id", handle.ID).Msg("failed to run picker action")
+	}
 }
 
 //nolint:gocritic // single-use parameter in command handler

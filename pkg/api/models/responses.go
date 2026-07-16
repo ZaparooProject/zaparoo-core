@@ -28,6 +28,35 @@ import (
 	"github.com/google/uuid"
 )
 
+type UIChoice struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type UIEvent struct {
+	CreatedAt        time.Time   `json:"createdAt"`
+	ExpiresAt        *time.Time  `json:"expiresAt,omitempty"`
+	ID               string      `json:"id"`
+	Kind             UIEventKind `json:"kind"`
+	Title            string      `json:"title,omitempty"`
+	Message          string      `json:"message,omitempty"`
+	SelectedChoiceID string      `json:"selectedChoiceId,omitempty"`
+	Choices          []UIChoice  `json:"choices,omitempty"`
+	Dismissible      bool        `json:"dismissible"`
+}
+
+type UIResolution struct {
+	ID       string    `json:"id"`
+	Outcome  UIOutcome `json:"outcome"`
+	ChoiceID string    `json:"choiceId,omitempty"`
+}
+
+type UIStateResponse struct {
+	Events   []UIEvent      `json:"events"`
+	Resolved []UIResolution `json:"resolved"`
+	Revision uint64         `json:"revision"`
+}
+
 type SearchResultMedia struct {
 	RelPath            *string            `json:"relativePath,omitempty"`
 	System             System             `json:"system"`

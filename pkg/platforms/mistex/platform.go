@@ -38,7 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -375,27 +374,6 @@ func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
 	gamelist := gamelistxml.NewPlatformScraper()
 	media := localmedia.NewPlatformScraper()
 	return map[string]platforms.Scraper{gamelist.ID: gamelist, media.ID: media}
-}
-
-func (*Platform) ShowNotice(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	return nil, 0, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowLoader(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, error) {
-	return nil, platforms.ErrNotSupported
-}
-
-func (*Platform) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

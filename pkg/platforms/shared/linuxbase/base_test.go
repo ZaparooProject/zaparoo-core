@@ -36,7 +36,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -443,17 +442,6 @@ func TestNoOpMethods(t *testing.T) {
 	path, found := base.LookupMapping(nil)
 	assert.Empty(t, path)
 	assert.False(t, found)
-
-	closeFunc, duration, err := base.ShowNotice(nil, widgetmodels.NoticeArgs{})
-	assert.Nil(t, closeFunc)
-	assert.Zero(t, duration)
-	require.ErrorIs(t, err, platforms.ErrNotSupported)
-
-	loaderClose, err := base.ShowLoader(nil, widgetmodels.NoticeArgs{})
-	assert.Nil(t, loaderClose)
-	require.ErrorIs(t, err, platforms.ErrNotSupported)
-
-	require.ErrorIs(t, base.ShowPicker(nil, widgetmodels.PickerArgs{}), platforms.ErrNotSupported)
 
 	assert.IsType(t, platforms.NoOpConsoleManager{}, base.ConsoleManager())
 }

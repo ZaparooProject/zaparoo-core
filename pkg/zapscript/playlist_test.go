@@ -21,12 +21,15 @@ package zapscript
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -34,7 +37,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -45,6 +49,15 @@ func newPlaylistTestPlatform() *mocks.MockPlatform {
 	mp := mocks.NewMockPlatform()
 	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
 	return mp
+}
+
+func selectedChoiceIndex(event *apimodels.UIEvent) int {
+	for i, choice := range event.Choices {
+		if choice.ID == event.SelectedChoiceID {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestQueuePlaylistUpdateReturnsWhenContextCancelled(t *testing.T) {
@@ -209,20 +222,17 @@ func TestCmdPlaylistOpen_NoArgs(t *testing.T) {
 			mockPlatform := newPlaylistTestPlatform()
 			cfg := &config.Instance{}
 
-			// Mock ShowPicker if we expect it to be called
+			var ui *uievents.Service
 			if tt.expectPickerCall {
-				mockPlatform.On("ShowPicker", cfg, mock.MatchedBy(func(args models.PickerArgs) bool {
-					// Verify picker shows the active playlist
-					return args.Title == tt.activePlaylist.Name &&
-						len(args.Items) == len(tt.activePlaylist.Items) &&
-						args.Selected == tt.activePlaylist.Index
-				})).Return(nil)
+				ui = uievents.New(clockwork.NewFakeClock(), nil, nil)
 			}
 
 			// Create playlist queue channel
 			playlistQueue := make(chan *playlists.Playlist, 1)
 
 			env := platforms.CmdEnv{
+				ServiceCtx: t.Context(),
+				UI:         ui,
 				Cmd: zapscript.Command{
 					Name: "playlist.open",
 					Args: []string{}, // No arguments!
@@ -252,9 +262,204 @@ func TestCmdPlaylistOpen_NoArgs(t *testing.T) {
 					t.Fatal("expected playlist to be queued")
 				}
 
-				mockPlatform.AssertExpectations(t)
+				state := ui.State()
+				require.Len(t, state.Events, 1)
+				assert.Equal(t, tt.activePlaylist.Index, selectedChoiceIndex(&state.Events[0]))
+				require.NoError(t, ui.Respond(
+					state.Events[0].ID, apimodels.UIResponseActionDismiss, "",
+				))
 			}
 		})
+	}
+}
+
+func TestCmdPlaylistOpen_UsesGlobalUIEvent(t *testing.T) {
+	t.Parallel()
+
+	active := &playlists.Playlist{
+		ID:   "test-playlist",
+		Name: "Test Playlist",
+		Items: []playlists.PlaylistItem{
+			{Name: "Item 1", ZapScript: "**test1"},
+			{Name: "Item 2", ZapScript: "**test2"},
+		},
+		Index: 1,
+	}
+	ui := uievents.New(clockwork.NewFakeClock(), nil, nil)
+	queue := make(chan *playlists.Playlist, 1)
+	env := platforms.CmdEnv{
+		ServiceCtx: t.Context(),
+		UI:         ui,
+		Cmd:        zapscript.Command{Name: "playlist.open"},
+		Cfg:        &config.Instance{},
+		Playlist: playlists.PlaylistController{
+			Active: active,
+			Queue:  queue,
+		},
+	}
+
+	result, err := cmdPlaylistOpen(newPlaylistTestPlatform(), env)
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+
+	state := ui.State()
+	require.Len(t, state.Events, 1)
+	event := state.Events[0]
+	assert.Equal(t, apimodels.UIEventKindPicker, event.Kind)
+	assert.Equal(t, "Test Playlist", event.Title)
+	require.Len(t, event.Choices, 2)
+	assert.Equal(t, event.Choices[1].ID, event.SelectedChoiceID)
+
+	encoded, err := json.Marshal(event)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "**test")
+	require.NoError(t, ui.Respond(event.ID, apimodels.UIResponseActionDismiss, ""))
+}
+
+func TestCmdPlaylistOpen_PickerUnavailableKeepsPlaylistUpdate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ui   func() *uievents.Service
+		name string
+	}{
+		{name: "missing service"},
+		{
+			name: "closed service",
+			ui: func() *uievents.Service {
+				service := uievents.New(clockwork.NewFakeClock(), nil, nil)
+				service.Shutdown()
+				return service
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var ui *uievents.Service
+			if tt.ui != nil {
+				ui = tt.ui()
+			}
+			active := &playlists.Playlist{
+				ID:    "test-playlist",
+				Name:  "Test Playlist",
+				Items: []playlists.PlaylistItem{{Name: "Item", ZapScript: "**test"}},
+			}
+			queue := make(chan *playlists.Playlist, 1)
+			env := platforms.CmdEnv{
+				ServiceCtx: t.Context(),
+				UI:         ui,
+				Cmd:        zapscript.Command{Name: "playlist.open"},
+				Cfg:        &config.Instance{},
+				Playlist: playlists.PlaylistController{
+					Active: active,
+					Queue:  queue,
+				},
+			}
+
+			result, err := cmdPlaylistOpen(newPlaylistTestPlatform(), env)
+			require.NoError(t, err)
+			assert.True(t, result.PlaylistChanged)
+			assert.Equal(t, active, result.Playlist)
+			select {
+			case queued := <-queue:
+				assert.Equal(t, active, queued)
+			case <-time.After(time.Second):
+				t.Fatal("playlist update was not queued")
+			}
+			if ui != nil {
+				assert.Empty(t, ui.State().Events)
+			}
+		})
+	}
+}
+
+func TestRunPickerResult_ExecutesPrivateActionOnce(t *testing.T) {
+	t.Parallel()
+
+	ui := uievents.New(clockwork.NewFakeClock(), nil, nil)
+	handle, err := ui.Open(t.Context(), &uievents.Request{
+		Kind:    apimodels.UIEventKindPicker,
+		Choices: []uievents.Choice{{Label: "Game", Value: "**launch:game"}},
+	})
+	require.NoError(t, err)
+
+	called := make(chan apimodels.RunParams, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runPickerResult(&config.Instance{}, handle, func(
+			_ context.Context,
+			_ *config.Instance,
+			method string,
+			params string,
+		) (string, error) {
+			assert.Equal(t, apimodels.MethodRun, method)
+			var runParams apimodels.RunParams
+			if unmarshalErr := json.Unmarshal([]byte(params), &runParams); unmarshalErr != nil {
+				assert.NoError(t, unmarshalErr)
+				return "", fmt.Errorf("unmarshal picker params: %w", unmarshalErr)
+			}
+			called <- runParams
+			return "", nil
+		})
+	}()
+
+	event := ui.State().Events[0]
+	require.NoError(t, ui.Respond(
+		event.ID, apimodels.UIResponseActionSelect, event.Choices[0].ID,
+	))
+
+	select {
+	case params := <-called:
+		require.NotNil(t, params.Text)
+		assert.Equal(t, "**launch:game", *params.Text)
+	case <-time.After(time.Second):
+		t.Fatal("picker action was not executed")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("picker result handler did not exit")
+	}
+}
+
+func TestRunPickerResult_DismissExecutesNothing(t *testing.T) {
+	t.Parallel()
+
+	ui := uievents.New(clockwork.NewFakeClock(), nil, nil)
+	handle, err := ui.Open(t.Context(), &uievents.Request{
+		Kind:        apimodels.UIEventKindPicker,
+		Choices:     []uievents.Choice{{Label: "Game", Value: "**launch:game"}},
+		Dismissible: true,
+	})
+	require.NoError(t, err)
+
+	called := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runPickerResult(&config.Instance{}, handle, func(
+			context.Context, *config.Instance, string, string,
+		) (string, error) {
+			called <- struct{}{}
+			return "", nil
+		})
+	}()
+
+	event := ui.State().Events[0]
+	require.NoError(t, ui.Respond(event.ID, apimodels.UIResponseActionDismiss, ""))
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("picker result handler did not exit")
+	}
+	select {
+	case <-called:
+		t.Fatal("dismissed picker executed an action")
+	default:
 	}
 }
 
@@ -291,15 +496,12 @@ Title3=Item 3`
 		Playing: true,
 	}
 
-	// Mock ShowPicker - verify it's called with preserved index
-	mockPlatform.On("ShowPicker", cfg, mock.MatchedBy(func(args models.PickerArgs) bool {
-		// Should preserve the Index from active playlist
-		return args.Selected == 2 && len(args.Items) == 3
-	})).Return(nil)
-
+	ui := uievents.New(clockwork.NewFakeClock(), nil, nil)
 	playlistQueue := make(chan *playlists.Playlist, 1)
 
 	env := platforms.CmdEnv{
+		ServiceCtx: t.Context(),
+		UI:         ui,
 		Cmd: zapscript.Command{
 			Name: "playlist.open",
 			Args: []string{plsFile}, // Argument matches active playlist
@@ -316,8 +518,10 @@ Title3=Item 3`
 	require.NoError(t, err)
 	assert.True(t, result.PlaylistChanged)
 	assert.Equal(t, 2, result.Playlist.Index, "should preserve current position")
-
-	mockPlatform.AssertExpectations(t)
+	state := ui.State()
+	require.Len(t, state.Events, 1)
+	assert.Equal(t, 2, selectedChoiceIndex(&state.Events[0]))
+	require.NoError(t, ui.Respond(state.Events[0].ID, apimodels.UIResponseActionDismiss, ""))
 }
 
 // makePlaylistEnv returns a 3-item playlist and a buffered queue channel for use in tests.

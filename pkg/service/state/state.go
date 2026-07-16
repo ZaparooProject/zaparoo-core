@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
 )
 
@@ -77,6 +78,7 @@ type State struct {
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
 	launcherManager       *LauncherManager
+	uiEvents              *uievents.Service
 	bootUUID              string
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
@@ -104,6 +106,20 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 		launcherManager: NewLauncherManager(),
 		bootUUID:        bootUUID,
 	}, ns
+}
+
+// SetUIEvents stores the process-wide UI event service.
+func (s *State) SetUIEvents(service *uievents.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uiEvents = service
+}
+
+// UIEvents returns the process-wide UI event service.
+func (s *State) UIEvents() *uievents.Service {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.uiEvents
 }
 
 func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-use parameter in state setter

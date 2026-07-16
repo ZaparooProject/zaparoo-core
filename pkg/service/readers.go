@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -321,9 +322,55 @@ func readerManager(
 	var exitTimer clockwork.Timer
 
 	var stagedToken *tokens.Token
-	var guardTimeout <-chan time.Time
+	var guardUI *uievents.Handle
+	var guardResults <-chan uievents.Result
 	var guardDelay <-chan time.Time
 	var delayExpired bool
+
+	resetGuardState := func() {
+		stagedToken = nil
+		guardUI = nil
+		guardResults = nil
+		guardDelay = nil
+		delayExpired = false
+	}
+	completeGuard := func(outcome models.UIOutcome) error {
+		var err error
+		if guardUI != nil {
+			err = guardUI.Complete(outcome)
+		}
+		resetGuardState()
+		if err != nil {
+			return fmt.Errorf("complete launch guard UI event: %w", err)
+		}
+		return nil
+	}
+	cancelGuard := func() {
+		if err := completeGuard(models.UIOutcomeCancelled); err != nil {
+			log.Debug().Err(err).Msg("launch guard: cancellation lost resolution race")
+		}
+	}
+	applyGuardResult := func(result uievents.Result) error {
+		staged := stagedToken
+		resetGuardState()
+		if result.Resolution.Outcome != models.UIOutcomeConfirmed {
+			log.Info().Str("outcome", string(result.Resolution.Outcome)).
+				Msg("launch guard: staged token resolved without launch")
+			return nil
+		}
+		if staged == nil || svc.State.ActiveMedia() == nil {
+			log.Info().Msg("launch guard: ignoring confirmation after media stopped")
+			return nil
+		}
+		confirmed := *staged
+		svc.State.SetActiveCard(confirmed)
+		select {
+		case itq <- confirmed:
+			return nil
+		case <-svc.State.GetContext().Done():
+			return svc.State.GetContext().Err()
+		}
+	}
 
 	var autoDetector *AutoDetector
 	if svc.Config.AutoDetect() {
@@ -449,18 +496,20 @@ preprocessing:
 			svc.State.SetSoftwareToken(stoken)
 			continue preprocessing
 		case result := <-svc.ConfirmQueue:
-			// API confirm request — launch the staged token if one exists.
-			// API confirm bypasses any active delay.
-			if stagedToken == nil {
+			// Legacy API confirm remains launch-guard-specific and bypasses delay.
+			if stagedToken == nil || svc.State.ActiveMedia() == nil {
+				if stagedToken != nil {
+					cancelGuard()
+				}
 				result <- ErrNoStagedToken
 				continue preprocessing
 			}
 			log.Info().Msgf("launch guard: API confirmed staged token: %v", stagedToken)
-			guardTimeout = nil
-			guardDelay = nil
-			delayExpired = false
 			confirmed := *stagedToken
-			stagedToken = nil
+			if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
+				result <- ErrNoStagedToken
+				continue preprocessing
+			}
 			svc.State.SetActiveCard(confirmed)
 			select {
 			case itq <- confirmed:
@@ -470,8 +519,27 @@ preprocessing:
 			}
 			result <- nil
 			continue preprocessing
+		case uiResult, ok := <-guardResults:
+			if !ok {
+				guardResults = nil
+				continue preprocessing
+			}
+			if err := applyGuardResult(uiResult); err != nil {
+				break preprocessing
+			}
+			continue preprocessing
+		case <-svc.LaunchGuardCancel:
+			if stagedToken != nil {
+				log.Info().Msg("launch guard: media stopped, cancelling staged token")
+				cancelGuard()
+			}
+			continue preprocessing
 		case <-guardDelay:
-			// Delay period expired — token is now ready for re-tap confirmation
+			// Delay period expired — token is now ready for re-tap confirmation.
+			if stagedToken == nil {
+				guardDelay = nil
+				continue preprocessing
+			}
 			log.Info().Msg("launch guard: delay expired, ready for confirmation")
 			delayExpired = true
 			guardDelay = nil
@@ -485,37 +553,29 @@ preprocessing:
 			path, enabled := svc.Config.ReadySoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.ReadySound, "ready")
 			continue preprocessing
-		case <-guardTimeout:
-			// Staged token expired
-			log.Info().Msg("launch guard: staged token expired")
-			stagedToken = nil
-			guardTimeout = nil
-			guardDelay = nil
-			delayExpired = false
-			continue preprocessing
 		}
 
-		// If a scan arrives while the timeout is also ready, process the timeout
-		// first. Otherwise Go's random select order can confirm an expired token.
-		if stagedToken != nil && guardTimeout != nil {
+		// If a scan races a terminal UI result, process resolution first. This
+		// prevents a re-tap from confirming a token whose Core timeout won.
+		if stagedToken != nil && guardResults != nil {
 			select {
-			case <-guardTimeout:
-				log.Info().Msg("launch guard: staged token expired")
-				stagedToken = nil
-				guardTimeout = nil
-				guardDelay = nil
-				delayExpired = false
+			case uiResult, ok := <-guardResults:
+				if !ok {
+					guardResults = nil
+					continue preprocessing
+				}
+				if err := applyGuardResult(uiResult); err != nil {
+					break preprocessing
+				}
+				continue preprocessing
 			default:
 			}
 		}
 
-		// Clear stale staged token if media has stopped since staging
+		// Clear stale staged token if media stopped before cancellation arrived.
 		if stagedToken != nil && svc.State.ActiveMedia() == nil {
 			log.Info().Msg("launch guard: media stopped, clearing stale staged token")
-			stagedToken = nil
-			guardTimeout = nil
-			guardDelay = nil
-			delayExpired = false
+			cancelGuard()
 		}
 
 		// Launch guard confirmation: check BEFORE the preprocessor so that
@@ -526,12 +586,14 @@ preprocessing:
 			svc.Config.LaunchGuardEnabled() && !svc.Config.LaunchGuardRequireConfirm() {
 			if helpers.TokensEqual(scan, stagedToken) && svc.State.ActiveMedia() != nil {
 				if !delayExpired {
-					// Re-tap during delay period — reset both timers as punishment
+					// Re-tap during delay period — reset both timers as punishment.
 					log.Info().Msg("launch guard: re-tap during delay, resetting timers")
-					timeout := svc.Config.LaunchGuardTimeout()
+					timeout := time.Duration(svc.Config.LaunchGuardTimeout() * float32(time.Second))
 					delay := svc.Config.LaunchGuardDelay()
-					if timeout > 0 {
-						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					if guardUI != nil {
+						if err := guardUI.Update(uievents.Update{Timeout: &timeout}); err != nil {
+							log.Warn().Err(err).Msg("launch guard: failed to reset UI expiry")
+						}
 					}
 					if delay > 0 {
 						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
@@ -540,12 +602,13 @@ preprocessing:
 					continue preprocessing
 				}
 				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
-				guardTimeout = nil
-				guardDelay = nil
-				delayExpired = false
 				confirmed := *stagedToken
-				stagedToken = nil
-				// Let the preprocessor know what's on the reader now
+				if err := completeGuard(models.UIOutcomeConfirmed); err != nil {
+					log.Info().Err(err).Msg("launch guard: re-tap lost resolution race")
+					proc.Process(scan, readerError)
+					continue preprocessing
+				}
+				// Let the preprocessor know what's on the reader now.
 				proc.Process(scan, readerError)
 				svc.State.SetActiveCard(confirmed)
 				select {
@@ -653,10 +716,28 @@ preprocessing:
 					path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
 					helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
 
-					if timeout := svc.Config.LaunchGuardTimeout(); timeout > 0 {
-						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					message := scan.Text
+					if message == "" {
+						message = scan.UID
+					}
+					if svc.UI == nil {
+						log.Error().Msg("launch guard: UI event service unavailable")
 					} else {
-						guardTimeout = nil
+						timeout := time.Duration(svc.Config.LaunchGuardTimeout() * float32(time.Second))
+						handle, openErr := svc.UI.Open(svc.State.GetContext(), &uievents.Request{
+							Kind:             models.UIEventKindConfirm,
+							Title:            "Change game?",
+							Message:          message,
+							Timeout:          timeout,
+							Dismissible:      true,
+							SkipHostRenderer: true,
+						})
+						if openErr != nil {
+							log.Error().Err(openErr).Msg("launch guard: failed to open UI event")
+						} else {
+							guardUI = handle
+							guardResults = handle.Results
+						}
 					}
 
 					if delay := svc.Config.LaunchGuardDelay(); delay > 0 {

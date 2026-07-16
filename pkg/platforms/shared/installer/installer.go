@@ -31,11 +31,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/rs/zerolog/log"
 )
 
@@ -78,27 +79,37 @@ func namesFromURL(rawURL, defaultName string) mediaNames {
 	}
 }
 
-func showPreNotice(cfg *config.Instance, pl platforms.Platform, text string) error {
-	if text != "" {
-		hide, delay, err := pl.ShowNotice(cfg, widgetmodels.NoticeArgs{
-			Text: text,
-		})
-		if err != nil {
-			return fmt.Errorf("error showing pre-notice: %w", err)
+func showPreNotice(
+	ctx context.Context,
+	ui *uievents.Service,
+	text string,
+) error {
+	if text == "" {
+		return nil
+	}
+	if ui == nil {
+		return nil
+	}
+	handle, err := ui.Open(ctx, &uievents.Request{
+		Kind:        models.UIEventKindNotice,
+		Message:     text,
+		Timeout:     30 * time.Second,
+		Dismissible: true,
+	})
+	if err != nil {
+		return fmt.Errorf("error opening pre-notice: %w", err)
+	}
+	if handle.MinimumDisplay > 0 {
+		log.Debug().Dur("delay", handle.MinimumDisplay).Msg("delaying pre-notice")
+		timer := time.NewTimer(handle.MinimumDisplay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
 		}
-		if hide == nil {
-			hide = func() error { return nil }
-		}
-
-		if delay > 0 {
-			log.Debug().Msgf("delaying pre-notice: %d", delay)
-			time.Sleep(delay)
-		}
-
-		err = hide()
-		if err != nil {
-			return fmt.Errorf("error hiding pre-notice: %w", err)
-		}
+	}
+	if err = handle.Complete(models.UIOutcomeCompleted); err != nil {
+		return fmt.Errorf("error completing pre-notice: %w", err)
 	}
 	return nil
 }
@@ -145,6 +156,7 @@ func InstallRemoteFile(
 	ctx context.Context,
 	cfg *config.Instance,
 	pl platforms.Platform,
+	ui *uievents.Service,
 	fileURL string,
 	systemID string,
 	preNotice string,
@@ -180,7 +192,7 @@ func InstallRemoteFile(
 
 	// check if the file already exists
 	if _, statErr := os.Stat(localPath); statErr == nil {
-		if err = showPreNotice(cfg, pl, preNotice); err != nil {
+		if err = showPreNotice(ctx, ui, preNotice); err != nil {
 			log.Warn().Err(err).Msgf("error showing pre-notice")
 		}
 		return localPath, nil
@@ -199,11 +211,19 @@ func InstallRemoteFile(
 	itemDisplay := names.display
 	loadingText := fmt.Sprintf("Downloading %s...", itemDisplay)
 
-	hideLoader, err := pl.ShowLoader(cfg, widgetmodels.NoticeArgs{
-		Text: loadingText,
-	})
-	if err != nil {
-		log.Warn().Err(err).Msgf("error showing loading dialog")
+	var hideLoader func() error
+	if ui != nil {
+		handle, openErr := ui.Open(ctx, &uievents.Request{
+			Kind:    models.UIEventKindLoader,
+			Message: loadingText,
+		})
+		if openErr != nil {
+			log.Warn().Err(openErr).Msg("error opening loading event")
+		} else {
+			hideLoader = func() error {
+				return handle.Complete(models.UIOutcomeCompleted)
+			}
+		}
 	}
 	if hideLoader == nil {
 		hideLoader = func() error { return nil }
@@ -236,7 +256,7 @@ func InstallRemoteFile(
 		log.Warn().Err(err).Msgf("error hiding loading dialog")
 	}
 
-	err = showPreNotice(cfg, pl, preNotice)
+	err = showPreNotice(ctx, ui, preNotice)
 	if err != nil {
 		log.Warn().Err(err).Msgf("error showing pre-notice")
 	}

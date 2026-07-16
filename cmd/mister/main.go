@@ -164,7 +164,7 @@ func run() error {
 
 	switch {
 	case *showLoader != "":
-		err := widgets.NoticeUI(pl, *showLoader, true)
+		err := widgets.NoticeUI(cfg, pl, *showLoader, true)
 		if err != nil {
 			return fmt.Errorf("error showing loader: %w", err)
 		}
@@ -176,7 +176,7 @@ func run() error {
 		}
 		return nil
 	case *showNotice != "":
-		err := widgets.NoticeUI(pl, *showNotice, false)
+		err := widgets.NoticeUI(cfg, pl, *showNotice, false)
 		if err != nil {
 			return fmt.Errorf("error showing notice: %w", err)
 		}

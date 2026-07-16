@@ -553,3 +553,29 @@ func TestBroker_CoalesceDoesNotAffectCriticalEvents(t *testing.T) {
 	assert.Equal(t, models.NotificationTokensAdded, notif.Method,
 		"critical notification must be delivered intact")
 }
+
+func TestBrokerPublishBypassesFullSourceQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := make(chan models.Notification, 1)
+	source <- models.Notification{Method: "source.blocker"}
+	b := NewBroker(ctx, source, models.NotificationUIChanged)
+	defer b.Stop()
+	sub, _ := b.Subscribe(1)
+
+	expected := models.Notification{
+		Method: models.NotificationUIChanged,
+		Params: []byte(`{"revision":2}`),
+	}
+	b.Publish(expected)
+
+	select {
+	case received := <-sub:
+		assert.Equal(t, expected, received)
+	case <-time.After(time.Second):
+		t.Fatal("directly published UI state was blocked by full source queue")
+	}
+}
