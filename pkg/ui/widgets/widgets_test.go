@@ -121,6 +121,26 @@ func TestSendUIResponseUsesBoundedContextAndPayload(t *testing.T) {
 	}
 }
 
+func TestSendUIResponseReturnsClientTimeout(t *testing.T) {
+	t.Parallel()
+
+	contextExpired := false
+	err := sendUIResponseWithTimeout(
+		&config.Instance{},
+		"event-1",
+		models.UIResponseActionConfirm,
+		"",
+		10*time.Millisecond,
+		func(ctx context.Context, _ *config.Instance, _, _ string) (string, error) {
+			<-ctx.Done()
+			contextExpired = errors.Is(ctx.Err(), context.DeadlineExceeded)
+			return "", ctx.Err()
+		},
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.True(t, contextExpired)
+}
+
 func TestWatchCompletionRemovesFileAndStopsApp(t *testing.T) {
 	fs := testhelpers.NewMemoryFS()
 	completePath := filepath.Join("tmp", "notice.complete")
@@ -128,8 +148,14 @@ func TestWatchCompletionRemovesFileAndStopsApp(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs.Fs, completePath, []byte{}, 0o600))
 
 	app := tview.NewApplication().SetRoot(tview.NewTextView(), true)
+	watchCtx, cancelWatch := context.WithCancel(t.Context())
+	defer cancelWatch()
+	stopApp := func() {
+		cancelWatch()
+		app.Stop()
+	}
 	_, done := startWidgetApp(t, app)
-	watchCompletion(app, fs.Fs, completePath)
+	watchCompletion(watchCtx, app, fs.Fs, completePath, stopApp)
 	waitForWidgetExit(t, done)
 
 	exists, err := afero.Exists(fs.Fs, completePath)
@@ -202,6 +228,7 @@ func TestPickerUIResponses(t *testing.T) {
 		action    models.UIResponseAction
 		choiceID  string
 		name      string
+		selected  int
 	}{
 		{
 			name:     "select success",
@@ -221,16 +248,33 @@ func TestPickerUIResponses(t *testing.T) {
 			choiceID:  "choice-1",
 			clientErr: errors.New("request failed"),
 		},
+		{
+			name:     "negative selection falls back to first",
+			key:      tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone),
+			action:   models.UIResponseActionSelect,
+			choiceID: "choice-1",
+			selected: -1,
+		},
+		{
+			name:     "selection past end falls back to first",
+			key:      tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone),
+			action:   models.UIResponseActionSelect,
+			choiceID: "choice-1",
+			selected: 2,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fs := testhelpers.NewMemoryFS()
 			argsPath := writeWidgetArgs(t, fs.Fs, "picker.json", widgetmodels.PickerArgs{
-				Title:       "Pick",
-				EventID:     "event-1",
-				Items:       []widgetmodels.PickerItem{{ID: "choice-1", Name: "Game"}},
-				Selected:    0,
+				Title:   "Pick",
+				EventID: "event-1",
+				Items: []widgetmodels.PickerItem{
+					{ID: "choice-1", Name: "Game One"},
+					{ID: "choice-2", Name: "Game Two"},
+				},
+				Selected:    tt.selected,
 				Timeout:     -1,
 				Dismissible: true,
 			})

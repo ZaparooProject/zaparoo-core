@@ -30,6 +30,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -150,7 +151,7 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 
 // handleTimeout creates a timer that exits the app after the specified timeout.
 // Prevents hanging widget processes if the parent application closes unexpectedly.
-func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actualTimeout int) {
+func handleTimeout(timeout int, onTimeout func()) (timer *time.Timer, actualTimeout int) {
 	switch {
 	case timeout == 0:
 		actualTimeout = DefaultTimeout
@@ -161,6 +162,9 @@ func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actual
 	}
 
 	timer = time.AfterFunc(time.Duration(actualTimeout)*time.Second, func() {
+		if onTimeout != nil {
+			onTimeout()
+		}
 		os.Exit(0)
 	})
 
@@ -174,6 +178,19 @@ func sendUIResponse(
 	choiceID string,
 	localClient localClientFunc,
 ) error {
+	return sendUIResponseWithTimeout(
+		cfg, eventID, action, choiceID, uiResponseTimeout, localClient,
+	)
+}
+
+func sendUIResponseWithTimeout(
+	cfg *config.Instance,
+	eventID string,
+	action models.UIResponseAction,
+	choiceID string,
+	timeout time.Duration,
+	localClient localClientFunc,
+) error {
 	params, err := json.Marshal(models.UIRespondParams{
 		ID:       eventID,
 		Action:   action,
@@ -182,7 +199,7 @@ func sendUIResponse(
 	if err != nil {
 		return fmt.Errorf("failed to marshal UI response: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), uiResponseTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if _, err = localClient(ctx, cfg, models.MethodUIRespond, string(params)); err != nil {
 		return fmt.Errorf("failed to send UI response: %w", err)
@@ -190,22 +207,37 @@ func sendUIResponse(
 	return nil
 }
 
-func watchCompletion(app *tview.Application, fs afero.Fs, completePath string) {
+func watchCompletion(
+	ctx context.Context,
+	app *tview.Application,
+	fs afero.Fs,
+	completePath string,
+	stopApp func(),
+) {
 	if completePath == "" {
 		return
 	}
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			if _, err := fs.Stat(completePath); err != nil {
-				continue
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := fs.Stat(completePath); err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						continue
+					}
+					log.Error().Err(err).Msg("error checking UI completion file")
+					return
+				}
+				if err := fs.Remove(completePath); err != nil {
+					log.Error().Err(err).Msg("error removing UI completion file")
+				}
+				app.QueueUpdateDraw(stopApp)
+				return
 			}
-			if err := fs.Remove(completePath); err != nil {
-				log.Error().Err(err).Msg("error removing UI completion file")
-			}
-			app.QueueUpdateDraw(app.Stop)
-			return
 		}
 	}()
 }
@@ -244,6 +276,11 @@ func buildNoticeUI(
 	}
 
 	app := tview.NewApplication()
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	stopApp := func() {
+		cancelWatch()
+		app.Stop()
+	}
 	tui.ApplyTheme(tui.CurrentTheme())
 
 	view := tview.NewTextView().
@@ -258,15 +295,15 @@ func buildNoticeUI(
 		return x, y, w, h
 	})
 
-	handleTimeout(app, noticeArgs.Timeout)
-	watchCompletion(app, fs, noticeArgs.Complete)
+	handleTimeout(noticeArgs.Timeout, cancelWatch)
+	watchCompletion(watchCtx, app, fs, noticeArgs.Complete, stopApp)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() != tcell.KeyEsc && event.Rune() != 'q' && event.Key() != tcell.KeyEnter {
 			return event
 		}
 		if noticeArgs.EventID == "" {
-			app.Stop()
+			stopApp()
 			return nil
 		}
 		if !noticeArgs.Dismissible {
@@ -279,7 +316,7 @@ func buildNoticeUI(
 				log.Error().Err(err).Msg("failed to dismiss UI notice")
 				return
 			}
-			app.QueueUpdateDraw(app.Stop)
+			app.QueueUpdateDraw(stopApp)
 		}()
 		return nil
 	})
@@ -371,7 +408,29 @@ func buildPickerUI(
 	}
 
 	app := tview.NewApplication()
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	stopApp := func() {
+		cancelWatch()
+		app.Stop()
+	}
 	tui.ApplyTheme(tui.CurrentTheme())
+
+	var responseInFlight atomic.Bool
+	sendResponse := func(action models.UIResponseAction, choiceID, errorMessage string) {
+		if !responseInFlight.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			if responseErr := sendUIResponse(
+				cfg, pickerArgs.EventID, action, choiceID, localClient,
+			); responseErr != nil {
+				log.Error().Err(responseErr).Msg(errorMessage)
+				responseInFlight.Store(false)
+				return
+			}
+			app.QueueUpdateDraw(stopApp)
+		}()
+	}
 
 	run := func(item widgetmodels.PickerItem) {
 		log.Info().Msgf("running picker selection: %v", item)
@@ -381,15 +440,7 @@ func buildPickerUI(
 			if action == "" {
 				action = models.UIResponseActionSelect
 			}
-			go func() {
-				if responseErr := sendUIResponse(
-					cfg, pickerArgs.EventID, action, item.ID, localClient,
-				); responseErr != nil {
-					log.Error().Err(responseErr).Msg("failed to send picker response")
-					return
-				}
-				app.QueueUpdateDraw(app.Stop)
-			}()
+			sendResponse(action, item.ID, "failed to send picker response")
 			return
 		}
 
@@ -401,7 +452,7 @@ func buildPickerUI(
 		ps, marshalErr := json.Marshal(zsrp)
 		if marshalErr != nil {
 			log.Error().Err(marshalErr).Msg("error creating run params")
-			app.Stop()
+			stopApp()
 			return
 		}
 
@@ -409,26 +460,18 @@ func buildPickerUI(
 			log.Error().Err(runErr).Msg("error running local client")
 		}
 
-		app.Stop()
+		stopApp()
 	}
 
 	dismiss := func() {
 		if pickerArgs.EventID == "" {
-			app.Stop()
+			stopApp()
 			return
 		}
 		if !pickerArgs.Dismissible {
 			return
 		}
-		go func() {
-			if responseErr := sendUIResponse(
-				cfg, pickerArgs.EventID, models.UIResponseActionDismiss, "", localClient,
-			); responseErr != nil {
-				log.Error().Err(responseErr).Msg("failed to dismiss picker")
-				return
-			}
-			app.QueueUpdateDraw(app.Stop)
-		}()
+		sendResponse(models.UIResponseActionDismiss, "", "failed to dismiss picker")
 	}
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
@@ -501,8 +544,8 @@ func buildPickerUI(
 		list.AddItem("Cancel", "", 0, dismiss)
 	}
 
-	timer, cto := handleTimeout(app, pickerArgs.Timeout)
-	watchCompletion(app, fs, pickerArgs.Complete)
+	timer, cto := handleTimeout(pickerArgs.Timeout, cancelWatch)
+	watchCompletion(watchCtx, app, fs, pickerArgs.Complete, stopApp)
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEsc || event.Rune() == 'q' {
@@ -511,7 +554,7 @@ func buildPickerUI(
 		if timer != nil {
 			timer.Stop()
 		}
-		timer, cto = handleTimeout(app, cto)
+		timer, cto = handleTimeout(cto, cancelWatch)
 		return event
 	})
 
