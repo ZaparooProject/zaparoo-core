@@ -136,9 +136,18 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
 
-Only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read by the current scraper.
+By default, only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read.
 
-For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
+An additional metadata bundle can be configured independently of ROM storage:
+
+```toml
+[scraper.gamelist_xml]
+custom_path = "/path/to/gamelists"
+```
+
+For each indexed system, the scraper also checks `<custom_path>/<system ID>/gamelist.xml`. Game paths in this file resolve against the system's first ROM root; asset paths resolve against the custom system directory. Custom bundle image references are optional: only files present during scraping are stored, and missing references fall back to `media/` artwork under the custom directory and then the system's ROM roots. Run the scraper again after installing more bundle artwork. Regular ROM-root gamelists are processed first and take precedence over matching custom entries.
+
+Custom gamelists enrich existing indexed records; they do not create systems, titles, or media rows. For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
 
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
 
