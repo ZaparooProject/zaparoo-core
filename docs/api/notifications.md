@@ -89,7 +89,7 @@ Authoritative global UI state changed. Sent when event opens, updates, is replac
 
 Host platform and all connected clients may render same event in parallel. First valid response wins. A terminal update removes event from `events` and describes it in `resolved`, instructing every renderer to close.
 
-`ui.changed` is latest-wins coalescible. Clients that reconnect or suspect missed notifications should query [`ui`](./methods#ui).
+`ui.changed` is latest-wins coalescible. Clients that reconnect or suspect missed notifications should query [`ui`](./methods.md#ui).
 
 #### Parameters
 
@@ -99,7 +99,7 @@ Host platform and all connected clients may render same event in parallel. First
 | events   | object[] | Yes    | Complete active event snapshot. Initial implementation contains zero or one event. |
 | resolved | object[] | Yes    | Terminal resolutions associated with this transition. |
 
-Event and resolution fields are defined under [`ui`](./methods#ui-event-object) and [`ui.respond`](./methods#ui-resolution-object).
+Event and resolution fields are defined under [`ui`](./methods.md#ui-event-object) and [`ui.respond`](./methods.md#ui-resolution-object).
 
 #### Picker opened
 
