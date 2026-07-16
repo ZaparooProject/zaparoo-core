@@ -42,6 +42,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -189,7 +190,7 @@ func sendUIResponse(
 	return nil
 }
 
-func watchCompletion(app *tview.Application, completePath string) {
+func watchCompletion(app *tview.Application, fs afero.Fs, completePath string) {
 	if completePath == "" {
 		return
 	}
@@ -197,10 +198,10 @@ func watchCompletion(app *tview.Application, completePath string) {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			if _, err := os.Stat(completePath); err != nil {
+			if _, err := fs.Stat(completePath); err != nil {
 				continue
 			}
-			if err := os.Remove(completePath); err != nil {
+			if err := fs.Remove(completePath); err != nil {
 				log.Error().Err(err).Msg("error removing UI completion file")
 			}
 			app.QueueUpdateDraw(app.Stop)
@@ -215,20 +216,20 @@ func NoticeUIBuilder(
 	argsPath string,
 	loader bool,
 ) (*tview.Application, error) {
-	return buildNoticeUI(cfg, pl, argsPath, loader, client.LocalClient)
+	return buildNoticeUI(cfg, pl, afero.NewOsFs(), argsPath, loader, client.LocalClient)
 }
 
 func buildNoticeUI(
 	cfg *config.Instance,
 	_ platforms.Platform,
+	fs afero.Fs,
 	argsPath string,
 	loader bool,
 	localClient localClientFunc,
 ) (*tview.Application, error) {
 	var noticeArgs widgetmodels.NoticeArgs
 
-	//nolint:gosec // Safe: reads widget argument files from controlled directories
-	args, err := os.ReadFile(argsPath)
+	args, err := afero.ReadFile(fs, argsPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read args file: %w", err)
 	}
@@ -258,7 +259,7 @@ func buildNoticeUI(
 	})
 
 	handleTimeout(app, noticeArgs.Timeout)
-	watchCompletion(app, noticeArgs.Complete)
+	watchCompletion(app, fs, noticeArgs.Complete)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() != tcell.KeyEsc && event.Rune() != 'q' && event.Key() != tcell.KeyEnter {
@@ -344,17 +345,17 @@ func PickerUIBuilder(
 	pl platforms.Platform,
 	argsPath string,
 ) (*tview.Application, error) {
-	return buildPickerUI(cfg, pl, argsPath, client.LocalClient)
+	return buildPickerUI(cfg, pl, afero.NewOsFs(), argsPath, client.LocalClient)
 }
 
 func buildPickerUI(
 	cfg *config.Instance,
 	_ platforms.Platform,
+	fs afero.Fs,
 	argsPath string,
 	localClient localClientFunc,
 ) (*tview.Application, error) {
-	//nolint:gosec // Safe: reads widget argument files from controlled directories
-	args, err := os.ReadFile(argsPath)
+	args, err := afero.ReadFile(fs, argsPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read picker args file: %w", err)
 	}
@@ -501,7 +502,7 @@ func buildPickerUI(
 	}
 
 	timer, cto := handleTimeout(app, pickerArgs.Timeout)
-	watchCompletion(app, pickerArgs.Complete)
+	watchCompletion(app, fs, pickerArgs.Complete)
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEsc || event.Rune() == 'q' {

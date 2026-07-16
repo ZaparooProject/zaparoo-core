@@ -25,9 +25,16 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsMediaLaunchingCommand(t *testing.T) {
@@ -609,6 +616,35 @@ func TestGetExprEnv_NoActiveMedia(t *testing.T) {
 	assert.Empty(t, env.ActiveMedia.LauncherID)
 	assert.Empty(t, env.ActiveMedia.SystemID)
 	assert.Empty(t, env.ActiveMedia.Path)
+}
+
+func TestRunCommandInjectsUIService(t *testing.T) {
+	t.Parallel()
+
+	ui := uievents.New(nil, nil, nil)
+	mockPlatform := mocks.NewMockPlatform()
+	var receivedUI *uievents.Service
+	mockPlatform.On("ForwardCmd", mock.MatchedBy(func(env *platforms.CmdEnv) bool {
+		receivedUI = env.UI
+		return true
+	})).Return(platforms.CmdResult{}, nil).Once()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{},
+		zapscript.Command{Name: zapscript.ZapScriptCmdMisterINI},
+		1,
+		0,
+		&database.Database{},
+		RunCommandOptions{UI: ui},
+		&zapscript.ArgExprEnv{},
+	)
+	require.NoError(t, err)
+	assert.Same(t, ui, receivedUI)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestIsValidCommand(t *testing.T) {

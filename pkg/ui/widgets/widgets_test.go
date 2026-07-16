@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -38,13 +39,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func writeWidgetArgs(t *testing.T, name string, value any) string {
+func writeWidgetArgs(t *testing.T, fs afero.Fs, name string, value any) string {
 	t.Helper()
 
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
-	path := filepath.Join(t.TempDir(), name)
-	require.NoError(t, afero.WriteFile(afero.NewOsFs(), path, data, 0o600))
+	path := filepath.Join("tmp", name)
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, afero.WriteFile(fs, path, data, 0o600))
 	return path
 }
 
@@ -120,15 +122,17 @@ func TestSendUIResponseUsesBoundedContextAndPayload(t *testing.T) {
 }
 
 func TestWatchCompletionRemovesFileAndStopsApp(t *testing.T) {
-	completePath := filepath.Join(t.TempDir(), "notice.complete")
-	require.NoError(t, afero.WriteFile(afero.NewOsFs(), completePath, []byte{}, 0o600))
+	fs := testhelpers.NewMemoryFS()
+	completePath := filepath.Join("tmp", "notice.complete")
+	require.NoError(t, fs.Fs.MkdirAll(filepath.Dir(completePath), 0o755))
+	require.NoError(t, afero.WriteFile(fs.Fs, completePath, []byte{}, 0o600))
 
 	app := tview.NewApplication().SetRoot(tview.NewTextView(), true)
 	_, done := startWidgetApp(t, app)
-	watchCompletion(app, completePath)
+	watchCompletion(app, fs.Fs, completePath)
 	waitForWidgetExit(t, done)
 
-	exists, err := afero.Exists(afero.NewOsFs(), completePath)
+	exists, err := afero.Exists(fs.Fs, completePath)
 	require.NoError(t, err)
 	assert.False(t, exists)
 }
@@ -144,7 +148,8 @@ func TestNoticeUIDismissResponseControlsShutdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			argsPath := writeWidgetArgs(t, "notice.json", widgetmodels.NoticeArgs{
+			fs := testhelpers.NewMemoryFS()
+			argsPath := writeWidgetArgs(t, fs.Fs, "notice.json", widgetmodels.NoticeArgs{
 				Text:        "Notice",
 				EventID:     "event-1",
 				Timeout:     -1,
@@ -152,7 +157,7 @@ func TestNoticeUIDismissResponseControlsShutdown(t *testing.T) {
 			})
 			called := make(chan models.UIRespondParams, 1)
 			app, err := buildNoticeUI(
-				&config.Instance{}, nil, argsPath, false,
+				&config.Instance{}, nil, fs.Fs, argsPath, false,
 				func(_ context.Context, _ *config.Instance, method, params string) (string, error) {
 					if method != models.MethodUIRespond {
 						return "", fmt.Errorf("unexpected method: %s", method)
@@ -220,7 +225,8 @@ func TestPickerUIResponses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			argsPath := writeWidgetArgs(t, "picker.json", widgetmodels.PickerArgs{
+			fs := testhelpers.NewMemoryFS()
+			argsPath := writeWidgetArgs(t, fs.Fs, "picker.json", widgetmodels.PickerArgs{
 				Title:       "Pick",
 				EventID:     "event-1",
 				Items:       []widgetmodels.PickerItem{{ID: "choice-1", Name: "Game"}},
@@ -230,7 +236,7 @@ func TestPickerUIResponses(t *testing.T) {
 			})
 			called := make(chan models.UIRespondParams, 1)
 			app, err := buildPickerUI(
-				&config.Instance{}, nil, argsPath,
+				&config.Instance{}, nil, fs.Fs, argsPath,
 				func(_ context.Context, _ *config.Instance, method, params string) (string, error) {
 					if method != models.MethodUIRespond {
 						return "", fmt.Errorf("unexpected method: %s", method)
