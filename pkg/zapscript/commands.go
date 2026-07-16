@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
@@ -406,6 +407,7 @@ func RunCommand(
 	lm *state.LauncherManager,
 	waitForMediaReady func(context.Context) error,
 	playbackManager audio.PlaybackManager,
+	ui *uievents.Service,
 	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
@@ -472,6 +474,7 @@ func RunCommand(
 		ServiceCtx:        serviceCtx,
 		WaitForMediaReady: waitForMediaReady,
 		PlaybackManager:   playbackManager,
+		UI:                ui,
 		Playlist:          plsc,
 		Source:            token.Source,
 		TotalCommands:     totalCmds,

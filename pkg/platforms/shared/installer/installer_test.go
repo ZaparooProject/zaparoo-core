@@ -28,11 +28,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,30 +47,12 @@ func setupMockPlatformWithTempDir(t *testing.T, tempDir string) *mocks.MockPlatf
 	return mockPlatform
 }
 
-// setupShowLoader sets up the ShowLoader mock to return a noop function.
-func setupShowLoader(mockPlatform *mocks.MockPlatform) {
-	noopFunc := func() error { return nil }
-	mockPlatform.On("ShowLoader",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	).Return(noopFunc, nil)
-}
-
-// setupShowLoaderNil sets up the ShowLoader mock to return nil function.
-func setupShowLoaderNil(mockPlatform *mocks.MockPlatform) {
-	mockPlatform.On("ShowLoader",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	).Return(nil, nil)
-}
-
 func TestInstallRemoteFile_NilContext(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
 	tempDir := t.TempDir()
 	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
-	setupShowLoader(mockPlatform)
 
 	var receivedCtx context.Context
 	downloader := func(args DownloaderArgs) error {
@@ -85,6 +69,7 @@ func TestInstallRemoteFile_NilContext(t *testing.T) {
 		nil,
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"nes",
 		"",
@@ -112,6 +97,7 @@ func TestInstallRemoteFile_NilDownloader(t *testing.T) {
 		context.Background(),
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"nes",
 		"",
@@ -137,6 +123,7 @@ func TestInstallRemoteFile_EmptyURL(t *testing.T) {
 		context.Background(),
 		cfg,
 		mockPlatform,
+		nil,
 		"", // empty URL
 		"nes",
 		"",
@@ -162,6 +149,7 @@ func TestInstallRemoteFile_EmptySystemID(t *testing.T) {
 		context.Background(),
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"", // empty system ID
 		"",
@@ -179,7 +167,6 @@ func TestInstallRemoteFile_ContextPassedToDownloader(t *testing.T) {
 	cfg := &config.Instance{}
 	tempDir := t.TempDir()
 	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
-	setupShowLoader(mockPlatform)
 
 	var receivedCtx context.Context
 	downloader := func(args DownloaderArgs) error {
@@ -198,6 +185,7 @@ func TestInstallRemoteFile_ContextPassedToDownloader(t *testing.T) {
 		ctx,
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"nes",
 		"",
@@ -219,7 +207,6 @@ func TestInstallRemoteFile_ContextCancellation(t *testing.T) {
 	cfg := &config.Instance{}
 	tempDir := t.TempDir()
 	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
-	setupShowLoader(mockPlatform)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -246,6 +233,7 @@ func TestInstallRemoteFile_ContextCancellation(t *testing.T) {
 		ctx,
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"nes",
 		"",
@@ -255,74 +243,6 @@ func TestInstallRemoteFile_ContextCancellation(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, errors.Unwrap(err), context.Canceled)
-}
-
-func TestInstallRemoteFile_NilShowLoaderFunction(t *testing.T) {
-	t.Parallel()
-
-	cfg := &config.Instance{}
-	tempDir := t.TempDir()
-	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
-	setupShowLoaderNil(mockPlatform)
-
-	downloader := func(args DownloaderArgs) error {
-		if err := os.WriteFile(args.tempPath, []byte("test"), 0o600); err != nil {
-			return fmt.Errorf("write temp file: %w", err)
-		}
-		return os.Rename(args.tempPath, args.finalPath)
-	}
-
-	// This should not panic even though ShowLoader returns nil
-	path, err := InstallRemoteFile(
-		context.Background(),
-		cfg,
-		mockPlatform,
-		"http://example.com/game.rom",
-		"nes",
-		"",
-		"",
-		downloader,
-	)
-
-	require.NoError(t, err)
-	assert.NotEmpty(t, path)
-}
-
-func TestInstallRemoteFile_NilShowNoticeFunction(t *testing.T) {
-	t.Parallel()
-
-	cfg := &config.Instance{}
-	tempDir := t.TempDir()
-	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
-	setupShowLoader(mockPlatform)
-
-	// Setup ShowNotice to return nil hide function
-	mockPlatform.On("ShowNotice",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	).Return(nil, time.Duration(0), nil)
-
-	downloader := func(args DownloaderArgs) error {
-		if err := os.WriteFile(args.tempPath, []byte("test"), 0o600); err != nil {
-			return fmt.Errorf("write temp file: %w", err)
-		}
-		return os.Rename(args.tempPath, args.finalPath)
-	}
-
-	// This should not panic even though ShowNotice returns nil hide function
-	path, err := InstallRemoteFile(
-		context.Background(),
-		cfg,
-		mockPlatform,
-		"http://example.com/game.rom",
-		"nes",
-		"Pre-download notice", // trigger showPreNotice
-		"",
-		downloader,
-	)
-
-	require.NoError(t, err)
-	assert.NotEmpty(t, path)
 }
 
 func TestInstallRemoteFile_FileAlreadyExists(t *testing.T) {
@@ -350,6 +270,7 @@ func TestInstallRemoteFile_FileAlreadyExists(t *testing.T) {
 		context.Background(),
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"nes",
 		"",
@@ -368,7 +289,6 @@ func TestInstallRemoteFile_DownloaderError(t *testing.T) {
 	cfg := &config.Instance{}
 	tempDir := t.TempDir()
 	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
-	setupShowLoader(mockPlatform)
 
 	expectedErr := errors.New("network error")
 	downloader := func(_ DownloaderArgs) error {
@@ -379,6 +299,7 @@ func TestInstallRemoteFile_DownloaderError(t *testing.T) {
 		context.Background(),
 		cfg,
 		mockPlatform,
+		nil,
 		"http://example.com/game.rom",
 		"nes",
 		"",
@@ -390,86 +311,91 @@ func TestInstallRemoteFile_DownloaderError(t *testing.T) {
 	assert.ErrorIs(t, err, expectedErr)
 }
 
-func TestShowPreNotice_NilHideFunction(t *testing.T) {
+func TestInstallRemoteFile_UIEventLoaderLifecycle(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	mockPlatform := mocks.NewMockPlatform()
+	tempDir := t.TempDir()
+	mockPlatform := setupMockPlatformWithTempDir(t, tempDir)
+	published := make(chan models.UIStateResponse, 2)
+	ui := uievents.New(clockwork.NewFakeClock(), nil, func(state models.UIStateResponse) {
+		published <- state
+	})
 
-	// Return nil hide function - this should not cause a panic
-	mockPlatform.On("ShowNotice",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	).Return(nil, time.Duration(0), nil)
+	downloader := func(args DownloaderArgs) error {
+		state := ui.State()
+		require.Len(t, state.Events, 1)
+		assert.Equal(t, models.UIEventKindLoader, state.Events[0].Kind)
+		assert.Contains(t, state.Events[0].Message, "Downloading game")
+		require.NoError(t, os.WriteFile(args.tempPath, []byte("test"), 0o600))
+		return os.Rename(args.tempPath, args.finalPath)
+	}
 
-	// This should not panic
-	err := showPreNotice(cfg, mockPlatform, "Test notice")
+	path, err := InstallRemoteFile(
+		t.Context(), cfg, mockPlatform, ui,
+		"http://example.com/game.rom", "nes", "", "", downloader,
+	)
 	require.NoError(t, err)
+	assert.NotEmpty(t, path)
+
+	opened := <-published
+	assert.Equal(t, uint64(1), opened.Revision)
+	resolved := <-published
+	assert.Equal(t, uint64(2), resolved.Revision)
+	require.Len(t, resolved.Resolved, 1)
+	assert.Equal(t, models.UIOutcomeCompleted, resolved.Resolved[0].Outcome)
+	assert.Empty(t, ui.State().Events)
+}
+
+type delayedUIRenderer struct {
+	delay time.Duration
+}
+
+func (*delayedUIRenderer) PresentUI(
+	_ context.Context,
+	_ *models.UIEvent,
+) (func() error, error) {
+	return func() error { return nil }, nil
+}
+
+func (r *delayedUIRenderer) MinimumUIDisplay(_ models.UIEventKind) time.Duration {
+	return r.delay
+}
+
+func TestShowPreNotice_NoService(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, showPreNotice(t.Context(), nil, "Test notice"))
 }
 
 func TestShowPreNotice_EmptyText(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mockPlatform := mocks.NewMockPlatform()
-
-	// ShowNotice should not be called with empty text
-	err := showPreNotice(cfg, mockPlatform, "")
-	require.NoError(t, err)
-
-	// Verify ShowNotice was never called
-	mockPlatform.AssertNotCalled(t, "ShowNotice",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	)
+	ui := uievents.New(clockwork.NewFakeClock(), nil, nil)
+	require.NoError(t, showPreNotice(t.Context(), ui, ""))
+	assert.Empty(t, ui.State().Events)
 }
 
-func TestShowPreNotice_WithDelay(t *testing.T) {
+func TestShowPreNotice_CompletesAfterRendererDelay(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mockPlatform := mocks.NewMockPlatform()
-
-	hideCalled := false
-	hideFunc := func() error {
-		hideCalled = true
-		return nil
-	}
-
-	// Return a delay to test the delay path
-	mockPlatform.On("ShowNotice",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	).Return(hideFunc, 10*time.Millisecond, nil)
+	const delay = 10 * time.Millisecond
+	published := make(chan models.UIStateResponse, 2)
+	ui := uievents.New(clockwork.NewRealClock(), &delayedUIRenderer{delay: delay},
+		func(state models.UIStateResponse) {
+			published <- state
+		})
 
 	start := time.Now()
-	err := showPreNotice(cfg, mockPlatform, "Test notice")
-	elapsed := time.Since(start)
+	require.NoError(t, showPreNotice(t.Context(), ui, "Test notice"))
+	assert.GreaterOrEqual(t, time.Since(start), delay)
 
-	require.NoError(t, err)
-	assert.True(t, hideCalled, "hide function should be called")
-	assert.GreaterOrEqual(t, elapsed, 10*time.Millisecond, "should have delayed")
-}
-
-func TestShowPreNotice_HideError(t *testing.T) {
-	t.Parallel()
-
-	cfg := &config.Instance{}
-	mockPlatform := mocks.NewMockPlatform()
-
-	hideErr := errors.New("hide error")
-	hideFunc := func() error {
-		return hideErr
-	}
-
-	mockPlatform.On("ShowNotice",
-		mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("models.NoticeArgs"),
-	).Return(hideFunc, time.Duration(0), nil)
-
-	err := showPreNotice(cfg, mockPlatform, "Test notice")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error hiding pre-notice")
+	opened := <-published
+	require.Len(t, opened.Events, 1)
+	assert.Equal(t, models.UIEventKindNotice, opened.Events[0].Kind)
+	resolved := <-published
+	require.Len(t, resolved.Resolved, 1)
+	assert.Equal(t, models.UIOutcomeCompleted, resolved.Resolved[0].Outcome)
 }
 
 func TestNamesFromURL(t *testing.T) {

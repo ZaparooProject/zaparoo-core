@@ -698,7 +698,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if dler, ok := isValidRemoteFileURL(path); ok && args.System != "" {
 		installPath, err := installer.InstallRemoteFile(
 			env.LauncherCtx,
-			env.Cfg, pl,
+			env.Cfg, pl, env.UI,
 			path,
 			args.System,
 			args.PreNotice,

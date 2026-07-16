@@ -69,6 +69,12 @@ type RunParams struct {
 	Unsafe bool    `json:"unsafe"`
 }
 
+type UIRespondParams struct {
+	ID       string           `json:"id" validate:"required"`
+	Action   UIResponseAction `json:"action" validate:"required,oneof=dismiss select confirm"`
+	ChoiceID string           `json:"choiceId,omitempty"`
+}
+
 type RunScriptParams struct {
 	Name      *string                  `json:"name"`
 	Cmds      []zapscript.ZapScriptCmd `json:"cmds"`

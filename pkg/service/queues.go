@@ -197,6 +197,7 @@ func runTokenZapScript(
 			svc.State.LauncherManager(),
 			func(ctx context.Context) error { return waitForMediaReady(ctx, svc, mediaReadyGen) },
 			svc.PlaybackManager,
+			svc.UI,
 			&cmdEnv,
 		)
 		if err != nil {

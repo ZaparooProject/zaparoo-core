@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
 type RequestEnv struct {
@@ -50,6 +51,7 @@ type RequestEnv struct {
 	LauncherCache   *helpers.LauncherCache
 	Player          audio.Player
 	PlaybackManager audio.PlaybackManager
+	UI              *uievents.Service
 	TokenQueue      chan<- tokens.Token
 	ConfirmQueue    chan<- chan error
 	IndexPauser     *syncutil.Pauser

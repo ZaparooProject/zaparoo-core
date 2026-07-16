@@ -333,3 +333,27 @@ func TestPlaytimeLimitWarning_Payload(t *testing.T) {
 	assert.Equal(t, models.NotificationPlaytimeLimitWarning, notification.Method)
 	assert.Contains(t, string(notification.Params), "5 minutes")
 }
+
+func TestUIChanged_Payload(t *testing.T) {
+	t.Parallel()
+
+	ns := make(chan models.Notification, 1)
+	UIChanged(ns, models.UIStateResponse{
+		Revision: 4,
+		Events: []models.UIEvent{{
+			ID:   "event-1",
+			Kind: models.UIEventKindConfirm,
+		}},
+		Resolved: []models.UIResolution{},
+	})
+
+	notification := <-ns
+	assert.Equal(t, models.NotificationUIChanged, notification.Method)
+	require.NotNil(t, notification.Params)
+
+	var received models.UIStateResponse
+	require.NoError(t, json.Unmarshal(notification.Params, &received))
+	assert.Equal(t, uint64(4), received.Revision)
+	require.Len(t, received.Events, 1)
+	assert.Equal(t, "event-1", received.Events[0].ID)
+}

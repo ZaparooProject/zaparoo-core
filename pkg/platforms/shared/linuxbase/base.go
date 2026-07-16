@@ -39,7 +39,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v4/process"
@@ -464,30 +463,6 @@ func (*Base) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 // LookupMapping returns false (no token mappings on Linux platforms).
 func (*Base) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
-}
-
-// ShowNotice returns ErrNotSupported (no UI widgets on Linux platforms).
-func (*Base) ShowNotice(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	return nil, 0, platforms.ErrNotSupported
-}
-
-// ShowLoader returns ErrNotSupported (no UI widgets on Linux platforms).
-func (*Base) ShowLoader(
-	_ *config.Instance,
-	_ widgetmodels.NoticeArgs,
-) (func() error, error) {
-	return nil, platforms.ErrNotSupported
-}
-
-// ShowPicker returns ErrNotSupported (no UI widgets on Linux platforms).
-func (*Base) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
 }
 
 // ConsoleManager returns a no-op console manager.

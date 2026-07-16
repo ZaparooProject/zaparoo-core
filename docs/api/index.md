@@ -232,7 +232,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. These API docs cover **62 methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. These API docs cover **64 methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
@@ -240,6 +240,8 @@ Methods are used to execute actions and request data back from the API. These AP
 | run                             | Run supplied ZapScript.                                                               |
 | stop                            | Kill any active launcher, if possible.                                                |
 | confirm                         | Confirm and launch the currently staged token.                                        |
+| ui                              | Return authoritative global UI event state.                                           |
+| ui.respond                      | Respond to active global UI event.                                                     |
 | tokens                          | List active tokens.                                                                   |
 | tokens.history                  | Return a list of the latest token launches.                                           |
 | media                           | Return status and statistics about media database.                                    |
@@ -311,6 +313,7 @@ Notifications let a server or client know an event has occurred. See the [API No
 | tokens.removed         | A token was removed.                                                              |
 | tokens.staged          | A token was staged by launch guard and is awaiting confirmation.                  |
 | tokens.staged.ready    | A staged token's delay period has expired and is ready for confirmation.          |
+| ui.changed             | Authoritative global UI event state changed.                                      |
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |

@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -50,6 +51,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
@@ -200,14 +202,28 @@ func Start(
 	// Create and start notification broker to broadcast to all consumers.
 	// media.indexing is coalesceable: bursts during index/resume collapse to
 	// latest-wins so slow WebSocket consumers don't drop discrete events.
-	notifBroker := broker.NewBroker(st.GetContext(), ns, models.NotificationMediaIndexing)
+	notifBroker := broker.NewBroker(
+		st.GetContext(), ns,
+		models.NotificationMediaIndexing,
+		models.NotificationUIChanged,
+	)
 	notifBroker.Start()
+
+	var uiRenderer uievents.Renderer
+	if renderer, ok := pl.(uievents.Renderer); ok {
+		uiRenderer = renderer
+	}
+	uiEvents := uievents.New(clockwork.NewRealClock(), uiRenderer, func(payload models.UIStateResponse) {
+		notifications.UIChanged(st.Notifications, payload)
+	})
+	st.SetUIEvents(uiEvents)
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 	cfq := make(chan chan error)          // launch guard confirm queue
+	lgcq := make(chan struct{}, 1)        // launch guard cancellation queue
 	backgroundWG := &sync.WaitGroup{}
 
 	setupStarted := time.Now()
@@ -287,9 +303,11 @@ func Start(
 		DB:                  db,
 		Profiles:            profilesSvc,
 		PlaybackManager:     playbackManager,
+		UI:                  uiEvents,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
+		LaunchGuardCancel:   lgcq,
 		BackgroundWG:        backgroundWG,
 	}
 	wireNativeAudioDrainCallbacks(playbackManager, svc)
@@ -307,6 +325,10 @@ func Start(
 	// Resume background music when a game quits, but only if we auto-paused it.
 	st.SetOnMediaStopHook(func() {
 		resumeBackgroundAfterMediaStop(svc)
+		select {
+		case svc.LaunchGuardCancel <- struct{}{}:
+		default:
+		}
 	})
 
 	log.Info().Msg("loading mapping files")
@@ -365,6 +387,7 @@ func Start(
 		}
 		limitsManager.Stop()
 		dataSwap.Stop()
+		uiEvents.Shutdown()
 		notifBroker.Stop()
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
@@ -541,6 +564,7 @@ func Start(
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
+		uiEvents.Shutdown()
 		indexPauser.Resume()
 		scrapePauser.Resume()
 

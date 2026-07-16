@@ -1430,63 +1430,89 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(custom, ls...)
 }
 
-func (p *Platform) ShowNotice(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	p.platformMu.Lock()
-	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
-	p.platformMu.Unlock()
-
-	if needsDelay {
-		log.Debug().Msg("waiting for previous notice to finish")
-		time.Sleep(3 * time.Second)
+func (*Platform) MinimumUIDisplay(kind models.UIEventKind) time.Duration {
+	if kind == models.UIEventKindNotice {
+		return preNoticeTime()
 	}
-
-	completePath, err := showNotice(p, args.Text, false)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return func() error {
-		p.platformMu.Lock()
-		defer p.platformMu.Unlock()
-		p.lastUIHidden = time.Now()
-		return hideNotice(p.filesystem(), completePath)
-	}, preNoticeTime(), nil
+	return 0
 }
 
-func (p *Platform) ShowLoader(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
+func (p *Platform) PresentUI(
+	_ context.Context,
+	event *models.UIEvent,
 ) (func() error, error) {
+	const orphanTimeoutSeconds = int(time.Hour / time.Second)
+
 	p.platformMu.Lock()
 	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second
 	p.platformMu.Unlock()
-
 	if needsDelay {
-		log.Debug().Msg("waiting for previous notice to finish")
+		log.Debug().Msg("waiting for previous UI event to finish")
 		time.Sleep(3 * time.Second)
 	}
 
-	completePath, err := showNotice(p, args.Text, true)
-	if err != nil {
-		return nil, err
+	closeEvent := func(argsPath string) func() error {
+		return func() error {
+			p.platformMu.Lock()
+			defer p.platformMu.Unlock()
+			p.lastUIHidden = time.Now()
+			return hideNotice(p.filesystem(), argsPath)
+		}
 	}
 
-	return func() error {
-		p.platformMu.Lock()
-		defer p.platformMu.Unlock()
-		p.lastUIHidden = time.Now()
-		return hideNotice(p.filesystem(), completePath)
-	}, nil
-}
-
-func (p *Platform) ShowPicker(
-	_ *config.Instance,
-	args widgetmodels.PickerArgs,
-) error {
-	return showPicker(p, args)
+	switch event.Kind {
+	case models.UIEventKindNotice, models.UIEventKindLoader:
+		text := event.Message
+		if text == "" {
+			text = event.Title
+		}
+		argsPath, err := showNotice(p, widgetmodels.NoticeArgs{
+			Text:        text,
+			EventID:     event.ID,
+			Timeout:     orphanTimeoutSeconds,
+			Dismissible: event.Dismissible,
+		}, event.Kind == models.UIEventKindLoader)
+		if err != nil {
+			return nil, err
+		}
+		return closeEvent(argsPath), nil
+	case models.UIEventKindPicker, models.UIEventKindConfirm:
+		items := make([]widgetmodels.PickerItem, 0, len(event.Choices))
+		selected := -1
+		if event.Kind == models.UIEventKindConfirm {
+			items = append(items, widgetmodels.PickerItem{
+				Name:   "Confirm",
+				Action: models.UIResponseActionConfirm,
+			})
+			selected = 0
+		} else {
+			for i, choice := range event.Choices {
+				items = append(items, widgetmodels.PickerItem{
+					ID:     choice.ID,
+					Name:   choice.Label,
+					Action: models.UIResponseActionSelect,
+				})
+				if choice.ID == event.SelectedChoiceID {
+					selected = i
+				}
+			}
+		}
+		argsPath, err := showPicker(p, &widgetmodels.PickerArgs{
+			Title:       event.Title,
+			Message:     event.Message,
+			EventID:     event.ID,
+			Items:       items,
+			Selected:    selected,
+			Timeout:     orphanTimeoutSeconds,
+			Dismissible: event.Dismissible,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return closeEvent(argsPath), nil
+	default:
+		return nil, platforms.ErrNotSupported
+	}
 }
 
 func (p *Platform) ConsoleManager() platforms.ConsoleManager {

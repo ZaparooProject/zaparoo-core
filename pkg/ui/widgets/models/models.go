@@ -19,21 +19,31 @@
 
 package models
 
+import apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+
 type NoticeArgs struct {
-	Text     string `json:"text"`
-	Complete string `json:"complete"`
-	Timeout  int    `json:"timeout"`
+	Text        string `json:"text"`
+	Complete    string `json:"complete"`
+	EventID     string `json:"eventId,omitempty"`
+	Timeout     int    `json:"timeout"`
+	Dismissible bool   `json:"dismissible,omitempty"`
 }
 
 type PickerItem struct {
-	Name      string `json:"name"`
-	ZapScript string `json:"zapscript"`
+	ID        string                     `json:"id,omitempty"`
+	Name      string                     `json:"name"`
+	ZapScript string                     `json:"zapscript,omitempty"`
+	Action    apimodels.UIResponseAction `json:"action,omitempty"`
 }
 
 type PickerArgs struct {
-	Title    string       `json:"title"`
-	Items    []PickerItem `json:"items"`
-	Selected int          `json:"selected"`
-	Timeout  int          `json:"timeout"`
-	Unsafe   bool         `json:"unsafe"`
+	Title       string       `json:"title"`
+	Message     string       `json:"message,omitempty"`
+	Complete    string       `json:"complete,omitempty"`
+	EventID     string       `json:"eventId,omitempty"`
+	Items       []PickerItem `json:"items"`
+	Selected    int          `json:"selected"`
+	Timeout     int          `json:"timeout"`
+	Unsafe      bool         `json:"unsafe"`
+	Dismissible bool         `json:"dismissible,omitempty"`
 }

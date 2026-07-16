@@ -41,6 +41,7 @@ const (
 	NotificationClientsPaired        = "clients.paired"
 	NotificationProfilesActive       = "profiles.active"
 	NotificationProfilesData         = "profiles.data"
+	NotificationUIChanged            = "ui.changed"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.
@@ -56,10 +57,41 @@ const (
 	PlaytimeLimitReasonDaily   = "daily"
 )
 
+type UIEventKind string
+
+const (
+	UIEventKindNotice  UIEventKind = "notice"
+	UIEventKindLoader  UIEventKind = "loader"
+	UIEventKindPicker  UIEventKind = "picker"
+	UIEventKindConfirm UIEventKind = "confirm"
+)
+
+type UIResponseAction string
+
+const (
+	UIResponseActionDismiss UIResponseAction = "dismiss"
+	UIResponseActionSelect  UIResponseAction = "select"
+	UIResponseActionConfirm UIResponseAction = "confirm"
+)
+
+type UIOutcome string
+
+const (
+	UIOutcomeConfirmed  UIOutcome = "confirmed"
+	UIOutcomeSelected   UIOutcome = "selected"
+	UIOutcomeDismissed  UIOutcome = "dismissed"
+	UIOutcomeTimedOut   UIOutcome = "timed_out"
+	UIOutcomeCompleted  UIOutcome = "completed"
+	UIOutcomeSuperseded UIOutcome = "superseded"
+	UIOutcomeCancelled  UIOutcome = "cancelled"
+)
+
 const (
 	MethodLaunch                = "launch" // DEPRECATED
 	MethodRun                   = "run"
 	MethodConfirm               = "confirm"
+	MethodUI                    = "ui"
+	MethodUIRespond             = "ui.respond"
 	MethodRunScript             = "run.script"
 	MethodStop                  = "stop"
 	MethodTokens                = "tokens"

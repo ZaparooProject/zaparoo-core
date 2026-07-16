@@ -22,10 +22,10 @@ func preNoticeTime() time.Duration {
 
 func showNotice(
 	pl *Platform,
-	text string,
+	args widgetmodels.NoticeArgs,
 	loader bool,
 ) (string, error) {
-	log.Info().Msgf("showing notice: %s", text)
+	log.Info().Msgf("showing notice: %s", args.Text)
 	argsID, err := helpers.RandSeq(10)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate random sequence: %w", err)
@@ -35,13 +35,9 @@ func showNotice(
 		argsName = "loader-" + argsID + ".json"
 	}
 	argsPath := filepath.Join(pl.Settings().TempDir, argsName)
-	completePath := argsPath + ".complete"
+	args.Complete = argsPath + ".complete"
 
 	log.Debug().Msg("launching script notice")
-	args := widgetmodels.NoticeArgs{
-		Text:     text,
-		Complete: completePath,
-	}
 	if writeErr := writeNoticeArgs(pl.filesystem(), argsPath, args); writeErr != nil {
 		return "", writeErr
 	}
@@ -82,19 +78,25 @@ func hideNotice(fs afero.Fs, argsPath string) error {
 
 func showPicker(
 	pl *Platform,
-	args widgetmodels.PickerArgs,
-) error {
-	// Launch picker through the script UI.
-	argsPath := filepath.Join(pl.Settings().TempDir, "picker.json")
+	args *widgetmodels.PickerArgs,
+) (string, error) {
+	argsID, err := helpers.RandSeq(10)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate random sequence: %w", err)
+	}
+	argsPath := filepath.Join(pl.Settings().TempDir, "picker-"+argsID+".json")
+	args.Complete = argsPath + ".complete"
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return fmt.Errorf("failed to marshal picker args: %w", err)
+		return "", fmt.Errorf("failed to marshal picker args: %w", err)
 	}
-	err = afero.WriteFile(pl.filesystem(), argsPath, argsJSON, 0o600)
-	if err != nil {
-		return fmt.Errorf("failed to write picker args file: %w", err)
+	if err = afero.WriteFile(pl.filesystem(), argsPath, argsJSON, 0o600); err != nil {
+		return "", fmt.Errorf("failed to write picker args file: %w", err)
 	}
 
 	scriptPath := filepath.Join(misterconfig.ScriptsDir, "zaparoo.sh")
-	return runScript(pl, scriptPath, "'-show-picker' '"+argsPath+"'", false)
+	if runErr := runScript(pl, scriptPath, "'-show-picker' '"+argsPath+"'", false); runErr != nil {
+		return "", runErr
+	}
+	return argsPath, nil
 }

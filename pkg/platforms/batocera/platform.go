@@ -38,7 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -809,31 +808,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(customLaunchers, launchers...)
 }
 
-func (*Platform) ShowNotice(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
-) (func() error, time.Duration, error) {
-	if err := esapi.APINotify(args.Text); err != nil {
-		return nil, 0, fmt.Errorf("failed to show notice: %w", err)
-	}
-	return nil, 0, nil
-}
-
-func (*Platform) ShowLoader(
-	_ *config.Instance,
-	args widgetmodels.NoticeArgs,
+func (*Platform) PresentUI(
+	_ context.Context,
+	event *models.UIEvent,
 ) (func() error, error) {
-	if err := esapi.APINotify(args.Text); err != nil {
-		return nil, fmt.Errorf("failed to show loader: %w", err)
+	if event.Kind != models.UIEventKindNotice && event.Kind != models.UIEventKindLoader {
+		return nil, platforms.ErrNotSupported
+	}
+	text := event.Message
+	if text == "" {
+		text = event.Title
+	}
+	if err := esapi.APINotify(text); err != nil {
+		return nil, fmt.Errorf("failed to present UI event: %w", err)
 	}
 	return func() error { return nil }, nil
-}
-
-func (*Platform) ShowPicker(
-	_ *config.Instance,
-	_ widgetmodels.PickerArgs,
-) error {
-	return platforms.ErrNotSupported
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {

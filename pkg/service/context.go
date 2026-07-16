@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 )
 
 // ServiceContext holds the shared dependencies threaded through all
@@ -41,8 +42,10 @@ type ServiceContext struct {
 	DB                  *database.Database
 	Profiles            *profiles.Service
 	PlaybackManager     audio.PlaybackManager
+	UI                  *uievents.Service
 	LaunchSoftwareQueue chan *tokens.Token
 	PlaylistQueue       chan *playlists.Playlist
 	ConfirmQueue        chan chan error
+	LaunchGuardCancel   chan struct{}
 	BackgroundWG        *sync.WaitGroup
 }

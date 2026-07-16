@@ -236,10 +236,12 @@ func NewMethodMap() *MethodMap {
 
 	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
 		// run
-		models.MethodLaunch:  methods.HandleRun, // DEPRECATED
-		models.MethodRun:     methods.HandleRun,
-		models.MethodStop:    methods.HandleStop,
-		models.MethodConfirm: methods.HandleConfirm,
+		models.MethodLaunch:    methods.HandleRun, // DEPRECATED
+		models.MethodRun:       methods.HandleRun,
+		models.MethodStop:      methods.HandleStop,
+		models.MethodConfirm:   methods.HandleConfirm,
+		models.MethodUI:        methods.HandleUI,
+		models.MethodUIRespond: methods.HandleUIRespond,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
@@ -1094,6 +1096,7 @@ func handleWSMessage(
 			LauncherCache:   helpers.GlobalLauncherCache,
 			Player:          player,
 			PlaybackManager: playbackManager,
+			UI:              st.UIEvents(),
 			TokenQueue:      inTokenQueue,
 			ConfirmQueue:    confirmQueue,
 			IndexPauser:     indexPauser,
@@ -1354,6 +1357,7 @@ func handlePostRequest(
 			LauncherCache:   helpers.GlobalLauncherCache,
 			Player:          player,
 			PlaybackManager: playbackManager,
+			UI:              st.UIEvents(),
 			TokenQueue:      inTokenQueue,
 			ConfirmQueue:    confirmQueue,
 			IndexPauser:     indexPauser,

@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -35,7 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/spf13/afero"
 )
 
@@ -153,6 +152,7 @@ type CmdEnv struct {
 	ServiceCtx        context.Context
 	WaitForMediaReady func(context.Context) error
 	PlaybackManager   audio.PlaybackManager
+	UI                *uievents.Service
 	Playlist          playlists.PlaylistController
 	Cfg               *config.Instance
 	Database          *database.Database
@@ -448,27 +448,6 @@ type Platform interface {
 	// Launchers is the complete list of all launchers available on this
 	// platform.
 	Launchers(*config.Instance) []Launcher
-	// ShowNotice displays a string on-screen of the platform device. Returns
-	// a function that may be used to manually hide the notice and a minimum
-	// amount of time that should be waited until trying to close the notice,
-	// for platforms where initializing a notice takes time.
-	// TODO: can this just block instead of returning a delay?
-	ShowNotice(
-		*config.Instance,
-		widgetmodels.NoticeArgs,
-	) (func() error, time.Duration, error)
-	// ShowLoader displays a string on-screen of the platform device alongside
-	// an animation indicating something is in progress. Returns a function
-	// that may be used to manually hide the loader and an optional delay to
-	// wait before hiding.
-	// TODO: does this need a close delay returned as well?
-	ShowLoader(*config.Instance, widgetmodels.NoticeArgs) (func() error, error)
-	// ShowPicker displays a list picker on-screen of the platform device with
-	// a list of Zap Link Cmds to choose from. The chosen action will be
-	// forwarded to the local API instance to be run. Returns a function that
-	// may be used to manually cancel and hide the picker.
-	// TODO: it appears to not return said function
-	ShowPicker(*config.Instance, widgetmodels.PickerArgs) error
 	// ConsoleManager returns the platform's console manager for TTY/console switching.
 	// Platforms without console switching return NoOpConsoleManager.
 	ConsoleManager() ConsoleManager

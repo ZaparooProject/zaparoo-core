@@ -10,6 +10,7 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Launchers**: Per-system programs that launch games/media. Each platform provides built-in launchers. Custom launchers via TOML files in `launchers/`. See `pkg/platforms/`.
 - **Systems**: 200+ supported game/computer/media systems (e.g., `SNES`, `Genesis`, `PSX`). IDs are case-insensitive with aliases and fallbacks.
 - **Readers**: Hardware or virtual devices that detect tokens. Two scan modes: **tap** (default, free removal) and **hold** (token must stay on reader, removal stops media).
+- **Global UI events**: Server-owned transient notice, loader, picker, or confirm requests. Host and connected clients render in parallel; first ID-bound response wins or Core times request out. See `pkg/ui/events/`.
 
 ## Zaparoo Ecosystem
 
@@ -26,8 +27,18 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Launch endpoint**: `/l/{zapscript}` - GET-based execution for QR codes
 - **Auth**: API keys via `auth.toml`, anonymous access from localhost
 - **Discovery**: mDNS (`_zaparoo._tcp`)
-- **Notifications**: Real-time WebSocket events (readers, tokens, media, indexing, playtime). See `docs/api/notifications.md`.
+- **Notifications**: Real-time WebSocket events (readers, tokens, media, indexing, playtime, global UI). See `docs/api/notifications.md`.
 - **Full docs**: `docs/api/`
+
+## Global UI Events
+
+`pkg/ui/events/` owns presentation lifecycle, authoritative expiry, monotonic revision, and first-response-wins arbitration. It initially exposes at most one active event but serializes plural `events`/`resolved` arrays so future overlays or priorities need no wire-format break.
+
+Platform UI rendering is optional. MiSTer implements notice, loader, picker, and confirm widgets; Batocera mirrors passive notice/loader text; unsupported platforms rely on App or another API client. Renderer errors never cancel event.
+
+Domain owners keep behavior: reader manager owns staged launch-guard token, playlist code owns selected ZapScript action, and installer owns download lifecycle. Public picker choices contain only label and opaque ID. Global events are broadcast to every permitted client and must never carry PINs, passwords, credentials, or other secrets.
+
+Clients consume `ui.changed`, replace local state using newest `revision`, query `ui` after reconnect, and answer through `ui.respond`. Legacy launch-guard `confirm` and token notifications remain supported. Launch-guard confirmation events deliberately skip host rendering so opening a MiSTer widget cannot interrupt active media; existing sound feedback and card re-tap confirmation remain unchanged.
 
 ## Database
 

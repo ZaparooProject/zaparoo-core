@@ -37,6 +37,7 @@ var criticalNotifications = map[string]bool{
 	models.NotificationReadersDisconnected: true,
 	models.NotificationStarted:             true,
 	models.NotificationStopped:             true,
+	models.NotificationUIChanged:           true,
 }
 
 func sendNotification(ns chan<- models.Notification, method string, payload any) {
@@ -127,6 +128,11 @@ func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.Playtime
 
 func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 	sendNotification(ns, models.NotificationInboxAdded, payload)
+}
+
+//nolint:gocritic // notification payload is copied before asynchronous fan-out
+func UIChanged(ns chan<- models.Notification, payload models.UIStateResponse) {
+	sendNotification(ns, models.NotificationUIChanged, payload)
 }
 
 func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
