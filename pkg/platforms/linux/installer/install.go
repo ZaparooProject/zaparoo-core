@@ -41,6 +41,9 @@ var modprobeFile string
 //go:embed conf/60-zaparoo.rules
 var udevFile string
 
+//go:embed conf/60-zaparoo-pn532killer.rules
+var pn532KillerUdevFile string
+
 //go:embed conf/zaparoo.service
 var systemdServiceFile string
 
@@ -63,9 +66,22 @@ var icon128 []byte
 var icon256 []byte
 
 const (
-	modprobePath = "/etc/modprobe.d/blacklist-zaparoo.conf"
-	udevPath     = "/etc/udev/rules.d/60-zaparoo.rules"
+	modprobePath        = "/etc/modprobe.d/blacklist-zaparoo.conf"
+	udevPath            = "/etc/udev/rules.d/60-zaparoo.rules"
+	pn532KillerUdevPath = "/etc/udev/rules.d/60-zaparoo-pn532killer.rules"
 )
+
+type udevRuleFile struct {
+	path    string
+	content string
+}
+
+func managedUdevRuleFiles() []udevRuleFile {
+	return []udevRuleFile{
+		{path: udevPath, content: udevFile},
+		{path: pn532KillerUdevPath, content: pn532KillerUdevFile},
+	}
+}
 
 // InstallApplication installs application files (binary, application launcher entry, icon).
 // Does not install systemd service or desktop shortcut. Must NOT be run as root.
@@ -288,19 +304,8 @@ func doInstallHardware(cmd command.Executor) error {
 		return errors.New("hardware install must be run as root")
 	}
 
-	// install udev rules
-	if _, err := os.Stat(filepath.Dir(udevPath)); os.IsNotExist(err) {
-		return errors.New("udev rules directory does not exist")
-	} else if _, err := os.Stat(udevPath); os.IsNotExist(err) {
-		err = os.WriteFile(udevPath, []byte(udevFile), 0o644) //nolint:gosec // udev rules need to be readable by system
-		if err != nil {
-			return fmt.Errorf("error creating udev rules: %w", err)
-		}
-		// these are just for convenience, don't care too much if they fail
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
-		_ = cmd.Run(ctx, "udevadm", "trigger")
-		cancel()
+	if err := installUdevRules(cmd, managedUdevRuleFiles()); err != nil {
+		return err
 	}
 
 	// install modprobe blacklist
@@ -319,6 +324,43 @@ func doInstallHardware(cmd command.Executor) error {
 	}
 
 	return nil
+}
+
+func installUdevRules(cmd command.Executor, rules []udevRuleFile) error {
+	changed := false
+	for _, rule := range rules {
+		if _, err := os.Stat(filepath.Dir(rule.path)); err != nil {
+			if os.IsNotExist(err) {
+				return errors.New("udev rules directory does not exist")
+			}
+			return fmt.Errorf("error checking udev rules directory: %w", err)
+		}
+
+		if _, err := os.Stat(rule.path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("error checking udev rules %s: %w", rule.path, err)
+		}
+
+		//nolint:gosec // udev rules need to be readable by the system
+		if err := os.WriteFile(rule.path, []byte(rule.content), 0o644); err != nil {
+			return fmt.Errorf("error creating udev rules %s: %w", rule.path, err)
+		}
+		changed = true
+	}
+
+	if changed {
+		reloadUdevRules(cmd)
+	}
+	return nil
+}
+
+func reloadUdevRules(cmd command.Executor) {
+	// These are convenience commands; the rule files remain installed if either command fails.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
+	_ = cmd.Run(ctx, "udevadm", "trigger")
 }
 
 // UninstallApplication removes application files (binary, application launcher entry, icon).
@@ -457,18 +499,31 @@ func doUninstallHardware(cmd command.Executor) error {
 		cancel()
 	}
 
-	// remove udev rules
-	if _, err := os.Stat(udevPath); !os.IsNotExist(err) {
-		err = os.Remove(udevPath)
-		if err != nil {
-			return fmt.Errorf("error removing udev rules: %w", err)
-		}
-		// these are just for convenience, don't care too much if they fail
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = cmd.Run(ctx, "udevadm", "control", "--reload-rules")
-		_ = cmd.Run(ctx, "udevadm", "trigger")
-		cancel()
+	if err := uninstallUdevRules(cmd, managedUdevRuleFiles()); err != nil {
+		return err
 	}
 
+	return nil
+}
+
+func uninstallUdevRules(cmd command.Executor, rules []udevRuleFile) error {
+	changed := false
+	for _, rule := range rules {
+		if _, err := os.Stat(rule.path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("error checking udev rules %s: %w", rule.path, err)
+		}
+
+		if err := os.Remove(rule.path); err != nil {
+			return fmt.Errorf("error removing udev rules %s: %w", rule.path, err)
+		}
+		changed = true
+	}
+
+	if changed {
+		reloadUdevRules(cmd)
+	}
 	return nil
 }

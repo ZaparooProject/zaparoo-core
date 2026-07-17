@@ -316,6 +316,113 @@ func TestInstallDesktop(t *testing.T) {
 	}
 }
 
+func TestInstallUdevRules(t *testing.T) {
+	const (
+		customOriginalRule = "# user-managed original rule\n"
+		customKillerRule   = "# user-managed PN532Killer rule\n"
+		expectedKillerRule = "# Allow user access to PN532Killer USB UART readers\n" +
+			"SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"1a86\", ATTRS{idProduct}==\"55d3\", " +
+			"ATTRS{product}==\"PN532Killer-UART\", MODE=\"0660\", TAG+=\"uaccess\"\n"
+	)
+
+	tests := []struct {
+		setup               func(*testing.T, []udevRuleFile)
+		name                string
+		wantOriginalContent string
+		wantKillerContent   string
+		wantReload          bool
+	}{
+		{
+			name:                "fresh installation creates both files",
+			wantOriginalContent: udevFile,
+			wantKillerContent:   expectedKillerRule,
+			wantReload:          true,
+		},
+		{
+			name: "upgrade preserves original and adds PN532Killer rule",
+			setup: func(t *testing.T, rules []udevRuleFile) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(rules[0].path, []byte(customOriginalRule), 0o644))
+			},
+			wantOriginalContent: customOriginalRule,
+			wantKillerContent:   expectedKillerRule,
+			wantReload:          true,
+		},
+		{
+			name: "reinstallation preserves existing files",
+			setup: func(t *testing.T, rules []udevRuleFile) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(rules[0].path, []byte(customOriginalRule), 0o644))
+				require.NoError(t, os.WriteFile(rules[1].path, []byte(customKillerRule), 0o644))
+			},
+			wantOriginalContent: customOriginalRule,
+			wantKillerContent:   customKillerRule,
+			wantReload:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rules := testUdevRuleFiles(t)
+			if tt.setup != nil {
+				tt.setup(t, rules)
+			}
+
+			cmd := &mocks.MockCommandExecutor{}
+			if tt.wantReload {
+				expectUdevReload(cmd)
+			}
+
+			err := installUdevRules(cmd, rules)
+			require.NoError(t, err)
+
+			originalContent, err := os.ReadFile(rules[0].path) //nolint:gosec // Test fixture path.
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantOriginalContent, string(originalContent))
+			killerContent, err := os.ReadFile(rules[1].path) //nolint:gosec // Test fixture path.
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantKillerContent, string(killerContent))
+			if !tt.wantReload {
+				assert.Empty(t, cmd.Calls)
+			}
+			cmd.AssertExpectations(t)
+		})
+	}
+}
+
+func TestUninstallUdevRules(t *testing.T) {
+	rules := testUdevRuleFiles(t)
+	for _, rule := range rules {
+		require.NoError(t, os.WriteFile(rule.path, []byte(rule.content), 0o644))
+	}
+
+	cmd := &mocks.MockCommandExecutor{}
+	expectUdevReload(cmd)
+
+	err := uninstallUdevRules(cmd, rules)
+	require.NoError(t, err)
+	for _, rule := range rules {
+		_, statErr := os.Stat(rule.path)
+		assert.True(t, os.IsNotExist(statErr), "%s should be removed", rule.path)
+	}
+	cmd.AssertExpectations(t)
+}
+
+func testUdevRuleFiles(t *testing.T) []udevRuleFile {
+	t.Helper()
+
+	dir := t.TempDir()
+	return []udevRuleFile{
+		{path: filepath.Join(dir, "60-zaparoo.rules"), content: udevFile},
+		{path: filepath.Join(dir, "60-zaparoo-pn532killer.rules"), content: pn532KillerUdevFile},
+	}
+}
+
+func expectUdevReload(cmd *mocks.MockCommandExecutor) {
+	cmd.On("Run", mock.Anything, "udevadm", []string{"control", "--reload-rules"}).Return(nil).Once()
+	cmd.On("Run", mock.Anything, "udevadm", []string{"trigger"}).Return(nil).Once()
+}
+
 func TestUninstallApplication(t *testing.T) {
 	// Cannot use t.Parallel() - tests modify shared XDG paths
 

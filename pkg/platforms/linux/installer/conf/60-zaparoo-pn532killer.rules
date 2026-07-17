@@ -1,0 +1,2 @@
+# Allow user access to PN532Killer USB UART readers
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{product}=="PN532Killer-UART", MODE="0660", TAG+="uaccess"
