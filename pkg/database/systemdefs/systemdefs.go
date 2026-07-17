@@ -66,14 +66,6 @@ type System struct {
 	Slugs     []string
 }
 
-// GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
-func (s *System) GetMediaType() MediaType {
-	if s.MediaType == "" {
-		return MediaTypeGame
-	}
-	return s.MediaType
-}
-
 // Lazy initialization for system lookup map
 // Maps lookup keys (lowercase IDs, slugs, etc.) to system IDs for resolution
 var (
@@ -81,167 +73,6 @@ var (
 	lookupMapOnce sync.Once
 	errLookupMap  error
 )
-
-// MapKeys returns a list of all keys in a map.
-func MapKeys[K comparable, V any](m map[K]V) []K {
-	// Copied from utils for circular
-	keys := make([]K, len(m))
-	i := 0
-	for k := range m {
-		keys[i] = k
-		i++
-	}
-	return keys
-}
-
-func AlphaMapKeys[V any](m map[string]V) []string {
-	// Copied from utils for circular
-	keys := MapKeys(m)
-	sort.Strings(keys)
-	return keys
-}
-
-// GetSystem looks up an exact system definition by ID.
-func GetSystem(id string) (*System, error) {
-	if system, ok := Systems[id]; ok {
-		return &system, nil
-	}
-	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
-}
-
-// buildLookupMap initializes the system lookup map with all possible lookup keys.
-// This includes: lowercase IDs, lowercase aliases, slugified IDs, slugified aliases,
-// and custom slugs. It detects and reports collisions at initialization time.
-func buildLookupMap() error {
-	lookupMapOnce.Do(func() {
-		lookupMap = make(map[string]string)
-		keyOwner := make(map[string]string) // Track which system owns each key for collision detection
-
-		addKey := func(key, systemID, sourceType string) {
-			if key == "" {
-				return // Skip empty keys
-			}
-
-			if ownerID, exists := keyOwner[key]; exists {
-				if ownerID != systemID {
-					// Collision detected between different systems
-					if errLookupMap == nil {
-						errLookupMap = fmt.Errorf(
-							"system lookup collision: key %q (from %s of %s) is already owned by system %q",
-							key, sourceType, systemID, ownerID,
-						)
-					}
-				}
-				return // Redundant key within the same system is acceptable
-			}
-
-			keyOwner[key] = systemID
-			// Store system ID for later resolution via Systems map
-			lookupMap[key] = systemID
-		}
-
-		// Process all systems in a deterministic order
-		for _, id := range AlphaMapKeys(Systems) {
-			system := Systems[id]
-
-			// 1. Add lowercase ID
-			addKey(strings.ToLower(system.ID), system.ID, "ID")
-
-			// 2. Add lowercase aliases
-			for _, alias := range system.Aliases {
-				addKey(strings.ToLower(alias), system.ID, "Alias")
-			}
-
-			// 3. Add slugified ID (auto-derived)
-			addKey(slugs.Slugify(slugs.MediaTypeGame, system.ID), system.ID, "Slug(ID)")
-
-			// 4. Add slugified aliases (auto-derived)
-			for _, alias := range system.Aliases {
-				addKey(slugs.Slugify(slugs.MediaTypeGame, alias), system.ID, "Slug(Alias)")
-			}
-
-			// 5. Add custom slugs
-			for _, slug := range system.Slugs {
-				addKey(slug, system.ID, "CustomSlug")
-			}
-		}
-	})
-
-	return errLookupMap
-}
-
-// LookupSystem case-insensitively looks up system ID definition including aliases and slugs.
-// It uses a two-step strategy:
-//  1. Fast path: Check lowercase input against the lookup map (exact ID/alias matches)
-//  2. Natural language path: Slugify input and check against the map (handles manufacturer
-//     prefixes, regional names, etc.)
-func LookupSystem(id string) (*System, error) {
-	// Initialize the lookup map if needed
-	if err := buildLookupMap(); err != nil {
-		return nil, fmt.Errorf("failed to build system lookup map: %w", err)
-	}
-
-	// Step 1: Try case-insensitive match (fast path for exact/alias matches)
-	lowerID := strings.ToLower(id)
-	if systemID, ok := lookupMap[lowerID]; ok {
-		// Resolve system ID to actual System from canonical map
-		system := Systems[systemID]
-		return &system, nil
-	}
-
-	// Step 2: Try slugified match (natural language path)
-	slugifiedID := slugs.Slugify(slugs.MediaTypeGame, id)
-	if slugifiedID != lowerID {
-		// Only check if slugification changed the string
-		if systemID, ok := lookupMap[slugifiedID]; ok {
-			// Resolve system ID to actual System from canonical map
-			system := Systems[systemID]
-			return &system, nil
-		}
-	}
-
-	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
-}
-
-func AllSystems() []System {
-	systems := make([]System, 0, len(Systems))
-
-	keys := AlphaMapKeys(Systems)
-	for _, k := range keys {
-		systems = append(systems, Systems[k])
-	}
-
-	return systems
-}
-
-// SystemsWithFallbacks returns the input systems plus any fallback systems,
-// with duplicates removed. Original systems appear first, followed by
-// fallback systems in the order they were encountered.
-// Only direct fallbacks are included, not transitive.
-func SystemsWithFallbacks(systems []System) []System {
-	seen := make(map[string]struct{}, len(systems)*2)
-	result := make([]System, 0, len(systems)*2)
-
-	for _, sys := range systems {
-		if _, ok := seen[sys.ID]; ok {
-			continue
-		}
-		seen[sys.ID] = struct{}{}
-		result = append(result, sys)
-
-		for _, fbID := range sys.Fallbacks {
-			if _, ok := seen[fbID]; ok {
-				continue
-			}
-			seen[fbID] = struct{}{}
-			if fbSys, err := GetSystem(fbID); err == nil {
-				result = append(result, *fbSys)
-			}
-		}
-	}
-
-	return result
-}
 
 // Consoles
 const (
@@ -547,6 +378,175 @@ const (
 	SystemWindowsMobile       = "WindowsMobile"
 	SystemWindowsPhone        = "WindowsPhone"
 )
+
+// GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
+func (s *System) GetMediaType() MediaType {
+	if s.MediaType == "" {
+		return MediaTypeGame
+	}
+	return s.MediaType
+}
+
+// MapKeys returns a list of all keys in a map.
+func MapKeys[K comparable, V any](m map[K]V) []K {
+	// Copied from utils for circular
+	keys := make([]K, len(m))
+	i := 0
+	for k := range m {
+		keys[i] = k
+		i++
+	}
+	return keys
+}
+
+func AlphaMapKeys[V any](m map[string]V) []string {
+	// Copied from utils for circular
+	keys := MapKeys(m)
+	sort.Strings(keys)
+	return keys
+}
+
+// GetSystem looks up an exact system definition by ID.
+func GetSystem(id string) (*System, error) {
+	if system, ok := Systems[id]; ok {
+		return &system, nil
+	}
+	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
+}
+
+// buildLookupMap initializes the system lookup map with all possible lookup keys.
+// This includes: lowercase IDs, lowercase aliases, slugified IDs, slugified aliases,
+// and custom slugs. It detects and reports collisions at initialization time.
+func buildLookupMap() error {
+	lookupMapOnce.Do(func() {
+		lookupMap = make(map[string]string)
+		keyOwner := make(map[string]string) // Track which system owns each key for collision detection
+
+		addKey := func(key, systemID, sourceType string) {
+			if key == "" {
+				return // Skip empty keys
+			}
+
+			if ownerID, exists := keyOwner[key]; exists {
+				if ownerID != systemID {
+					// Collision detected between different systems
+					if errLookupMap == nil {
+						errLookupMap = fmt.Errorf(
+							"system lookup collision: key %q (from %s of %s) is already owned by system %q",
+							key, sourceType, systemID, ownerID,
+						)
+					}
+				}
+				return // Redundant key within the same system is acceptable
+			}
+
+			keyOwner[key] = systemID
+			// Store system ID for later resolution via Systems map
+			lookupMap[key] = systemID
+		}
+
+		// Process all systems in a deterministic order
+		for _, id := range AlphaMapKeys(Systems) {
+			system := Systems[id]
+
+			// 1. Add lowercase ID
+			addKey(strings.ToLower(system.ID), system.ID, "ID")
+
+			// 2. Add lowercase aliases
+			for _, alias := range system.Aliases {
+				addKey(strings.ToLower(alias), system.ID, "Alias")
+			}
+
+			// 3. Add slugified ID (auto-derived)
+			addKey(slugs.Slugify(slugs.MediaTypeGame, system.ID), system.ID, "Slug(ID)")
+
+			// 4. Add slugified aliases (auto-derived)
+			for _, alias := range system.Aliases {
+				addKey(slugs.Slugify(slugs.MediaTypeGame, alias), system.ID, "Slug(Alias)")
+			}
+
+			// 5. Add custom slugs
+			for _, slug := range system.Slugs {
+				addKey(slug, system.ID, "CustomSlug")
+			}
+		}
+	})
+
+	return errLookupMap
+}
+
+// LookupSystem case-insensitively looks up system ID definition including aliases and slugs.
+// It uses a two-step strategy:
+//  1. Fast path: Check lowercase input against the lookup map (exact ID/alias matches)
+//  2. Natural language path: Slugify input and check against the map (handles manufacturer
+//     prefixes, regional names, etc.)
+func LookupSystem(id string) (*System, error) {
+	// Initialize the lookup map if needed
+	if err := buildLookupMap(); err != nil {
+		return nil, fmt.Errorf("failed to build system lookup map: %w", err)
+	}
+
+	// Step 1: Try case-insensitive match (fast path for exact/alias matches)
+	lowerID := strings.ToLower(id)
+	if systemID, ok := lookupMap[lowerID]; ok {
+		// Resolve system ID to actual System from canonical map
+		system := Systems[systemID]
+		return &system, nil
+	}
+
+	// Step 2: Try slugified match (natural language path)
+	slugifiedID := slugs.Slugify(slugs.MediaTypeGame, id)
+	if slugifiedID != lowerID {
+		// Only check if slugification changed the string
+		if systemID, ok := lookupMap[slugifiedID]; ok {
+			// Resolve system ID to actual System from canonical map
+			system := Systems[systemID]
+			return &system, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: %s", ErrUnknownSystem, id)
+}
+
+func AllSystems() []System {
+	systems := make([]System, 0, len(Systems))
+
+	keys := AlphaMapKeys(Systems)
+	for _, k := range keys {
+		systems = append(systems, Systems[k])
+	}
+
+	return systems
+}
+
+// SystemsWithFallbacks returns the input systems plus any fallback systems,
+// with duplicates removed. Original systems appear first, followed by
+// fallback systems in the order they were encountered.
+// Only direct fallbacks are included, not transitive.
+func SystemsWithFallbacks(systems []System) []System {
+	seen := make(map[string]struct{}, len(systems)*2)
+	result := make([]System, 0, len(systems)*2)
+
+	for _, sys := range systems {
+		if _, ok := seen[sys.ID]; ok {
+			continue
+		}
+		seen[sys.ID] = struct{}{}
+		result = append(result, sys)
+
+		for _, fbID := range sys.Fallbacks {
+			if _, ok := seen[fbID]; ok {
+				continue
+			}
+			seen[fbID] = struct{}{}
+			if fbSys, err := GetSystem(fbID); err == nil {
+				result = append(result, *fbSys)
+			}
+		}
+	}
+
+	return result
+}
 
 var Systems = map[string]System{
 	// Consoles

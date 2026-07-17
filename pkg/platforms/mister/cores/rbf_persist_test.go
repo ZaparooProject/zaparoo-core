@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -244,15 +245,16 @@ func TestDiffDirMtimes_MissingPath(t *testing.T) {
 func TestSnapshotDirMtimes_IncludesSpecialCoreDirs(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
 	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
 	customCoreDir := filepath.Join(root, "_Custom Cores", "Cores")
 	lightGunDir := filepath.Join(root, "Light Gun")
-	require.NoError(t, os.MkdirAll(raCoreDir, 0o750))
-	require.NoError(t, os.MkdirAll(customCoreDir, 0o750))
-	require.NoError(t, os.MkdirAll(lightGunDir, 0o750))
+	require.NoError(t, fs.MkdirAll(raCoreDir, 0o750))
+	require.NoError(t, fs.MkdirAll(customCoreDir, 0o750))
+	require.NoError(t, fs.MkdirAll(lightGunDir, 0o750))
 
-	snapshot, err := snapshotDirMtimesAt(root)
+	snapshot, err := snapshotDirMtimesWithFS(fs, root)
 	require.NoError(t, err)
 	assert.Contains(t, snapshot, raCoreDir)
 	assert.Contains(t, snapshot, customCoreDir)
@@ -262,7 +264,8 @@ func TestSnapshotDirMtimes_IncludesSpecialCoreDirs(t *testing.T) {
 func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
 	consoleDir := filepath.Join(root, "_Console")
 	customDir := filepath.Join(root, "_Custom")
 	lightGunDir := filepath.Join(root, "Light Gun")
@@ -270,11 +273,11 @@ func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
 	customCoreDir := filepath.Join(root, "_Custom Cores", "Cores")
 	ignoredDir := filepath.Join(root, "Games")
 	for _, dir := range []string{consoleDir, customDir, lightGunDir, raCoreDir, customCoreDir, ignoredDir} {
-		require.NoError(t, os.MkdirAll(dir, 0o750))
+		require.NoError(t, fs.MkdirAll(dir, 0o750))
 	}
 
 	writeRBF := func(path string) {
-		require.NoError(t, os.WriteFile(path, nil, 0o600))
+		require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
 	}
 	writeRBF(filepath.Join(root, "Arcade.rbf"))
 	writeRBF(filepath.Join(consoleDir, "Saturn_20251003.rbf"))
@@ -283,11 +286,11 @@ func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
 	writeRBF(filepath.Join(raCoreDir, "RASNES.rbf"))
 	writeRBF(filepath.Join(customCoreDir, "VGM_MD_MiSTer.rbf"))
 	writeRBF(filepath.Join(ignoredDir, "Ignored.rbf"))
-	require.NoError(t, os.MkdirAll(filepath.Join(consoleDir, "Nested"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(consoleDir, "Nested"), 0o750))
 	writeRBF(filepath.Join(consoleDir, "Nested", "TooDeep.rbf"))
-	require.NoError(t, os.WriteFile(filepath.Join(consoleDir, "readme.txt"), nil, 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(consoleDir, "readme.txt"), nil, 0o600))
 
-	manifest, err := snapshotRBFManifestAt(root)
+	manifest, err := snapshotRBFManifestWithFS(fs, root)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"Arcade.rbf",

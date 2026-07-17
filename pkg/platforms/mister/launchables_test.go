@@ -12,6 +12,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/google/uuid"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -188,13 +189,16 @@ func TestLaunchMGLFileReturnsInjectedLaunchError(t *testing.T) {
 func TestLaunchableFileAvailability(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
 	filePath := filepath.Join(root, "launch.mgl")
-	require.NoError(t, os.WriteFile(filePath, nil, 0o600))
+	require.NoError(t, fs.MkdirAll(root, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filePath, nil, 0o600))
+	platform := &Platform{fs: fs}
 
-	assert.True(t, testFile(filePath)(nil))
-	assert.False(t, testFile(root)(nil))
-	assert.False(t, testFile(filepath.Join(root, "missing.mgl"))(nil))
+	assert.True(t, platform.testFile(filePath)(nil))
+	assert.False(t, platform.testFile(root)(nil))
+	assert.False(t, platform.testFile(filepath.Join(root, "missing.mgl"))(nil))
 }
 
 func TestCoreExists(t *testing.T) {

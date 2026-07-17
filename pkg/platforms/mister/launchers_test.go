@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -690,12 +691,38 @@ func TestRecentMediaLaunchers(t *testing.T) {
 	}
 }
 
-func TestPico8PNGCartTest(t *testing.T) {
+func TestPico8LauncherFiltering(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, pico8PNGCartTest(nil, filepath.Join("games", "PICO-8", "Celeste.p8.png")))
-	assert.True(t, pico8PNGCartTest(nil, filepath.Join("games", "PICO-8", "CELESTE.P8.PNG")))
-	assert.False(t, pico8PNGCartTest(nil, filepath.Join("games", "PICO-8", "cover.png")))
+	platform := NewPlatform()
+	launchers := CreateLaunchers(platform)
+	var pico8Launcher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemPico8 {
+			pico8Launcher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, pico8Launcher)
+
+	root := filepath.Join(misterconfig.SDRootDir, "games", "PICO-8")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "P8 cart", path: filepath.Join(root, "Celeste.p8"), want: true},
+		{name: "P8 PNG cart", path: filepath.Join(root, "Celeste.p8.png"), want: true},
+		{name: "uppercase P8 PNG cart", path: filepath.Join(root, "CELESTE.P8.PNG"), want: true},
+		{name: "unrelated PNG", path: filepath.Join(root, "cover.png"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, helpers.PathIsLauncher(&config.Instance{}, platform, pico8Launcher, tt.path))
+		})
+	}
 }
 
 func TestLaunchAltCoreCandidatesUsesAvailableFallback(t *testing.T) {

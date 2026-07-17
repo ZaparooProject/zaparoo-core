@@ -619,8 +619,9 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 	}
 }
 
-func pico8PNGCartTest(_ *config.Instance, path string) bool {
-	return strings.HasSuffix(strings.ToLower(path), ".p8.png")
+func pico8CartTest(_ *config.Instance, path string) bool {
+	lowerPath := strings.ToLower(path)
+	return strings.HasSuffix(lowerPath, ".p8") || strings.HasSuffix(lowerPath, ".p8.png")
 }
 
 func atari2600BinTest(_ *config.Instance, path string) bool {
@@ -2327,7 +2328,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			SystemID:   systemdefs.SystemPico8,
 			Folders:    []string{"PICO-8"},
 			Extensions: []string{".p8"},
-			Test:       pico8PNGCartTest,
+			Test:       pico8CartTest,
 			Launch:     launch(pl, systemdefs.SystemPico8),
 		},
 		{

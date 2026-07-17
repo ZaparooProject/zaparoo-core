@@ -22,12 +22,14 @@
 package cores
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/spf13/afero"
 )
 
 type RBFInfo struct {
@@ -83,27 +85,58 @@ func parseRBFPathAt(root, path string) RBFInfo {
 	return info
 }
 
+func lstatIfPossible(fs afero.Fs, path string) (os.FileInfo, error) {
+	if lstater, ok := fs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(path)
+		if err != nil {
+			return nil, fmt.Errorf("filesystem lstat: %w", err)
+		}
+		return info, nil
+	}
+	info, err := fs.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("filesystem stat: %w", err)
+	}
+	return info, nil
+}
+
+func readlinkIfPossible(fs afero.Fs, path string) (string, error) {
+	reader, ok := fs.(afero.LinkReader)
+	if !ok {
+		return "", errors.New("filesystem does not support reading symlinks")
+	}
+	target, err := reader.ReadlinkIfPossible(path)
+	if err != nil {
+		return "", fmt.Errorf("filesystem readlink: %w", err)
+	}
+	return target, nil
+}
+
 // Find all rbf files in the top 2 menu levels of the SD card, plus
 // supported nested custom-core directories.
 func shallowScanRBF() ([]RBFInfo, error) {
-	return shallowScanRBFAt(config.SDRootDir)
+	return shallowScanRBFWithFS(afero.NewOsFs(), config.SDRootDir)
 }
 
 func shallowScanRBFAt(root string) ([]RBFInfo, error) {
+	return shallowScanRBFWithFS(afero.NewOsFs(), root)
+}
+
+func shallowScanRBFWithFS(fs afero.Fs, root string) ([]RBFInfo, error) {
 	results := make([]RBFInfo, 0)
 
-	isRbf := func(file os.DirEntry) bool {
+	isRbf := func(file os.FileInfo) bool {
 		return filepath.Ext(strings.ToLower(file.Name())) == ".rbf"
 	}
 
 	infoSymlink := func(path string) (RBFInfo, error) {
-		info, err := os.Lstat(path)
+		info, err := lstatIfPossible(fs, path)
 		if err != nil {
 			return RBFInfo{}, fmt.Errorf("failed to lstat %s: %w", path, err)
 		}
 
 		if info.Mode()&os.ModeSymlink != 0 {
-			newPath, readlinkErr := os.Readlink(path)
+			newPath, readlinkErr := readlinkIfPossible(fs, path)
 			if readlinkErr != nil {
 				return RBFInfo{}, fmt.Errorf("failed to readlink %s: %w", path, readlinkErr)
 			}
@@ -121,7 +154,7 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 		results = append(results, info)
 	}
 
-	files, err := os.ReadDir(root)
+	files, err := afero.ReadDir(fs, root)
 	if err != nil {
 		return results, fmt.Errorf("failed to read SD root directory %s: %w", root, err)
 	}
@@ -130,7 +163,7 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 		// Scan "_"-prefixed core menu folders plus the "Light Gun" folder
 		// used by modern MiSTer Sinden cores (which has no "_" prefix).
 		if file.IsDir() && (strings.HasPrefix(file.Name(), "_") || strings.EqualFold(file.Name(), "Light Gun")) {
-			subFiles, subErr := os.ReadDir(filepath.Join(root, file.Name()))
+			subFiles, subErr := afero.ReadDir(fs, filepath.Join(root, file.Name()))
 			if subErr != nil {
 				continue
 			}
@@ -147,7 +180,7 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 
 	for _, relativeDir := range nestedRBFDirectories {
 		coreDir := filepath.Join(root, relativeDir)
-		coreFiles, readErr := os.ReadDir(coreDir)
+		coreFiles, readErr := afero.ReadDir(fs, coreDir)
 		if readErr != nil {
 			continue
 		}

@@ -33,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // RBFCacheFileName is the on-disk filename used by the persisted cache,
@@ -72,19 +73,23 @@ type persistedRBFCache struct {
 // and immediate files in supported nested custom-core directories. It never
 // walks recursively beyond those known locations.
 func snapshotRBFManifestAt(root string) ([]string, error) {
-	rootFiles, err := os.ReadDir(root)
+	return snapshotRBFManifestWithFS(afero.NewOsFs(), root)
+}
+
+func snapshotRBFManifestWithFS(fs afero.Fs, root string) ([]string, error) {
+	rootFiles, err := afero.ReadDir(fs, root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root for RBF manifest: %w", err)
 	}
 
 	manifest := make([]string, 0)
-	addRBF := func(dir, relativeDir string, entry os.DirEntry) error {
+	addRBF := func(dir, relativeDir string, entry os.FileInfo) error {
 		if entry.IsDir() || filepath.Ext(strings.ToLower(entry.Name())) != ".rbf" {
 			return nil
 		}
 		relativePath := filepath.Join(relativeDir, entry.Name())
-		if entry.Type()&os.ModeSymlink != 0 {
-			target, linkErr := os.Readlink(filepath.Join(dir, entry.Name()))
+		if entry.Mode()&os.ModeSymlink != 0 {
+			target, linkErr := readlinkIfPossible(fs, filepath.Join(dir, entry.Name()))
 			if linkErr != nil {
 				return fmt.Errorf("read RBF symlink %s: %w", relativePath, linkErr)
 			}
@@ -94,7 +99,7 @@ func snapshotRBFManifestAt(root string) ([]string, error) {
 		return nil
 	}
 	addRBFs := func(dir, relativeDir string) error {
-		entries, readErr := os.ReadDir(dir)
+		entries, readErr := afero.ReadDir(fs, dir)
 		if readErr != nil {
 			return fmt.Errorf("readdir %s: %w", dir, readErr)
 		}
@@ -143,10 +148,10 @@ func rbfManifestsMatch(stored, current []string) bool {
 	return true
 }
 
-func snapshotDirMtimesAt(root string) (map[string]int64, error) {
+func snapshotDirMtimesWithFS(fs afero.Fs, root string) (map[string]int64, error) {
 	snapshot := make(map[string]int64)
 
-	files, err := os.ReadDir(root)
+	files, err := afero.ReadDir(fs, root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root: %w", err)
 	}
@@ -155,7 +160,7 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 			continue
 		}
 		sub := filepath.Join(root, f.Name())
-		info, statErr := os.Stat(sub)
+		info, statErr := fs.Stat(sub)
 		if statErr != nil {
 			continue
 		}
@@ -164,7 +169,7 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 
 	for _, relativeDir := range nestedRBFDirectories {
 		coreDir := filepath.Join(root, relativeDir)
-		if info, statErr := os.Stat(coreDir); statErr == nil && info.IsDir() {
+		if info, statErr := fs.Stat(coreDir); statErr == nil && info.IsDir() {
 			snapshot[coreDir] = info.ModTime().UnixNano()
 		}
 	}
@@ -179,8 +184,8 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 // directories are tracked transitively via snapshotDirMtimes. This matches
 // MiSTer's convention that cores live at SD root, under top-level `_*`
 // folders, or in Light Gun. Other top-level directories are not scanned.
-func snapshotRootRBFsAt(root string) ([]string, error) {
-	files, err := os.ReadDir(root)
+func snapshotRootRBFsWithFS(fs afero.Fs, root string) ([]string, error) {
+	files, err := afero.ReadDir(fs, root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root: %w", err)
 	}
@@ -212,15 +217,12 @@ type dirMtimeDiff struct {
 	DeltaMs         int64
 }
 
-// rootRBFsMatch reports whether the stored sorted list of root-level RBF
-// filenames is identical to the live filesystem state. A read failure on
-// the SD root is treated as a mismatch.
-func rootRBFsMatch(stored []string) bool {
-	return rootRBFsMatchAt(config.SDRootDir, stored)
+func rootRBFsMatchAt(root string, stored []string) bool {
+	return rootRBFsMatchWithFS(afero.NewOsFs(), root, stored)
 }
 
-func rootRBFsMatchAt(root string, stored []string) bool {
-	current, err := snapshotRootRBFsAt(root)
+func rootRBFsMatchWithFS(fs afero.Fs, root string, stored []string) bool {
+	current, err := snapshotRootRBFsWithFS(fs, root)
 	if err != nil {
 		return false
 	}
@@ -292,11 +294,15 @@ func diffDirMtimes(snapshot map[string]int64) []dirMtimeDiff {
 // snapshot. Light Gun is treated like a `_*` directory. An empty snapshot
 // is always considered stale so we don't trust incomplete runtime state.
 func dirMtimesMatch(snapshot map[string]int64) bool {
+	return dirMtimesMatchWithFS(afero.NewOsFs(), config.SDRootDir, snapshot)
+}
+
+func dirMtimesMatchWithFS(fs afero.Fs, root string, snapshot map[string]int64) bool {
 	if len(snapshot) == 0 {
 		return false
 	}
 	for p, want := range snapshot {
-		info, err := os.Stat(p)
+		info, err := fs.Stat(p)
 		if err != nil {
 			return false
 		}
@@ -304,7 +310,7 @@ func dirMtimesMatch(snapshot map[string]int64) bool {
 			return false
 		}
 	}
-	files, err := os.ReadDir(config.SDRootDir)
+	files, err := afero.ReadDir(fs, root)
 	if err != nil {
 		return false
 	}
@@ -312,7 +318,7 @@ func dirMtimesMatch(snapshot map[string]int64) bool {
 		if !f.IsDir() || (!strings.HasPrefix(f.Name(), "_") && !strings.EqualFold(f.Name(), "Light Gun")) {
 			continue
 		}
-		sub := filepath.Join(config.SDRootDir, f.Name())
+		sub := filepath.Join(root, f.Name())
 		if _, ok := snapshot[sub]; !ok {
 			return false
 		}

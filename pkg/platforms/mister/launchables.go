@@ -222,7 +222,7 @@ func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
 			Name:     "Load GB/GBC Cartridge",
 			Category: misterLaunchableCategoryConsole,
 			Launch:   p.launchMGLFile(misterMMS2CartridgeMGLPath),
-			Test:     testFile(misterMMS2CartridgeMGLPath),
+			Test:     p.testFile(misterMMS2CartridgeMGLPath),
 		},
 		// 3S-ARM is a native ARM port of Street Fighter III: 3rd Strike that
 		// ships as an _Other core but is a real arcade game, so it is exposed
@@ -239,7 +239,7 @@ func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
 			Name:     "Paprium",
 			SystemID: systemdefs.SystemGenesis,
 			Launch:   p.launchMGLFile(misterPapriumMGLPath),
-			Test:     testFile(misterPapriumMGLPath),
+			Test:     p.testFile(misterPapriumMGLPath),
 		},
 	)
 
@@ -270,9 +270,9 @@ func otherCoreExists(rootDir, shortName string) bool {
 	return coreExists(rootDir, filepath.Join("_Other", shortName))
 }
 
-func testFile(path string) func(*config.Instance) bool {
+func (p *Platform) testFile(path string) func(*config.Instance) bool {
 	return func(*config.Instance) bool {
-		info, err := os.Stat(path)
+		info, err := p.filesystem().Stat(path)
 		return err == nil && !info.IsDir()
 	}
 }

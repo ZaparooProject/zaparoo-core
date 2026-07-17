@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,12 +120,13 @@ func TestShallowScanRBF_IncludesRetroAchievementsCores(t *testing.T) {
 func TestShallowScanRBF_IncludesCustomCompanionCores(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
 	customCoreDir := filepath.Join(root, "_Custom Cores", "Cores")
-	require.NoError(t, os.MkdirAll(customCoreDir, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(customCoreDir, "VGM_MD_MiSTer.rbf"), []byte{}, 0o600))
+	require.NoError(t, fs.MkdirAll(customCoreDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(customCoreDir, "VGM_MD_MiSTer.rbf"), nil, 0o600))
 
-	rbfs, err := shallowScanRBFAt(root)
+	rbfs, err := shallowScanRBFWithFS(fs, root)
 	require.NoError(t, err)
 
 	expectedMglName := filepath.Join("_Custom Cores", "Cores", "VGM_MD_MiSTer")
@@ -140,8 +142,8 @@ func TestShallowScanRBF_IncludesCustomCompanionCores(t *testing.T) {
 	assert.Equal(t, "VGM_MD_MiSTer", found.ShortName)
 	assert.Equal(t, "VGM_MD_MiSTer.rbf", found.Filename)
 
-	cache := &RBFCache{}
-	cache.BuildFromRBFs(rbfs)
+	cache := &RBFCache{fs: fs, sdRoot: root}
+	cache.Refresh()
 	resolved, ok := cache.GetBySystemID("MegaVGMDrive")
 	require.True(t, ok)
 	assert.Equal(t, expectedMglName, resolved.MglName)
