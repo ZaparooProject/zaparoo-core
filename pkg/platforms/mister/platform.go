@@ -110,6 +110,7 @@ type Platform struct {
 	consoleManager      *MiSTerConsoleManager
 	profileData         *profileDataManager
 	launchShortCore     func(string) error
+	launchBasicFile     func(string) error
 	closeConsole        func() error
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
@@ -124,6 +125,7 @@ func NewPlatform() *Platform {
 		platformMu:      syncutil.Mutex{},
 		fs:              afero.NewOsFs(),
 		launchShortCore: mgls.LaunchShortCore,
+		launchBasicFile: mgls.LaunchBasicFile,
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)
@@ -1221,6 +1223,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// indexing). The Refresh fast path stats only the snapshot directories
 	// and returns early when nothing has changed, so the syscall cost per
 	// call is bounded to ~one readdir plus one stat per top-level _* dir.
+	cores.GlobalRBFCache.SetFilesystem(p.filesystem())
 	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
 	cores.GlobalRBFCache.Refresh()
 

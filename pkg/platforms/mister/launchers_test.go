@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -622,6 +623,134 @@ func TestMGLIndexingAddedToFolderLaunchers(t *testing.T) {
 	scummVMLauncher := findLauncher("ScummVM")
 	require.NotNil(t, scummVMLauncher, "ScummVM launcher should exist")
 	assert.NotContains(t, scummVMLauncher.Extensions, ".mgl")
+}
+
+func TestRecentMediaLaunchers(t *testing.T) {
+	t.Parallel()
+
+	launchers := CreateLaunchers(NewPlatform())
+	tests := []struct {
+		name       string
+		id         string
+		systemID   string
+		folders    []string
+		extensions []string
+	}{
+		{
+			name: "Apple IIGS", id: systemdefs.SystemAppleIIGS, systemID: systemdefs.SystemAppleIIGS,
+			folders:    []string{"Apple-IIgs"},
+			extensions: []string{".hdv", ".po", ".2mg", ".woz", ".dsk", ".do", ".nib"},
+		},
+		{
+			name: "Apple Lisa", id: systemdefs.SystemAppleLisa, systemID: systemdefs.SystemAppleLisa,
+			folders: []string{"LISA"}, extensions: []string{".img", ".vhd"},
+		},
+		{
+			name: "Intellivision ROM", id: systemdefs.SystemIntellivision,
+			systemID: systemdefs.SystemIntellivision,
+			folders:  []string{"Intellivision"}, extensions: []string{".rom", ".int", ".bin"},
+		},
+		{
+			name: "MegaVGMDrive", id: "MegaVGMDrive", systemID: systemdefs.SystemAudio,
+			folders: []string{"MegaVGMDrive"}, extensions: []string{".vgm"},
+		},
+		{
+			name: "OpenBOR default", id: systemdefs.SystemOpenBOR, systemID: systemdefs.SystemOpenBOR,
+			folders: []string{"OpenBOR"}, extensions: []string{".pak"},
+		},
+		{
+			name: "OpenBOR 7533", id: "OpenBOR7533", systemID: systemdefs.SystemOpenBOR,
+			extensions: []string{".pak"},
+		},
+		{
+			name: "PICO-8", id: systemdefs.SystemPico8, systemID: systemdefs.SystemPico8,
+			folders: []string{"PICO-8"}, extensions: []string{".p8"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var found *platforms.Launcher
+			for i := range launchers {
+				if launchers[i].ID == tt.id {
+					found = &launchers[i]
+					break
+				}
+			}
+
+			require.NotNil(t, found, "%s launcher should exist", tt.id)
+			assert.Equal(t, tt.systemID, found.SystemID)
+			assert.ElementsMatch(t, tt.folders, found.Folders)
+			for _, ext := range tt.extensions {
+				assert.Contains(t, found.Extensions, ext)
+			}
+			assert.NotNil(t, found.Launch)
+		})
+	}
+}
+
+func TestPico8LauncherFiltering(t *testing.T) {
+	t.Parallel()
+
+	platform := NewPlatform()
+	launchers := CreateLaunchers(platform)
+	var pico8Launcher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemPico8 {
+			pico8Launcher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, pico8Launcher)
+
+	root := filepath.Join(misterconfig.SDRootDir, "games", "PICO-8")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "P8 cart", path: filepath.Join(root, "Celeste.p8"), want: true},
+		{name: "P8 PNG cart", path: filepath.Join(root, "Celeste.p8.png"), want: true},
+		{name: "uppercase P8 PNG cart", path: filepath.Join(root, "CELESTE.P8.PNG"), want: true},
+		{name: "unrelated PNG", path: filepath.Join(root, "cover.png"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, helpers.PathIsLauncher(&config.Instance{}, platform, pico8Launcher, tt.path))
+		})
+	}
+}
+
+func TestLaunchAltCoreCandidatesUsesAvailableFallback(t *testing.T) {
+	oldCache := cores.GlobalRBFCache
+	cache := &cores.RBFCache{}
+	cores.GlobalRBFCache = cache
+	defer func() {
+		cores.GlobalRBFCache = oldCache
+	}()
+
+	fallbackPath := filepath.Join("_Other", "OpenBOR_7533")
+	cache.BuildFromRBFs([]cores.RBFInfo{
+		{
+			Path:     filepath.Join("media", "fat", "_Other", "OpenBOR_7533.rbf"),
+			Filename: "OpenBOR_7533.rbf", ShortName: "OpenBOR_7533", MglName: fallbackPath,
+		},
+	})
+
+	_ = launchAltCoreCandidates(
+		systemdefs.SystemOpenBOR,
+		systemdefs.SystemOpenBOR,
+		filepath.Join("_Other", "OpenBOR_4086"),
+		fallbackPath,
+	)
+
+	resolved, ok := cache.GetByLauncherID(systemdefs.SystemOpenBOR)
+	require.True(t, ok)
+	assert.Equal(t, fallbackPath, resolved.MglName)
 }
 
 func countExtension(extensions []string, want string) int {

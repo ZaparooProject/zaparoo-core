@@ -33,7 +33,12 @@ var (
 	MisterOtherGenMidi       = uuid.MustParse("91fafc5c-25d1-4356-b5b5-3628573d77b3")
 	MisterOtherSlugCross     = uuid.MustParse("e05893a4-59ee-4919-a3cd-47ff8c5e518d")
 	MisterOtherTomyScramble  = uuid.MustParse("349dfee7-bc32-4004-b377-ff8fe8083836")
+	MisterOtherTamagotchi    = uuid.MustParse("ee9f97fb-df75-460a-82af-13ed03c3deb5")
+	MisterOtherSonicMania    = uuid.MustParse("02abc813-464d-4c7c-8feb-5d11411b959c")
+	MisterOtherQuake         = uuid.MustParse("c483707b-deb9-4f9b-8414-7fd45717fa7f")
 	MisterArcadeThirdStrike  = uuid.MustParse("618433aa-0e8b-4230-800e-ec33758affb7")
+	MisterGenesisPaprium     = uuid.MustParse("b97b6512-01ac-4685-94c9-96264ee86f01")
+	MisterConsoleMMS2Gameboy = uuid.MustParse("c25b1083-e180-4cad-83f8-ad34c1598b4d")
 
 	MisterConsoleAY38500            = uuid.MustParse("8229ba4f-722c-5758-bea7-e87cf1189249")
 	MisterConsoleBBCBridgeCompanion = uuid.MustParse("7c10204b-487a-5fc5-b581-a02e5cace541")

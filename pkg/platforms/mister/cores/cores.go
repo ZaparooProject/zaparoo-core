@@ -23,6 +23,7 @@ package cores
 
 import (
 	"fmt"
+	"path/filepath"
 	s "strings"
 )
 
@@ -489,8 +490,7 @@ var Systems = map[string]Core{
 		RBF: "_Console/Intellivision",
 		Slots: []Slot{
 			{
-				// Exts: []string{".rom", ".int", ".bin"},
-				Exts: []string{".int", ".bin"},
+				Exts: []string{".rom", ".int", ".bin"},
 				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
@@ -1245,6 +1245,54 @@ var Systems = map[string]Core{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
+				},
+			},
+		},
+	},
+	"AppleIIGS": {
+		ID:  "AppleIIGS",
+		RBF: filepath.Join("_Computer", "Apple-IIgs"),
+		Slots: []Slot{
+			{
+				Label: "Hard Disk",
+				Exts:  []string{".hdv", ".po", ".2mg"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "s",
+					Index:  0,
+				},
+			},
+			{
+				Label: "3.5-inch Floppy",
+				Exts:  []string{".woz"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "s",
+					Index:  2,
+				},
+			},
+			{
+				Label: "5.25-inch Floppy",
+				Exts:  []string{".dsk", ".do", ".nib"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "s",
+					Index:  3,
+				},
+			},
+		},
+	},
+	"AppleLisa": {
+		ID:  "AppleLisa",
+		RBF: filepath.Join("_Computer", "Apple-Lisa"),
+		Slots: []Slot{
+			{
+				Label: "Hard Disk",
+				Exts:  []string{".img", ".vhd"},
+				Mgl: &MGLParams{
+					Delay:  2,
+					Method: "s",
+					Index:  0,
 				},
 			},
 		},
@@ -2364,6 +2412,52 @@ var Systems = map[string]Core{
 					Delay:  3,
 					Method: "f",
 					Index:  1,
+				},
+			},
+		},
+	},
+	"MegaVGMDrive": {
+		ID:      "MegaVGMDrive",
+		RBF:     filepath.Join("_Custom Cores", "Cores", "VGM_MD_MiSTer"),
+		SetName: "MegaVGMDrive",
+		Slots: []Slot{
+			{
+				Label: "VGM",
+				Exts:  []string{".vgm"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	},
+	"OpenBOR": {
+		ID:  "OpenBOR",
+		RBF: filepath.Join("_Other", "OpenBOR_4086"),
+		Slots: []Slot{
+			{
+				Label: "PAK",
+				Exts:  []string{".pak"},
+				Mgl: &MGLParams{
+					Delay:  2,
+					Method: "s",
+					Index:  0,
+				},
+			},
+		},
+	},
+	"Pico8": {
+		ID:  "Pico8",
+		RBF: filepath.Join("_Other", "PICO-8"),
+		Slots: []Slot{
+			{
+				Label: "Cart",
+				Exts:  []string{".p8", ".p8.png"},
+				Mgl: &MGLParams{
+					Delay:  2,
+					Method: "s",
+					Index:  0,
 				},
 			},
 		},

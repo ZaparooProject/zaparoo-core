@@ -376,7 +376,18 @@ func launchAltCore(
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, "", false)
+	return launchAltCoreCandidates(launcherID, systemID, rbfPath)
+}
+
+func launchAltCoreCandidates(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+	fallbackRBFPaths ...string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefaultSetName(
+		launcherID, systemID, rbfPath, "", false, fallbackRBFPaths...,
+	)
 }
 
 func launchDB9Core(
@@ -500,9 +511,13 @@ func launchAltCoreWithDefaultSetName(
 	rbfPath string,
 	setName string,
 	setNameSameDir bool,
+	fallbackRBFPaths ...string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	// Register alt core during launcher creation
-	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
+	// Register alt core during launcher creation.
+	rbfPaths := make([]string, 0, 1+len(fallbackRBFPaths))
+	rbfPaths = append(rbfPaths, rbfPath)
+	rbfPaths = append(rbfPaths, fallbackRBFPaths...)
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPaths...)
 
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
@@ -602,6 +617,11 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 		}
 		return nil, nil
 	}
+}
+
+func pico8CartTest(_ *config.Instance, path string) bool {
+	lowerPath := strings.ToLower(path)
+	return strings.HasSuffix(lowerPath, ".p8") || strings.HasSuffix(lowerPath, ".p8.png")
 }
 
 func atari2600BinTest(_ *config.Instance, path string) bool {
@@ -1367,7 +1387,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemIntellivision,
 			SystemID:   systemdefs.SystemIntellivision,
 			Folders:    []string{"Intellivision"},
-			Extensions: []string{".int", ".bin"},
+			Extensions: []string{".rom", ".int", ".bin"},
 			Launch:     launch(pl, systemdefs.SystemIntellivision),
 		},
 		{
@@ -1947,6 +1967,20 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemAppleII),
 		},
 		{
+			ID:         systemdefs.SystemAppleIIGS,
+			SystemID:   systemdefs.SystemAppleIIGS,
+			Folders:    []string{"Apple-IIgs"},
+			Extensions: []string{".hdv", ".po", ".2mg", ".woz", ".dsk", ".do", ".nib"},
+			Launch:     launch(pl, systemdefs.SystemAppleIIGS),
+		},
+		{
+			ID:         systemdefs.SystemAppleLisa,
+			SystemID:   systemdefs.SystemAppleLisa,
+			Folders:    []string{"LISA"},
+			Extensions: []string{".img", ".vhd"},
+			Launch:     launch(pl, systemdefs.SystemAppleLisa),
+		},
+		{
 			ID:         systemdefs.SystemAquarius,
 			SystemID:   systemdefs.SystemAquarius,
 			Folders:    []string{"AQUARIUS"},
@@ -2261,6 +2295,41 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"Chip8"},
 			Extensions: []string{".ch8"},
 			Launch:     launch(pl, systemdefs.SystemChip8),
+		},
+		{
+			ID:         "MegaVGMDrive",
+			SystemID:   systemdefs.SystemAudio,
+			Folders:    []string{"MegaVGMDrive"},
+			Extensions: []string{".vgm"},
+			Launch:     launch(pl, "MegaVGMDrive"),
+		},
+		{
+			ID:         systemdefs.SystemOpenBOR,
+			SystemID:   systemdefs.SystemOpenBOR,
+			Folders:    []string{"OpenBOR"},
+			Extensions: []string{".pak"},
+			Launch: launchAltCoreCandidates(
+				systemdefs.SystemOpenBOR,
+				systemdefs.SystemOpenBOR,
+				filepath.Join("_Other", "OpenBOR_4086"),
+				filepath.Join("_Other", "OpenBOR_7533"),
+			),
+		},
+		{
+			ID:         "OpenBOR7533",
+			SystemID:   systemdefs.SystemOpenBOR,
+			Extensions: []string{".pak"},
+			Launch: launchAltCore(
+				"OpenBOR7533", systemdefs.SystemOpenBOR, filepath.Join("_Other", "OpenBOR_7533"),
+			),
+		},
+		{
+			ID:         systemdefs.SystemPico8,
+			SystemID:   systemdefs.SystemPico8,
+			Folders:    []string{"PICO-8"},
+			Extensions: []string{".p8"},
+			Test:       pico8CartTest,
+			Launch:     launch(pl, systemdefs.SystemPico8),
 		},
 		{
 			ID:         systemdefs.SystemGroovy,

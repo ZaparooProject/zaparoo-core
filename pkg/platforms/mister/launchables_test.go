@@ -12,6 +12,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/google/uuid"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +20,7 @@ import (
 func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 	items := (&Platform{}).Launchables(&config.Instance{})
 
-	require.Len(t, items, 32)
+	require.Len(t, items, 37)
 	seenSystems := make(map[string]string, len(items))
 	seenMedia := make(map[string]launchables.VirtualMedia, len(items))
 	for _, item := range items {
@@ -48,7 +49,10 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 		"Game of Life",
 		"GBMidi",
 		"GenMidi",
+		"MiSTer Quake",
+		"Sonic Mania",
 		"Slug Cross",
+		"Tamagotchi",
 		"Tomy Scramble",
 	} {
 		assert.Equal(t, "Other", seenSystems[name], name)
@@ -59,6 +63,7 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 		"BBC Bridge Companion",
 		"My Vision",
 		"Super Vision 8000",
+		"Load GB/GBC Cartridge",
 	} {
 		assert.Equal(t, "Console", seenSystems[name], name)
 	}
@@ -89,6 +94,11 @@ func TestLaunchablesOtherCoreDefinitions(t *testing.T) {
 	thirdStrike, ok := seenMedia["Street Fighter III: 3rd Strike (3S-ARM)"]
 	require.True(t, ok, "3S-ARM virtual media missing")
 	assert.Equal(t, systemdefs.SystemArcade, thirdStrike.SystemID)
+
+	paprium, ok := seenMedia["Paprium"]
+	require.True(t, ok, "Paprium virtual media missing")
+	assert.Equal(t, launchables.MisterGenesisPaprium, paprium.ID)
+	assert.Equal(t, systemdefs.SystemGenesis, paprium.SystemID)
 }
 
 func TestLaunchOtherCoreUsesInjectedLauncher(t *testing.T) {
@@ -135,6 +145,62 @@ func TestLaunchOtherCoreReturnsInjectedLaunchError(t *testing.T) {
 	assert.True(t, closed)
 }
 
+func TestLaunchMGLFileUsesInjectedLauncher(t *testing.T) {
+	mglPath := filepath.Join("_Custom Cores", "PapriumMD.mgl")
+	closed := false
+	var launched string
+	p := &Platform{
+		closeConsole: func() error {
+			closed = true
+			return nil
+		},
+		launchBasicFile: func(path string) error {
+			launched = path
+			return nil
+		},
+	}
+
+	process, err := p.launchMGLFile(mglPath)(&config.Instance{}, "", nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, process)
+	assert.True(t, closed)
+	assert.Equal(t, mglPath, launched)
+}
+
+func TestLaunchMGLFileReturnsInjectedLaunchError(t *testing.T) {
+	mglPath := filepath.Join("_Custom Cores", "PapriumMD.mgl")
+	launchErr := errors.New("launch failed")
+	p := &Platform{
+		closeConsole: func() error {
+			return errors.New("close failed")
+		},
+		launchBasicFile: func(string) error {
+			return launchErr
+		},
+	}
+
+	process, err := p.launchMGLFile(mglPath)(&config.Instance{}, "", nil)
+
+	require.ErrorIs(t, err, launchErr)
+	assert.Nil(t, process)
+}
+
+func TestLaunchableFileAvailability(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	filePath := filepath.Join(root, "launch.mgl")
+	require.NoError(t, fs.MkdirAll(root, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filePath, nil, 0o600))
+	platform := &Platform{fs: fs}
+
+	assert.True(t, platform.testFile(filePath)(nil))
+	assert.False(t, platform.testFile(root)(nil))
+	assert.False(t, platform.testFile(filepath.Join(root, "missing.mgl"))(nil))
+}
+
 func TestCoreExists(t *testing.T) {
 	rootDir := t.TempDir()
 	otherDir := filepath.Join(rootDir, "_Other")
@@ -145,11 +211,17 @@ func TestCoreExists(t *testing.T) {
 	require.NoError(t, os.MkdirAll(computerDir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "Chess_20240410.rbf"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "3S-ARM.rbf"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "Sonic_Mania_20260701.rbf"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "Tamagotchi_20260515.rbf"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "Quake.rbf"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(consoleDir, "AY-3-8500_20250903.rbf"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(computerDir, "VT52_20241120.RBF"), nil, 0o600))
 
 	assert.True(t, otherCoreExists(rootDir, "Chess"))
 	assert.True(t, otherCoreExists(rootDir, "3S-ARM"))
+	assert.True(t, otherCoreExists(rootDir, "Sonic_Mania"))
+	assert.True(t, otherCoreExists(rootDir, "Tamagotchi"))
+	assert.True(t, otherCoreExists(rootDir, "Quake"))
 	assert.False(t, otherCoreExists(rootDir, "Donut"))
 	assert.True(t, coreExists(rootDir, filepath.Join("_Console", "AY-3-8500")))
 	assert.True(t, coreExists(rootDir, filepath.Join("_Computer", "VT52")))
@@ -220,7 +292,7 @@ load_path = "_Other/Arduboy"
 
 	items := (&Platform{}).Launchables(cfg)
 
-	require.Len(t, items, 33)
+	require.Len(t, items, 38)
 
 	var found *launchables.VirtualSystem
 	for i := range items {

@@ -275,6 +275,90 @@ func TestLookupSystemExact(t *testing.T) {
 }
 
 // TestLookupSystemAliases verifies alias lookups
+func TestIssue655SystemsDefined(t *testing.T) {
+	t.Parallel()
+
+	issueSystems := []string{
+		SystemWebBrowser,
+		SystemHandheldLCD,
+		SystemSteamVR,
+		SystemLegacyMobile,
+		SystemNintendoEReader,
+		SystemMetaQuest2,
+		SystemPlaydate,
+		SystemPlayStationVR2,
+		SystemMetaQuest3,
+		SystemOculusQuest,
+		SystemPlayStationVR,
+		SystemWindowsPhone,
+		SystemOculusRift,
+		SystemOculusVR,
+		SystemHyperScan,
+		SystemNintendoSwitch2,
+		SystemEvercade,
+		SystemDVDPlayer,
+		SystemUzebox,
+		SystemLeapster,
+		SystemLeapsterExplorer,
+		SystemWindowsMixedReality,
+		SystemAdvancedPICOBeena,
+		SystemSegaPico,
+		SystemLinux,
+		SystemBlackBerryOS,
+		SystemWindowsMobile,
+		SystemMagnavoxOdyssey,
+		SystemZeebo,
+		SystemElektorTVGamesComputer,
+		SystemPlaydia,
+		SystemApplePippin,
+		SystemLegacyComputer,
+		SystemTerebikko,
+		SystemSuperCassetteVision,
+		SystemRZone,
+		SystemVisionOS,
+		SystemVMU,
+		SystemDragon32,
+		SystemAppleIIGS,
+		System1292APVS,
+		SystemFireTV,
+		SystemOculusGo,
+		SystemLeapTV,
+		SystemPolymega,
+		SystemDigiBlast,
+		SystemPC6000,
+		SystemPalmOS,
+		SystemMZ2200,
+		SystemPocketStation,
+		SystemGearVR,
+		SystemPLATO,
+		SystemMicrovision,
+		SystemCassetteVision,
+		SystemDaydream,
+		SystemCasioLoopy,
+		SystemIntellivisionAmico,
+		SystemTapwaveZodiac,
+		SystemPC50XFamily,
+		SystemBluRayPlayer,
+		SystemPDP10,
+		SystemGoogleStadia,
+		SystemHyperNeoGeo64,
+		SystemAirConsole,
+		SystemSegaCD32X,
+		SystemCommodorePlus4,
+		SystemAmstradGX4000,
+		SystemCommodoreCDTV,
+		SystemNuon,
+		SystemPanasonicJungle,
+		SystemPanasonicM2,
+	}
+
+	require.Len(t, issueSystems, 71)
+	for _, systemID := range issueSystems {
+		assert.Contains(t, Systems, systemID)
+	}
+	assert.Contains(t, Systems, SystemPinball)
+}
+
 func TestLookupSystemAliases(t *testing.T) {
 	t.Parallel()
 
@@ -300,6 +384,12 @@ func TestLookupSystemAliases(t *testing.T) {
 		{"SNESMSU1 SNES-MSU1 alias", "SNES-MSU1", "SNESMSU1"},
 		{"SGBMSU1 SGB-MSU1 alias", "SGB-MSU1", "SGBMSU1"},
 		{"SGBMSU1 SuperGameboyMSU1 alias", "SuperGameboyMSU1", "SGBMSU1"},
+		{"Apple IIGS alias", "Apple-IIGS", SystemAppleIIGS},
+		{"Apple Lisa alias", "Apple-Lisa", SystemAppleLisa},
+		{"OpenBOR lowercase", "openbor", SystemOpenBOR},
+		{"Magnavox Odyssey alias", "Odyssey", SystemMagnavoxOdyssey},
+		{"Commodore Plus4 alias", "Plus4", SystemCommodorePlus4},
+		{"Pinball alias", "Virtual Pinball", SystemPinball},
 	}
 
 	for _, tt := range tests {

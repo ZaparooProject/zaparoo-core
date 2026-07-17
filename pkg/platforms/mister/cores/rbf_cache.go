@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // RBFCache provides lookups of RBF paths by system ID, short name, or launcher ID.
@@ -43,6 +44,7 @@ import (
 // NeedsRescan returns true so the caller can schedule a background rescan.
 // Subsequent Refresh calls use directory mtimes as a cheap runtime check.
 type RBFCache struct {
+	fs            afero.Fs
 	persistPath   string
 	sdRoot        string
 	bySystemID    map[string]RBFInfo
@@ -124,7 +126,9 @@ func (c *RBFCache) Refresh() {
 		if c.tryLoadFromDiskLocked() {
 			return
 		}
-	} else if !c.needsRescan && dirMtimesMatch(c.lastDirMtimes) && rootRBFsMatch(c.lastRootRBFs) {
+	} else if !c.needsRescan &&
+		dirMtimesMatchWithFS(c.filesystem(), c.root(), c.lastDirMtimes) &&
+		rootRBFsMatchWithFS(c.filesystem(), c.root(), c.lastRootRBFs) {
 		return
 	}
 
@@ -187,7 +191,7 @@ func (c *RBFCache) scanLocked() {
 	stable := false
 	for range maxScanAttempts {
 		beforeManifest, beforeErr := c.snapshotRBFManifest()
-		files, err := shallowScanRBF()
+		files, err := shallowScanRBFWithFS(c.filesystem(), c.root())
 		if err != nil {
 			log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
 			c.BuildFromRBFs(nil)
@@ -234,6 +238,24 @@ func (c *RBFCache) scanLocked() {
 		Msg("RBF cache persisted to disk")
 }
 
+func (c *RBFCache) filesystem() afero.Fs {
+	if c.fs != nil {
+		return c.fs
+	}
+	return afero.NewOsFs()
+}
+
+// SetFilesystem configures filesystem access before first Refresh.
+// Calls after cache initialization are ignored.
+func (c *RBFCache) SetFilesystem(fs afero.Fs) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.initialized {
+		return
+	}
+	c.fs = fs
+}
+
 func (c *RBFCache) root() string {
 	if c.sdRoot != "" {
 		return c.sdRoot
@@ -242,15 +264,15 @@ func (c *RBFCache) root() string {
 }
 
 func (c *RBFCache) snapshotRBFManifest() ([]string, error) {
-	return snapshotRBFManifestAt(c.root())
+	return snapshotRBFManifestWithFS(c.filesystem(), c.root())
 }
 
 func (c *RBFCache) snapshotDirMtimes() (map[string]int64, error) {
-	return snapshotDirMtimesAt(c.root())
+	return snapshotDirMtimesWithFS(c.filesystem(), c.root())
 }
 
 func (c *RBFCache) snapshotRootRBFs() ([]string, error) {
-	return snapshotRootRBFsAt(c.root())
+	return snapshotRootRBFsWithFS(c.filesystem(), c.root())
 }
 
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a
