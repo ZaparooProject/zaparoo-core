@@ -22,9 +22,11 @@
 package cores
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +43,24 @@ func TestRBFCacheRefresh_Basic(t *testing.T) {
 	// On non-MiSTer systems, counts will be 0 (empty cache is valid)
 	assert.GreaterOrEqual(t, systems, 0, "systems count should be non-negative")
 	assert.GreaterOrEqual(t, rbfs, 0, "rbfs count should be non-negative")
+}
+
+func TestRBFCacheSetFilesystemDiscoversCores(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	coreDir := filepath.Join(root, "_Custom Cores", "Cores")
+	require.NoError(t, fs.MkdirAll(coreDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(coreDir, "VGM_MD_MiSTer.rbf"), nil, 0o600))
+
+	cache := &RBFCache{sdRoot: root}
+	cache.SetFilesystem(fs)
+	cache.Refresh()
+
+	rbf, found := cache.GetBySystemID("MegaVGMDrive")
+	require.True(t, found)
+	assert.Equal(t, filepath.Join("_Custom Cores", "Cores", "VGM_MD_MiSTer"), rbf.MglName)
 }
 
 func TestRBFCacheGetByShortName_CaseInsensitive(t *testing.T) {

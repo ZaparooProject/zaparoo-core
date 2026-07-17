@@ -245,9 +245,14 @@ func (c *RBFCache) filesystem() afero.Fs {
 	return afero.NewOsFs()
 }
 
+// SetFilesystem configures filesystem access before first Refresh.
+// Calls after cache initialization are ignored.
 func (c *RBFCache) SetFilesystem(fs afero.Fs) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.initialized {
+		return
+	}
 	c.fs = fs
 }
 
