@@ -246,13 +246,16 @@ func TestSnapshotDirMtimes_IncludesSpecialCoreDirs(t *testing.T) {
 
 	root := t.TempDir()
 	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	customCoreDir := filepath.Join(root, "_Custom Cores", "Cores")
 	lightGunDir := filepath.Join(root, "Light Gun")
 	require.NoError(t, os.MkdirAll(raCoreDir, 0o750))
+	require.NoError(t, os.MkdirAll(customCoreDir, 0o750))
 	require.NoError(t, os.MkdirAll(lightGunDir, 0o750))
 
 	snapshot, err := snapshotDirMtimesAt(root)
 	require.NoError(t, err)
 	assert.Contains(t, snapshot, raCoreDir)
+	assert.Contains(t, snapshot, customCoreDir)
 	assert.Contains(t, snapshot, lightGunDir)
 }
 
@@ -264,8 +267,9 @@ func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
 	customDir := filepath.Join(root, "_Custom")
 	lightGunDir := filepath.Join(root, "Light Gun")
 	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	customCoreDir := filepath.Join(root, "_Custom Cores", "Cores")
 	ignoredDir := filepath.Join(root, "Games")
-	for _, dir := range []string{consoleDir, customDir, lightGunDir, raCoreDir, ignoredDir} {
+	for _, dir := range []string{consoleDir, customDir, lightGunDir, raCoreDir, customCoreDir, ignoredDir} {
 		require.NoError(t, os.MkdirAll(dir, 0o750))
 	}
 
@@ -277,6 +281,7 @@ func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
 	writeRBF(filepath.Join(customDir, "Custom.rbf"))
 	writeRBF(filepath.Join(lightGunDir, "Sinden.rbf"))
 	writeRBF(filepath.Join(raCoreDir, "RASNES.rbf"))
+	writeRBF(filepath.Join(customCoreDir, "VGM_MD_MiSTer.rbf"))
 	writeRBF(filepath.Join(ignoredDir, "Ignored.rbf"))
 	require.NoError(t, os.MkdirAll(filepath.Join(consoleDir, "Nested"), 0o750))
 	writeRBF(filepath.Join(consoleDir, "Nested", "TooDeep.rbf"))
@@ -288,6 +293,7 @@ func TestSnapshotRBFManifest_ShallowScanScope(t *testing.T) {
 		"Arcade.rbf",
 		filepath.Join("Light Gun", "Sinden.rbf"),
 		filepath.Join("_Console", "Saturn_20251003.rbf"),
+		filepath.Join("_Custom Cores", "Cores", "VGM_MD_MiSTer.rbf"),
 		filepath.Join("_Custom", "Custom.rbf"),
 		filepath.Join("_RA_Cores", "Cores", "RASNES.rbf"),
 	}, manifest)

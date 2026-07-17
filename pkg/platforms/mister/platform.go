@@ -110,6 +110,7 @@ type Platform struct {
 	consoleManager      *MiSTerConsoleManager
 	profileData         *profileDataManager
 	launchShortCore     func(string) error
+	launchBasicFile     func(string) error
 	closeConsole        func() error
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
@@ -124,6 +125,7 @@ func NewPlatform() *Platform {
 		platformMu:      syncutil.Mutex{},
 		fs:              afero.NewOsFs(),
 		launchShortCore: mgls.LaunchShortCore,
+		launchBasicFile: mgls.LaunchBasicFile,
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)

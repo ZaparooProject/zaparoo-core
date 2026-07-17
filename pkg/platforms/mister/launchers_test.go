@@ -624,6 +624,108 @@ func TestMGLIndexingAddedToFolderLaunchers(t *testing.T) {
 	assert.NotContains(t, scummVMLauncher.Extensions, ".mgl")
 }
 
+func TestRecentMediaLaunchers(t *testing.T) {
+	t.Parallel()
+
+	launchers := CreateLaunchers(NewPlatform())
+	tests := []struct {
+		name       string
+		id         string
+		systemID   string
+		folders    []string
+		extensions []string
+	}{
+		{
+			name: "Apple IIGS", id: systemdefs.SystemAppleIIGS, systemID: systemdefs.SystemAppleIIGS,
+			folders:    []string{"Apple-IIgs"},
+			extensions: []string{".hdv", ".po", ".2mg", ".woz", ".dsk", ".do", ".nib"},
+		},
+		{
+			name: "Apple Lisa", id: systemdefs.SystemAppleLisa, systemID: systemdefs.SystemAppleLisa,
+			folders: []string{"LISA"}, extensions: []string{".img", ".vhd"},
+		},
+		{
+			name: "Intellivision ROM", id: systemdefs.SystemIntellivision,
+			systemID: systemdefs.SystemIntellivision,
+			folders:  []string{"Intellivision"}, extensions: []string{".rom", ".int", ".bin"},
+		},
+		{
+			name: "MegaVGMDrive", id: "MegaVGMDrive", systemID: systemdefs.SystemAudio,
+			folders: []string{"MegaVGMDrive"}, extensions: []string{".vgm"},
+		},
+		{
+			name: "OpenBOR default", id: systemdefs.SystemOpenBOR, systemID: systemdefs.SystemOpenBOR,
+			folders: []string{"OpenBOR"}, extensions: []string{".pak"},
+		},
+		{
+			name: "OpenBOR 7533", id: "OpenBOR7533", systemID: systemdefs.SystemOpenBOR,
+			extensions: []string{".pak"},
+		},
+		{
+			name: "PICO-8", id: systemdefs.SystemPico8, systemID: systemdefs.SystemPico8,
+			folders: []string{"PICO-8"}, extensions: []string{".p8"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var found *platforms.Launcher
+			for i := range launchers {
+				if launchers[i].ID == tt.id {
+					found = &launchers[i]
+					break
+				}
+			}
+
+			require.NotNil(t, found, "%s launcher should exist", tt.id)
+			assert.Equal(t, tt.systemID, found.SystemID)
+			assert.ElementsMatch(t, tt.folders, found.Folders)
+			for _, ext := range tt.extensions {
+				assert.Contains(t, found.Extensions, ext)
+			}
+			assert.NotNil(t, found.Launch)
+		})
+	}
+}
+
+func TestPico8PNGCartTest(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, pico8PNGCartTest(nil, filepath.Join("games", "PICO-8", "Celeste.p8.png")))
+	assert.True(t, pico8PNGCartTest(nil, filepath.Join("games", "PICO-8", "CELESTE.P8.PNG")))
+	assert.False(t, pico8PNGCartTest(nil, filepath.Join("games", "PICO-8", "cover.png")))
+}
+
+func TestLaunchAltCoreCandidatesUsesAvailableFallback(t *testing.T) {
+	oldCache := cores.GlobalRBFCache
+	cache := &cores.RBFCache{}
+	cores.GlobalRBFCache = cache
+	defer func() {
+		cores.GlobalRBFCache = oldCache
+	}()
+
+	fallbackPath := filepath.Join("_Other", "OpenBOR_7533")
+	cache.BuildFromRBFs([]cores.RBFInfo{
+		{
+			Path:     filepath.Join("media", "fat", "_Other", "OpenBOR_7533.rbf"),
+			Filename: "OpenBOR_7533.rbf", ShortName: "OpenBOR_7533", MglName: fallbackPath,
+		},
+	})
+
+	_ = launchAltCoreCandidates(
+		systemdefs.SystemOpenBOR,
+		systemdefs.SystemOpenBOR,
+		filepath.Join("_Other", "OpenBOR_4086"),
+		fallbackPath,
+	)
+
+	resolved, ok := cache.GetByLauncherID(systemdefs.SystemOpenBOR)
+	require.True(t, ok)
+	assert.Equal(t, fallbackPath, resolved.MglName)
+}
+
 func countExtension(extensions []string, want string) int {
 	count := 0
 	for _, extension := range extensions {

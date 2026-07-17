@@ -116,6 +116,37 @@ func TestShallowScanRBF_IncludesRetroAchievementsCores(t *testing.T) {
 	assert.Equal(t, "NES.rbf", found.Filename)
 }
 
+func TestShallowScanRBF_IncludesCustomCompanionCores(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	customCoreDir := filepath.Join(root, "_Custom Cores", "Cores")
+	require.NoError(t, os.MkdirAll(customCoreDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(customCoreDir, "VGM_MD_MiSTer.rbf"), []byte{}, 0o600))
+
+	rbfs, err := shallowScanRBFAt(root)
+	require.NoError(t, err)
+
+	expectedMglName := filepath.Join("_Custom Cores", "Cores", "VGM_MD_MiSTer")
+	var found *RBFInfo
+	for i := range rbfs {
+		if rbfs[i].MglName == expectedMglName {
+			found = &rbfs[i]
+			break
+		}
+	}
+
+	require.NotNil(t, found, "MiSTer Companion custom core should be included in shallow RBF scan")
+	assert.Equal(t, "VGM_MD_MiSTer", found.ShortName)
+	assert.Equal(t, "VGM_MD_MiSTer.rbf", found.Filename)
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs(rbfs)
+	resolved, ok := cache.GetBySystemID("MegaVGMDrive")
+	require.True(t, ok)
+	assert.Equal(t, expectedMglName, resolved.MglName)
+}
+
 func TestShallowScanRBF_IncludesLightGunSindenCores(t *testing.T) {
 	t.Parallel()
 

@@ -41,7 +41,7 @@ const RBFCacheFileName = "rbf_cache.gob"
 
 const (
 	rbfCacheFileMagic   = "zrbf"
-	rbfCacheFileVersion = 4
+	rbfCacheFileVersion = 5
 )
 
 // rbfCacheMaxBytes caps gob input at load time. ~200 RBFs × ~256 B per
@@ -61,14 +61,16 @@ type persistedRBFCache struct {
 	Version  int
 }
 
-// snapshotDirMtimes captures the current mtime for each `_*` subdirectory
-// and the Light Gun directory. These are directories whose mtime can cheaply
-// signal runtime core changes. The SD root itself is intentionally excluded —
-// its mtime drifts from boot scripts and other unrelated writes — and
-// root-level RBFs are tracked separately via snapshotRootRBFs.
+// snapshotDirMtimes captures the current mtime for each `_*` subdirectory,
+// the Light Gun directory, and supported nested custom-core directories. These
+// are directories whose mtime can cheaply signal runtime core changes. The SD
+// root itself is intentionally excluded — its mtime drifts from boot scripts
+// and other unrelated writes — and root-level RBFs are tracked separately via
+// snapshotRootRBFs.
 // snapshotRBFManifest returns sorted shallow RBF paths relative to the SD root.
 // It scans root files, immediate files in every `_*` and Light Gun directory,
-// and immediate files in _RA_Cores/Cores. It never walks recursively.
+// and immediate files in supported nested custom-core directories. It never
+// walks recursively beyond those known locations.
 func snapshotRBFManifestAt(root string) ([]string, error) {
 	rootFiles, err := os.ReadDir(root)
 	if err != nil {
@@ -118,10 +120,11 @@ func snapshotRBFManifestAt(root string) ([]string, error) {
 		}
 	}
 
-	raRelativeDir := filepath.Join("_RA_Cores", "Cores")
-	raCoreDir := filepath.Join(root, raRelativeDir)
-	if addErr := addRBFs(raCoreDir, raRelativeDir); addErr != nil && !errors.Is(addErr, os.ErrNotExist) {
-		return nil, fmt.Errorf("readdir RBF directory %s: %w", raCoreDir, addErr)
+	for _, relativeDir := range nestedRBFDirectories {
+		coreDir := filepath.Join(root, relativeDir)
+		if addErr := addRBFs(coreDir, relativeDir); addErr != nil && !errors.Is(addErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("readdir RBF directory %s: %w", coreDir, addErr)
+		}
 	}
 
 	sort.Strings(manifest)
@@ -159,9 +162,11 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 		snapshot[sub] = info.ModTime().UnixNano()
 	}
 
-	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
-	if info, statErr := os.Stat(raCoreDir); statErr == nil && info.IsDir() {
-		snapshot[raCoreDir] = info.ModTime().UnixNano()
+	for _, relativeDir := range nestedRBFDirectories {
+		coreDir := filepath.Join(root, relativeDir)
+		if info, statErr := os.Stat(coreDir); statErr == nil && info.IsDir() {
+			snapshot[coreDir] = info.ModTime().UnixNano()
+		}
 	}
 	return snapshot, nil
 }

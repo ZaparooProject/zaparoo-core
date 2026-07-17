@@ -211,6 +211,48 @@ func TestPathToMGLDef(t *testing.T) {
 			wantMgl:  Systems["PSX"].Slots[1].Mgl,
 		},
 		{
+			name:     "Intellivision ROM",
+			systemID: "Intellivision",
+			path:     "Homebrew.ROM",
+			wantMgl:  Systems["Intellivision"].Slots[0].Mgl,
+		},
+		{
+			name:     "PICO-8 PNG cart",
+			systemID: "Pico8",
+			path:     "celeste.p8.png",
+			wantMgl:  Systems["Pico8"].Slots[0].Mgl,
+		},
+		{
+			name:     "OpenBOR PAK",
+			systemID: "OpenBOR",
+			path:     "Avengers.pak",
+			wantMgl:  Systems["OpenBOR"].Slots[0].Mgl,
+		},
+		{
+			name:     "Apple IIGS hard disk",
+			systemID: "AppleIIGS",
+			path:     "GSOS.2mg",
+			wantMgl:  Systems["AppleIIGS"].Slots[0].Mgl,
+		},
+		{
+			name:     "Apple IIGS 5.25-inch floppy",
+			systemID: "AppleIIGS",
+			path:     "game.dsk",
+			wantMgl:  Systems["AppleIIGS"].Slots[2].Mgl,
+		},
+		{
+			name:     "Apple Lisa hard disk",
+			systemID: "AppleLisa",
+			path:     "profile.vhd",
+			wantMgl:  Systems["AppleLisa"].Slots[0].Mgl,
+		},
+		{
+			name:     "MegaVGMDrive track",
+			systemID: "MegaVGMDrive",
+			path:     "Streets of Rage.vgm",
+			wantMgl:  Systems["MegaVGMDrive"].Slots[0].Mgl,
+		},
+		{
 			name:     "No matching extension returns error",
 			systemID: "NES",
 			path:     "unknown.zip",

@@ -37,6 +37,11 @@ type RBFInfo struct {
 	MglName   string // relative path launch-able from MGL file
 }
 
+var nestedRBFDirectories = []string{
+	filepath.Join("_RA_Cores", "Cores"),
+	filepath.Join("_Custom Cores", "Cores"),
+}
+
 func stripOfficialDateSuffix(name string) string {
 	if len(name) < 10 || name[len(name)-9] != '_' {
 		return name
@@ -79,7 +84,7 @@ func parseRBFPathAt(root, path string) RBFInfo {
 }
 
 // Find all rbf files in the top 2 menu levels of the SD card, plus
-// RetroAchievements cores under _RA_Cores/Cores.
+// supported nested custom-core directories.
 func shallowScanRBF() ([]RBFInfo, error) {
 	return shallowScanRBFAt(config.SDRootDir)
 }
@@ -140,12 +145,15 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 		}
 	}
 
-	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
-	raCoreFiles, raErr := os.ReadDir(raCoreDir)
-	if raErr == nil {
-		for _, file := range raCoreFiles {
+	for _, relativeDir := range nestedRBFDirectories {
+		coreDir := filepath.Join(root, relativeDir)
+		coreFiles, readErr := os.ReadDir(coreDir)
+		if readErr != nil {
+			continue
+		}
+		for _, file := range coreFiles {
 			if isRbf(file) {
-				addRBF(filepath.Join(raCoreDir, file.Name()))
+				addRBF(filepath.Join(coreDir, file.Name()))
 			}
 		}
 	}
