@@ -50,9 +50,10 @@ import (
 type profileDataItemKind uint8
 
 type profileDataItemSpec struct {
-	id    string
-	label string
-	kind  profileDataItemKind
+	id       string
+	label    string
+	filename string
+	kind     profileDataItemKind
 }
 
 const (
@@ -80,7 +81,7 @@ var (
 		{id: profileDataItemSavestates, label: "Save states", kind: profileDataItemKindDir},
 		{
 			id: profileDataItemRetroAchievements, label: "RetroAchievements account",
-			kind: profileDataItemKindFile,
+			filename: retroAchievementsConfigFile, kind: profileDataItemKindFile,
 		},
 	}
 
@@ -105,7 +106,7 @@ func findProfileDataItem(id string) (profileDataItemSpec, bool) {
 
 func profileItemTarget(root string, item profileDataItemSpec) string {
 	if item.kind == profileDataItemKindFile {
-		return filepath.Join(misterconfig.SDRootDir, retroAchievementsConfigFile)
+		return filepath.Join(misterconfig.SDRootDir, item.filename)
 	}
 	return filepath.Join(root, item.id)
 }
@@ -279,7 +280,7 @@ func (d *profileDataManager) prepareFileItem(
 	if err = d.fs.MkdirAll(profileDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create profile pool %s: %w", profileDir, err)
 	}
-	plan.pool = filepath.Join(profileDir, retroAchievementsConfigFile)
+	plan.pool = filepath.Join(profileDir, plan.item.filename)
 
 	poolInfo, statErr := d.fs.Stat(plan.pool)
 	switch {
@@ -304,7 +305,7 @@ func (d *profileDataManager) copyProfileFile(source, target string, mode os.File
 		return fmt.Errorf("failed to read live config: %w", err)
 	}
 
-	temp, err := afero.TempFile(d.fs, filepath.Dir(target), ".retroachievements-*")
+	temp, err := afero.TempFile(d.fs, filepath.Dir(target), "."+filepath.Base(target)+"-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary profile config: %w", err)
 	}

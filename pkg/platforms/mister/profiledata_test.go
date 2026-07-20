@@ -460,8 +460,11 @@ func TestApply_LedgerAndUnmountFailureDropsOwnership(t *testing.T) {
 
 func TestApply_USBRoot(t *testing.T) {
 	t.Parallel()
+	root := string(filepath.Separator)
+	usbRoot := filepath.Join(mediaRootPath, "usb0")
+	deviceSource := filepath.Join(root, "dev", "sda1")
 	m := &fakeMounter{mounts: []mountEntry{
-		{Root: "/", Mountpoint: "/media/usb0", FSType: "vfat", Source: "/dev/sda1"},
+		{Root: root, Mountpoint: usbRoot, FSType: "vfat", Source: deviceSource},
 	}}
 	d, fs := newTestManager(m)
 	writeDeviceBin(t, fs, 1)
@@ -471,11 +474,13 @@ func TestApply_USBRoot(t *testing.T) {
 	require.NoError(t, d.apply(kidA(), allProfileItems()))
 
 	// Save targets and pools follow the USB storage root.
-	saves := mountsAt(m.mounts, "/media/usb0/saves")
+	saves := mountsAt(m.mounts, filepath.Join(usbRoot, profileDataItemSaves))
 	require.Len(t, saves, 1)
-	assert.Equal(t, "/zaparoo/profiles/"+kidA().ID+"/saves", saves[0].Root)
-	assert.Equal(t, "/dev/sda1", saves[0].Source)
-	assert.Empty(t, mountsAt(m.mounts, "/media/fat/saves"))
+	assert.Equal(t, filepath.Join(
+		root, "zaparoo", "profiles", kidA().ID, profileDataItemSaves,
+	), saves[0].Root)
+	assert.Equal(t, deviceSource, saves[0].Source)
+	assert.Empty(t, mountsAt(m.mounts, filepath.Join(misterconfig.SDRootDir, profileDataItemSaves)))
 
 	// odelot's Main hardcodes its config on the SD root, independent of
 	// main's selected save storage root.
@@ -484,7 +489,7 @@ func TestApply_USBRoot(t *testing.T) {
 	assert.Equal(t, filepath.Join(
 		misterconfig.SDRootDir, "zaparoo", "profiles", kidA().ID, retroAchievementsConfigFile,
 	), configMounts[0].Root)
-	assert.Empty(t, mountsAt(m.mounts, filepath.Join(mediaRootPath, "usb0", retroAchievementsConfigFile)))
+	assert.Empty(t, mountsAt(m.mounts, filepath.Join(usbRoot, retroAchievementsConfigFile)))
 }
 
 func TestApply_NASSavesStackOnForeignMount(t *testing.T) {

@@ -174,7 +174,11 @@ func (d *profileDataManager) prepareBackupRestore() (func(bool) error, error) {
 		return nil, err
 	}
 	previous := make([]profileRestoreMount, 0, 2)
-	for _, itemID := range []string{profileDataItemSaves, profileDataItemSavestates} {
+	for _, candidate := range profileDataItems {
+		if candidate.kind != profileDataItemKindDir {
+			continue
+		}
+		itemID := candidate.id
 		item, ok := findProfileDataItem(itemID)
 		if !ok {
 			d.mu.Unlock()
