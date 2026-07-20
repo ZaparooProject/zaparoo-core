@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
@@ -113,12 +114,13 @@ func startRemoteBackupScheduler(
 	db *database.Database,
 	st *state.State,
 	idleSched *idle.Scheduler,
+	pauser *syncutil.Pauser,
 	wg *sync.WaitGroup,
 ) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		remoteBackupSchedulerLoop(ctx, cfg, pl, db, st, idleSched, time.NewTicker)
+		remoteBackupSchedulerLoop(ctx, cfg, pl, db, st, idleSched, pauser, time.NewTicker)
 	}()
 }
 
@@ -129,11 +131,21 @@ func remoteBackupSchedulerLoop(
 	db *database.Database,
 	st *state.State,
 	idleSched *idle.Scheduler,
+	pauser *syncutil.Pauser,
 	newTicker func(time.Duration) *time.Ticker,
 ) {
+	// A run interrupted by power loss or a hard shutdown left "running" in
+	// the status file; record it as failed so it retries on the short
+	// failure interval instead of waiting out the full schedule cadence.
+	backupsvc.NewManager(cfg, pl, db).RecoverInterruptedRuns()
+
 	var scheduled atomic.Bool
 	trySchedule := func() {
-		if scheduled.Load() || !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
+		// While a pause-tier core (CD-based) is running, don't start at all:
+		// a run would immediately block on the pauser while holding the
+		// backup coordinator lease. The next tick retries; throttled states
+		// still run and make slow progress.
+		if scheduled.Load() || pauser.IsPaused() || !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
 			return
 		}
 		scheduled.Store(true)
@@ -144,7 +156,7 @@ func remoteBackupSchedulerLoop(
 			remoteBackupIdleMaxWait,
 			func(taskCtx context.Context) {
 				defer scheduled.Store(false)
-				runScheduledRemoteBackup(taskCtx, cfg, pl, db, st)
+				runScheduledRemoteBackup(taskCtx, cfg, pl, db, st, pauser)
 			},
 		)
 	}
@@ -220,12 +232,13 @@ func runScheduledRemoteBackup(
 	pl platforms.Platform,
 	db *database.Database,
 	st *state.State,
+	pauser *syncutil.Pauser,
 ) {
-	if !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
+	if pauser.IsPaused() || !scheduledRemoteBackupDue(time.Now(), cfg, pl, db) {
 		return
 	}
 	log.Info().Str("schedule", cfg.BackupRemoteSchedule()).Msg("running scheduled remote backup")
-	mgr := backupsvc.NewManager(cfg, pl, db)
+	mgr := backupsvc.NewManager(cfg, pl, db).WithPauser(pauser)
 	if st != nil {
 		if _, _, active := st.BackupCoordinator().Active(); active {
 			log.Debug().Msg("skipping scheduled remote backup while backup service is busy")

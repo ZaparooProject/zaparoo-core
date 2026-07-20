@@ -43,8 +43,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -73,11 +75,15 @@ const (
 	// remoteRequestTimeout bounds JSON API calls. Byte transfers (pack
 	// uploads, object downloads) scale on top of it via remoteTransferTimeout
 	// so a 64 MiB pack on a slow uplink is not killed at the base timeout.
-	remoteRequestTimeout         = 60 * time.Second
-	remoteTransferBytesPerSec    = 128 << 10
-	remoteManifestResponseLimit  = 64 << 20
-	remoteAvailabilityTTL        = 1 * time.Hour
-	remoteAvailabilityUnknownTTL = 5 * time.Minute
+	remoteRequestTimeout        = 60 * time.Second
+	remoteTransferBytesPerSec   = 128 << 10
+	remoteManifestResponseLimit = 64 << 20
+	// remoteAvailabilityTTL caches a confirmed-available subscription check.
+	// Any other result (unavailable, unknown) is rechecked on the shorter
+	// retry TTL so a user who just subscribed or fixed connectivity is not
+	// stuck behind a stale negative result.
+	remoteAvailabilityTTL      = 1 * time.Hour
+	remoteAvailabilityRetryTTL = 5 * time.Minute
 )
 
 var (
@@ -130,6 +136,7 @@ type RemoteBackupInfo struct {
 	CoreVersion   *string                          `json:"coreVersion,omitempty"`
 	Platform      *string                          `json:"platform,omitempty"`
 	RestoredAt    *time.Time                       `json:"restoredAt,omitempty"`
+	SourceDevice  *RemoteBackupSourceDevice        `json:"sourceDevice,omitempty"`
 	Categories    map[string]remoteCategorySummary `json:"categories"`
 	ManifestHash  string                           `json:"manifestHash"`
 	BackupType    string                           `json:"backupType"`
@@ -141,6 +148,16 @@ type RemoteBackupInfo struct {
 	// Incompatible marks snapshots committed with a newer schema version
 	// than this Core supports: they list fine but refuse to restore.
 	Incompatible bool `json:"incompatible,omitempty"`
+}
+
+// RemoteBackupSourceDevice identifies the account device that created a
+// snapshot. Current is relative to the device requesting the catalog.
+type RemoteBackupSourceDevice struct {
+	Platform *string `json:"platform,omitempty"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Linked   bool    `json:"linked"`
+	Current  bool    `json:"current"`
 }
 
 type remoteCategorySummary struct {
@@ -192,6 +209,7 @@ type remoteBackupResponse struct {
 	CoreVersion   *string                          `json:"core_version,omitempty"`
 	Platform      *string                          `json:"platform,omitempty"`
 	RestoredAt    *time.Time                       `json:"restored_at,omitempty"`
+	SourceDevice  *remoteBackupSourceDevice        `json:"source_device,omitempty"`
 	Categories    map[string]remoteCategorySummary `json:"categories"`
 	Manifest      json.RawMessage                  `json:"manifest,omitempty"`
 	ManifestHash  string                           `json:"manifest_hash"`
@@ -203,6 +221,18 @@ type remoteBackupResponse struct {
 }
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
+type remoteBackupSourceDevice struct {
+	Platform *string `json:"platform,omitempty"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Linked   bool    `json:"linked"`
+	Current  bool    `json:"current"`
+}
+
+type remoteRestoreCompleteRequest struct {
+	RestoreID string `json:"restore_id"`
+}
+
 type remotePackResponse struct {
 	PackHash    string    `json:"pack_hash"`
 	SizeBytes   int64     `json:"size_bytes"`
@@ -298,7 +328,7 @@ func (m *Manager) ListRemote(ctx context.Context) (RemoteListInfo, error) {
 		return RemoteListInfo{}, err
 	}
 	var resp remoteListResponse
-	if err := client.doJSON(ctx, http.MethodGet, "/v1/device/backups", nil, &resp); err != nil {
+	if err := client.doJSON(ctx, http.MethodGet, "/v1/device/backups?scope=account", nil, &resp); err != nil {
 		return RemoteListInfo{}, err
 	}
 	items := make([]RemoteBackupInfo, 0, len(resp.Items))
@@ -310,10 +340,29 @@ func (m *Manager) ListRemote(ctx context.Context) (RemoteListInfo, error) {
 	}, nil
 }
 
+// RevokeRemoteLink invalidates the current device on the backup server before
+// Core removes its local bearer. An already-missing or revoked credential is
+// treated as success so local cleanup can finish.
+func (m *Manager) RevokeRemoteLink(ctx context.Context) error {
+	client, err := m.newRemoteClient()
+	if errors.Is(err, errRemoteUnlinked) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := client.doJSON(ctx, http.MethodDelete, "/v1/device/me", nil, nil); err != nil &&
+		!errors.Is(err, errRemoteUnlinked) {
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreInfo, error) {
 	if id == "" {
 		return RemoteRestoreInfo{}, errors.New("invalid remote backup id")
 	}
+	restoreID := uuid.NewString()
 	lease, err := m.begin(ctx, OperationRemoteRestore, OperationWrite)
 	if err != nil {
 		return RemoteRestoreInfo{}, err
@@ -405,8 +454,17 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 		log.Warn().Err(finishErr).Msg("committed remote restore profile cleanup deferred until restart")
 	}
 	restoreCompletePath := remoteBackupPath(id) + "/restore-complete"
-	if err := client.doJSON(ctx, http.MethodPost, restoreCompletePath, nil, nil); err != nil {
-		log.Warn().Err(err).Str("backup_id", id).Msg("failed to mark remote backup restored")
+	complete := remoteRestoreCompleteRequest{RestoreID: restoreID}
+	if err := client.doJSON(ctx, http.MethodPost, restoreCompletePath, &complete, nil); err != nil {
+		log.Warn().Err(err).Str("backup_id", id).Str("restore_id", restoreID).
+			Msg("failed to mark remote backup restored")
+	} else {
+		completed := log.Info().Str("backup_id", id).Str("restore_id", restoreID).
+			Str("target_device_hint", m.cfg.DeviceID())
+		if resp.SourceDevice != nil {
+			completed = completed.Str("source_device_id", resp.SourceDevice.ID)
+		}
+		completed.Msg("remote backup restore recorded")
 	}
 	preInfo := pre
 	restoreSucceeded = true
@@ -514,6 +572,9 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if err != nil {
 		return RemoteRunInfo{}, err
 	}
+	if waitErr := m.pauser.Wait(ctx); waitErr != nil {
+		return RemoteRunInfo{}, fmt.Errorf("creating remote backup snapshot: %w", waitErr)
+	}
 	heartbeatErr := client.heartbeat(ctx)
 	if heartbeatErr != nil {
 		return RemoteRunInfo{}, heartbeatErr
@@ -547,7 +608,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if _, sizeErr := validateLogicalSize(files, m.cfg.BackupMaxSizeBytes()); sizeErr != nil {
 		return RemoteRunInfo{}, sizeErr
 	}
-	files, unreadableWarnings, err := prepareSourceFiles(ctx, files, m.sourceOpener)
+	files, unreadableWarnings, err := prepareSourceFiles(ctx, files, m.sourceOpener, m.pauser)
 	if err != nil {
 		if errors.Is(err, errSourceIdentityChanged) {
 			return RemoteRunInfo{}, fmt.Errorf("%w: %w", errRemoteIntegrityRetry, err)
@@ -563,7 +624,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		return RemoteRunInfo{}, err
 	}
 	missingSet := stringSet(missing)
-	uploaded, err := client.uploadMissing(ctx, files, missingSet)
+	uploaded, err := client.uploadMissing(ctx, files, missingSet, m.pauser)
 	if err != nil {
 		return RemoteRunInfo{}, err
 	}
@@ -582,7 +643,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		CoreVersion:   &config.AppVersion,
 		Categories:    remoteCategories(files),
 	}
-	if verifyErr := verifyRemoteSources(ctx, files); verifyErr != nil {
+	if verifyErr := verifyRemoteSources(ctx, files, m.pauser); verifyErr != nil {
 		return RemoteRunInfo{}, verifyErr
 	}
 	var backup remoteBackupResponse
@@ -594,7 +655,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	}
 	commitErr := commit()
 	if errors.Is(commitErr, errRemoteMissingObjects) {
-		if verifyErr := verifyRemoteSources(ctx, files); verifyErr != nil {
+		if verifyErr := verifyRemoteSources(ctx, files, m.pauser); verifyErr != nil {
 			return RemoteRunInfo{}, verifyErr
 		}
 		repairMissing, checkErr := client.checkMissing(ctx, uniqueHashes(files))
@@ -602,7 +663,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 			return RemoteRunInfo{}, checkErr
 		}
 		repairSet := stringSet(repairMissing)
-		repair, repairErr := client.uploadMissing(ctx, files, repairSet)
+		repair, repairErr := client.uploadMissing(ctx, files, repairSet, m.pauser)
 		if repairErr != nil {
 			return RemoteRunInfo{}, repairErr
 		}
@@ -614,7 +675,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		for hash := range repairSet {
 			missingSet[hash] = struct{}{}
 		}
-		if verifyErr := verifyRemoteSources(ctx, files); verifyErr != nil {
+		if verifyErr := verifyRemoteSources(ctx, files, m.pauser); verifyErr != nil {
 			return RemoteRunInfo{}, verifyErr
 		}
 		commitErr = commit()
@@ -857,8 +918,8 @@ func RemoteAvailabilityNeedsRefresh(now time.Time, status *models.BackupStatusEn
 		return true
 	}
 	ttl := remoteAvailabilityTTL
-	if status.Availability == "" || status.Availability == RemoteAvailabilityUnknown {
-		ttl = remoteAvailabilityUnknownTTL
+	if status.Availability != RemoteAvailabilityAvailable {
+		ttl = remoteAvailabilityRetryTTL
 	}
 	return now.Sub(checkedAt) >= ttl
 }
@@ -875,8 +936,8 @@ func cachedRemoteAvailability(remote *statusEntry) (string, bool) {
 		return availability, false
 	}
 	ttl := remoteAvailabilityTTL
-	if availability == RemoteAvailabilityUnknown {
-		ttl = remoteAvailabilityUnknownTTL
+	if availability != RemoteAvailabilityAvailable {
+		ttl = remoteAvailabilityRetryTTL
 	}
 	age := time.Since(checkedAt)
 	return availability, age >= 0 && age < ttl
@@ -1161,6 +1222,7 @@ func (c *remoteClient) uploadMissing(
 	ctx context.Context,
 	files []FileRef,
 	missing map[string]struct{},
+	pauser *syncutil.Pauser,
 ) (uploadResult, error) {
 	var result uploadResult
 	if len(missing) == 0 {
@@ -1198,7 +1260,10 @@ func (c *remoteClient) uploadMissing(
 		if len(current) == 0 {
 			return nil
 		}
-		body, packHash, buildErr := buildRemotePack(ctx, current)
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			return fmt.Errorf("uploading remote backup pack: %w", waitErr)
+		}
+		body, packHash, buildErr := buildRemotePack(ctx, current, pauser)
 		if buildErr != nil {
 			return buildErr
 		}
@@ -1398,14 +1463,20 @@ func remoteEndpoint(baseURL, requestPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid remote backup base URL: %w", err)
 	}
-	decodedRequestPath, err := url.PathUnescape(requestPath)
+	pathPart, rawQuery, _ := strings.Cut(requestPath, "?")
+	decodedRequestPath, err := url.PathUnescape(pathPart)
 	if err != nil {
 		return "", fmt.Errorf("invalid remote backup request path: %w", err)
+	}
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", fmt.Errorf("invalid remote backup request query: %w", err)
 	}
 	basePath := strings.TrimRight(base.Path, "/")
 	baseEscapedPath := strings.TrimRight(base.EscapedPath(), "/")
 	base.Path = basePath + decodedRequestPath
-	base.RawPath = baseEscapedPath + requestPath
+	base.RawPath = baseEscapedPath + pathPart
+	base.RawQuery = query.Encode()
 	return base.String(), nil
 }
 
@@ -1446,13 +1517,16 @@ func remoteStatusError(resp *http.Response) error {
 	return fmt.Errorf("remote backup server returned status %d: %s", resp.StatusCode, msg)
 }
 
-func hashRemoteFiles(ctx context.Context, files []FileRef) ([]FileRef, error) {
+func hashRemoteFiles(ctx context.Context, files []FileRef, pauser *syncutil.Pauser) ([]FileRef, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("hashing remote backup sources: %w", err)
 	}
 	out := make([]FileRef, len(files))
 	copy(out, files)
 	for i := range out {
+		if err := pauser.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("hashing remote backup sources: %w", err)
+		}
 		f, err := openSourceContext(ctx, &out[i])
 		if err != nil {
 			if errors.Is(err, errSourceIdentityChanged) {
@@ -1478,8 +1552,8 @@ func hashRemoteFiles(ctx context.Context, files []FileRef) ([]FileRef, error) {
 	return out, nil
 }
 
-func verifyRemoteSources(ctx context.Context, files []FileRef) error {
-	verified, err := hashRemoteFiles(ctx, files)
+func verifyRemoteSources(ctx context.Context, files []FileRef, pauser *syncutil.Pauser) error {
+	verified, err := hashRemoteFiles(ctx, files, pauser)
 	if err != nil {
 		return err
 	}
@@ -1531,7 +1605,9 @@ func remoteSingleFilePackExceedsMax(file *FileRef) bool {
 	return file.Size+int64(len(footerData))+remotePackFooterTrailerSize > remoteMaxPackBytes
 }
 
-func buildRemotePack(ctx context.Context, files []FileRef) (body []byte, packHash string, err error) {
+func buildRemotePack(
+	ctx context.Context, files []FileRef, pauser *syncutil.Pauser,
+) (body []byte, packHash string, err error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, "", fmt.Errorf("building remote backup pack: %w", ctxErr)
 	}
@@ -1539,6 +1615,9 @@ func buildRemotePack(ctx context.Context, files []FileRef) (body []byte, packHas
 	footer := make([]packFooterEntry, 0, len(files))
 	seen := make(map[string]struct{}, len(files))
 	for _, file := range files {
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			return nil, "", fmt.Errorf("building remote backup pack: %w", waitErr)
+		}
 		if _, ok := seen[file.SHA256]; ok {
 			continue
 		}
@@ -1655,7 +1734,7 @@ func stringSet(items []string) map[string]struct{} {
 }
 
 func remoteBackupToInfo(resp *remoteBackupResponse) RemoteBackupInfo {
-	return RemoteBackupInfo{
+	info := RemoteBackupInfo{
 		ID:            resp.ID,
 		BackupType:    resp.BackupType,
 		SchemaVersion: resp.SchemaVersion,
@@ -1669,6 +1748,16 @@ func remoteBackupToInfo(resp *remoteBackupResponse) RemoteBackupInfo {
 		CreatedAt:     resp.CreatedAt,
 		RestoredAt:    resp.RestoredAt,
 	}
+	if resp.SourceDevice != nil {
+		info.SourceDevice = &RemoteBackupSourceDevice{
+			ID:       resp.SourceDevice.ID,
+			Name:     resp.SourceDevice.Name,
+			Platform: resp.SourceDevice.Platform,
+			Linked:   resp.SourceDevice.Linked,
+			Current:  resp.SourceDevice.Current,
+		}
+	}
+	return info
 }
 
 func validateCommittedRemoteBackup(

@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
@@ -46,6 +47,7 @@ type sourceCollector struct {
 	ctx                context.Context
 	err                error
 	excludedSources    map[string]struct{}
+	pauser             *syncutil.Pauser
 	excludedIdentities []os.FileInfo
 	files              []FileRef
 	warnings           []models.BackupWarning
@@ -124,6 +126,12 @@ func newSourceCollector(
 
 func (c *sourceCollector) continueCollection() bool {
 	if c.err != nil {
+		return false
+	}
+	// Checkpoint on the shared media pauser so a filesystem walk yields to a
+	// running game; every collect/walk step passes through here.
+	if err := c.pauser.Wait(c.ctx); err != nil {
+		c.err = fmt.Errorf("collecting backup sources: %w", err)
 		return false
 	}
 	if err := c.ctx.Err(); err != nil {

@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -511,6 +512,9 @@ func newAuthUnlinkTestEnv(t *testing.T) requests.RequestEnv {
 	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
 	require.NoError(t, err)
 	t.Cleanup(config.ClearAuthCfgForTesting)
+	originalRevoke := revokeRemoteDevice
+	revokeRemoteDevice = func(context.Context, *backupsvc.Manager) error { return nil }
+	t.Cleanup(func() { revokeRemoteDevice = originalRevoke })
 	return requests.RequestEnv{
 		Context:  context.Background(),
 		Config:   cfg,
@@ -608,6 +612,25 @@ func TestSettingsAuthUnlink_RemovesConfiguredBackupServerCredential(t *testing.T
 	require.True(t, ok)
 	assert.Equal(t, []string{"http://127.0.0.1:8787"}, resp.Domains)
 	assert.Empty(t, config.GetAuthCfg())
+}
+
+func TestSettingsAuthUnlink_RevokeFailureKeepsLocalCredential(t *testing.T) {
+	// Not parallel: SaveAuthEntry and revokeRemoteDevice are process globals.
+	env := newAuthUnlinkTestEnv(t)
+	revokeRemoteDevice = func(context.Context, *backupsvc.Manager) error {
+		return errors.New("server unavailable")
+	}
+
+	require.NoError(t, env.Config.SaveAuthEntry(
+		"https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"},
+	))
+
+	_, err := HandleSettingsAuthUnlink(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to revoke remote device link")
+	entry := config.LookupAuth(config.GetAuthCfg(), "https://api.zaparoo.com")
+	require.NotNil(t, entry)
+	assert.Equal(t, "t1", entry.Bearer)
 }
 
 func TestSettingsAuthUnlink_MarksRemoteUnlinked(t *testing.T) {

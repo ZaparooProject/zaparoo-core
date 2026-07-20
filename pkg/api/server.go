@@ -1019,6 +1019,7 @@ func handleWSMessage(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	tracker RequestTracker,
@@ -1134,6 +1135,7 @@ func handleWSMessage(
 			ConfirmQueue:    confirmQueue,
 			IndexPauser:     indexPauser,
 			ScrapePauser:    scrapePauser,
+			BackupPauser:    backupPauser,
 			IsLocal:         isLocal,
 			ClientID:        session.Request.RemoteAddr,
 		}
@@ -1335,6 +1337,7 @@ func handlePostRequest(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1399,6 +1402,7 @@ func handlePostRequest(
 			ConfirmQueue:    confirmQueue,
 			IndexPauser:     indexPauser,
 			ScrapePauser:    scrapePauser,
+			BackupPauser:    backupPauser,
 			IsLocal:         apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:        r.RemoteAddr,
 		}
@@ -1468,11 +1472,12 @@ func Start(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
-		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, tracker, nil,
+		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil,
 	)
 }
 
@@ -1494,6 +1499,7 @@ func StartWithReady(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 	ready chan<- error,
 ) error {
@@ -1760,7 +1766,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, profilesSvc, player, playbackManager,
-			indexPauser, scrapePauser, tracker,
+			indexPauser, scrapePauser, backupPauser, tracker,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1802,8 +1808,8 @@ func StartWithReady(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, encGateway,
-			lastSeenTracker, tracker,
+			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
+			encGateway, lastSeenTracker, tracker,
 		),
 	))
 

@@ -161,3 +161,9 @@ func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesD
 func AuthLinkStatus(ns chan<- models.Notification, payload *models.AuthLinkStatusResponse) {
 	sendNotification(ns, models.NotificationAuthLinkStatus, payload)
 }
+
+// BackupState reports a running backup operation's pause/throttle state
+// changing in response to a game starting or stopping.
+func BackupState(ns chan<- models.Notification, payload models.BackupStateNotification) {
+	sendNotification(ns, models.NotificationBackupState, payload)
+}

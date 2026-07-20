@@ -52,6 +52,10 @@ var claimClient = &http.Client{
 	Timeout: 10 * time.Second,
 }
 
+var revokeRemoteDevice = func(ctx context.Context, manager *backupsvc.Manager) error {
+	return manager.RevokeRemoteLink(ctx)
+}
+
 // headerZaparooDeviceHint carries the device ID from config on claim
 // redemption and link-request creation, so re-linking reuses the same
 // server-side device record instead of creating a duplicate.
@@ -113,14 +117,22 @@ func authStatusProbeAllowed(rawURL, configuredBackupURL string) bool {
 // creates with the root domain that created it (linked_via), so unlink
 // removes the configured backup server's entry plus everything tagged with
 // it — whatever the server's trusted list contained at link time.
-// Credentials for other domains and API keys are untouched. Removal is
-// local only: the server has no revoke endpoint and invalidates the old
-// token when the device links again.
+// Credentials for other domains and API keys are untouched. The official
+// backup-server device is revoked before local credentials are removed, so
+// unlink never leaves a usable bearer behind.
 //
 //nolint:gocritic // single-use parameter in API handler
 func HandleSettingsAuthUnlink(env requests.RequestEnv) (any, error) {
 	if !isLocalOrAdmin(&env) {
 		return nil, models.ClientErrf("unlink requires a local or admin client")
+	}
+
+	backupManager := backupsvc.NewManager(env.Config, env.Platform, env.Database)
+	if env.State != nil {
+		backupManager.WithCoordinator(env.State.BackupCoordinator())
+	}
+	if err := revokeRemoteDevice(env.Context, backupManager); err != nil {
+		return nil, fmt.Errorf("failed to revoke remote device link: %w", err)
 	}
 
 	creds := config.GetAuthCfg()
@@ -143,10 +155,6 @@ func HandleSettingsAuthUnlink(env requests.RequestEnv) (any, error) {
 		}
 	}
 
-	backupManager := backupsvc.NewManager(env.Config, env.Platform, env.Database)
-	if env.State != nil {
-		backupManager.WithCoordinator(env.State.BackupCoordinator())
-	}
 	backupManager.MarkRemoteUnlinked()
 
 	log.Info().Strs("domains", removed).Msg("settings.auth.unlink completed")

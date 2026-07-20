@@ -583,16 +583,10 @@ func addCloudBackupItems(
 	if status.Remote.Availability == "unavailable" {
 		cloudUploadDescription = "Warp is required to create cloud backups"
 	}
+	// The cached availability is a display hint only: the upload itself does
+	// a fresh subscription check server-side, so a just-activated Warp
+	// subscription works immediately instead of waiting out the cache TTL.
 	menu.AddNavAction("Back up now", cloudUploadDescription, func() {
-		if status.Remote.Availability == "unavailable" {
-			ShowInfoModal(
-				pages, app, "Cloud backup unavailable",
-				"Cloud upload requires an active Zaparoo Warp subscription. "+
-					"Existing cloud backups can still be restored.",
-				func() { app.SetFocus(menu.List) },
-			)
-			return
-		}
 		runBackupAction(
 			pages,
 			app,

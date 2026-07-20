@@ -118,7 +118,7 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 	handler := handlePostRequest(
 		methodMap, platform, cfg, st,
 		tokenQueue, confirmQueue, db,
-		nil, nil, nil, playbackManager, nil, nil, tracker,
+		nil, nil, nil, playbackManager, nil, nil, nil, tracker,
 	)
 	return handler, methodMap, tracker
 }
@@ -197,7 +197,7 @@ func TestHandlePostRequest_InjectsPlaybackManager(t *testing.T) {
 	confirmQueue := make(chan chan error, 1)
 	handler := handlePostRequest(
 		methodMap, platform, cfg, st, tokenQueue, confirmQueue, db,
-		nil, nil, nil, playbackManager, nil, nil, nil,
+		nil, nil, nil, playbackManager, nil, nil, nil, nil,
 	)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.playback"}`

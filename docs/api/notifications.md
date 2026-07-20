@@ -564,3 +564,31 @@ Sent on every state transition of a device link flow started with `settings.auth
   }
 }
 ```
+
+## Backup
+
+### backup.state
+
+Sent while a backup operation (local create, cloud upload, or restore) is running, whenever its pause/throttle state changes because a game started or stopped. Backup work follows the same policy as media indexing: most games throttle it, storage-sensitive CD-based cores pause it entirely, and it resumes when the game stops. A notification with both `paused` and `throttled` false means the operation returned to full speed.
+
+#### Parameters
+
+| Key       | Type    | Required | Description                                                                              |
+| :-------- | :------ | :------- | :--------------------------------------------------------------------------------------- |
+| operation | string  | No       | The active operation kind, matching `activeOperation` from `settings.backup.status`.     |
+| paused    | boolean | Yes      | True if the operation is fully paused until the running game stops.                      |
+| throttled | boolean | Yes      | True if the operation is running slowed to stay out of the running game's way.           |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "backup.state",
+  "params": {
+    "operation": "remote-upload",
+    "paused": true,
+    "throttled": false
+  }
+}
+```

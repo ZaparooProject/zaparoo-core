@@ -66,6 +66,10 @@ const (
 	StatusPartial = "partial"
 	StatusFailed  = "failed"
 
+	// statusErrorInterrupted records a run cut short by power loss or a hard
+	// shutdown, detected at the next service start.
+	statusErrorInterrupted = "backup interrupted before completion"
+
 	IntegrityUnchecked = "unchecked"
 	IntegrityValid     = "valid"
 
@@ -97,6 +101,7 @@ type Manager struct {
 	restoreGate   func() (func(bool), error)
 	directorySync func(string) error
 	sourceOpener  sourceOpener
+	pauser        *syncutil.Pauser
 }
 
 type sourceIdentity struct {
@@ -210,6 +215,15 @@ func (m *Manager) WithCoordinator(coordinator *Coordinator) *Manager {
 	return m
 }
 
+// WithPauser subjects backup work to the shared media pause/throttle policy:
+// file collection, hashing, packing, and uploads checkpoint on the pauser so
+// they yield to a running game the same way media indexing does. A nil pauser
+// (the default) leaves backups unthrottled.
+func (m *Manager) WithPauser(pauser *syncutil.Pauser) *Manager {
+	m.pauser = pauser
+	return m
+}
+
 func (m *Manager) begin(ctx context.Context, kind OperationKind, mode OperationMode) (*Lease, error) {
 	if m.coordinator == nil {
 		m.coordinator = NewCoordinator()
@@ -279,7 +293,7 @@ func (m *Manager) createBackup(ctx context.Context, preRestore bool) (result Inf
 	if validateErr := validateFiles(files); validateErr != nil {
 		return Info{}, validateErr
 	}
-	files, unreadableWarnings, err := prepareSourceFiles(ctx, files, m.sourceOpener)
+	files, unreadableWarnings, err := prepareSourceFiles(ctx, files, m.sourceOpener, m.pauser)
 	if err != nil {
 		return Info{}, err
 	}
@@ -553,6 +567,35 @@ func (m *Manager) writeLocalStatus(local *statusEntry) error {
 	return m.writeStatusLocked(&st)
 }
 
+// RecoverInterruptedRuns converts a persisted "running" status left behind by
+// an interrupted run (power loss, hard shutdown) into a failure. The
+// coordinator lease is in-memory, so at service startup no run can actually be
+// in flight: a lingering "running" is always stale. Recording it as failed
+// makes the scheduler retry on the short failure interval instead of waiting
+// out the full daily/weekly cadence.
+func (m *Manager) RecoverInterruptedRuns() {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+
+	st := m.readStatusLocked()
+	changed := false
+	for _, entry := range []*statusEntry{&st.Local, &st.Remote} {
+		if entry.LastStatus != StatusRunning {
+			continue
+		}
+		entry.LastStatus = StatusFailed
+		entry.LastError = statusErrorInterrupted
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	log.Info().Msg("marking interrupted backup run as failed")
+	if err := m.writeStatusLocked(&st); err != nil {
+		log.Warn().Err(err).Msg("failed to persist interrupted backup status")
+	}
+}
+
 // writeStatusLocked persists the status file. Callers must hold statusMu.
 func (m *Manager) writeStatusLocked(st *statusFile) error {
 	statusPath := m.statusPath()
@@ -660,6 +703,7 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 	}
 	collector := newSourceCollector(ctx, m.cfg.BackupMaxSizeBytes(), excludedSources)
 	collector.excludedIdentities = excludedIdentities
+	collector.pauser = m.pauser
 	if err = collector.addTrustedFile(
 		userBackup.Path, CategoryZaparoo, zaparooArchive("user.db"), "user.db",
 	); err != nil {
@@ -936,11 +980,14 @@ func appendBackupWarnings(
 }
 
 func prepareSourceFiles(
-	ctx context.Context, files []FileRef, opener sourceOpener,
+	ctx context.Context, files []FileRef, opener sourceOpener, pauser *syncutil.Pauser,
 ) ([]FileRef, []models.BackupWarning, error) {
 	prepared := make([]FileRef, 0, len(files))
 	warnings := make([]models.BackupWarning, 0)
 	for i := range files {
+		if err := pauser.Wait(ctx); err != nil {
+			return nil, nil, fmt.Errorf("preparing backup sources: %w", err)
+		}
 		file := files[i]
 		hash, err := hashSourceFile(ctx, &file, opener)
 		if err == nil {
@@ -1633,6 +1680,7 @@ var safeStatusReasons = map[string]struct{}{
 	"requires newer Core version":    {},
 	"another backup was running":     {},
 	"backup failed":                  {},
+	statusErrorInterrupted:           {},
 }
 
 func safeStatusError(err error) string {

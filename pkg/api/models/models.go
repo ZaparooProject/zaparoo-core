@@ -44,6 +44,7 @@ const (
 	NotificationProfilesData         = "profiles.data"
 	NotificationUIChanged            = "ui.changed"
 	NotificationAuthLinkStatus       = "auth.link.status"
+	NotificationBackupState          = "backup.state"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.

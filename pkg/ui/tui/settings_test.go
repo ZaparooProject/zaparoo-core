@@ -805,7 +805,7 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 	}, 100*time.Millisecond), "toggle should write BackupRemoteEnabled")
 }
 
-func TestBuildBackupSettingsMenu_UnavailableWarpBlocksUploadOnly_Integration(t *testing.T) {
+func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(t *testing.T) {
 	t.Parallel()
 
 	runner := NewTestAppRunner(t, 100, 30)
@@ -816,6 +816,8 @@ func TestBuildBackupSettingsMenu_UnavailableWarpBlocksUploadOnly_Integration(t *
 	status.Remote.Availability = "unavailable"
 	mockSvc.SetupGetBackupStatus(status)
 	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.On("RunRemoteBackup", mock.Anything).
+		Return("", errors.New("remote backup is not available for this account"))
 
 	runner.Start(pages)
 	runner.QueueUpdateDraw(func() {
@@ -831,9 +833,12 @@ func TestBuildBackupSettingsMenu_UnavailableWarpBlocksUploadOnly_Integration(t *
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	require.True(t, runner.WaitForText("Warp is required", 100*time.Millisecond))
+	// The cached "unavailable" value is only a hint: pressing the action
+	// must still attempt the upload, whose fresh server-side check is
+	// authoritative (a just-activated subscription works immediately).
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Cloud backup unavailable", 100*time.Millisecond))
-	mockSvc.AssertNotCalled(t, "RunRemoteBackup", mock.Anything)
+	require.True(t, runner.WaitForText("requires an active Zaparoo Warp subscription", 500*time.Millisecond))
+	mockSvc.AssertCalled(t, "RunRemoteBackup", mock.Anything)
 }
 
 func TestBuildBackupSettingsMenu_BackupNowCallsService_Integration(t *testing.T) {

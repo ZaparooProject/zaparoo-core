@@ -390,6 +390,7 @@ func Start(
 	// Create pausers to pause heavy background media work while a game is running.
 	indexPauser := syncutil.NewPauser()
 	scrapePauser := syncutil.NewPauser()
+	backupPauser := syncutil.NewPauser()
 
 	discoveryService := discovery.New(cfg)
 
@@ -404,7 +405,7 @@ func Start(
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
 			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
-			idleSched, apiReady,
+			backupPauser, idleSched, apiReady,
 		)
 	}()
 
@@ -533,9 +534,10 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
-	startRemoteBackupScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
+	startRemoteBackupScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
+	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
 	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("starting publishers")

@@ -86,6 +86,7 @@ func newBackupManager(env *requests.RequestEnv) *backupsvc.Manager {
 			WithActiveMedia(env.State.ActiveMedia).
 			WithRestoreGate(env.State.BeginRestoreGate)
 	}
+	mgr.WithPauser(env.BackupPauser)
 	return mgr
 }
 
@@ -93,6 +94,11 @@ func newBackupManager(env *requests.RequestEnv) *backupsvc.Manager {
 func HandleBackup(env requests.RequestEnv) (any, error) {
 	if err := requireBackupAccess(&env); err != nil {
 		return nil, err
+	}
+	// Reconcile with current primary-media state before starting, clearing
+	// stale pause state left by non-primary media events (same as indexing).
+	if env.State != nil {
+		syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.BackupPauser)
 	}
 	backup, err := newBackupManager(&env).Create(env.Context)
 	if err != nil {
@@ -187,6 +193,11 @@ func HandleBackupRestore(env requests.RequestEnv) (any, error) {
 func HandleBackupRemoteRun(env requests.RequestEnv) (any, error) {
 	if err := requireBackupAccess(&env); err != nil {
 		return nil, err
+	}
+	// Reconcile with current primary-media state before starting, clearing
+	// stale pause state left by non-primary media events (same as indexing).
+	if env.State != nil {
+		syncMediaWorkPauserWithActiveMedia(env.Config, env.State.ActiveMedia(), env.BackupPauser)
 	}
 	mgr := newBackupManager(&env)
 	backup, err := mgr.RunRemote(env.Context, backupsvc.RemoteBackupTypeManual)

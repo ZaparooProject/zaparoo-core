@@ -48,11 +48,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	testinghelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	testifymock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -937,7 +939,7 @@ func TestOpenSourceRejectsCollectedFileReplacedBySensitiveSymlink(t *testing.T) 
 	require.ErrorIs(t, err, errSourceIdentityChanged)
 	assert.Nil(t, opened)
 	_, warnings, err := prepareSourceFiles(
-		context.Background(), []FileRef{*collected}, openSourceContext,
+		context.Background(), []FileRef{*collected}, openSourceContext, nil,
 	)
 	require.ErrorIs(t, err, errSourceIdentityChanged)
 	assert.Empty(t, warnings, "identity changes must fail rather than become unreadable-file warnings")
@@ -1079,12 +1081,12 @@ func TestRemoteSourceProcessingHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, warnings, err := prepareSourceFiles(ctx, []FileRef{file}, openSourceContext)
+	_, warnings, err := prepareSourceFiles(ctx, []FileRef{file}, openSourceContext, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, warnings)
-	_, err = hashRemoteFiles(ctx, []FileRef{file})
+	_, err = hashRemoteFiles(ctx, []FileRef{file}, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	_, _, err = buildRemotePack(ctx, []FileRef{file})
+	_, _, err = buildRemotePack(ctx, []FileRef{file}, nil)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -2243,7 +2245,7 @@ func TestRemoteUploadMissingReportsEveryPathForDuplicateOversizedContent(t *test
 	}
 	missing := map[string]struct{}{hash: {}}
 
-	result, err := client.uploadMissing(context.Background(), files, missing)
+	result, err := client.uploadMissing(context.Background(), files, missing, nil)
 	require.NoError(t, err)
 	assert.Zero(t, result.packs)
 	assert.Zero(t, result.bytesUploaded)
@@ -2279,7 +2281,7 @@ func TestRemoteUploadMissingNeverPacksEmptyFiles(t *testing.T) {
 	}}
 	missing := map[string]struct{}{remoteEmptyContentSHA256: {}}
 
-	result, err := client.uploadMissing(context.Background(), files, missing)
+	result, err := client.uploadMissing(context.Background(), files, missing, nil)
 	require.NoError(t, err)
 	assert.Zero(t, result.packs)
 	assert.Zero(t, result.bytesUploaded)
@@ -2361,6 +2363,47 @@ func TestRemotePackFilesSortsByCategoryThenPath(t *testing.T) {
 	}, remotePackOrder(files))
 }
 
+func TestManagerListRemoteUsesAccountScopeAndMapsSources(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/device/backups", r.URL.Path)
+		assert.Equal(t, "account", r.URL.Query().Get("scope"))
+		writeJSON(t, w, remoteListResponse{Items: []remoteBackupResponse{{
+			ID: "backup-1", BackupType: RemoteBackupTypeManual, SchemaVersion: remoteSchemaVersion,
+			Platform: testStringPointer(platformids.Mister), CreatedAt: time.Now().UTC(),
+			SourceDevice: &remoteBackupSourceDevice{
+				ID: "source-1", Name: "Old MiSTer", Platform: testStringPointer(platformids.Mister),
+				Linked: false, Current: false,
+			},
+		}}})
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	list, err := env.Manager.ListRemote(context.Background())
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	require.NotNil(t, list.Items[0].SourceDevice)
+	assert.Equal(t, "source-1", list.Items[0].SourceDevice.ID)
+	assert.Equal(t, "Old MiSTer", list.Items[0].SourceDevice.Name)
+	assert.False(t, list.Items[0].SourceDevice.Linked)
+}
+
+func TestManagerRevokeRemoteLink(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/v1/device/me", r.URL.Path)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	require.NoError(t, env.Manager.RevokeRemoteLink(context.Background()))
+}
+
 func TestManagerRestoreRemoteRejectsMissingUserDBBeforePreRestoreBackup(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
 	manifestData, manifestHash, err := canonicalRemoteManifest(map[string][]remoteManifestEntry{})
@@ -2401,6 +2444,7 @@ func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
 	})
 	require.NoError(t, err)
 	restoreComplete := false
+	var restoreCompleteID string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -2420,6 +2464,11 @@ func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+configHash:
 			_, _ = w.Write(remoteConfig)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/7/restore-complete":
+			var complete remoteRestoreCompleteRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&complete))
+			_, parseErr := uuid.Parse(complete.RestoreID)
+			require.NoError(t, parseErr)
+			restoreCompleteID = complete.RestoreID
 			restoreComplete = true
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -2435,6 +2484,7 @@ func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "7", restore.RestoredFrom.ID)
 	assert.True(t, restoreComplete)
+	assert.NotEmpty(t, restoreCompleteID)
 	restored, err := os.ReadFile(filepath.Join(env.RootDir, "saves", "game.sav"))
 	require.NoError(t, err)
 	assert.Equal(t, newSave, restored)
@@ -3203,11 +3253,20 @@ func TestRemoteAvailabilityNeedsRefreshUsesStateSpecificTTL(t *testing.T) {
 	assert.True(t, RemoteAvailabilityNeedsRefresh(now, &models.BackupStatusEntry{
 		Availability: RemoteAvailabilityUnknown, AvailabilityCheckedAt: &checkedEarlier,
 	}))
+	// Unavailable uses the short retry TTL too, so a subscription activated
+	// after the check is picked up quickly.
 	assert.False(t, RemoteAvailabilityNeedsRefresh(now, &models.BackupStatusEntry{
-		Availability: RemoteAvailabilityUnavailable, AvailabilityCheckedAt: &checkedEarlier,
+		Availability: RemoteAvailabilityUnavailable, AvailabilityCheckedAt: &checkedRecently,
 	}))
 	assert.True(t, RemoteAvailabilityNeedsRefresh(now, &models.BackupStatusEntry{
-		Availability: RemoteAvailabilityUnavailable, AvailabilityCheckedAt: &checkedStale,
+		Availability: RemoteAvailabilityUnavailable, AvailabilityCheckedAt: &checkedEarlier,
+	}))
+	// Only a confirmed-available result is cached for the long TTL.
+	assert.False(t, RemoteAvailabilityNeedsRefresh(now, &models.BackupStatusEntry{
+		Availability: RemoteAvailabilityAvailable, AvailabilityCheckedAt: &checkedEarlier,
+	}))
+	assert.True(t, RemoteAvailabilityNeedsRefresh(now, &models.BackupStatusEntry{
+		Availability: RemoteAvailabilityAvailable, AvailabilityCheckedAt: &checkedStale,
 	}))
 }
 
@@ -3303,4 +3362,127 @@ func TestValidateRemoteManifestResponse_RejectsTamperedManifest(t *testing.T) {
 	_, err = validateRemoteManifestResponse(&resp, platformids.Mister)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "manifest hash mismatch")
+}
+
+func TestManagerRecoverInterruptedRuns(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	started := formatTime(time.Now().UTC())
+	require.NoError(t, env.Manager.writeLocalStatus(&statusEntry{LastRunAt: started, LastStatus: StatusRunning}))
+	require.NoError(t, env.Manager.writeRemoteStatus(&statusEntry{LastRunAt: started, LastStatus: StatusRunning}))
+
+	env.Manager.RecoverInterruptedRuns()
+
+	status := env.Manager.Status()
+	assert.Equal(t, StatusFailed, status.Local.LastStatus)
+	assert.Equal(t, "backup interrupted before completion", status.Local.LastError)
+	assert.Equal(t, StatusFailed, status.Remote.LastStatus)
+	assert.Equal(t, "backup interrupted before completion", status.Remote.LastError)
+
+	// Completed statuses are left untouched.
+	require.NoError(t, env.Manager.writeRemoteStatus(&statusEntry{
+		LastRunAt: started, LastSuccessAt: started, LastStatus: StatusSuccess,
+	}))
+	env.Manager.RecoverInterruptedRuns()
+	status = env.Manager.Status()
+	assert.Equal(t, StatusSuccess, status.Remote.LastStatus)
+	assert.Empty(t, status.Remote.LastError)
+}
+
+// newRemoteBackupSuccessServer returns a server accepting a full remote
+// backup run, counting every request it receives.
+func newRemoteBackupSuccessServer(t *testing.T, requests *atomic.Int32) *httptest.Server {
+	t.Helper()
+	uploadedMu := syncutil.Mutex{}
+	uploaded := make(map[string][]byte)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "test", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			var req remoteCheckRequest
+			if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, remoteCheckResponse{Missing: req.Hashes})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			uploadedMu.Lock()
+			for hash, payload := range parseTestPack(t, body) {
+				uploaded[hash] = payload
+			}
+			uploadedMu.Unlock()
+			writeJSON(t, w, remotePackResponse{
+				PackHash: sha256Hex(body), ObjectCount: len(uploaded), CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			var committed remoteSnapshotRequest
+			if decodeErr := json.NewDecoder(r.Body).Decode(&committed); decodeErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, testCommittedRemoteResponse(t, "backup-1", platformids.Mister, &committed))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 1, StorageQuotaBytes: 1000})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestManagerRunRemotePausedBlocksUntilResumed(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var requests atomic.Int32
+	server := newRemoteBackupSuccessServer(t, &requests)
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	env.Manager.WithPauser(pauser)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+		done <- err
+	}()
+
+	// While paused, the run must not reach the server at all.
+	assert.Never(t, func() bool { return requests.Load() > 0 },
+		300*time.Millisecond, 25*time.Millisecond, "paused backup must not contact the server")
+
+	pauser.Resume()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("resumed backup did not complete")
+	}
+	assert.Positive(t, requests.Load())
+	assert.Equal(t, StatusSuccess, env.Manager.Status().Remote.LastStatus)
+}
+
+func TestManagerRunRemoteThrottledStillCompletes(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	var requests atomic.Int32
+	server := newRemoteBackupSuccessServer(t, &requests)
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	pauser := syncutil.NewPauser()
+	pauser.Throttle(syncutil.ThrottleLight)
+	env.Manager.WithPauser(pauser)
+
+	info, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err)
+	assert.Equal(t, "backup-1", info.Backup.ID)
+	assert.True(t, pauser.IsThrottled())
 }

@@ -56,6 +56,7 @@ type RequestEnv struct {
 	ConfirmQueue    chan<- chan error
 	IndexPauser     *syncutil.Pauser
 	ScrapePauser    *syncutil.Pauser
+	BackupPauser    *syncutil.Pauser
 	ClientID        string
 	// ClientRole is the paired client's permission role ("admin" or
 	// "member"), or "" when the request carries no paired identity (local

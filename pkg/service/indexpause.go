@@ -59,6 +59,39 @@ func watchGameForIndexPause(
 	)
 }
 
+// watchGameForBackupPause mirrors media indexing pause behavior for backup
+// work (collection, hashing, packing, uploads) so a running remote backup
+// does not compete with gameplay for storage or CPU.
+func watchGameForBackupPause(
+	ctx context.Context,
+	b *broker.Broker,
+	st *state.State,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	pauser *syncutil.Pauser,
+) {
+	notifChan, subID := b.Subscribe(32, models.NotificationStarted, models.NotificationStopped)
+	defer b.Unsubscribe(subID)
+
+	primaryActive := func() bool { return activeMediaPausesMediaWork(st.ActiveMedia()) }
+	resolvePolicy := func() config.MediaPausePolicy { return cfg.ResolveMediaPausePolicy(activeSystemID(st)) }
+	isActive := func() bool {
+		_, _, active := st.BackupCoordinator().Active()
+		return active
+	}
+	handleMediaPauseNotifications(
+		ctx, notifChan, pauser, primaryActive(), isActive, "remote backup",
+		func(paused, throttled bool) {
+			operation, _, _ := st.BackupCoordinator().Active()
+			notifications.BackupState(ns, models.BackupStateNotification{
+				Operation: string(operation),
+				Paused:    paused,
+				Throttled: throttled,
+			})
+		}, resolvePolicy, primaryActive,
+	)
+}
+
 // watchGameForScrapePause mirrors media indexing pause behavior for metadata
 // scraping so SQLite and filesystem-heavy scrape work does not compete with gameplay.
 func watchGameForScrapePause(

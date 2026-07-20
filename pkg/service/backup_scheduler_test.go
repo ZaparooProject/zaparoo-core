@@ -22,10 +22,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -168,3 +170,12 @@ func backupTime(t time.Time) *string {
 }
 
 func stringPtr(s string) *string { return &s }
+
+func TestRunScheduledRemoteBackupSkipsWhilePaused(t *testing.T) {
+	t.Parallel()
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	// The pause gate must be checked before anything else: the nil platform
+	// and database would panic if the run proceeded past it.
+	runScheduledRemoteBackup(context.Background(), nil, nil, nil, nil, pauser)
+}
