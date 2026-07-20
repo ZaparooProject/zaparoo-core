@@ -353,6 +353,12 @@ func (s *Service) VerifyBySwitchID(switchID string) (*database.Profile, error) {
 // (PINs gate entry only); restricting what a profile-less device can do is
 // handled by the require-profile launch setting.
 func (s *Service) Deactivate() error {
+	release, err := s.st.TryAcquireRestoreAccess()
+	if err != nil {
+		return fmt.Errorf("cannot deactivate profile during backup restore: %w", err)
+	}
+	defer release()
+
 	s.activateMu.Lock()
 	defer s.activateMu.Unlock()
 
@@ -402,6 +408,12 @@ func (s *Service) RestoreOnBoot() error {
 }
 
 func (s *Service) activate(p *database.Profile) (*models.ActiveProfile, error) {
+	release, err := s.st.TryAcquireRestoreAccess()
+	if err != nil {
+		return nil, fmt.Errorf("cannot activate profile during backup restore: %w", err)
+	}
+	defer release()
+
 	// Serialize activations so two concurrent switches cannot interleave
 	// the persisted device state with the in-memory snapshot.
 	s.activateMu.Lock()

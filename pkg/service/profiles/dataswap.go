@@ -304,7 +304,11 @@ func (c *DataSwapCoordinator) apply(req *swapRequest) {
 		}
 	}
 
-	err := c.swapper.ApplyProfile(req.ref, items)
+	release, err := c.st.AcquireRestoreAccess()
+	if err == nil {
+		err = c.swapper.ApplyProfile(req.ref, items)
+		release()
+	}
 
 	c.mu.Lock()
 	notify := c.notify
@@ -319,6 +323,9 @@ func (c *DataSwapCoordinator) apply(req *swapRequest) {
 				Status:    models.ProfilesDataApplied,
 			})
 		}
+	case errors.Is(err, state.ErrRestoreRestartRequired):
+		log.Debug().Err(err).Str("profileId", req.ref.ID).
+			Msg("profiles: data swap skipped while restore restart is pending")
 	case errors.Is(err, platforms.ErrProfileDataUnavailable):
 		log.Warn().Err(err).Str("profileId", req.ref.ID).
 			Msg("profiles: data swap unavailable")

@@ -31,6 +31,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -635,4 +637,91 @@ func TestHandleScrapePauseNotifications_ThrottlesOnStartedInThrottleMode(t *test
 	assert.True(t, resp.Scraping)
 	assert.False(t, resp.Paused)
 	assert.True(t, resp.Throttled)
+}
+
+func TestWatchGameForBackupPause_AppliesPolicyPerSystem(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	drainState(t, st, ns)
+	cfg := &config.Instance{}
+	pauser := syncutil.NewPauser()
+	backupNS := make(chan models.Notification, 32)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	source := make(chan models.Notification, 10)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	done := make(chan struct{})
+	go func() {
+		watchGameForBackupPause(ctx, b, st, cfg, backupNS, pauser)
+		close(done)
+	}()
+
+	// The watcher subscribes asynchronously; re-publish until it reacts.
+	// A non-streaming system gets the throttle policy.
+	st.SetActiveMedia(models.NewActiveMedia(
+		systemdefs.SystemNES, systemdefs.SystemNES, "game.nes", "Game", "NES",
+	))
+	require.Eventually(t, func() bool {
+		b.Publish(models.Notification{Method: models.NotificationStarted})
+		return pauser.IsThrottled() && !pauser.IsPaused()
+	}, 2*time.Second, 20*time.Millisecond, "non-streaming system must throttle backup work")
+
+	// With no backup operation running, no backup.state notification is sent.
+	select {
+	case notif := <-backupNS:
+		t.Fatalf("unexpected backup.state notification with no active operation: %+v", notif)
+	default:
+	}
+
+	// A pause-tier CD system escalates to a full pause, and with a backup
+	// operation in flight the state change is reported as backup.state.
+	lease, err := st.BackupCoordinator().Begin(
+		context.Background(), backupcoordinator.OperationRemoteUpload, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+	st.SetActiveMedia(models.NewActiveMedia(
+		systemdefs.SystemSaturn, systemdefs.SystemSaturn, "game.chd", "Game", "Saturn",
+	))
+	require.Eventually(t, func() bool {
+		b.Publish(models.Notification{Method: models.NotificationStarted})
+		return pauser.IsPaused()
+	}, 2*time.Second, 20*time.Millisecond, "pause-tier system must pause backup work")
+
+	// Queued media events from the throttle phase may emit a throttled
+	// backup.state first; scan until the paused notification arrives.
+	require.Eventually(t, func() bool {
+		select {
+		case notif := <-backupNS:
+			if notif.Method != models.NotificationBackupState {
+				return false
+			}
+			var payload models.BackupStateNotification
+			if json.Unmarshal(notif.Params, &payload) != nil {
+				return false
+			}
+			return payload.Paused && !payload.Throttled &&
+				payload.Operation == string(backupcoordinator.OperationRemoteUpload)
+		default:
+			return false
+		}
+	}, 2*time.Second, 20*time.Millisecond, "paused backup.state notification must be sent")
+
+	// Stopping the game resumes backup work.
+	st.SetActiveMedia(nil)
+	require.Eventually(t, func() bool {
+		b.Publish(models.Notification{Method: models.NotificationStopped})
+		return !pauser.IsPaused() && !pauser.IsThrottled()
+	}, 2*time.Second, 20*time.Millisecond, "stopping the game must resume backup work")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("backup pause watcher did not exit on context cancellation")
+	}
 }

@@ -150,6 +150,50 @@ func TestDataSwap_SwitchApplies(t *testing.T) {
 	assert.Contains(t, string(n.Params), models.ProfilesDataApplied)
 }
 
+func TestDataSwap_WaitsForRestoreRollback(t *testing.T) {
+	t.Parallel()
+	swapper := &fakeSwapper{}
+	fix := newTestCoordinator(t, swapper)
+	finishRestore, err := fix.st.BeginRestoreGate()
+	require.NoError(t, err)
+	requested := make(chan struct{})
+	go func() {
+		fix.coord.RequestSwitch(platforms.ProfileRef{ID: "profile-1", Name: "Kid A"})
+		close(requested)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Zero(t, swapper.applyCount())
+	finishRestore(false)
+	require.Eventually(t, func() bool { return swapper.applyCount() == 1 },
+		2*time.Second, 5*time.Millisecond)
+	select {
+	case <-requested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("profile switch request did not complete after restore rollback")
+	}
+}
+
+func TestDataSwap_RestartPendingSkipsFailureNotification(t *testing.T) {
+	t.Parallel()
+	swapper := &fakeSwapper{}
+	fix := newTestCoordinator(t, swapper)
+	finishRestore, err := fix.st.BeginRestoreGate()
+	require.NoError(t, err)
+	finishRestore(true)
+
+	fix.coord.RequestSwitch(platforms.ProfileRef{ID: "profile-1", Name: "Kid A"})
+
+	assert.Zero(t, swapper.applyCount())
+	select {
+	case n := <-fix.notifs:
+		if n.Method == models.NotificationProfilesData {
+			t.Fatalf("unexpected profiles.data notification: %s", n.Params)
+		}
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestDataSwap_DeferredWhileMediaRunning(t *testing.T) {
 	t.Parallel()
 	swapper := &fakeSwapper{}

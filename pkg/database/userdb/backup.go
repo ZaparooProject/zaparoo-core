@@ -71,6 +71,10 @@ func isBackupName(name string) bool {
 }
 
 func backupInfo(path string, quickCheck bool) (database.BackupInfo, error) {
+	return backupInfoContext(context.Background(), path, quickCheck)
+}
+
+func backupInfoContext(ctx context.Context, path string, quickCheck bool) (database.BackupInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return database.BackupInfo{}, fmt.Errorf("failed to stat user database backup: %w", err)
@@ -83,7 +87,7 @@ func backupInfo(path string, quickCheck bool) (database.BackupInfo, error) {
 		Manual:    strings.HasSuffix(filepath.Base(path), "-manual"+backupExt),
 	}
 	if quickCheck {
-		valid, check, checkErr := quickCheckDB(path)
+		valid, check, checkErr := quickCheckDBContext(ctx, path)
 		result.Valid = valid
 		result.QuickCheck = check
 		if checkErr != nil {
@@ -95,8 +99,8 @@ func backupInfo(path string, quickCheck bool) (database.BackupInfo, error) {
 	return result, nil
 }
 
-func quickCheckDB(path string) (valid bool, result string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func quickCheckDBContext(parent context.Context, path string) (valid bool, result string, err error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	checkDB, err := sql.Open("sqlite3", path+"?mode=ro&_query_only=ON&_mmap_size=0")
@@ -137,6 +141,10 @@ func (db *UserDB) pruneAutoBackups() error {
 }
 
 func (db *UserDB) Backup(reason string, manual bool) (database.BackupInfo, error) {
+	return db.createBackup(db.ctx, reason, manual)
+}
+
+func (db *UserDB) createBackup(ctx context.Context, reason string, manual bool) (database.BackupInfo, error) {
 	if db.sql.Load() == nil {
 		return database.BackupInfo{}, ErrNullSQL
 	}
@@ -145,12 +153,12 @@ func (db *UserDB) Backup(reason string, manual bool) (database.BackupInfo, error
 	}
 
 	backupPath := filepath.Join(db.backupDir(), backupName(manual, time.Now()))
-	if _, err := db.sql.Load().ExecContext(db.ctx, "VACUUM INTO ?", backupPath); err != nil {
+	if _, err := db.sql.Load().ExecContext(ctx, "VACUUM INTO ?", backupPath); err != nil {
 		db.NoteCorruption(err)
 		return database.BackupInfo{}, fmt.Errorf("failed to back up user database: %w", err)
 	}
 
-	info, err := backupInfo(backupPath, true)
+	info, err := backupInfoContext(ctx, backupPath, true)
 	if err != nil {
 		// The VACUUM INTO file exists but could not be inspected; don't leave it behind.
 		_ = os.Remove(backupPath)
@@ -175,6 +183,80 @@ func (db *UserDB) Backup(reason string, manual bool) (database.BackupInfo, error
 		Str("reason", reason).
 		Msg("created user database backup")
 	return info, nil
+}
+
+// BackupForTransfer creates a validated portable snapshot without paired-client
+// credentials. Cleanup owns the private temporary directory and is safe to call
+// more than once.
+func (db *UserDB) BackupForTransfer(
+	ctx context.Context, reason string,
+) (database.BackupInfo, func() error, error) {
+	full, err := db.createBackup(ctx, reason, false)
+	if err != nil {
+		return database.BackupInfo{}, nil, err
+	}
+
+	transferDir, err := os.MkdirTemp(db.backupDir(), ".transfer-*")
+	if err != nil {
+		return database.BackupInfo{}, nil, fmt.Errorf("failed to create transfer backup directory: %w", err)
+	}
+	cleanup := func() error {
+		if removeErr := os.RemoveAll(transferDir); removeErr != nil {
+			return fmt.Errorf("failed to remove transfer backup directory: %w", removeErr)
+		}
+		return nil
+	}
+	fail := func(cause error) (database.BackupInfo, func() error, error) {
+		return database.BackupInfo{}, nil, errors.Join(cause, cleanup())
+	}
+
+	transferPath := filepath.Join(transferDir, "user.db")
+	if err = copyFileSyncContext(ctx, full.Path, transferPath, 0o600); err != nil {
+		return fail(fmt.Errorf("failed to copy transfer backup: %w", err))
+	}
+	if err = sanitizeTransferBackup(ctx, transferPath); err != nil {
+		return fail(err)
+	}
+	if err = os.Chmod(transferPath, 0o600); err != nil {
+		return fail(fmt.Errorf("failed to secure transfer backup permissions: %w", err))
+	}
+
+	info, err := backupInfoContext(ctx, transferPath, true)
+	if err != nil {
+		return fail(err)
+	}
+	info.Reason = reason
+	if !info.Valid {
+		return fail(fmt.Errorf("transfer backup failed validation: %s", info.QuickCheck))
+	}
+	return info, cleanup, nil
+}
+
+func sanitizeTransferBackup(parent context.Context, path string) (err error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+
+	transferDB, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=DELETE&_mmap_size=0")
+	if err != nil {
+		return fmt.Errorf("failed to open transfer backup: %w", err)
+	}
+	transferDB.SetMaxOpenConns(1)
+	defer func() {
+		if closeErr := transferDB.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to close transfer backup: %w", closeErr))
+		}
+	}()
+
+	if _, err = transferDB.ExecContext(ctx, "PRAGMA secure_delete=ON"); err != nil {
+		return fmt.Errorf("failed to enable secure deletion in transfer backup: %w", err)
+	}
+	if _, err = transferDB.ExecContext(ctx, "DELETE FROM Clients"); err != nil {
+		return fmt.Errorf("failed to remove clients from transfer backup: %w", err)
+	}
+	if _, err = transferDB.ExecContext(ctx, "VACUUM"); err != nil {
+		return fmt.Errorf("failed to compact transfer backup: %w", err)
+	}
+	return nil
 }
 
 func (db *UserDB) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo, bool, error) {
@@ -233,7 +315,30 @@ func (db *UserDB) resolveBackupPath(name string) (string, error) {
 	return path, nil
 }
 
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, fmt.Errorf("copy canceled: %w", err)
+	}
+	n, err := r.reader.Read(p)
+	if errors.Is(err, io.EOF) {
+		return n, io.EOF
+	}
+	if err != nil {
+		return n, fmt.Errorf("reading backup copy source: %w", err)
+	}
+	return n, nil
+}
+
 func copyFileSync(src, dst string, mode os.FileMode) error {
+	return copyFileSyncContext(context.Background(), src, dst, mode)
+}
+
+func copyFileSyncContext(ctx context.Context, src, dst string, mode os.FileMode) error {
 	//nolint:gosec // src is selected by backup validation/recovery code, not raw user input.
 	in, err := os.Open(src)
 	if err != nil {
@@ -246,7 +351,7 @@ func copyFileSync(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("failed to open destination file: %w", err)
 	}
-	_, copyErr := io.Copy(out, in)
+	_, copyErr := io.Copy(out, &contextReader{ctx: ctx, reader: in})
 	syncErr := out.Sync()
 	closeErr := out.Close()
 	if copyErr != nil {
@@ -262,7 +367,8 @@ func copyFileSync(src, dst string, mode os.FileMode) error {
 }
 
 func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err error) {
-	tmp, err := afero.TempFile(fs, filepath.Dir(dbPath), ".userdb-restore-*")
+	dbDir := filepath.Dir(dbPath)
+	tmp, err := afero.TempFile(fs, dbDir, ".userdb-restore-*")
 	if err != nil {
 		return fmt.Errorf("failed to create staged restore file: %w", err)
 	}
@@ -283,20 +389,72 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 		return fmt.Errorf("failed to preserve user database before restore: %w", err)
 	}
 	originalPreserved := err == nil
+	if originalPreserved {
+		if syncErr := syncAferoDirectory(fs, dbDir); syncErr != nil {
+			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
+			return errors.Join(
+				fmt.Errorf("failed to sync preserved user database: %w", syncErr),
+				rollbackErr,
+			)
+		}
+	}
 
 	database.RemoveSidecars(dbPath)
 	if err = fs.Rename(tmpPath, dbPath); err != nil {
 		if originalPreserved {
-			if rollbackErr := fs.Rename(rollbackPath, dbPath); rollbackErr != nil {
-				return errors.Join(
-					fmt.Errorf("failed to install staged user database backup: %w", err),
-					fmt.Errorf("failed to restore original user database: %w", rollbackErr),
-				)
-			}
+			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
+			return errors.Join(
+				fmt.Errorf("failed to install staged user database backup: %w", err),
+				rollbackErr,
+			)
 		}
 		return fmt.Errorf("failed to install staged user database backup: %w", err)
 	}
-	_ = fs.Remove(rollbackPath)
+	if syncErr := syncAferoDirectory(fs, dbDir); syncErr != nil {
+		if originalPreserved {
+			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
+			return errors.Join(
+				fmt.Errorf("failed to sync installed user database: %w", syncErr),
+				rollbackErr,
+			)
+		}
+		return fmt.Errorf("failed to sync installed user database: %w", syncErr)
+	}
+	if originalPreserved {
+		if removeErr := fs.Remove(rollbackPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("failed to remove user database rollback: %w", removeErr)
+		}
+		if syncErr := syncAferoDirectory(fs, dbDir); syncErr != nil {
+			return fmt.Errorf("failed to sync user database rollback removal: %w", syncErr)
+		}
+	}
+	return nil
+}
+
+func restoreDatabaseRollback(fs afero.Fs, rollbackPath, dbPath string) error {
+	_ = fs.Remove(dbPath)
+	if err := fs.Rename(rollbackPath, dbPath); err != nil {
+		return fmt.Errorf("failed to restore original user database: %w", err)
+	}
+	if err := syncAferoDirectory(fs, filepath.Dir(dbPath)); err != nil {
+		return fmt.Errorf("failed to sync restored original user database: %w", err)
+	}
+	return nil
+}
+
+func syncAferoDirectory(fs afero.Fs, path string) error {
+	dir, err := fs.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open directory for sync: %w", err)
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil {
+		return fmt.Errorf("failed to sync directory: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("failed to close synced directory: %w", closeErr)
+	}
 	return nil
 }
 

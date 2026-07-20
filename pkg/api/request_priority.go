@@ -20,10 +20,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,6 +37,25 @@ const (
 	apiPriorityNormal
 	apiPriorityLow
 )
+
+func requestTimeoutForAPIMethod(method string) time.Duration {
+	if models.MethodHasUnboundedRuntime(method) {
+		return 0
+	}
+	return config.APIRequestTimeout
+}
+
+func requestContextForAPIMethod(
+	parent context.Context, method string,
+) (context.Context, context.CancelFunc) {
+	timeout := requestTimeoutForAPIMethod(method)
+	if timeout == 0 {
+		//nolint:gosec // Caller receives and owns the cancellation function.
+		return context.WithCancel(parent)
+	}
+	//nolint:gosec // Caller receives and owns the cancellation function.
+	return context.WithTimeout(parent, timeout)
+}
 
 func classifyAPIMethod(method string) apiRequestPriority {
 	method = strings.ToLower(method)

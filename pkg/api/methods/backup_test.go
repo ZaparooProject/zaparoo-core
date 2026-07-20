@@ -22,164 +22,339 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	testinghelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	testifymock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandleBackup_Success(t *testing.T) {
-	t.Parallel()
+type backupCapableTestPlatform struct {
+	*mocks.MockPlatform
+}
 
-	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("Backup", "manual", true).Return(database.BackupInfo{
-		Name:  "backup-20260624-150405-000000001-manual.db",
+func (*backupCapableTestPlatform) BackupDefinitions() []platforms.BackupDefinition {
+	return nil
+}
+
+func newBackupTestEnv(t *testing.T) requests.RequestEnv {
+	t.Helper()
+	rootDir := t.TempDir()
+	configDir := filepath.Join(rootDir, "config")
+	dataDir := filepath.Join(rootDir, "data")
+	tempDir := filepath.Join(rootDir, "tmp")
+	logDir := filepath.Join(rootDir, "logs")
+	require.NoError(t, os.MkdirAll(configDir, 0o750))
+	require.NoError(t, os.MkdirAll(dataDir, 0o750))
+	require.NoError(t, os.MkdirAll(tempDir, 0o750))
+	require.NoError(t, os.MkdirAll(logDir, 0o750))
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "frontend.toml"), []byte("enabled=true\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, config.TUIFile), []byte("theme=\"default\"\n"), 0o600))
+	userDBPath := filepath.Join(dataDir, config.UserDbFile)
+	require.NoError(t, os.WriteFile(userDBPath, []byte("test user db snapshot"), 0o600))
+	mockUserDB := testinghelpers.NewMockUserDBI()
+	mockUserDB.On(
+		"BackupForTransfer", testifymock.Anything, testifymock.AnythingOfType("string"),
+	).Return(database.BackupInfo{
+		Name:  "backup-20260624-150405-000000001-auto.db",
+		Path:  userDBPath,
 		Valid: true,
+	}, func() error { return nil }, nil)
+	mockUserDB.On("Backup", "restore-rollback", false).Return(database.BackupInfo{
+		Name: "backup-20260624-150405-000000002-auto.db", Path: userDBPath, Valid: true,
+	}, nil).Maybe()
+	mockUserDB.On("GetDBPath").Return(userDBPath)
+	mockUserDB.On("RestoreBackup", testifymock.AnythingOfType("string")).Return(database.RestoreInfo{
+		RestoredFrom: database.BackupInfo{Name: "staged.db", Valid: true},
 	}, nil)
-
-	env := requests.RequestEnv{
+	mockUserDB.On("ListClients").Return([]database.Client{}, nil).Maybe()
+	mockUserDB.On("ReplaceAllClients", testifymock.Anything).Return(nil).Maybe()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: dataDir, ConfigDir: configDir, TempDir: tempDir, LogDir: logDir,
+	})
+	pl := &backupCapableTestPlatform{MockPlatform: mockPlatform}
+	return requests.RequestEnv{
 		Context:  context.Background(),
+		Config:   cfg,
+		Platform: pl,
 		Database: &database.Database{UserDB: mockUserDB},
 		IsLocal:  true,
 	}
+}
 
-	result, err := HandleBackup(env)
-	require.NoError(t, err)
-	info, ok := result.(database.BackupInfo)
+func TestHandleBackup_RejectsPlatformWithoutFullDeviceProvider(t *testing.T) {
+	env := newBackupTestEnv(t)
+	platformWithBackup, ok := env.Platform.(*backupCapableTestPlatform)
 	require.True(t, ok)
-	assert.Equal(t, "backup-20260624-150405-000000001-manual.db", info.Name)
-	mockUserDB.AssertExpectations(t)
-}
-
-func TestHandleBackupList_Success(t *testing.T) {
-	t.Parallel()
-
-	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("ListBackups").Return([]database.BackupInfo{
-		{Name: "backup-a-manual.db", Valid: true},
-		{Name: "backup-b-auto.db", Valid: true},
-	}, nil)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-	}
-
-	result, err := HandleBackupList(env)
-	require.NoError(t, err)
-	backups, ok := result.([]database.BackupInfo)
-	require.True(t, ok)
-	require.Len(t, backups, 2)
-	mockUserDB.AssertExpectations(t)
-}
-
-func TestHandleBackupRestore_Success(t *testing.T) {
-	t.Parallel()
-
-	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("RestoreBackup", "backup-a-manual.db").Return(database.RestoreInfo{
-		RestoredFrom: database.BackupInfo{Name: "backup-a-manual.db", Valid: true},
-	}, nil)
-
-	params, err := json.Marshal(map[string]string{"name": "backup-a-manual.db"})
-	require.NoError(t, err)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-		Params:   params,
-	}
-
-	result, err := HandleBackupRestore(env)
-	require.NoError(t, err)
-	info, ok := result.(database.RestoreInfo)
-	require.True(t, ok)
-	assert.Equal(t, "backup-a-manual.db", info.RestoredFrom.Name)
-	mockUserDB.AssertExpectations(t)
-}
-
-func TestHandleBackupRestore_MissingName(t *testing.T) {
-	t.Parallel()
-
-	mockUserDB := helpers.NewMockUserDBI()
-	params, err := json.Marshal(map[string]string{})
-	require.NoError(t, err)
-
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  true,
-		Params:   params,
-	}
-
-	_, err = HandleBackupRestore(env)
-	require.Error(t, err)
-	mockUserDB.AssertNotCalled(t, "RestoreBackup")
-}
-
-func TestHandleBackup_RejectsNonLocal(t *testing.T) {
-	t.Parallel()
-
-	mockUserDB := helpers.NewMockUserDBI()
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  false,
-	}
+	env.Platform = platformWithBackup.MockPlatform
 
 	_, err := HandleBackup(env)
 	require.Error(t, err)
-	mockUserDB.AssertNotCalled(t, "Backup")
+	assert.Contains(t, err.Error(), "not supported on this platform")
 }
 
-func TestHandleBackupList_RejectsNonLocal(t *testing.T) {
-	t.Parallel()
+func TestHandleBackup_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
 
-	mockUserDB := helpers.NewMockUserDBI()
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  false,
-	}
-
-	_, err := HandleBackupList(env)
-	require.Error(t, err)
-	mockUserDB.AssertNotCalled(t, "ListBackups")
+	result, err := HandleBackup(env)
+	require.NoError(t, err)
+	info, ok := result.(backupsvc.Info)
+	require.True(t, ok)
+	assert.Equal(t, backupsvc.IntegrityValid, info.Integrity)
+	assert.Contains(t, info.Name, "backup-")
+	assert.Contains(t, info.Name, ".zip")
+	assert.NotZero(t, info.Categories[backupsvc.CategoryZaparoo].Files)
 }
 
-func TestHandleBackupRestore_RejectsNonLocal(t *testing.T) {
-	t.Parallel()
-
-	mockUserDB := helpers.NewMockUserDBI()
-	params, err := json.Marshal(map[string]string{"name": "backup-a-manual.db"})
+func TestHandleBackupList_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
+	_, err := HandleBackup(env)
 	require.NoError(t, err)
 
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: mockUserDB},
-		IsLocal:  false,
-		Params:   params,
-	}
+	result, err := HandleBackupList(env)
+	require.NoError(t, err)
+	backups, ok := result.([]backupsvc.ListInfo)
+	require.True(t, ok)
+	require.Len(t, backups, 1)
+	assert.NotEmpty(t, backups[0].Name)
+	assert.NotZero(t, backups[0].Size)
+}
+
+func TestHandleBackupInspect_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err := HandleBackupInspect(env)
+	require.NoError(t, err)
+	inspected, ok := result.(backupsvc.Info)
+	require.True(t, ok)
+	assert.Equal(t, backupsvc.IntegrityUnchecked, inspected.Integrity)
+	assert.NotEmpty(t, inspected.Categories)
+}
+
+func TestHandleBackupDelete_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err := HandleBackupDelete(env)
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, result)
+
+	_, err = backupsvc.NewManager(env.Config, env.Platform, env.Database).
+		Inspect(context.Background(), backupInfo.Name)
+	require.Error(t, err)
+}
+
+func TestHandleBackupRestore_Success(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err := HandleBackupRestore(env)
+	require.NoError(t, err)
+	info, ok := result.(backupsvc.RestoreInfo)
+	require.True(t, ok)
+	assert.Equal(t, backupInfo.Name, info.RestoredFrom.Name)
+	require.NotNil(t, info.PreRestoreBackup)
+	assert.Equal(t, backupsvc.IntegrityValid, info.PreRestoreBackup.Integrity)
+}
+
+func TestHandleBackupRestore_RejectsActiveMedia(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+	env.State, _ = state.NewState(env.Platform, "test-boot")
+	env.State.SetActiveMedia(&models.ActiveMedia{})
 
 	_, err = HandleBackupRestore(env)
 	require.Error(t, err)
-	mockUserDB.AssertNotCalled(t, "RestoreBackup")
+	assert.Contains(t, err.Error(), "while media is active")
+}
+
+func TestHandleBackupRestore_RestartsAfterResponse(t *testing.T) {
+	env := newBackupTestEnv(t)
+	created, err := HandleBackup(env)
+	require.NoError(t, err)
+	backupInfo, ok := created.(backupsvc.Info)
+	require.True(t, ok)
+	params, err := json.Marshal(map[string]string{"name": backupInfo.Name})
+	require.NoError(t, err)
+	env.Params = params
+	env.State, _ = state.NewState(env.Platform, "test-boot")
+
+	result, err := HandleBackupRestore(env)
+	require.NoError(t, err)
+	response, ok := result.(models.ResponseWithCallback)
+	require.True(t, ok)
+	assert.False(t, env.State.RestartRequested())
+	response.AfterWrite()
+	assert.True(t, env.State.RestartRequested())
+}
+
+func TestHandleBackupRestore_MissingName(t *testing.T) {
+	env := newBackupTestEnv(t)
+	params, err := json.Marshal(map[string]string{})
+	require.NoError(t, err)
+	env.Params = params
+
+	_, err = HandleBackupRestore(env)
+	require.Error(t, err)
+}
+
+func TestHandleBackupStatus_AllowsNonLocal(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.IsLocal = false
+	env.Database = nil
+
+	result, err := HandleBackupStatus(env)
+	require.NoError(t, err)
+	status, ok := result.(models.BackupStatusResponse)
+	require.True(t, ok)
+	assert.True(t, status.Local.Enabled)
+	assert.Equal(t, config.DefaultBackupRemoteSchedule, status.Remote.Schedule)
+}
+
+func TestHandleBackupRemoteList_MapsOpaqueIDsAndSources(t *testing.T) {
+	env := newBackupTestEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/device/backups", r.URL.Path)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, writeErr := w.Write([]byte(`{
+			"items":[{
+				"id":"save/a%b ?\u96ea",
+				"backup_type":"manual",
+				"schema_version":1,
+				"created_at":"2026-07-10T12:00:00Z",
+				"source_device":{"id":"dev-2","name":"Bedroom","linked":true,"current":false}
+			}],
+			"storage_used_bytes":42,
+			"storage_quota_bytes":100
+		}`))
+		assert.NoError(t, writeErr)
+	}))
+	defer server.Close()
+	require.NoError(t, env.Config.SetBackupRemoteBaseURL(server.URL))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.BackupAuthLookupURL(server.URL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	result, err := HandleBackupRemoteList(env)
+	require.NoError(t, err)
+	list, ok := result.(backupsvc.RemoteListInfo)
+	require.True(t, ok)
+	require.Len(t, list.Items, 1)
+	assert.Equal(t, "save/a%b ?\u96ea", list.Items[0].ID)
+	require.NotNil(t, list.Items[0].SourceDevice)
+	assert.Equal(t, "dev-2", list.Items[0].SourceDevice.ID)
+	assert.Equal(t, int64(42), list.StorageUsedBytes)
+}
+
+func TestHandleBackupRemoteRestore_RequiresID(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.Params = json.RawMessage(`{}`)
+
+	_, err := HandleBackupRemoteRestore(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "id is required")
+}
+
+func TestBackupMethodErrorMapsExpectedConditions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err      error
+		contains string
+	}{
+		{err: backupsvc.ErrPlatformBackupUnsupported, contains: "not supported on this platform"},
+		{err: backupsvc.ErrRestoreMediaActive, contains: "while media is active"},
+		{err: backupsvc.ErrRestoreLaunchInProgress, contains: "media is launching or restart is pending"},
+		{err: &backupsvc.BusyError{Kind: backupsvc.OperationRemoteUpload}, contains: "busy with remote-upload"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.contains, func(t *testing.T) {
+			t.Parallel()
+			err := backupMethodError("test action", tt.err)
+			var clientErr *models.ClientError
+			require.ErrorAs(t, err, &clientErr)
+			assert.Contains(t, err.Error(), tt.contains)
+		})
+	}
+}
+
+func TestHandleBackup_RejectsNonLocal(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.IsLocal = false
+
+	_, err := HandleBackup(env)
+	require.Error(t, err)
+}
+
+func TestHandleBackupList_RejectsNonLocal(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.IsLocal = false
+
+	_, err := HandleBackupList(env)
+	require.Error(t, err)
+}
+
+func TestHandleBackupRestore_RejectsNonLocal(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.IsLocal = false
+	params, err := json.Marshal(map[string]string{"name": "backup-a-manual.zip"})
+	require.NoError(t, err)
+	env.Params = params
+
+	_, err = HandleBackupRestore(env)
+	require.Error(t, err)
 }
 
 func TestHandleBackup_RejectsUnavailableDatabase(t *testing.T) {
-	t.Parallel()
-
-	// A nil UserDB must be rejected by the access gate rather than panicking.
-	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Database: &database.Database{UserDB: nil},
-		IsLocal:  true,
-	}
+	env := newBackupTestEnv(t)
+	env.Database = &database.Database{UserDB: nil}
 
 	_, err := HandleBackup(env)
 	require.Error(t, err)

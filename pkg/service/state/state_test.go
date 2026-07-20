@@ -20,11 +20,14 @@
 package state
 
 import (
+	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -275,5 +278,31 @@ func TestSetOnMediaStartHookNotCalledOnStop(t *testing.T) {
 
 	if hookCalled {
 		t.Error("OnMediaStart hook should not be called when media stops")
+	}
+}
+
+func TestBackupCoordinatorReleasePublishesFinishedNotification(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, ns := NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(state.StopService)
+
+	lease, err := state.BackupCoordinator().Begin(
+		context.Background(), backupcoordinator.OperationRemoteUpload, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	lease.Release()
+
+	select {
+	case notif := <-ns:
+		assert.Equal(t, models.NotificationBackupState, notif.Method)
+		var payload models.BackupStateNotification
+		require.NoError(t, json.Unmarshal(notif.Params, &payload))
+		assert.Equal(t, string(backupcoordinator.OperationRemoteUpload), payload.Operation)
+		assert.True(t, payload.Finished)
+		assert.False(t, payload.Paused)
+		assert.False(t, payload.Throttled)
+	case <-time.After(time.Second):
+		t.Fatal("expected backup.state finished notification")
 	}
 }

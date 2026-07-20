@@ -20,7 +20,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -32,6 +34,29 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
+)
+
+// PageSettingsBackupSnapshots shows one source device's cloud snapshots.
+const PageSettingsBackupSnapshots = "settings_backup_snapshots"
+
+// remoteBackupSource groups an account's cloud snapshots by the device that
+// created them, snapshots newest first.
+type remoteBackupSource struct {
+	Device  RemoteBackupSourceDevice
+	Backups []RemoteBackupItem
+}
+
+// backupCategoryOrder and backupCategoryLabels define the display order and
+// names for backup categories across list, detail, and confirmation views.
+var (
+	backupCategoryOrder  = []string{"zaparoo", "settings", "inputs", "saves", "savestates"}
+	backupCategoryLabels = map[string]string{
+		"zaparoo":    "Zaparoo",
+		"settings":   "Settings",
+		"inputs":     "Inputs",
+		"saves":      "Saves",
+		"savestates": "Save states",
+	}
 )
 
 // BuildSettingsMainMenu creates the top-level settings menu with Audio, Readers, and Advanced options.
@@ -109,6 +134,12 @@ func BuildSettingsMainMenuWithService(
 		}).
 		AddNavAction("Clients", "Pair and revoke client devices", func() {
 			BuildClientsPage(svc, pages, app)
+		}).
+		AddNavAction("Backup", "Back up and restore this device", func() {
+			buildBackupSettingsMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
+		}).
+		AddNavAction("Online", "Zaparoo Online account and cloud features", func() {
+			buildOnlineSettingsMenu(svc, pages, app, func() { pages.SwitchToPage(PageSettingsMain) })
 		}).
 		AddNavAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)
@@ -424,6 +455,1154 @@ func buildReadersSettingsMenu(
 	frame.SetupContentToButtonNavigation()
 
 	pages.AddAndSwitchToPage(PageSettingsReadersMenu, frame, true)
+}
+
+// buildBackupSettingsMenu loads backup status in the background, then shows
+// the backup settings submenu. goBack runs when the page is dismissed, so
+// the page returns to wherever it was opened from.
+func buildBackupSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application, goBack func()) {
+	loadSettingsPage(pages, app, PageSettingsBackup,
+		[]string{"Settings", "Backup"},
+		"Loading backup status...",
+		"Failed to load backup status",
+		tuiContext, goBack,
+		func(ctx context.Context) (*models.BackupStatusResponse, error) {
+			status, err := svc.GetBackupStatus(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("get backup status: %w", err)
+			}
+			return status, nil
+		},
+		func(status *models.BackupStatusResponse) {
+			renderBackupSettingsMenu(svc, pages, app, status, goBack)
+		},
+	)
+}
+
+// renderBackupSettingsMenu shows the backup settings submenu: a Local
+// section for portable ZIP backups and a Cloud section for Zaparoo Online
+// backups (or a pointer to account linking when no account is linked).
+func renderBackupSettingsMenu(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	status *models.BackupStatusResponse,
+	goBack func(),
+) {
+	frame := NewPageFrame(app).SetTitle("Settings", "Backup")
+	frame.SetOnEscape(goBack)
+	buttonBar := NewButtonBar(app).AddButton("Back", goBack).SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	menu := NewSettingsList(pages, PageSettingsMain).SetRebuildPrevious(goBack)
+	menu.SetDynamicHelpMode(true).SetHelpCallback(func(desc string) { frame.SetHelpText(desc) })
+	menu.SetOnNavigateOut(frame.FocusButtonBar)
+
+	rebuild := func() { buildBackupSettingsMenu(svc, pages, app, goBack) }
+
+	if status.ActiveOperation != "" {
+		description := "Backup service is busy"
+		if status.ActiveSince != nil {
+			description += " since " + *status.ActiveSince
+		}
+		menu.AddNavAction("Active operation", description, func() {
+			ShowInfoModal(
+				pages, app, "Backup in progress", status.ActiveOperation+" is currently running.",
+				func() { app.SetFocus(menu.List) },
+			)
+		})
+	}
+
+	menu.AddHeader("Local")
+	menu.AddNavAction("Back up now", "Create a portable local backup ZIP", func() {
+		runBackupAction(
+			pages,
+			app,
+			menu.List,
+			"Creating backup",
+			"Creating local backup ZIP...",
+			func(ctx context.Context) (string, error) {
+				name, backupErr := svc.CreateBackup(ctx)
+				if backupErr != nil {
+					return "", fmt.Errorf("create local backup: %w", backupErr)
+				}
+				return backupLabelFromName("Local backup", name), nil
+			},
+			func(label string) {
+				ShowInfoModal(pages, app, "Backup created", label, rebuild)
+			},
+		)
+	})
+	menu.AddNavAction("View backups", backupStatusDescription(&status.Local), func() {
+		buildBackupListPage(svc, pages, app, rebuild)
+	})
+
+	menu.AddHeader("Cloud")
+	if status.Remote.Linked {
+		addCloudBackupItems(svc, pages, app, menu, status, rebuild)
+	} else {
+		menu.AddNavAction("Link account", "Link a Zaparoo Online account to enable cloud backup", func() {
+			buildOnlineSettingsMenu(svc, pages, app, rebuild)
+		})
+	}
+
+	frame.SetContent(menu.List)
+	menu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
+	pages.AddAndSwitchToPage(PageSettingsBackup, frame, true)
+}
+
+// addCloudBackupItems adds the Cloud section items available while a
+// Zaparoo Online account is linked.
+func addCloudBackupItems(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	menu *SettingsList,
+	status *models.BackupStatusResponse,
+	rebuild func(),
+) {
+	enabled := status.Remote.Enabled
+	menu.AddToggle(
+		"Automatic backup", "Back up this device to the cloud on a schedule", &enabled,
+		func(value bool) {
+			ctx, cancel := tuiContext()
+			defer cancel()
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteEnabled: &value})
+			if err != nil {
+				log.Warn().Err(err).Msg("error updating cloud backup setting")
+				ShowErrorModal(
+					pages, app, "Failed to save cloud backup setting", func() { app.SetFocus(menu.List) },
+				)
+			}
+		},
+	)
+	scheduleOptions := []string{"daily", "weekly", "manual"}
+	scheduleIndex := 0
+	for i, option := range scheduleOptions {
+		if option == status.Remote.Schedule {
+			scheduleIndex = i
+			break
+		}
+	}
+	menu.AddCycle(
+		"Schedule",
+		"How often automatic cloud backup runs",
+		scheduleOptions,
+		&scheduleIndex,
+		func(value string, _ int) {
+			ctx, cancel := tuiContext()
+			defer cancel()
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{BackupRemoteSchedule: &value})
+			if err != nil {
+				log.Warn().Err(err).Msg("error updating cloud backup schedule")
+				ShowErrorModal(pages, app, "Failed to save cloud backup schedule", func() {
+					app.SetFocus(menu.List)
+				})
+			}
+		},
+	)
+	cloudUploadDescription := "Upload a backup of this device to the cloud"
+	if status.Remote.Availability == "unavailable" {
+		cloudUploadDescription = "Warp is required to create cloud backups"
+	}
+	// The cached availability is a display hint only: the upload itself does
+	// a fresh subscription check server-side, so a just-activated Warp
+	// subscription works immediately instead of waiting out the cache TTL.
+	menu.AddNavAction("Back up now", cloudUploadDescription, func() {
+		runBackupAction(
+			pages,
+			app,
+			menu.List,
+			"Creating cloud backup",
+			"Uploading backup to the cloud...",
+			func(ctx context.Context) (string, error) {
+				id, backupErr := svc.RunRemoteBackup(ctx)
+				if backupErr != nil {
+					return "", fmt.Errorf("create cloud backup: %w", backupErr)
+				}
+				return "Cloud backup " + id, nil
+			},
+			func(label string) {
+				ShowInfoModal(pages, app, "Cloud backup created", label, rebuild)
+			},
+		)
+	})
+	menu.AddNavAction("View backups", "List and restore cloud backup snapshots", func() {
+		buildRemoteBackupListPage(svc, pages, app, rebuild)
+	})
+	menu.AddNavAction("Status", backupStatusDescription(&status.Remote), func() {
+		ShowInfoModal(pages, app, "Cloud backup", backupStatusText(&status.Remote), func() {
+			app.SetFocus(menu.List)
+		})
+	})
+}
+
+const (
+	backupProgressModalPage = "backup_progress_modal"
+	// Sized to fit the five-line progress text plus border within the
+	// 75-column CRT view.
+	backupProgressModalWidth  = 51
+	backupProgressModalHeight = 7
+)
+
+func backupActionErrorText(title string, err error) string {
+	message := strings.ToLower(err.Error())
+	var guidance string
+	switch {
+	case strings.Contains(message, "backup operation ") && strings.Contains(message, " has been running since "):
+		guidance = "Another backup or restore is already running. Wait for it to finish, then try again."
+	case strings.Contains(message, "cannot restore backup while media is active"):
+		guidance = "Stop active media before restoring this backup."
+	case strings.Contains(message, "cannot restore backup while media is launching") ||
+		strings.Contains(message, "media launch is in progress"):
+		guidance = "Wait for media launch to finish, then try restoring again."
+	case strings.Contains(message, "full-device backup is not supported on this platform"):
+		guidance = "Full-device backup is not available on this platform."
+	case strings.Contains(message, "remote backup is not available for this account"):
+		guidance = "Cloud backup requires an active Zaparoo Warp subscription."
+	case strings.Contains(message, "backup restore rollback requires recovery") ||
+		strings.Contains(message, "pending backup restore transaction exists"):
+		guidance = "Restart Zaparoo Core to complete restore recovery, then try again."
+	case strings.Contains(message, "backup restore restart is pending"):
+		guidance = "Restart Zaparoo Core before starting another backup or restore operation."
+	case strings.Contains(message, "remote backup rate limited"):
+		guidance = "A backup was uploaded recently. Wait a few minutes, then try again."
+	case strings.Contains(message, "remote backup is unlinked") || strings.Contains(message, "device not linked"):
+		guidance = "Relink this device to Zaparoo Online, then try again."
+	case strings.Contains(message, "insufficient disk space"):
+		guidance = "Free storage space on this device, then try again."
+	default:
+		guidance = "Check Core logs for details, then try again."
+	}
+	return title + " failed.\n\n" + guidance
+}
+
+func runBackupAction(
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	title string,
+	message string,
+	run func(context.Context) (string, error),
+	onSuccess func(string),
+) {
+	ctx, cancel := backupContext()
+	started := time.Now()
+	done := make(chan struct{})
+
+	// Deliberately blocking: no buttons, and all input is swallowed.
+	// Backups and restores are foreground operations whose outcome must
+	// always be reported, and a restore ends in a Core restart. A plain
+	// bordered TextView is used instead of tview.Modal so no empty button
+	// row is reserved.
+	modal := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetText(backupProgressText(message, started))
+	modal.SetInputCapture(func(_ *tcell.EventKey) *tcell.EventKey { return nil })
+	modal.SetBorder(true)
+	SetBoxTitle(modal.Box, title)
+	modal.SetTitleAlign(tview.AlignCenter)
+	pages.AddPage(backupProgressModalPage,
+		CenterWidget(backupProgressModalWidth, backupProgressModalHeight, modal), true, true)
+	app.SetFocus(modal)
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				app.QueueUpdateDraw(func() {
+					modal.SetText(backupProgressText(message, started))
+				})
+			}
+		}
+	}()
+
+	go func() {
+		label, err := run(ctx)
+		cancel()
+		close(done)
+		app.QueueUpdateDraw(func() {
+			pages.HidePage(backupProgressModalPage)
+			pages.RemovePage(backupProgressModalPage)
+			if err != nil {
+				log.Warn().Err(err).Msg("error running backup action")
+				ShowErrorModal(pages, app, backupActionErrorText(title, err), func() { app.SetFocus(focus) })
+				return
+			}
+			onSuccess(label)
+		})
+	}()
+}
+
+func backupProgressText(message string, started time.Time) string {
+	return fmt.Sprintf(
+		"%s\n\nElapsed: %s\n\nTime depends on save data size.",
+		message,
+		time.Since(started).Round(time.Second),
+	)
+}
+
+const authLinkModalPage = "authLinkModal"
+
+// startAuthLinkFlow runs the reverse device link flow: display the user code
+// and verification URL, then wait for the link to be approved online. onDone
+// rebuilds the caller's menu when the flow ends, whatever the outcome.
+func startAuthLinkFlow(svc SettingsService, pages *tview.Pages, app *tview.Application, onDone func()) {
+	ctx, cancel := tuiContext()
+	defer cancel()
+	link, err := svc.StartAuthLink(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("error starting device link")
+		ShowErrorModal(pages, app, "Failed to start device linking", onDone)
+		return
+	}
+
+	done := make(chan struct{})
+	closeModal := func() {
+		pages.HidePage(authLinkModalPage)
+		pages.RemovePage(authLinkModalPage)
+	}
+
+	dialog := NewDialog().
+		SetText(authLinkMessage(link.VerificationURL, link.UserCode)).
+		SetTextAlign(tview.AlignLeft).
+		SetTitle("Link with Zaparoo Online").
+		AddButtons([]string{"Cancel"}).
+		SetDoneFunc(func(_ int) {
+			close(done)
+			cancelCtx, cancelCancel := tuiContext()
+			defer cancelCancel()
+			if cancelErr := svc.CancelAuthLink(cancelCtx); cancelErr != nil {
+				log.Debug().Err(cancelErr).Msg("error cancelling device link")
+			}
+			closeModal()
+			onDone()
+		})
+	pages.AddPage(authLinkModalPage, dialog, true, true)
+	app.SetFocus(dialog)
+
+	go pollAuthLinkStatus(svc, pages, app, done, closeModal, onDone)
+}
+
+// authLinkMessage lays out the link instructions so the two things the user
+// must act on — the address and the code — stand out from the fixed text.
+func authLinkMessage(verificationURL, userCode string) string {
+	t := CurrentTheme()
+	accent := colorToHex(t.LabelColor)
+	dim := colorToHex(t.SecondaryTextColor)
+	displayURL := strings.TrimPrefix(strings.TrimPrefix(verificationURL, "https://"), "http://")
+	return fmt.Sprintf(
+		"On your phone or computer, open:\n  [%s::b]%s[-::-]\n\n"+
+			"and enter this code:\n  [%s::b]%s[-::-]\n\n"+
+			"[%s]Waiting for approval...[-::-]",
+		accent, displayURL, accent, userCode, dim,
+	)
+}
+
+// pollAuthLinkStatus watches the link flow until it reaches a terminal state
+// and swaps the waiting modal for the outcome.
+func pollAuthLinkStatus(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	done <-chan struct{},
+	closeModal func(),
+	onDone func(),
+) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+		}
+
+		ctx, cancel := tuiContext()
+		status, err := svc.GetAuthLinkStatus(ctx)
+		cancel()
+		if err != nil {
+			log.Debug().Err(err).Msg("error polling device link status")
+			continue
+		}
+		switch status.Status {
+		case models.AuthLinkStatusPending:
+			continue
+		case models.AuthLinkStatusApproved:
+			app.QueueUpdateDraw(func() {
+				closeModal()
+				ShowInfoModal(pages, app, "Device linked",
+					"This device is now linked to Zaparoo Online.\n\n"+
+						"Existing backups from your account are under\n"+
+						"Cloud backup > View backups.", onDone)
+			})
+			return
+		default:
+			reason := status.Error
+			if reason == "" {
+				reason = "Device linking did not complete."
+			}
+			app.QueueUpdateDraw(func() {
+				closeModal()
+				ShowErrorModal(pages, app, reason, onDone)
+			})
+			return
+		}
+	}
+}
+
+func buildBackupListPage(svc SettingsService, pages *tview.Pages, app *tview.Application, goBack func()) {
+	loadSettingsPage(pages, app, PageSettingsBackupList,
+		[]string{"Settings", "Backup", "Local"},
+		"Loading backups...",
+		"Failed to list backups",
+		tuiContext, goBack,
+		func(ctx context.Context) ([]map[string]any, error) {
+			backups, err := svc.ListBackups(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list backups: %w", err)
+			}
+			return backups, nil
+		},
+		func(backups []map[string]any) {
+			renderBackupListPage(svc, pages, app, backups, goBack)
+		},
+	)
+}
+
+func renderBackupListPage(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	backups []map[string]any,
+	goBack func(),
+) {
+	frame := NewPageFrame(app).SetTitle("Settings", "Backup", "Local")
+	frame.SetOnEscape(goBack)
+	buttonBar := NewButtonBar(app).AddButton("Back", goBack).SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	list := tview.NewList()
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
+	list.ShowSecondaryText(true)
+	list.SetSelectedFocusOnly(true)
+	for _, backup := range backups {
+		name := backupString(backup, "name")
+		if name == "" {
+			continue
+		}
+		secondary := formatBackupSize(backup, "size")
+		backupName := name
+		backupInfo := backup
+		list.AddItem(backupDisplayLabel("Local backup", name, backupString(backup, "createdAt")), secondary, 0, func() {
+			showBackupManageModal(svc, pages, app, list, backupInfo, backupName, goBack)
+		})
+	}
+	if len(backups) == 0 {
+		list.AddItem("(no backups found)", "Create a backup first", 0, nil)
+	}
+
+	frame.SetContent(list)
+	frame.SetupContentToButtonNavigation()
+	pages.AddAndSwitchToPage(PageSettingsBackupList, frame, true)
+	frame.FocusContent()
+}
+
+const backupManageModalPage = "backup_manage_modal"
+
+func showBackupManageModal(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	backup map[string]any,
+	backupName string,
+	onRestored func(),
+) {
+	label := backupDisplayLabel("Local backup", backupName, backupString(backup, "createdAt"))
+	showBackupModal(pages, app, "Backup details", "Loading backup manifest...", []string{"Back"}, func(_ int) {
+		app.SetFocus(focus)
+	})
+
+	go func() {
+		ctx, cancel := backupContext()
+		details, err := svc.InspectBackup(ctx, backupName)
+		cancel()
+		app.QueueUpdateDraw(func() {
+			if err != nil {
+				log.Warn().Err(err).Str("name", backupName).Msg("error inspecting backup")
+				showBackupModal(
+					pages,
+					app,
+					"Backup details",
+					label+"\n\nUnable to read backup manifest.\n\nRestore is disabled for this backup.",
+					[]string{"Back"},
+					func(_ int) { app.SetFocus(focus) },
+				)
+				return
+			}
+			showBackupDetailsActions(svc, pages, app, focus, details, backupName, onRestored)
+		})
+	}()
+}
+
+func showBackupDetailsActions(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	backup map[string]any,
+	backupName string,
+	onRestored func(),
+) {
+	label := backupDisplayLabel("Local backup", backupName, backupString(backup, "createdAt"))
+	showBackupModal(
+		pages,
+		app,
+		"Backup details",
+		formatBackupDetails(label, backup),
+		[]string{"Restore", "Delete", "Back"},
+		func(buttonIndex int) {
+			switch buttonIndex {
+			case 0:
+				showBackupRestoreConfirm(svc, pages, app, focus, backupName, onRestored)
+			case 1:
+				showBackupDeleteConfirm(svc, pages, app, focus, label, backupName, onRestored)
+			default:
+				app.SetFocus(focus)
+			}
+		},
+	)
+}
+
+func showBackupModal(
+	pages *tview.Pages,
+	app *tview.Application,
+	title string,
+	message string,
+	buttons []string,
+	onDone func(int),
+) {
+	dialog := NewDialog().
+		SetText(message).
+		SetTitle(title).
+		AddButtons(buttons).
+		SetDoneFunc(func(buttonIndex int) {
+			pages.HidePage(backupManageModalPage)
+			pages.RemovePage(backupManageModalPage)
+			onDone(buttonIndex)
+		})
+	pages.RemovePage(backupManageModalPage)
+	pages.AddPage(backupManageModalPage, dialog, true, true)
+	app.SetFocus(dialog)
+}
+
+func showBackupDeleteConfirm(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	label string,
+	backupName string,
+	onDeleted func(),
+) {
+	ShowConfirmModal(pages, app, "Delete "+label+"?", func() {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		if err := svc.DeleteBackup(ctx, backupName); err != nil {
+			log.Warn().Err(err).Msg("error deleting backup")
+			ShowErrorModal(pages, app, "Failed to delete backup", func() { app.SetFocus(focus) })
+			return
+		}
+		ShowInfoModal(pages, app, "Backup deleted", label, onDeleted)
+	}, func() { app.SetFocus(focus) })
+}
+
+const (
+	coreRestartModalPage    = "core_restart_modal"
+	coreRestartPollInterval = time.Second
+	// coreRestartNoDownGrace ends the wait when the API never drops: the
+	// restart finished before polling started, or is not coming.
+	coreRestartNoDownGrace = 15 * time.Second
+	coreRestartTimeout     = 90 * time.Second
+)
+
+// waitForCoreRestart blocks the UI while Core restarts after a restore.
+// The service restarts a few seconds after the restore response, so wait
+// for the API to drop and come back before running onDone; if it never
+// drops, give up waiting after a grace period. onDone always runs.
+func waitForCoreRestart(svc SettingsService, pages *tview.Pages, app *tview.Application, onDone func()) {
+	waitForCoreRestartWith(
+		svc, pages, app, coreRestartPollInterval, coreRestartNoDownGrace, coreRestartTimeout, onDone,
+	)
+}
+
+func waitForCoreRestartWith(
+	svc SettingsService, pages *tview.Pages, app *tview.Application,
+	pollInterval, noDownGrace, timeout time.Duration, onDone func(),
+) {
+	modal := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetText("Core is restarting.\n\nWaiting for it to come back...")
+	modal.SetInputCapture(func(_ *tcell.EventKey) *tcell.EventKey { return nil })
+	modal.SetBorder(true)
+	SetBoxTitle(modal.Box, "Restore")
+	modal.SetTitleAlign(tview.AlignCenter)
+	pages.AddPage(coreRestartModalPage, CenterWidget(45, 5, modal), true, true)
+	app.SetFocus(modal)
+
+	go func() {
+		started := time.Now()
+		sawDown := false
+		cameBack := false
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := tuiContext()
+			_, err := svc.GetSettings(ctx)
+			cancel()
+			elapsed := time.Since(started)
+			if err != nil {
+				sawDown = true
+				if elapsed < timeout {
+					continue
+				}
+			} else {
+				if !sawDown && elapsed < noDownGrace {
+					continue
+				}
+				cameBack = true
+			}
+			break
+		}
+		app.QueueUpdateDraw(func() {
+			pages.HidePage(coreRestartModalPage)
+			pages.RemovePage(coreRestartModalPage)
+			// End with a modal that requires an explicit OK: an
+			// auto-dismissing wait hands focus straight to the rebuilt
+			// menu, where a stray Enter lands on its first action.
+			message := "Core restarted successfully."
+			if !cameBack {
+				message = "Core has not come back yet.\nCheck the service status before continuing."
+			}
+			ShowInfoModal(pages, app, "Restore", message, onDone)
+		})
+	}()
+}
+
+func showBackupRestoreConfirm(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	backupName string,
+	onRestored func(),
+) {
+	label := backupLabelFromName("Local backup", backupName)
+	ShowConfirmModal(
+		pages, app,
+		"Restore "+label+"?\n\nCore will restart after restore.",
+		func() {
+			runBackupAction(
+				pages,
+				app,
+				focus,
+				"Restoring backup",
+				"Restoring local backup...",
+				func(ctx context.Context) (string, error) {
+					if err := svc.RestoreBackup(ctx, backupName); err != nil {
+						return "", fmt.Errorf("restore local backup: %w", err)
+					}
+					return label, nil
+				},
+				func(restoredLabel string) {
+					ShowInfoModal(pages, app, "Backup restored", restoredLabel, func() {
+						waitForCoreRestart(svc, pages, app, onRestored)
+					})
+				},
+			)
+		}, func() { app.SetFocus(focus) })
+}
+
+func buildRemoteBackupListPage(svc SettingsService, pages *tview.Pages, app *tview.Application, goBack func()) {
+	loadSettingsPage(pages, app, PageSettingsBackupList,
+		[]string{"Settings", "Backup", "Cloud"},
+		"Loading cloud backups...",
+		"Failed to list cloud backups",
+		backupContext, goBack,
+		func(ctx context.Context) ([]RemoteBackupItem, error) {
+			backups, err := svc.ListRemoteBackups(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list cloud backups: %w", err)
+			}
+			return backups, nil
+		},
+		func(backups []RemoteBackupItem) {
+			renderRemoteBackupListPage(svc, pages, app, backups, goBack)
+		},
+	)
+}
+
+// groupRemoteBackupsBySource organizes the account catalog into one entry
+// per source device: this device first, then other linked devices, then
+// unlinked devices. Items without source metadata (legacy API or current
+// device) join this device's group. Snapshots sort newest first; groups
+// within a tier sort by latest snapshot, then name, then ID.
+func groupRemoteBackupsBySource(items []RemoteBackupItem) []remoteBackupSource {
+	const currentKey = "\x00current"
+	groups := make(map[string]*remoteBackupSource)
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		key := currentKey
+		device := RemoteBackupSourceDevice{Current: true, Linked: true}
+		if item.SourceDevice != nil {
+			device = *item.SourceDevice
+			if !device.Current {
+				key = device.ID
+			}
+		}
+		group, ok := groups[key]
+		if !ok {
+			group = &remoteBackupSource{Device: device}
+			groups[key] = group
+			order = append(order, key)
+		}
+		if group.Device.Name == "" && device.Name != "" {
+			// A legacy item may create the current group before an item
+			// carrying full source metadata for this device arrives.
+			group.Device = device
+		}
+		group.Backups = append(group.Backups, item)
+	}
+
+	sources := make([]remoteBackupSource, 0, len(order))
+	for _, key := range order {
+		group := groups[key]
+		slices.SortStableFunc(group.Backups, func(a, b RemoteBackupItem) int {
+			return b.CreatedAt.Compare(a.CreatedAt)
+		})
+		sources = append(sources, *group)
+	}
+	tier := func(s *remoteBackupSource) int {
+		switch {
+		case s.Device.Current:
+			return 0
+		case s.Device.Linked:
+			return 1
+		default:
+			return 2
+		}
+	}
+	slices.SortStableFunc(sources, func(a, b remoteBackupSource) int {
+		if t := tier(&a) - tier(&b); t != 0 {
+			return t
+		}
+		if c := b.Backups[0].CreatedAt.Compare(a.Backups[0].CreatedAt); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Device.Name, b.Device.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Device.ID, b.Device.ID)
+	})
+	return sources
+}
+
+// remoteBackupSourceLabel renders a source device's list label: this device
+// first-person, unlinked devices marked so the user knows the source is no
+// longer attached to the account.
+func remoteBackupSourceLabel(device *RemoteBackupSourceDevice) string {
+	switch {
+	case device.Current && device.Name == "":
+		return "This device"
+	case device.Current:
+		return device.Name + " (this device)"
+	case device.Name == "":
+		return "Unnamed device"
+	case !device.Linked:
+		return device.Name + " (unlinked)"
+	default:
+		return device.Name
+	}
+}
+
+func renderRemoteBackupListPage(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	backups []RemoteBackupItem,
+	goBack func(),
+) {
+	frame := NewPageFrame(app).SetTitle("Settings", "Backup", "Cloud")
+	frame.SetOnEscape(goBack)
+	buttonBar := NewButtonBar(app).AddButton("Back", goBack).SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	list := tview.NewList()
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
+	list.ShowSecondaryText(true)
+	list.SetSelectedFocusOnly(true)
+	for _, source := range groupRemoteBackupsBySource(backups) {
+		count := "1 backup"
+		if len(source.Backups) != 1 {
+			count = fmt.Sprintf("%d backups", len(source.Backups))
+		}
+		secondary := count + "  Latest " + formatBackupTime(source.Backups[0].CreatedAt)
+		list.AddItem(remoteBackupSourceLabel(&source.Device), secondary, 0, func() {
+			renderRemoteBackupSnapshotsPage(svc, pages, app, &source, func() {
+				pages.SwitchToPage(PageSettingsBackupList)
+				app.SetFocus(list)
+			}, goBack)
+		})
+	}
+	if len(backups) == 0 {
+		list.AddItem("(no cloud backups found)", "Create a cloud backup first", 0, nil)
+	}
+
+	frame.SetContent(list)
+	frame.SetupContentToButtonNavigation()
+	pages.AddAndSwitchToPage(PageSettingsBackupList, frame, true)
+	frame.FocusContent()
+}
+
+// renderRemoteBackupSnapshotsPage lists one source device's snapshots,
+// newest first. goBack returns to the source list; onRestored runs after a
+// completed restore (Core restart flow).
+func renderRemoteBackupSnapshotsPage(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	source *remoteBackupSource,
+	goBack func(),
+	onRestored func(),
+) {
+	frame := NewPageFrame(app).SetTitle("Settings", "Cloud", remoteBackupSourceLabel(&source.Device))
+	frame.SetOnEscape(goBack)
+	buttonBar := NewButtonBar(app).AddButton("Back", goBack).SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	list := tview.NewList()
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
+	list.ShowSecondaryText(true)
+	list.SetSelectedFocusOnly(true)
+	for _, backup := range source.Backups {
+		if backup.ID == "" {
+			continue
+		}
+		label := "Cloud backup " + formatBackupTime(backup.CreatedAt)
+		secondary := remoteBackupTypeLabel(backup.BackupType)
+		if backup.SizeBytes > 0 {
+			secondary += "  " + formatHumanBytes(backup.SizeBytes)
+		}
+		if backup.Incompatible {
+			// Committed by a newer Core: listed, but refuses to restore.
+			list.AddItem(label+" (requires newer Core)", secondary, 0, func() {
+				ShowInfoModal(pages, app, "Incompatible backup",
+					"This backup was made by a newer Core version and cannot be restored "+
+						"until this device is updated.", func() { app.SetFocus(list) })
+			})
+			continue
+		}
+		item := backup
+		list.AddItem(label, secondary, 0, func() {
+			showRemoteBackupRestoreConfirm(svc, pages, app, list, &item, &source.Device, onRestored)
+		})
+	}
+
+	frame.SetContent(list)
+	frame.SetupContentToButtonNavigation()
+	pages.AddAndSwitchToPage(PageSettingsBackupSnapshots, frame, true)
+	frame.FocusContent()
+}
+
+func remoteBackupTypeLabel(backupType string) string {
+	switch backupType {
+	case "scheduled":
+		return "Scheduled"
+	case "manual":
+		return "Manual"
+	default:
+		return "Backup"
+	}
+}
+
+// remoteBackupOverwriteSummary names the categories a restore replaces on
+// this device, in display order.
+func remoteBackupOverwriteSummary(categories map[string]RemoteBackupCategory) string {
+	names := make([]string, 0, len(categories))
+	for _, category := range backupCategoryOrder {
+		if _, ok := categories[category]; ok {
+			names = append(names, backupCategoryLabels[category])
+		}
+	}
+	if len(names) == 0 {
+		return "Backup data"
+	}
+	return strings.Join(names, ", ")
+}
+
+// showRemoteBackupRestoreConfirm explains exactly what a restore does before
+// running it: the snapshot is copied onto this device, the source backup and
+// device are untouched, and this device keeps its own Online identity.
+func showRemoteBackupRestoreConfirm(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	focus tview.Primitive,
+	backup *RemoteBackupItem,
+	source *RemoteBackupSourceDevice,
+	onRestored func(),
+) {
+	sourceName := remoteBackupSourceLabel(source)
+	message := "Restore backup from " + sourceName + "?\n\n" +
+		"Snapshot: " + formatBackupTime(backup.CreatedAt) + "\n" +
+		"Overwrites: " + remoteBackupOverwriteSummary(backup.Categories) + "\n\n" +
+		"The source backup is not changed. This device\n" +
+		"keeps its own Zaparoo Online identity. A local\n" +
+		"safety backup is created first.\n\n" +
+		"Core restarts after restore."
+	backupID := backup.ID
+	ShowConfirmModal(
+		pages, app,
+		message,
+		func() {
+			runBackupAction(
+				pages,
+				app,
+				focus,
+				"Restoring cloud backup",
+				"Downloading and restoring cloud backup...",
+				func(ctx context.Context) (string, error) {
+					if err := svc.RestoreRemoteBackup(ctx, backupID); err != nil {
+						return "", fmt.Errorf("restore cloud backup: %w", err)
+					}
+					return backupID, nil
+				},
+				func(restoredLabel string) {
+					ShowInfoModal(pages, app, "Cloud backup restored", restoredLabel, func() {
+						waitForCoreRestart(svc, pages, app, onRestored)
+					})
+				},
+			)
+		}, func() { app.SetFocus(focus) })
+}
+
+func backupStatusDescription(status *models.BackupStatusEntry) string {
+	if status.Availability == "unavailable" {
+		return "Warp unavailable; restore remains available"
+	}
+	if status.LastStatus == "partial" {
+		return fmt.Sprintf("Completed with %d warning(s)", status.SkippedFiles)
+	}
+	if status.LastStatus == "" || status.LastStatus == "never" {
+		return "No successful backup yet"
+	}
+	if status.LastSuccessAt != nil && *status.LastSuccessAt != "" {
+		return "Last success: " + *status.LastSuccessAt
+	}
+	return "Last status: " + status.LastStatus
+}
+
+func backupStatusText(status *models.BackupStatusEntry) string {
+	lines := []string{"Status: " + status.LastStatus}
+	if status.Schedule != "" {
+		lines = append(lines, "Schedule: "+status.Schedule)
+	}
+	if status.Availability != "" {
+		lines = append(lines, "Warp availability: "+status.Availability)
+	}
+	if status.AvailabilityCheckedAt != nil {
+		lines = append(lines, "Availability checked: "+*status.AvailabilityCheckedAt)
+	}
+	if status.LastSuccessAt != nil {
+		lines = append(lines, "Last success: "+*status.LastSuccessAt)
+	}
+	if status.LastError != "" {
+		lines = append(lines, "Last error: "+status.LastError)
+	}
+	if status.SkippedFiles > 0 {
+		lines = append(lines, fmt.Sprintf("Skipped paths: %d", status.SkippedFiles))
+	}
+	for _, warning := range status.Warnings {
+		lines = append(lines, "Warning: "+warning.Path+" ("+warning.Reason+")")
+	}
+	for _, category := range []string{"zaparoo", "settings", "inputs", "saves", "savestates"} {
+		entry, ok := status.Categories[category]
+		if !ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: %d files, %d bytes", category, entry.Files, entry.Bytes))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatBackupDetails(label string, backup map[string]any) string {
+	lines := []string{label}
+	if createdAt, ok := formatBackupTimestamp(backupString(backup, "createdAt")); ok {
+		lines = append(lines, "Created: "+createdAt)
+	}
+	if size := formatBackupSize(backup, "size"); size != "" {
+		lines = append(lines, "Size: "+size)
+	}
+	if status := backupString(backup, "status"); status != "" {
+		lines = append(lines, "Status: "+status)
+	}
+	if errText := backupString(backup, "error"); errText != "" {
+		lines = append(lines, "Error: "+errText)
+	}
+	if categoryLines := formatBackupCategories(backup); len(categoryLines) > 0 {
+		lines = append(lines, "", "Manifest:")
+		lines = append(lines, categoryLines...)
+	}
+	if warningLines := formatBackupWarnings(backup); len(warningLines) > 0 {
+		lines = append(lines, "", "Warnings:")
+		lines = append(lines, warningLines...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatBackupCategories(backup map[string]any) []string {
+	raw, ok := backup["categories"].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(raw))
+	for _, category := range backupCategoryOrder {
+		entry, ok := raw[category].(map[string]any)
+		if !ok {
+			continue
+		}
+		name := backupCategoryLabels[category]
+		files, _ := backupAnyInt64(entry["files"])
+		bytes, _ := backupAnyInt64(entry["bytes"])
+		lines = append(lines, fmt.Sprintf("%s: %d files, %s", name, files, formatHumanBytes(bytes)))
+	}
+	return lines
+}
+
+func formatBackupWarnings(backup map[string]any) []string {
+	raw, ok := backup["warnings"].([]any)
+	if !ok {
+		return nil
+	}
+	lines := make([]string, 0, len(raw))
+	for _, item := range raw {
+		warning, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		path := backupString(warning, "path")
+		reason := backupString(warning, "reason")
+		if path == "" || reason == "" {
+			continue
+		}
+		lines = append(lines, path+" ("+reason+")")
+	}
+	return lines
+}
+
+func backupDisplayLabel(prefix, name, createdAt string) string {
+	if label, ok := formatBackupTimestamp(createdAt); ok {
+		return prefix + " " + label
+	}
+	return backupLabelFromName(prefix, name)
+}
+
+func backupLabelFromName(prefix, name string) string {
+	if label, ok := timestampFromBackupName(name); ok {
+		return prefix + " " + label
+	}
+	if name == "" {
+		return prefix
+	}
+	return name
+}
+
+func timestampFromBackupName(name string) (string, bool) {
+	trimmed := strings.TrimPrefix(name, "backup-")
+	parts := strings.SplitN(trimmed, "-", 3)
+	if len(parts) < 2 {
+		return "", false
+	}
+	parsed, err := time.ParseInLocation("20060102150405", parts[0]+parts[1], time.UTC)
+	if err != nil {
+		return "", false
+	}
+	return formatBackupTime(parsed), true
+}
+
+func formatBackupTimestamp(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "", false
+	}
+	return formatBackupTime(parsed), true
+}
+
+func formatBackupTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05 UTC")
+}
+
+func formatBackupSize(backup map[string]any, key string) string {
+	value, ok := backup[key]
+	if !ok || value == nil {
+		return ""
+	}
+	bytes, ok := backupAnyInt64(value)
+	if !ok {
+		return ""
+	}
+	return formatHumanBytes(bytes)
+}
+
+func formatHumanBytes(bytes int64) string {
+	if bytes < 0 {
+		bytes = 0
+	}
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	value := float64(bytes)
+	unitIndex := -1
+	for value >= 1024 && unitIndex < len(units)-1 {
+		value /= 1024
+		unitIndex++
+	}
+	value = math.Ceil(value*10) / 10
+	if value == math.Trunc(value) {
+		return fmt.Sprintf("%.0f %s", value, units[unitIndex])
+	}
+	return fmt.Sprintf("%.1f %s", value, units[unitIndex])
+}
+
+func backupString(backup map[string]any, key string) string {
+	value, ok := backup[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func backupAnyInt64(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	case float64:
+		return int64(typed), true
+	default:
+		return 0, false
+	}
 }
 
 // buildAdvancedSettingsMenu creates the advanced settings menu.

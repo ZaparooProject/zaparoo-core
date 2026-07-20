@@ -191,6 +191,8 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 
 	now := s.clock.Now()
 	entry := newActiveEvent(request, now)
+	eventID := entry.event.ID
+	timerGeneration := entry.timerGeneration
 
 	var replaced *activeEvent
 	var replacedResolution *models.UIResolution
@@ -220,13 +222,13 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 	}
 	s.publishState(state)
 
-	s.attachCancellation(ctx, entry.event.ID)
-	s.attachTimer(entry.event.ID, entry.timerGeneration, request.Timeout)
+	s.attachCancellation(ctx, eventID)
+	s.attachTimer(eventID, timerGeneration, request.Timeout)
 
 	minimumDisplay := time.Duration(0)
 	if !entry.skipHostRenderer {
 		event := cloneEvent(&entry.event)
-		s.present(ctx, entry.event.ID, &event)
+		s.present(ctx, eventID, &event)
 		if timedRenderer, ok := s.renderer.(TimedRenderer); ok {
 			minimumDisplay = timedRenderer.MinimumUIDisplay(entry.event.Kind)
 		}
@@ -234,7 +236,7 @@ func (s *Service) Open(ctx context.Context, request *Request) (*Handle, error) {
 	return &Handle{
 		service:        s,
 		Results:        entry.result,
-		ID:             entry.event.ID,
+		ID:             eventID,
 		MinimumDisplay: minimumDisplay,
 	}, nil
 }

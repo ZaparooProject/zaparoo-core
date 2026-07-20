@@ -646,16 +646,24 @@ func getLaunchClosure(
 			}
 		}
 
+		var launcher *platforms.Launcher
 		if launcherID != "" {
-			launcher := findLauncher(pl, env, launcherID)
+			launcher = findLauncher(pl, env, launcherID)
 			if launcher == nil {
 				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
 			log.Info().Msgf("launching with launcher: %s", launcherID)
-			return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 		}
 
-		return pl.LaunchMedia(env.Cfg, target.path, nil, env.Database, opts)
+		releaseLaunch := func() {}
+		if env.AcquireMediaLaunch != nil {
+			releaseLaunch, err = env.AcquireMediaLaunch()
+			if err != nil {
+				return fmt.Errorf("acquiring media launch gate: %w", err)
+			}
+		}
+		defer releaseLaunch()
+		return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 	}
 }
 

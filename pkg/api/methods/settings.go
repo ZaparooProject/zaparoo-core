@@ -81,6 +81,14 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
+	if isLocalOrAdmin(&env) {
+		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
+		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
+		backupRemoteBaseURL := env.Config.BackupRemoteBaseURL()
+		resp.BackupRemoteEnabled = &backupRemoteEnabled
+		resp.BackupRemoteSchedule = &backupRemoteSchedule
+		resp.BackupRemoteBaseURL = &backupRemoteBaseURL
+	}
 
 	return resp, nil
 }
@@ -138,6 +146,12 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if !env.IsLocal {
 		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
 			return nil, err
+		}
+	}
+
+	if params.BackupRemoteEnabled != nil || params.BackupRemoteSchedule != nil {
+		if !isLocalOrAdmin(&env) {
+			return nil, models.ClientErrf("backup settings require a local or admin client")
 		}
 	}
 
@@ -202,6 +216,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.Encryption != nil {
 		log.Debug().Bool("encryption", *params.Encryption).Msg("updating setting")
 		env.Config.SetEncryptionEnabled(*params.Encryption)
+	}
+
+	if params.BackupRemoteEnabled != nil {
+		log.Debug().Bool("backupRemoteEnabled", *params.BackupRemoteEnabled).Msg("updating setting")
+		env.Config.SetBackupRemoteEnabled(*params.BackupRemoteEnabled)
+	}
+
+	if params.BackupRemoteSchedule != nil {
+		log.Debug().Str("backupRemoteSchedule", *params.BackupRemoteSchedule).Msg("updating setting")
+		env.Config.SetBackupRemoteSchedule(*params.BackupRemoteSchedule)
 	}
 
 	if params.ReadersScanMode != nil {

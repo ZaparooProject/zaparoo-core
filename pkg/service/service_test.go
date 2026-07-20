@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -49,6 +50,62 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWaitForBackupShutdownDoesNotTearDownBeforeLeaseRelease(t *testing.T) {
+	t.Parallel()
+	coordinator := backupcoordinator.New()
+	lease, err := coordinator.Begin(
+		context.Background(), backupcoordinator.OperationLocalRestore, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond, time.Second)
+	}()
+
+	select {
+	case <-lease.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel active restore lease")
+	}
+	select {
+	case <-waitDone:
+		t.Fatal("shutdown returned before restore lease released")
+	case <-time.After(50 * time.Millisecond):
+	}
+	lease.Release()
+	select {
+	case waitErr := <-waitDone:
+		require.NoError(t, waitErr)
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after restore lease released")
+	}
+}
+
+func TestWaitForBackupShutdownReturnsAtHardDeadline(t *testing.T) {
+	t.Parallel()
+	coordinator := backupcoordinator.New()
+	lease, err := coordinator.Begin(
+		context.Background(), backupcoordinator.OperationRemoteUpload, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond, 50*time.Millisecond)
+	}()
+
+	select {
+	case waitErr := <-waitDone:
+		require.Error(t, waitErr)
+		require.ErrorIs(t, waitErr, context.DeadlineExceeded)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("shutdown did not return at hard deadline")
+	}
+	_, _, active := coordinator.Active()
+	assert.True(t, active, "timed-out lease remains active until its owner releases it")
+}
 
 func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")

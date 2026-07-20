@@ -27,7 +27,6 @@ import (
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
@@ -218,7 +217,7 @@ func (d *wsSessionDispatcher) worker(queue <-chan *wsRequestJob) {
 
 func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 	//nolint:gosec // Cancellation is transferred to job and invoked when response handling completes.
-	ctx, cancel := context.WithTimeout(d.ctx, config.APIRequestTimeout)
+	ctx, cancel := requestContextForAPIMethod(d.ctx, job.method)
 	job.env.Context = ctx
 	job.cancel = cancel
 

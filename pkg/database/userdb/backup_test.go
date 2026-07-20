@@ -20,6 +20,8 @@
 package userdb
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -39,6 +41,40 @@ type failStagedInstallFs struct {
 	afero.Fs
 	dbPath       string
 	failRollback bool
+}
+
+type failDirectorySyncFile struct {
+	afero.File
+	fail bool
+}
+
+func (f *failDirectorySyncFile) Sync() error {
+	if f.fail {
+		return errors.New("injected directory sync failure")
+	}
+	if err := f.File.Sync(); err != nil {
+		return fmt.Errorf("sync test directory: %w", err)
+	}
+	return nil
+}
+
+type failDirectorySyncFs struct {
+	afero.Fs
+	dir    string
+	calls  int
+	failAt int
+}
+
+func (fs *failDirectorySyncFs) Open(name string) (afero.File, error) {
+	file, err := fs.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open test directory: %w", err)
+	}
+	if filepath.Clean(name) != filepath.Clean(fs.dir) {
+		return file, nil
+	}
+	fs.calls++
+	return &failDirectorySyncFile{File: file, fail: fs.calls == fs.failAt}, nil
 }
 
 func (fs failStagedInstallFs) Rename(oldPath, newPath string) error {
@@ -76,6 +112,29 @@ func TestReplaceDatabaseFromBackup_RestoresOriginalAfterInstallFailure(t *testin
 	assert.True(t, os.IsNotExist(rollbackErr))
 }
 
+func TestReplaceDatabaseFromBackup_RestoresOriginalAfterDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("sync %d", failAt), func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "user.db")
+			backupPath := filepath.Join(dir, "backup.db")
+			require.NoError(t, os.WriteFile(dbPath, []byte("original"), 0o600))
+			require.NoError(t, os.WriteFile(backupPath, []byte("replacement"), 0o600))
+
+			fs := &failDirectorySyncFs{Fs: afero.NewOsFs(), dir: dir, failAt: failAt}
+			err := replaceDatabaseFromBackup(fs, backupPath, dbPath)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "sync")
+			contents, readErr := os.ReadFile(dbPath) // #nosec G304 -- test-owned path.
+			require.NoError(t, readErr)
+			assert.Equal(t, []byte("original"), contents)
+		})
+	}
+}
+
 func TestReplaceDatabaseFromBackup_RetainsRollbackAfterRestoreFailure(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +152,69 @@ func TestReplaceDatabaseFromBackup_RetainsRollbackAfterRestoreFailure(t *testing
 	rollbackContents, readErr := afero.ReadFile(fs, dbPath+".restore-rollback")
 	require.NoError(t, readErr)
 	assert.Equal(t, []byte("original"), rollbackContents)
+}
+
+func TestUserDBBackupForTransferRemovesClientCredentials(t *testing.T) {
+	userDB, closeDB := setupTempUserDB(t)
+	defer closeDB()
+
+	const authToken = "portable-backup-must-not-contain-this-token"
+	pairingKey := []byte("0123456789abcdef0123456789abcdef")
+	require.NoError(t, userDB.CreateClient(&database.Client{
+		ClientID:   "client-1",
+		ClientName: "Admin",
+		AuthToken:  authToken,
+		PairingKey: pairingKey,
+		Role:       "admin",
+		CreatedAt:  time.Now().Unix(),
+	}))
+
+	portable, cleanup, err := userDB.BackupForTransfer(context.Background(), "test-transfer")
+	require.NoError(t, err)
+	require.NotNil(t, cleanup)
+
+	portableDB, err := sql.Open("sqlite3", portable.Path+"?mode=ro&_query_only=ON")
+	require.NoError(t, err)
+	var clientCount int
+	require.NoError(t, portableDB.QueryRowContext(
+		context.Background(), "SELECT COUNT(*) FROM Clients",
+	).Scan(&clientCount))
+	require.NoError(t, portableDB.Close())
+	assert.Zero(t, clientCount)
+
+	portableBytes, err := os.ReadFile(portable.Path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(portableBytes), authToken)
+	assert.NotContains(t, string(portableBytes), string(pairingKey))
+
+	fullBackups, err := userDB.ListBackups()
+	require.NoError(t, err)
+	require.NotEmpty(t, fullBackups)
+	fullDB, err := sql.Open("sqlite3", fullBackups[0].Path+"?mode=ro&_query_only=ON")
+	require.NoError(t, err)
+	require.NoError(t, fullDB.QueryRowContext(
+		context.Background(), "SELECT COUNT(*) FROM Clients",
+	).Scan(&clientCount))
+	require.NoError(t, fullDB.Close())
+	assert.Equal(t, 1, clientCount)
+
+	portablePath := portable.Path
+	require.NoError(t, cleanup())
+	_, err = os.Stat(portablePath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, cleanup(), "cleanup must be idempotent")
+}
+
+func TestUserDBBackupForTransferHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	userDB, closeDB := setupTempUserDB(t)
+	defer closeDB()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, cleanup, err := userDB.BackupForTransfer(ctx, "canceled-transfer")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, cleanup)
 }
 
 func TestUserDBRestoreBackupFailsWhenCorruptMarkerCannotBeCleared(t *testing.T) {

@@ -822,6 +822,7 @@ type UserDBI interface {
 	CreateClient(c *Client) error
 	GetClientByToken(authToken string) (*Client, error)
 	ListClients() ([]Client, error)
+	ReplaceAllClients(clients []Client) error
 	DeleteClient(clientID string) error
 	UpdateClientLastSeen(authToken string, lastSeenAt int64) error
 	CountClients() (int, error)
@@ -836,6 +837,7 @@ type UserDBI interface {
 	GetDeviceState(key string) (string, bool, error)
 	DeleteDeviceState(key string) error
 	Backup(reason string, manual bool) (BackupInfo, error)
+	BackupForTransfer(ctx context.Context, reason string) (BackupInfo, func() error, error)
 	EnsureRecentBackup(maxAge time.Duration) (BackupInfo, bool, error)
 	ListBackups() ([]BackupInfo, error)
 	RestoreBackup(name string) (RestoreInfo, error)

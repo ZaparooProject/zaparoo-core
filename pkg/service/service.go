@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
@@ -58,11 +59,36 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	backupShutdownWarningAfter = 30 * time.Second
+	backupShutdownHardDeadline = 2 * time.Minute
+)
+
 // StartResult holds the return values from Start.
 type StartResult struct {
 	Stop             func() error
 	Done             <-chan struct{}
 	RestartRequested func() bool
+}
+
+func waitForBackupShutdown(
+	coordinator *backupsvc.Coordinator,
+	warningAfter time.Duration,
+	hardDeadline time.Duration,
+) error {
+	hardCtx, cancelHard := context.WithTimeout(context.Background(), hardDeadline)
+	defer cancelHard()
+	warningCtx, cancelWarning := context.WithTimeout(hardCtx, warningAfter)
+	err := coordinator.Shutdown(warningCtx)
+	cancelWarning()
+	if err == nil {
+		return nil
+	}
+	log.Warn().Err(err).Msg("backup operation still stopping; delaying service teardown")
+	if waitErr := coordinator.Shutdown(hardCtx); waitErr != nil {
+		return fmt.Errorf("waiting for backup operation before teardown: %w", waitErr)
+	}
+	return nil
 }
 
 func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bool) {
@@ -188,6 +214,16 @@ func Start(
 ) (*StartResult, error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
+	// A config file created outside Core can lack a device ID. The service
+	// daemon owns device identity (TUI/CLI processes only read it), so
+	// mint and persist one before anything reads it. Save generates a
+	// UUID whenever the ID is empty.
+	if cfg.DeviceID() == "" {
+		if err := cfg.Save(); err != nil {
+			log.Error().Err(err).Msg("failed to persist generated device id")
+		}
+	}
+
 	// Generate boot UUID for this session (for timestamp healing on MiSTer)
 	bootUUID := uuid.New().String()
 	log.Info().Msgf("boot session UUID: %s", bootUUID)
@@ -251,6 +287,11 @@ func Start(
 		return nil, err
 	}
 	log.Debug().Dur("duration", time.Since(databaseStarted)).Msg("databases opened")
+	backupManager := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+	if recoveryErr := backupManager.RecoverRestore(st.GetContext()); recoveryErr != nil {
+		closeDatabase(db)
+		return nil, fmt.Errorf("recovering interrupted backup restore: %w", recoveryErr)
+	}
 	closeHangingMediaHistoryOnStartup(db)
 
 	// Initialize inbox service for system notifications
@@ -358,6 +399,7 @@ func Start(
 	// Create pausers to pause heavy background media work while a game is running.
 	indexPauser := syncutil.NewPauser()
 	scrapePauser := syncutil.NewPauser()
+	backupPauser := syncutil.NewPauser()
 
 	discoveryService := discovery.New(cfg)
 
@@ -372,7 +414,7 @@ func Start(
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager, profilesSvc,
 			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
-			idleSched, apiReady,
+			backupPauser, idleSched, apiReady,
 		)
 	}()
 
@@ -501,8 +543,10 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
+	startRemoteBackupScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
+	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
 	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("starting publishers")
@@ -564,6 +608,11 @@ func Start(
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
+		if backupErr := waitForBackupShutdown(
+			st.BackupCoordinator(), backupShutdownWarningAfter, backupShutdownHardDeadline,
+		); backupErr != nil {
+			log.Error().Err(backupErr).Msg("backup operation did not stop cleanly")
+		}
 		uiEvents.Shutdown()
 		indexPauser.Resume()
 		scrapePauser.Resume()

@@ -50,6 +50,12 @@ const (
 	CategoryMediaDBCorruptionRecoveryLimit   = "mediadb_corruption_recovery_limit"
 	CategoryMediaIndexResumeLimit            = "media_index_resume_limit"
 	CategoryUpdateAvailable                  = "update_available"
+	CategoryBackupRemoteNotAvailable         = "backup_remote_not_available"
+	CategoryBackupRemoteQuotaExceeded        = "backup_remote_quota_exceeded"
+	CategoryBackupRemoteUnlinked             = "backup_remote_unlinked"
+	CategoryBackupRemoteFailed               = "backup_remote_failed"
+	CategoryBackupRemoteFilesSkipped         = "backup_remote_files_skipped"
+	CategoryBackupRemoteStale                = "backup_remote_stale"
 )
 
 // MessageOptions configures optional fields for inbox messages.

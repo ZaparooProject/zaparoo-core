@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,116 @@ func drainState(t *testing.T, st *State, ns <-chan models.Notification) {
 			}
 		}
 	})
+}
+
+func TestMediaRestoreGateMutualExclusion(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	releaseLaunch, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	restoreErr := make(chan error, 1)
+	go func() {
+		finish, beginErr := st.BeginRestoreGate()
+		if finish != nil {
+			finish(false)
+		}
+		restoreErr <- beginErr
+	}()
+	require.ErrorIs(t, <-restoreErr, ErrMediaLaunchInProgress)
+	releaseLaunch()
+
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+	launchErr := make(chan error, 1)
+	go func() {
+		release, acquireErr := st.AcquireMediaLaunch()
+		if release != nil {
+			release()
+		}
+		launchErr <- acquireErr
+	}()
+	require.ErrorIs(t, <-launchErr, ErrRestoreInProgress)
+	finishRestore(false)
+
+	releaseLaunch, err = st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	releaseLaunch()
+}
+
+func TestExternalActiveMediaCancelsRestoreBeforeUpdatingState(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+	lease, err := st.BackupCoordinator().Begin(
+		context.Background(), backupcoordinator.OperationLocalRestore, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+	updated := make(chan struct{})
+	go func() {
+		st.SetActiveMedia(&models.ActiveMedia{SystemID: "SNES", Path: "game.sfc", Name: "Game"})
+		close(updated)
+	}()
+
+	select {
+	case <-lease.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("external active media did not cancel restore")
+	}
+	select {
+	case <-updated:
+		t.Fatal("active media changed before restore gate released")
+	case <-time.After(50 * time.Millisecond):
+	}
+	finishRestore(false)
+	select {
+	case <-updated:
+	case <-time.After(time.Second):
+		t.Fatal("active media update did not resume after rollback gate released")
+	}
+	assert.NotNil(t, st.ActiveMedia())
+}
+
+func TestBlockingRestoreAccessWaitsForRollback(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+	acquired := make(chan error, 1)
+	go func() {
+		release, accessErr := st.AcquireRestoreAccess()
+		if release != nil {
+			release()
+		}
+		acquired <- accessErr
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("restore-sensitive operation did not wait for restore")
+	case <-time.After(50 * time.Millisecond):
+	}
+	finishRestore(false)
+	require.NoError(t, <-acquired)
+}
+
+func TestSuccessfulRestoreGateBlocksLaunchUntilRestart(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+	finishRestore(true)
+
+	_, err = st.AcquireMediaLaunch()
+	require.ErrorIs(t, err, ErrRestoreRestartRequired)
+	_, err = st.BeginRestoreGate()
+	require.ErrorIs(t, err, ErrRestoreRestartRequired)
 }
 
 func TestSetRunZapScript(t *testing.T) {

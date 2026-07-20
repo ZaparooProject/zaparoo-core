@@ -593,6 +593,116 @@ func stopTrackedProcess(proc *os.Process, done chan struct{}, processGroup bool,
 	killRemainingProcessGroup(proc, processGroup)
 }
 
+func (p *Platform) BackupDefinitions() []platforms.BackupDefinition {
+	return BackupDefinitions(p.Settings())
+}
+
+func (p *Platform) BackupPlan() platforms.BackupPlan {
+	definitions := BackupDefinitions(p.Settings())
+	if p.profileData == nil {
+		return platforms.BackupPlan{Definitions: definitions}
+	}
+	return p.profileData.backupPlan(p.Settings(), definitions)
+}
+
+func (p *Platform) PrepareBackupRestore() (func(bool) error, error) {
+	if p.profileData == nil {
+		return func(bool) error { return nil }, nil
+	}
+	return p.profileData.prepareBackupRestore()
+}
+
+func (p *Platform) BackupRestoreRoot() string {
+	return BackupRestoreRoot(p.Settings())
+}
+
+func BackupRestoreRoot(settings platforms.Settings) string {
+	return filepath.Dir(settings.DataDir)
+}
+
+func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition {
+	root := BackupRestoreRoot(settings)
+	return []platforms.BackupDefinition{
+		{
+			Category:     "settings",
+			SourceRoot:   root,
+			RestoreRoot:  "",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "MiSTer.ini"},
+				{Glob: "MiSTer_alt_*.ini"},
+				{Glob: "MiSTer_*.ini"},
+				{Glob: "MiSTer.ini.*"},
+				{Glob: "downloader.ini"},
+			},
+			Exclude: []platforms.BackupPattern{{Glob: "MiSTer_example.ini"}},
+		},
+		{
+			Category:    "settings",
+			SourceRoot:  filepath.Join(root, "config"),
+			RestoreRoot: "config",
+			Include: []platforms.BackupPattern{
+				{Glob: "*.cfg"},
+				{Glob: "*.dat"},
+				{Glob: "*.f2"},
+			},
+			Exclude: []platforms.BackupPattern{{Contains: "_recent"}},
+		},
+		{
+			Category:     "inputs",
+			SourceRoot:   root,
+			RestoreRoot:  "",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "gamecontrollerdb_user.txt"},
+			},
+		},
+		{
+			Category:     "inputs",
+			SourceRoot:   filepath.Join(root, "linux"),
+			RestoreRoot:  "linux",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "gamecontrollerdb_user.txt"},
+			},
+		},
+		{
+			Category:    "inputs",
+			SourceRoot:  filepath.Join(root, "config", "inputs"),
+			RestoreRoot: filepath.Join("config", "inputs"),
+			Include: []platforms.BackupPattern{
+				{Glob: "*.map"},
+				{Glob: "*.zip"},
+			},
+			Exclude: []platforms.BackupPattern{{Glob: filepath.Join("renamed", "*")}},
+		},
+		{
+			Category:    "saves",
+			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include:     []platforms.BackupPattern{{Contains: "/saves/"}},
+		},
+		{
+			Category:    "savestates",
+			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include:     []platforms.BackupPattern{{Contains: "/savestates/"}},
+		},
+		{
+			Category:    "saves",
+			SourceRoot:  filepath.Join(root, "saves"),
+			RestoreRoot: "saves",
+			Include:     []platforms.BackupPattern{{All: true}},
+		},
+		{
+			Category:    "savestates",
+			SourceRoot:  filepath.Join(root, "savestates"),
+			RestoreRoot: "savestates",
+			Include:     []platforms.BackupPattern{{All: true}},
+		},
+	}
+}
+
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.processMu.Lock()
 	p.stopIntent = intent

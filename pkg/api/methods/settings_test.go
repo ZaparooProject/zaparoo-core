@@ -599,6 +599,57 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 
 // TestHandleSettings_ReaderConnectionsEnabled tests that the enabled field
 // is passed through in the settings response.
+func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	cfg.SetDebugLogging(false)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	debugLogging := true
+	backupRemoteEnabled := true
+	params := models.UpdateSettingsParams{
+		DebugLogging:        &debugLogging,
+		BackupRemoteEnabled: &backupRemoteEnabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  false,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backup settings require a local or admin client")
+	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
+	assert.False(t, cfg.BackupRemoteEnabled())
+
+	// A remote member client is rejected the same way.
+	env.ClientRole = string(permissions.RoleMember)
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+	assert.False(t, cfg.BackupRemoteEnabled())
+
+	// A paired admin client is as privileged as a local connection.
+	env.ClientRole = string(permissions.RoleAdmin)
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+	assert.True(t, cfg.BackupRemoteEnabled())
+}
+
 func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -1235,4 +1286,27 @@ func TestHandleSettingsUpdate_SystemDefaults_AllowsEmptyLauncher(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Empty(t, got[0].Launcher)
 	assert.Equal(t, "echo bye", got[0].BeforeExit)
+}
+
+func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	mockPlatform := mocks.NewMockPlatform()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	result, err := HandleSettings(requests.RequestEnv{Config: cfg, State: appState, IsLocal: true})
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp.BackupRemoteBaseURL)
+	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
+
+	result, err = HandleSettings(requests.RequestEnv{Config: cfg, State: appState, IsLocal: false})
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.Nil(t, resp.BackupRemoteBaseURL)
 }

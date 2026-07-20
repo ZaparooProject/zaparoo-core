@@ -54,12 +54,48 @@ const configHeader = `# Zaparoo Core configuration file.
 # preserved on next save, but comments will be lost.
 `
 
+// PreserveRestoreOverrides forces destination-owned service values into
+// restored config data: the device identity and the encryption requirement.
+// Everything else in the restored config wins.
+func PreserveRestoreOverrides(data []byte, deviceID string, encryption bool) ([]byte, error) {
+	values := make(map[string]any)
+	if err := toml.Unmarshal(data, &values); err != nil {
+		return nil, fmt.Errorf("failed to parse restored config: %w", err)
+	}
+	service, ok := values["service"].(map[string]any)
+	if !ok {
+		service = make(map[string]any)
+		values["service"] = service
+	}
+	// An empty destination ID is left unset so Save generates a fresh
+	// UUID, exactly as it would for any config without one.
+	if deviceID == "" {
+		delete(service, "device_id")
+	} else {
+		service["device_id"] = deviceID
+	}
+	// The encryption requirement belongs to the destination's paired
+	// clients (which restore preserves), so the backup's value must not
+	// silently reopen or lock down the device.
+	if encryption {
+		service["encryption"] = true
+	} else {
+		delete(service, "encryption")
+	}
+	encoded, err := toml.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply restore overrides to config: %w", err)
+	}
+	return append([]byte(configHeader), encoded...), nil
+}
+
 type Values struct {
 	Groovy         Groovy    `toml:"groovy,omitempty"`
 	Input          Input     `toml:"input,omitempty"`
 	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
 	UpdateChannel  *string   `toml:"update_channel,omitempty"`
 	Audio          Audio     `toml:"audio"`
+	Backup         Backup    `toml:"backup,omitempty"`
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
 	Playtime       Playtime  `toml:"playtime,omitempty"`
@@ -114,6 +150,12 @@ var BaseDefaults = Values{
 	ConfigSchema: SchemaVersion,
 	Audio: Audio{
 		ScanFeedback: true,
+	},
+	Backup: Backup{
+		Remote: BackupRemote{
+			BaseURL:  DefaultBackupRemoteBaseURL,
+			Schedule: DefaultBackupRemoteSchedule,
+		},
 	},
 	Readers: Readers{
 		AutoDetect: true,
@@ -461,6 +503,50 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 	}
 
 	if err := afero.WriteFile(fs, c.authPath, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write auth file: %w", err)
+	}
+
+	c.reloadAuth()
+	return nil
+}
+
+// DeleteAuthEntries removes the credential entries for the given domains from
+// auth.toml, matching stored keys case-insensitively. API keys and entries
+// for other domains are preserved. Missing domains are a no-op; the in-memory
+// auth config is reloaded when anything was removed.
+func (c *Instance) DeleteAuthEntries(domains []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fs := c.getFs()
+
+	data, err := afero.ReadFile(fs, c.authPath)
+	if err != nil {
+		// No auth file means there is nothing to delete.
+		return nil
+	}
+	existing := LoadAuthFromData(data)
+	existingKeys := LoadAPIKeysFromData(data)
+
+	removed := false
+	for stored := range existing {
+		for _, domain := range domains {
+			if strings.EqualFold(stored, domain) {
+				delete(existing, stored)
+				removed = true
+				break
+			}
+		}
+	}
+	if !removed {
+		return nil
+	}
+
+	out, err := marshalAuthFile(existing, existingKeys)
+	if err != nil {
+		return err
+	}
+	if err := afero.WriteFile(fs, c.authPath, out, 0o600); err != nil {
 		return fmt.Errorf("failed to write auth file: %w", err)
 	}
 

@@ -24,10 +24,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 )
+
+// RemoteBackupSourceDevice identifies the account device that created a
+// cloud backup snapshot, as reported by settings.backup.remote.list.
+// Current is relative to this device; a nil source on an item means the
+// snapshot belongs to this device (legacy API or current device).
+type RemoteBackupSourceDevice struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Linked   bool   `json:"linked"`
+	Current  bool   `json:"current"`
+}
+
+// RemoteBackupCategory summarizes one category inside a cloud snapshot.
+type RemoteBackupCategory struct {
+	Files int64 `json:"files"`
+	Bytes int64 `json:"bytes"`
+}
+
+// RemoteBackupItem is one cloud backup snapshot from the account catalog.
+type RemoteBackupItem struct {
+	CreatedAt    time.Time                       `json:"createdAt"`
+	SourceDevice *RemoteBackupSourceDevice       `json:"sourceDevice"`
+	Categories   map[string]RemoteBackupCategory `json:"categories"`
+	ID           string                          `json:"id"`
+	BackupType   string                          `json:"backupType"`
+	SizeBytes    int64                           `json:"sizeBytes"`
+	Incompatible bool                            `json:"incompatible"`
+}
 
 // SettingsService handles settings API operations.
 type SettingsService interface {
@@ -36,6 +66,45 @@ type SettingsService interface {
 
 	// UpdateSettings sends a settings update to the API.
 	UpdateSettings(ctx context.Context, params *models.UpdateSettingsParams) error
+
+	// CreateBackup creates a local backup ZIP.
+	CreateBackup(ctx context.Context) (string, error)
+
+	// ListBackups fetches local backup ZIP metadata.
+	ListBackups(ctx context.Context) ([]map[string]any, error)
+
+	// InspectBackup fetches local backup manifest details.
+	InspectBackup(ctx context.Context, name string) (map[string]any, error)
+
+	// DeleteBackup removes a local backup ZIP.
+	DeleteBackup(ctx context.Context, name string) error
+
+	// RestoreBackup restores a local backup ZIP.
+	RestoreBackup(ctx context.Context, name string) error
+
+	// GetBackupStatus fetches local/remote backup status.
+	GetBackupStatus(ctx context.Context) (*models.BackupStatusResponse, error)
+
+	// RunRemoteBackup uploads a backup to the configured remote provider.
+	RunRemoteBackup(ctx context.Context) (string, error)
+
+	// ListRemoteBackups fetches the account's cloud backup snapshots.
+	ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error)
+
+	// RestoreRemoteBackup restores a remote backup snapshot.
+	RestoreRemoteBackup(ctx context.Context, id string) error
+
+	// StartAuthLink starts the reverse device link flow.
+	StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error)
+
+	// GetAuthLinkStatus reports the active link flow's state.
+	GetAuthLinkStatus(ctx context.Context) (*models.AuthLinkStatusResponse, error)
+
+	// CancelAuthLink stops the active link flow.
+	CancelAuthLink(ctx context.Context) error
+
+	// Unlink removes the stored Zaparoo Online credentials.
+	Unlink(ctx context.Context) error
 
 	// GetSystems fetches available systems from the API.
 	GetSystems(ctx context.Context) ([]models.System, error)
@@ -97,6 +166,14 @@ type DefaultSettingsService struct {
 	apiClient client.APIClient
 }
 
+type remoteBackupRunRaw struct {
+	Backup remoteBackupIDRaw `json:"backup"`
+}
+
+type remoteBackupIDRaw struct {
+	ID string `json:"id"`
+}
+
 // NewSettingsService creates a SettingsService that uses the given APIClient.
 func NewSettingsService(apiClient client.APIClient) *DefaultSettingsService {
 	return &DefaultSettingsService{apiClient: apiClient}
@@ -124,6 +201,168 @@ func (s *DefaultSettingsService) UpdateSettings(ctx context.Context, params *mod
 	_, err = s.apiClient.Call(ctx, models.MethodSettingsUpdate, string(data))
 	if err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
+	}
+	return nil
+}
+
+func (s *DefaultSettingsService) CreateBackup(ctx context.Context) (string, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackup, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create backup: %w", err)
+	}
+	var raw struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
+		return "", fmt.Errorf("failed to parse backup result: %w", err)
+	}
+	return raw.Name, nil
+}
+
+func (s *DefaultSettingsService) ListBackups(ctx context.Context) ([]map[string]any, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupList, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list backups: %w", err)
+	}
+	var backups []map[string]any
+	if err := json.Unmarshal([]byte(resp), &backups); err != nil {
+		return nil, fmt.Errorf("failed to parse backups: %w", err)
+	}
+	return backups, nil
+}
+
+func (s *DefaultSettingsService) InspectBackup(ctx context.Context, name string) (map[string]any, error) {
+	params := models.BackupNameParams{Name: name}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal inspect params: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupInspect, string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect backup: %w", err)
+	}
+	var backup map[string]any
+	if err := json.Unmarshal([]byte(resp), &backup); err != nil {
+		return nil, fmt.Errorf("failed to parse backup details: %w", err)
+	}
+	return backup, nil
+}
+
+func (s *DefaultSettingsService) DeleteBackup(ctx context.Context, name string) error {
+	params := models.BackupNameParams{Name: name}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete params: %w", err)
+	}
+	_, err = s.apiClient.Call(ctx, models.MethodSettingsBackupDelete, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to delete backup: %w", err)
+	}
+	return nil
+}
+
+func (s *DefaultSettingsService) RestoreBackup(ctx context.Context, name string) error {
+	params := models.BackupNameParams{Name: name}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal restore params: %w", err)
+	}
+	_, err = s.apiClient.Call(ctx, models.MethodSettingsBackupRestore, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to restore backup: %w", err)
+	}
+	return nil
+}
+
+func (s *DefaultSettingsService) GetBackupStatus(ctx context.Context) (*models.BackupStatusResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupStatus, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get backup status: %w", err)
+	}
+	var status models.BackupStatusResponse
+	if err := json.Unmarshal([]byte(resp), &status); err != nil {
+		return nil, fmt.Errorf("failed to parse backup status: %w", err)
+	}
+	return &status, nil
+}
+
+func (s *DefaultSettingsService) RunRemoteBackup(ctx context.Context) (string, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupRemoteRun, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to run remote backup: %w", err)
+	}
+	var raw remoteBackupRunRaw
+	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
+		return "", fmt.Errorf("failed to parse remote backup result: %w", err)
+	}
+	return raw.Backup.ID, nil
+}
+
+func (s *DefaultSettingsService) ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupRemoteList, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list remote backups: %w", err)
+	}
+	var raw struct {
+		Items []RemoteBackupItem `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse remote backups: %w", err)
+	}
+	return raw.Items, nil
+}
+
+func (s *DefaultSettingsService) RestoreRemoteBackup(ctx context.Context, id string) error {
+	params := models.BackupRemoteRestoreParams{ID: id}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal remote restore params: %w", err)
+	}
+	_, err = s.apiClient.Call(ctx, models.MethodSettingsBackupRemoteRestore, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to restore remote backup: %w", err)
+	}
+	return nil
+}
+
+// StartAuthLink starts the reverse device link flow.
+func (s *DefaultSettingsService) StartAuthLink(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLink, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to start device link: %w", err)
+	}
+	var link models.AuthLinkStatusResponse
+	if err := json.Unmarshal([]byte(resp), &link); err != nil {
+		return nil, fmt.Errorf("failed to parse device link response: %w", err)
+	}
+	return &link, nil
+}
+
+// GetAuthLinkStatus reports the active link flow's state.
+func (s *DefaultSettingsService) GetAuthLinkStatus(ctx context.Context) (*models.AuthLinkStatusResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLinkStatus, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get device link status: %w", err)
+	}
+	var link models.AuthLinkStatusResponse
+	if err := json.Unmarshal([]byte(resp), &link); err != nil {
+		return nil, fmt.Errorf("failed to parse device link status: %w", err)
+	}
+	return &link, nil
+}
+
+// CancelAuthLink stops the active link flow.
+func (s *DefaultSettingsService) CancelAuthLink(ctx context.Context) error {
+	if _, err := s.apiClient.Call(ctx, models.MethodSettingsAuthLinkCancel, ""); err != nil {
+		return fmt.Errorf("failed to cancel device link: %w", err)
+	}
+	return nil
+}
+
+// Unlink removes the stored Zaparoo Online credentials.
+func (s *DefaultSettingsService) Unlink(ctx context.Context) error {
+	if _, err := s.apiClient.Call(ctx, models.MethodSettingsAuthUnlink, ""); err != nil {
+		return fmt.Errorf("failed to unlink: %w", err)
 	}
 	return nil
 }

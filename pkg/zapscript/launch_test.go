@@ -668,6 +668,34 @@ func TestLaunchClosurePreservesExplicitLauncher(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestLaunchClosureHoldsMediaLaunchGate(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	path := filepath.Join("games", "game.sfc")
+	mockPlatform := mocks.NewMockPlatform()
+	gateHeld := false
+	mockPlatform.On(
+		"LaunchMedia", cfg, path, (*platforms.Launcher)(nil),
+		(*database.Database)(nil), (*platforms.LaunchOptions)(nil),
+	).Run(func(mock.Arguments) {
+		assert.True(t, gateHeld)
+	}).Return(nil).Once()
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
+		AcquireMediaLaunch: func() (func(), error) {
+			gateHeld = true
+			return func() { gateHeld = false }, nil
+		},
+	}
+
+	launch := getLaunchClosure(mockPlatform, &env, true)
+	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	assert.False(t, gateHeld)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestLaunchClosureAppliesSystemDefault(t *testing.T) {
 	t.Parallel()
 
