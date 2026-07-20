@@ -113,8 +113,12 @@ func Init(reportingEnabled bool, deviceID, appVersion, platformID string) error 
 		Environment:            platformID,
 		AttachStacktrace:       true,
 		DisableTelemetryBuffer: true,
-		// Privacy: explicitly disable PII collection
-		SendDefaultPII: false,
+		// Privacy: disable automatic PII collection. UserInfo does not gate
+		// the device ID set explicitly via Scope.SetUser below.
+		DataCollection: &sentry.DataCollection{
+			UserInfo:   sentry.Set(false),
+			HTTPBodies: []sentry.BodyType{},
+		},
 		ServerName:     "",
 		MaxBreadcrumbs: 0,
 		HTTPClient:     httpClient,
