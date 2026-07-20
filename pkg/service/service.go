@@ -59,24 +59,33 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// StartResult holds the return values from Start.
-const backupShutdownWarningAfter = 30 * time.Second
+const (
+	backupShutdownWarningAfter = 30 * time.Second
+	backupShutdownHardDeadline = 2 * time.Minute
+)
 
+// StartResult holds the return values from Start.
 type StartResult struct {
 	Stop             func() error
 	Done             <-chan struct{}
 	RestartRequested func() bool
 }
 
-func waitForBackupShutdown(coordinator *backupsvc.Coordinator, warningAfter time.Duration) error {
-	warningCtx, cancelWarning := context.WithTimeout(context.Background(), warningAfter)
+func waitForBackupShutdown(
+	coordinator *backupsvc.Coordinator,
+	warningAfter time.Duration,
+	hardDeadline time.Duration,
+) error {
+	hardCtx, cancelHard := context.WithTimeout(context.Background(), hardDeadline)
+	defer cancelHard()
+	warningCtx, cancelWarning := context.WithTimeout(hardCtx, warningAfter)
 	err := coordinator.Shutdown(warningCtx)
 	cancelWarning()
 	if err == nil {
 		return nil
 	}
 	log.Warn().Err(err).Msg("backup operation still stopping; delaying service teardown")
-	if waitErr := coordinator.Shutdown(context.Background()); waitErr != nil {
+	if waitErr := coordinator.Shutdown(hardCtx); waitErr != nil {
 		return fmt.Errorf("waiting for backup operation before teardown: %w", waitErr)
 	}
 	return nil
@@ -599,7 +608,9 @@ func Start(
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
-		if backupErr := waitForBackupShutdown(st.BackupCoordinator(), backupShutdownWarningAfter); backupErr != nil {
+		if backupErr := waitForBackupShutdown(
+			st.BackupCoordinator(), backupShutdownWarningAfter, backupShutdownHardDeadline,
+		); backupErr != nil {
 			log.Error().Err(backupErr).Msg("backup operation did not stop cleanly")
 		}
 		uiEvents.Shutdown()

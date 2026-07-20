@@ -22,6 +22,8 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -252,6 +254,75 @@ func TestHandleBackupStatus_AllowsNonLocal(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, status.Local.Enabled)
 	assert.Equal(t, config.DefaultBackupRemoteSchedule, status.Remote.Schedule)
+}
+
+func TestHandleBackupRemoteList_MapsOpaqueIDsAndSources(t *testing.T) {
+	env := newBackupTestEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/device/backups", r.URL.Path)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, writeErr := w.Write([]byte(`{
+			"items":[{
+				"id":"save/a%b ?\u96ea",
+				"backup_type":"manual",
+				"schema_version":1,
+				"created_at":"2026-07-10T12:00:00Z",
+				"source_device":{"id":"dev-2","name":"Bedroom","linked":true,"current":false}
+			}],
+			"storage_used_bytes":42,
+			"storage_quota_bytes":100
+		}`))
+		assert.NoError(t, writeErr)
+	}))
+	defer server.Close()
+	require.NoError(t, env.Config.SetBackupRemoteBaseURL(server.URL))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.BackupAuthLookupURL(server.URL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	result, err := HandleBackupRemoteList(env)
+	require.NoError(t, err)
+	list, ok := result.(backupsvc.RemoteListInfo)
+	require.True(t, ok)
+	require.Len(t, list.Items, 1)
+	assert.Equal(t, "save/a%b ?\u96ea", list.Items[0].ID)
+	require.NotNil(t, list.Items[0].SourceDevice)
+	assert.Equal(t, "dev-2", list.Items[0].SourceDevice.ID)
+	assert.Equal(t, int64(42), list.StorageUsedBytes)
+}
+
+func TestHandleBackupRemoteRestore_RequiresID(t *testing.T) {
+	env := newBackupTestEnv(t)
+	env.Params = json.RawMessage(`{}`)
+
+	_, err := HandleBackupRemoteRestore(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "id is required")
+}
+
+func TestBackupMethodErrorMapsExpectedConditions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err      error
+		contains string
+	}{
+		{err: backupsvc.ErrPlatformBackupUnsupported, contains: "not supported on this platform"},
+		{err: backupsvc.ErrRestoreMediaActive, contains: "while media is active"},
+		{err: backupsvc.ErrRestoreLaunchInProgress, contains: "media is launching or restart is pending"},
+		{err: &backupsvc.BusyError{Kind: backupsvc.OperationRemoteUpload}, contains: "busy with remote-upload"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.contains, func(t *testing.T) {
+			t.Parallel()
+			err := backupMethodError("test action", tt.err)
+			var clientErr *models.ClientError
+			require.ErrorAs(t, err, &clientErr)
+			assert.Contains(t, err.Error(), tt.contains)
+		})
+	}
 }
 
 func TestHandleBackup_RejectsNonLocal(t *testing.T) {

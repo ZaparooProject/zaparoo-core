@@ -51,7 +51,8 @@ func TestApplyTUIDefaults_AllSet(t *testing.T) {
 	mouse := false
 	crt := true
 	osk := true
-	prompted := true
+	errorReportingPrompted := false
+	encryptionPrompted := true
 
 	raw := tuiConfigRaw{
 		Theme:                  &theme,
@@ -59,8 +60,8 @@ func TestApplyTUIDefaults_AllSet(t *testing.T) {
 		Mouse:                  &mouse,
 		CRTMode:                &crt,
 		OnScreenKeyboard:       &osk,
-		ErrorReportingPrompted: &prompted,
-		EncryptionPrompted:     &prompted,
+		ErrorReportingPrompted: &errorReportingPrompted,
+		EncryptionPrompted:     &encryptionPrompted,
 	}
 
 	cfg := applyTUIDefaults(raw, "generic")
@@ -70,7 +71,7 @@ func TestApplyTUIDefaults_AllSet(t *testing.T) {
 	assert.False(t, cfg.Mouse)
 	assert.True(t, cfg.CRTMode)
 	assert.True(t, cfg.OnScreenKeyboard)
-	assert.True(t, cfg.ErrorReportingPrompted)
+	assert.False(t, cfg.ErrorReportingPrompted)
 	assert.True(t, cfg.EncryptionPrompted)
 }
 

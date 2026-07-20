@@ -109,6 +109,14 @@ type authLinkDeps struct {
 	fetchWK           wellKnownFetcher
 }
 
+// authLinkTerminalError marks poll failures that end the flow (as opposed to
+// transient network errors, which are retried until expiry).
+type authLinkTerminalError struct {
+	reason string
+}
+
+func (e *authLinkTerminalError) Error() string { return e.reason }
+
 // HandleSettingsAuthLink starts a reverse link flow against the official
 // Zaparoo API (or an explicit url param) and returns the user code and
 // verification URLs to display. Progress is pushed via auth.link.status
@@ -370,14 +378,6 @@ func pollDeviceLink(
 		return
 	}
 }
-
-// authLinkTerminalError marks poll failures that end the flow (as opposed to
-// transient network errors, which are retried until expiry).
-type authLinkTerminalError struct {
-	reason string
-}
-
-func (e *authLinkTerminalError) Error() string { return e.reason }
 
 func pollDeviceLinkOnce(ctx context.Context, baseURL, deviceCode string) (*deviceLinkPollResponse, error) {
 	body, err := json.Marshal(deviceLinkPollRequest{DeviceCode: deviceCode})

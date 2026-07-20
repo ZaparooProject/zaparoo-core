@@ -22,6 +22,7 @@
 package mister
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -52,6 +53,28 @@ func TestProfileBackupPlanOmitsLiveAliasAndIncludesProfilePools(t *testing.T) {
 		Category: profileDataItemSavestates, Path: profileDataItemSavestates,
 		Reason: "shared profile data hidden by active profile mount",
 	})
+}
+
+func TestProfileBackupPlanWarnsWhenMountStateIsUnavailable(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{mountsErr: errors.New("mount table unavailable")}
+	manager, _ := newTestManager(mounter)
+	settings := platforms.Settings{DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo")}
+	plan := manager.backupPlan(settings, BackupDefinitions(settings))
+
+	for _, item := range allItems() {
+		assert.Contains(t, plan.Warnings, platforms.BackupWarning{
+			Category: item, Path: item, Reason: "profile mount state unavailable",
+		})
+		for _, definition := range plan.Definitions {
+			assert.False(t,
+				definition.Category == item &&
+					filepath.Clean(definition.SourceRoot) == filepath.Join(misterconfig.SDRootDir, item) &&
+					filepath.Clean(definition.RestoreRoot) == item,
+				"live %s alias must be omitted when active mount state is unknown", item,
+			)
+		}
+	}
 }
 
 func TestProfileBackupPlanMapsActiveNASPoolToOwnedPath(t *testing.T) {
@@ -98,6 +121,17 @@ func TestPrepareBackupRestoreUnmountsAndRestoresProfileBinds(t *testing.T) {
 		require.NotNil(t, entry)
 		assert.Equal(t, kidA().ID, entry.ProfileID)
 	}
+}
+
+func TestPrepareBackupRestoreFailsWhenMountStateIsUnavailable(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{mountsErr: errors.New("mount table unavailable")}
+	manager, _ := newTestManager(mounter)
+
+	finish, err := manager.prepareBackupRestore()
+	require.Error(t, err)
+	assert.Nil(t, finish)
+	assert.Contains(t, err.Error(), "reading profile mounts before backup restore")
 }
 
 func TestPrepareBackupRestoreLeavesBindsUnmountedAfterSuccess(t *testing.T) {

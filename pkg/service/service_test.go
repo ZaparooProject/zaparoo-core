@@ -60,7 +60,7 @@ func TestWaitForBackupShutdownDoesNotTearDownBeforeLeaseRelease(t *testing.T) {
 	require.NoError(t, err)
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond)
+		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond, time.Second)
 	}()
 
 	select {
@@ -80,6 +80,31 @@ func TestWaitForBackupShutdownDoesNotTearDownBeforeLeaseRelease(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("shutdown did not finish after restore lease released")
 	}
+}
+
+func TestWaitForBackupShutdownReturnsAtHardDeadline(t *testing.T) {
+	t.Parallel()
+	coordinator := backupcoordinator.New()
+	lease, err := coordinator.Begin(
+		context.Background(), backupcoordinator.OperationRemoteUpload, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- waitForBackupShutdown(coordinator, 10*time.Millisecond, 50*time.Millisecond)
+	}()
+
+	select {
+	case waitErr := <-waitDone:
+		require.Error(t, waitErr)
+		require.ErrorIs(t, waitErr, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not return at hard deadline")
+	}
+	_, _, active := coordinator.Active()
+	assert.True(t, active, "timed-out lease remains active until its owner releases it")
 }
 
 func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {

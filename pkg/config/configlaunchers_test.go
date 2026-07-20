@@ -771,17 +771,18 @@ func TestLoadCustomLaunchers_SkipsUnreadablePaths(t *testing.T) {
 		t.Skip("permission bits are not enforced for root")
 	}
 
+	fs := afero.NewOsFs()
 	launchersDir := t.TempDir()
 	blocked := filepath.Join(launchersDir, "blocked")
-	require.NoError(t, os.MkdirAll(blocked, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(launchersDir, "good.toml"), []byte(`
+	require.NoError(t, fs.MkdirAll(blocked, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "good.toml"), []byte(`
 [[launchers.custom]]
 id = "GoodLauncher"
 execute = "echo good"
 `), 0o600))
 	require.NoError(t, os.Chmod(blocked, 0o000))
 
-	cfg := &Instance{}
+	cfg := &Instance{fs: fs}
 	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
 	customs := cfg.CustomLaunchers()
 	require.Len(t, customs, 1)

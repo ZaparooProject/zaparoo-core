@@ -174,6 +174,26 @@ func TestDataSwap_WaitsForRestoreRollback(t *testing.T) {
 	}
 }
 
+func TestDataSwap_RestartPendingSkipsFailureNotification(t *testing.T) {
+	t.Parallel()
+	swapper := &fakeSwapper{}
+	fix := newTestCoordinator(t, swapper)
+	finishRestore, err := fix.st.BeginRestoreGate()
+	require.NoError(t, err)
+	finishRestore(true)
+
+	fix.coord.RequestSwitch(platforms.ProfileRef{ID: "profile-1", Name: "Kid A"})
+
+	assert.Zero(t, swapper.applyCount())
+	select {
+	case n := <-fix.notifs:
+		if n.Method == models.NotificationProfilesData {
+			t.Fatalf("unexpected profiles.data notification: %s", n.Params)
+		}
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestDataSwap_DeferredWhileMediaRunning(t *testing.T) {
 	t.Parallel()
 	swapper := &fakeSwapper{}

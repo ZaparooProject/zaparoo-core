@@ -106,3 +106,69 @@ func TestCoordinatorReportsWriteFinished(t *testing.T) {
 	default:
 	}
 }
+
+func TestCoordinatorCancelRestoreLeavesUnrelatedLeaseRunning(t *testing.T) {
+	t.Parallel()
+	coordinator := New()
+	restoreKinds := []OperationKind{OperationLocalRestore, OperationRemoteRestore, OperationRecovery}
+	restoreLeases := make([]*Lease, 0, len(restoreKinds))
+	for _, kind := range restoreKinds {
+		lease, err := coordinator.Begin(context.Background(), kind, OperationRead)
+		require.NoError(t, err)
+		restoreLeases = append(restoreLeases, lease)
+	}
+	unrelated, err := coordinator.Begin(context.Background(), OperationLocalInspect, OperationRead)
+	require.NoError(t, err)
+	defer unrelated.Release()
+
+	assert.True(t, coordinator.CancelRestore())
+	for _, lease := range restoreLeases {
+		require.ErrorIs(t, lease.Context().Err(), context.Canceled)
+		lease.Release()
+	}
+	require.NoError(t, unrelated.Context().Err())
+	kind, _, active := coordinator.Active()
+	assert.True(t, active)
+	assert.Equal(t, OperationLocalInspect, kind)
+}
+
+func TestCoordinatorRemoteUnlinkedState(t *testing.T) {
+	t.Parallel()
+	coordinator := New()
+
+	assert.False(t, coordinator.RemoteUnlinked())
+	coordinator.SetRemoteUnlinked(true)
+	assert.True(t, coordinator.RemoteUnlinked())
+	coordinator.SetRemoteUnlinked(false)
+	assert.False(t, coordinator.RemoteUnlinked())
+}
+
+func TestCoordinatorActiveTracksReadAndWriteLeases(t *testing.T) {
+	t.Parallel()
+	coordinator := New()
+
+	kind, startedAt, active := coordinator.Active()
+	assert.False(t, active)
+	assert.Empty(t, kind)
+	assert.True(t, startedAt.IsZero())
+
+	readLease, err := coordinator.Begin(context.Background(), OperationLocalInspect, OperationRead)
+	require.NoError(t, err)
+	kind, startedAt, active = coordinator.Active()
+	assert.True(t, active)
+	assert.Equal(t, OperationLocalInspect, kind)
+	assert.False(t, startedAt.IsZero())
+	readLease.Release()
+	_, _, active = coordinator.Active()
+	assert.False(t, active)
+
+	writeLease, err := coordinator.Begin(context.Background(), OperationRemoteUpload, OperationWrite)
+	require.NoError(t, err)
+	kind, startedAt, active = coordinator.Active()
+	assert.True(t, active)
+	assert.Equal(t, OperationRemoteUpload, kind)
+	assert.False(t, startedAt.IsZero())
+	writeLease.Release()
+	_, _, active = coordinator.Active()
+	assert.False(t, active)
+}

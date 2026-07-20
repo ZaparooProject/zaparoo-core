@@ -44,6 +44,7 @@ import (
 type fakeMounter struct {
 	bindErr       error
 	unmountErr    error
+	mountsErr     error
 	mounts        []mountEntry
 	binds         int
 	bindAttempts  int
@@ -66,6 +67,9 @@ func (f failMkdirFS) MkdirAll(path string, perm iofs.FileMode) error {
 }
 
 func (f *fakeMounter) Mounts() ([]mountEntry, error) {
+	if f.mountsErr != nil {
+		return nil, f.mountsErr
+	}
 	out := make([]mountEntry, len(f.mounts))
 	copy(out, f.mounts)
 	return out, nil

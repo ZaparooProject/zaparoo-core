@@ -23,12 +23,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	backupsvc "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -170,6 +176,41 @@ func backupTime(t time.Time) *string {
 }
 
 func stringPtr(s string) *string { return &s }
+
+func TestScheduledRemoteBackupDueUsesAvailabilityFreshness(t *testing.T) {
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	rootDir := t.TempDir()
+	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
+	require.NoError(t, err)
+	cfg.SetBackupRemoteEnabled(true)
+	cfg.SetBackupRemoteSchedule("daily")
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DataDir: rootDir})
+
+	statusPath := filepath.Join(rootDir, "backups", "status.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(statusPath), 0o750))
+	writeUnavailableStatus := func(checkedAt time.Time) {
+		t.Helper()
+		data, marshalErr := json.Marshal(map[string]any{
+			"remote": map[string]any{
+				"lastStatus":            backupsvc.StatusNever,
+				"availability":          backupsvc.RemoteAvailabilityUnavailable,
+				"availabilityCheckedAt": checkedAt.Format(time.RFC3339Nano),
+			},
+		})
+		require.NoError(t, marshalErr)
+		require.NoError(t, os.WriteFile(statusPath, data, 0o600))
+	}
+
+	writeUnavailableStatus(now.Add(-time.Minute))
+	assert.False(t, scheduledRemoteBackupDue(now, cfg, pl, nil),
+		"fresh unavailable state must suppress scheduled work")
+
+	writeUnavailableStatus(now.Add(-10 * time.Minute))
+	assert.True(t, scheduledRemoteBackupDue(now, cfg, pl, nil),
+		"stale unavailable state must schedule work so eligibility can refresh")
+	pl.AssertExpectations(t)
+}
 
 func TestRunScheduledRemoteBackupSkipsWhilePaused(t *testing.T) {
 	t.Parallel()

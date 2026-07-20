@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	testifymock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,6 +107,114 @@ func TestDefaultSettingsService_UpdateSettings_Error(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to update settings")
 
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_LocalBackupAPIContracts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackup, "").
+		Return(`{"name":"backup-1.zip"}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackupList, "").
+		Return(`[{"name":"backup-1.zip","size":42}]`, nil).Once()
+	mockClient.On(
+		"Call", testifymock.Anything, models.MethodSettingsBackupInspect, `{"name":"backup-1.zip"}`,
+	).Return(`{"name":"backup-1.zip","integrity":"unchecked"}`, nil).Once()
+	mockClient.On(
+		"Call", testifymock.Anything, models.MethodSettingsBackupDelete, `{"name":"backup-1.zip"}`,
+	).Return(`{}`, nil).Once()
+	mockClient.On(
+		"Call", testifymock.Anything, models.MethodSettingsBackupRestore, `{"name":"backup-1.zip"}`,
+	).Return(`{}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackupStatus, "").
+		Return(`{"local":{"lastStatus":"success"},"remote":{"lastStatus":"never"}}`, nil).Once()
+
+	svc := NewSettingsService(mockClient)
+	name, err := svc.CreateBackup(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "backup-1.zip", name)
+
+	backups, err := svc.ListBackups(ctx)
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	assert.Equal(t, "backup-1.zip", backups[0]["name"])
+	assert.InDelta(t, 42, backups[0]["size"], 0)
+
+	backup, err := svc.InspectBackup(ctx, name)
+	require.NoError(t, err)
+	assert.Equal(t, "unchecked", backup["integrity"])
+	require.NoError(t, svc.DeleteBackup(ctx, name))
+	require.NoError(t, svc.RestoreBackup(ctx, name))
+
+	status, err := svc.GetBackupStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "success", status.Local.LastStatus)
+	assert.Equal(t, "never", status.Remote.LastStatus)
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_RemoteBackupAPIContracts(t *testing.T) {
+	t.Parallel()
+	const backupID = "save/a%b ?\u96ea"
+	ctx := context.Background()
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackupRemoteRun, "").Return(
+		`{"backup":{"id":"save/a%b ?\u96ea"}}`, nil,
+	).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackupRemoteList, "").Return(
+		`{"items":[{"id":"save/a%b ?\u96ea","createdAt":"2026-07-10T12:00:00Z",`+
+			`"backupType":"manual","sizeBytes":42,"categories":{"saves":{"files":1,"bytes":42}},`+
+			`"sourceDevice":{"id":"dev-2","name":"Bedroom","platform":"mister",`+
+			`"linked":true,"current":false}}]}`, nil,
+	).Once()
+	mockClient.On(
+		"Call", testifymock.Anything, models.MethodSettingsBackupRemoteRestore,
+		"{\"id\":\"save/a%b ?\u96ea\"}",
+	).Return(`{}`, nil).Once()
+
+	svc := NewSettingsService(mockClient)
+	id, err := svc.RunRemoteBackup(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, backupID, id)
+
+	backups, err := svc.ListRemoteBackups(ctx)
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	assert.Equal(t, backupID, backups[0].ID)
+	assert.Equal(t, int64(42), backups[0].SizeBytes)
+	require.NotNil(t, backups[0].SourceDevice)
+	assert.Equal(t, "dev-2", backups[0].SourceDevice.ID)
+	assert.Equal(t, "Bedroom", backups[0].SourceDevice.Name)
+	assert.Equal(t, int64(1), backups[0].Categories["saves"].Files)
+	require.NoError(t, svc.RestoreRemoteBackup(ctx, backupID))
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_AuthLinkAPIContracts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsAuthLink, "").
+		Return(`{"status":"pending","userCode":"ABCD-EFGH"}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsAuthLinkStatus, "").
+		Return(`{"status":"approved"}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsAuthLinkCancel, "").
+		Return(`{}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsAuthUnlink, "").
+		Return(`{}`, nil).Once()
+
+	svc := NewSettingsService(mockClient)
+	started, err := svc.StartAuthLink(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, models.AuthLinkStatusPending, started.Status)
+	assert.Equal(t, "ABCD-EFGH", started.UserCode)
+
+	status, err := svc.GetAuthLinkStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, models.AuthLinkStatusApproved, status.Status)
+	require.NoError(t, svc.CancelAuthLink(ctx))
+	require.NoError(t, svc.Unlink(ctx))
 	mockClient.AssertExpectations(t)
 }
 

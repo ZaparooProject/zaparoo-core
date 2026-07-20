@@ -704,6 +704,63 @@ func TestManagerTrackScheduleStale(t *testing.T) {
 	assert.False(t, env.Manager.TrackScheduleStale(now.Add(30*24*time.Hour), true, staleAfter))
 }
 
+func TestManagerNotifyScheduleStaleAddsInboxNotice(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	ns := make(chan models.Notification, 1)
+	env.UserDB.On("AddInboxMessage", testifymock.MatchedBy(func(msg *database.InboxMessage) bool {
+		return msg.Title == "Remote backup is overdue" &&
+			msg.Category == inboxservice.CategoryBackupRemoteStale &&
+			msg.Severity == inboxservice.SeverityWarning
+	})).Return(&database.InboxMessage{
+		DBID: 1, Title: "Remote backup is overdue", Category: inboxservice.CategoryBackupRemoteStale,
+	}, nil).Once()
+	env.Manager.WithInbox(inboxservice.NewService(env.UserDB, ns))
+
+	env.Manager.NotifyScheduleStale()
+
+	env.UserDB.AssertNumberOfCalls(t, "AddInboxMessage", 1)
+	select {
+	case notification := <-ns:
+		assert.Equal(t, models.NotificationInboxAdded, notification.Method)
+	default:
+		t.Fatal("expected stale backup inbox notification")
+	}
+}
+
+func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			var body map[string]any
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			capabilities, ok := body["capabilities"].(map[string]any)
+			if !assert.True(t, ok) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			assert.InDelta(t, 1, capabilities["backup"], 0)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "Living Room", BackupActive: true})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	require.NoError(t, env.Manager.SendHeartbeat(context.Background()))
+	status := env.Manager.Status()
+	assert.Equal(t, RemoteAvailabilityAvailable, status.Remote.Availability)
+	require.NotNil(t, status.Remote.DeviceName)
+	assert.Equal(t, "Living Room", *status.Remote.DeviceName)
+}
+
 func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)

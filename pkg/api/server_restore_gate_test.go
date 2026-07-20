@@ -78,6 +78,9 @@ func TestHandleRequestAllowsRestoreMethodToOwnExclusiveGate(t *testing.T) {
 		models.MethodSettingsBackupRestore,
 		func(requests.RequestEnv) (any, error) { return "restore", nil },
 	))
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+	defer finishRestore(false)
 
 	result, rpcErr := handleRequest(methodMap, requests.RequestEnv{
 		Context: context.Background(), State: st,

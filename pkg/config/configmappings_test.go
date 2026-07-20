@@ -35,17 +35,18 @@ func TestLoadMappings_SkipsUnreadablePaths(t *testing.T) {
 		t.Skip("permission bits are not enforced for root")
 	}
 
+	fs := afero.NewOsFs()
 	mappingsDir := t.TempDir()
 	blocked := filepath.Join(mappingsDir, "blocked")
-	require.NoError(t, os.MkdirAll(blocked, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(mappingsDir, "good.toml"), []byte(`
+	require.NoError(t, fs.MkdirAll(blocked, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(mappingsDir, "good.toml"), []byte(`
 [[mappings.entry]]
 match_pattern = "*.sfc"
 zapscript = "**launch:snes/{match}"
 `), 0o600))
 	require.NoError(t, os.Chmod(blocked, 0o000))
 
-	cfg := &Instance{}
+	cfg := &Instance{fs: fs}
 	require.NoError(t, cfg.LoadMappings(mappingsDir))
 	require.Len(t, cfg.Mappings(), 1)
 }

@@ -1430,6 +1430,13 @@ func TestRemoteBackupListPage_GroupsSources_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("2 backups"), "current device merges the legacy snapshot")
 	assert.True(t, runner.ContainsText("1 backup"))
 	assert.True(t, runner.ContainsText("Latest 2026-07-10 14:00:00 UTC"))
+
+	// Open the first of multiple groups to exercise its captured callback.
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 14:00:00 UTC", 500*time.Millisecond))
+	assert.True(t, runner.ContainsText("Cloud backup 2026-07-10 13:00:00 UTC"))
+	assert.False(t, runner.ContainsText("Cloud backup 2026-07-10 12:00:00 UTC"))
+	assert.False(t, runner.ContainsText("Old MiSTer (unlinked)"))
 }
 
 func TestRemoteBackupListPage_Empty_Integration(t *testing.T) {
