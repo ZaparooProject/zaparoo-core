@@ -811,12 +811,14 @@ type BackupStatusResponse struct {
 
 // BackupStateNotification is the payload for the backup.state notification,
 // sent while a backup operation is running whenever its pause/throttle state
-// changes in response to a game starting or stopping. Operation is the
+// changes in response to a game starting or stopping, and once with Finished
+// set when the operation ends (whatever its outcome). Operation is the
 // active operation kind from settings.backup.status (e.g. "remote-upload").
 type BackupStateNotification struct {
 	Operation string `json:"operation,omitempty"`
 	Paused    bool   `json:"paused"`
 	Throttled bool   `json:"throttled"`
+	Finished  bool   `json:"finished,omitempty"`
 }
 
 type UpdateCheckResponse struct {

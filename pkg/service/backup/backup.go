@@ -574,6 +574,14 @@ func (m *Manager) writeLocalStatus(local *statusEntry) error {
 // makes the scheduler retry on the short failure interval instead of waiting
 // out the full daily/weekly cadence.
 func (m *Manager) RecoverInterruptedRuns() {
+	// An operation holding the coordinator right now owns the "running"
+	// status (a run can start between the API coming up and this recovery
+	// pass); leave it to record its own outcome.
+	if m.coordinator != nil {
+		if _, _, active := m.coordinator.Active(); active {
+			return
+		}
+	}
 	statusMu.Lock()
 	defer statusMu.Unlock()
 

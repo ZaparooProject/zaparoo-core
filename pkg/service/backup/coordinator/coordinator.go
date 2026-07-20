@@ -66,12 +66,13 @@ type activeOperation struct {
 }
 
 type Coordinator struct {
-	operations     map[uint64]activeOperation
-	done           chan struct{}
-	nextID         uint64
-	mu             syncutil.Mutex
-	shuttingDown   bool
-	remoteUnlinked bool
+	operations      map[uint64]activeOperation
+	done            chan struct{}
+	onWriteFinished func(OperationKind)
+	nextID          uint64
+	mu              syncutil.Mutex
+	shuttingDown    bool
+	remoteUnlinked  bool
 }
 
 type Lease struct {
@@ -138,6 +139,15 @@ func (l *Lease) Release() {
 	l.coordinator.release(l.id)
 }
 
+// SetOnWriteFinished registers a callback invoked, outside the coordinator
+// lock, whenever a write operation's lease is released. It reports that a
+// backup, upload, restore, or recovery operation ended, whatever its outcome.
+func (c *Coordinator) SetOnWriteFinished(fn func(OperationKind)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onWriteFinished = fn
+}
+
 func (c *Coordinator) release(id uint64) {
 	c.mu.Lock()
 	operation, ok := c.operations[id]
@@ -151,7 +161,11 @@ func (c *Coordinator) release(id uint64) {
 		close(c.done)
 		c.done = nil
 	}
+	onWriteFinished := c.onWriteFinished
 	c.mu.Unlock()
+	if operation.mode == OperationWrite && onWriteFinished != nil {
+		onWriteFinished(operation.kind)
+	}
 }
 
 func (c *Coordinator) SetRemoteUnlinked(unlinked bool) {

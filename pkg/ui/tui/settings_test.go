@@ -1331,3 +1331,239 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingDisableNoConfirm_Integration(t 
 	assert.False(t, runner.ContainsText("Sentry"),
 		"No confirmation modal should appear when disabling")
 }
+
+func remoteTestBackup(id string, createdAt time.Time, source *RemoteBackupSourceDevice) RemoteBackupItem {
+	return RemoteBackupItem{
+		ID:         id,
+		CreatedAt:  createdAt,
+		BackupType: "manual",
+		SizeBytes:  4 << 20,
+		Categories: map[string]RemoteBackupCategory{
+			"zaparoo": {Files: 2, Bytes: 100},
+			"saves":   {Files: 5, Bytes: 900},
+		},
+		SourceDevice: source,
+	}
+}
+
+func TestGroupRemoteBackupsBySource_OrdersTiersAndSnapshots(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	oldDevice := &RemoteBackupSourceDevice{ID: "dev-old", Name: "Old MiSTer", Linked: false}
+	linkedDevice := &RemoteBackupSourceDevice{ID: "dev-b", Name: "Bedroom", Linked: true}
+	currentDevice := &RemoteBackupSourceDevice{ID: "dev-cur", Name: "Living Room", Linked: true, Current: true}
+
+	sources := groupRemoteBackupsBySource([]RemoteBackupItem{
+		remoteTestBackup("old-1", base.Add(1*time.Hour), oldDevice),
+		remoteTestBackup("legacy-1", base.Add(2*time.Hour), nil),
+		remoteTestBackup("old-2", base.Add(3*time.Hour), oldDevice),
+		remoteTestBackup("cur-1", base.Add(4*time.Hour), currentDevice),
+		remoteTestBackup("linked-1", base.Add(5*time.Hour), linkedDevice),
+	})
+
+	require.Len(t, sources, 3)
+	// Current device first, merged with the legacy item, newest snapshot first.
+	assert.Equal(t, "Living Room", sources[0].Device.Name)
+	assert.True(t, sources[0].Device.Current)
+	require.Len(t, sources[0].Backups, 2)
+	assert.Equal(t, "cur-1", sources[0].Backups[0].ID)
+	assert.Equal(t, "legacy-1", sources[0].Backups[1].ID)
+	// Other linked devices next.
+	assert.Equal(t, "Bedroom", sources[1].Device.Name)
+	// Unlinked devices last, snapshots newest first.
+	assert.Equal(t, "Old MiSTer", sources[2].Device.Name)
+	require.Len(t, sources[2].Backups, 2)
+	assert.Equal(t, "old-2", sources[2].Backups[0].ID)
+	assert.Equal(t, "old-1", sources[2].Backups[1].ID)
+}
+
+func TestGroupRemoteBackupsBySource_LegacyWithoutSourceDevice(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	sources := groupRemoteBackupsBySource([]RemoteBackupItem{
+		remoteTestBackup("a", base, nil),
+		remoteTestBackup("b", base.Add(time.Hour), nil),
+	})
+	require.Len(t, sources, 1)
+	assert.True(t, sources[0].Device.Current)
+	assert.Equal(t, "This device", remoteBackupSourceLabel(&sources[0].Device))
+	require.Len(t, sources[0].Backups, 2)
+	assert.Equal(t, "b", sources[0].Backups[0].ID)
+}
+
+func TestRemoteBackupSourceLabel(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "This device",
+		remoteBackupSourceLabel(&RemoteBackupSourceDevice{Current: true}))
+	assert.Equal(t, "Living Room (this device)",
+		remoteBackupSourceLabel(&RemoteBackupSourceDevice{Name: "Living Room", Current: true}))
+	assert.Equal(t, "Bedroom",
+		remoteBackupSourceLabel(&RemoteBackupSourceDevice{Name: "Bedroom", Linked: true}))
+	assert.Equal(t, "Old MiSTer (unlinked)",
+		remoteBackupSourceLabel(&RemoteBackupSourceDevice{Name: "Old MiSTer"}))
+	assert.Equal(t, "Unnamed device",
+		remoteBackupSourceLabel(&RemoteBackupSourceDevice{Linked: true}))
+}
+
+func TestRemoteBackupListPage_GroupsSources_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	mockSvc.On("ListRemoteBackups", mock.Anything).Return([]RemoteBackupItem{
+		remoteTestBackup("old-1", base, &RemoteBackupSourceDevice{ID: "dev-old", Name: "Old MiSTer"}),
+		remoteTestBackup("cur-1", base.Add(time.Hour),
+			&RemoteBackupSourceDevice{ID: "dev-cur", Name: "Living Room", Linked: true, Current: true}),
+		remoteTestBackup("cur-2", base.Add(2*time.Hour), nil),
+	}, nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Living Room (this device)", 500*time.Millisecond))
+	assert.True(t, runner.ContainsText("Old MiSTer (unlinked)"))
+	assert.True(t, runner.ContainsText("2 backups"), "current device merges the legacy snapshot")
+	assert.True(t, runner.ContainsText("1 backup"))
+	assert.True(t, runner.ContainsText("Latest 2026-07-10 14:00:00 UTC"))
+}
+
+func TestRemoteBackupListPage_Empty_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("ListRemoteBackups", mock.Anything).Return([]RemoteBackupItem{}, nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("(no cloud backups found)", 500*time.Millisecond))
+}
+
+func TestRemoteBackupSnapshotsPage_ShowsTypeAndSize_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	scheduled := remoteTestBackup("snap-old", base, nil)
+	scheduled.BackupType = "scheduled"
+	mockSvc.On("ListRemoteBackups", mock.Anything).Return([]RemoteBackupItem{
+		scheduled,
+		remoteTestBackup("snap-new", base.Add(time.Hour), nil),
+	}, nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("This device", 500*time.Millisecond))
+
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 13:00:00 UTC", 500*time.Millisecond))
+	assert.True(t, runner.ContainsText("Cloud backup 2026-07-10 12:00:00 UTC"))
+	assert.True(t, runner.ContainsText("Manual"))
+	assert.True(t, runner.ContainsText("Scheduled"))
+	assert.True(t, runner.ContainsText("4 MB"))
+}
+
+func TestRemoteBackupSnapshotsPage_IncompatibleCannotRestore_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	incompatible := remoteTestBackup("snap-1", time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC), nil)
+	incompatible.Incompatible = true
+	mockSvc.On("ListRemoteBackups", mock.Anything).Return([]RemoteBackupItem{incompatible}, nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("This device", 500*time.Millisecond))
+
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("requires newer Core", 500*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Incompatible backup", 500*time.Millisecond))
+	runner.SimulateEnter()
+	mockSvc.AssertNotCalled(t, "RestoreRemoteBackup", mock.Anything, mock.Anything)
+}
+
+func TestRemoteBackupRestoreConfirm_WordingAndRestore_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	source := &RemoteBackupSourceDevice{ID: "dev-old", Name: "Old MiSTer"}
+	mockSvc.On("ListRemoteBackups", mock.Anything).Return([]RemoteBackupItem{
+		remoteTestBackup("backup-7", time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC), source),
+	}, nil)
+	mockSvc.On("RestoreRemoteBackup", mock.Anything, "backup-7").Return(nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Old MiSTer (unlinked)", 500*time.Millisecond))
+
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 12:00:00 UTC", 500*time.Millisecond))
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForText("Restore backup from Old MiSTer (unlinked)?", 500*time.Millisecond))
+	assert.True(t, runner.ContainsText("Snapshot: 2026-07-10 12:00:00 UTC"))
+	assert.True(t, runner.ContainsText("Overwrites: Zaparoo, Saves"))
+	assert.True(t, runner.ContainsText("The source backup is not changed."))
+	assert.True(t, runner.ContainsText("keeps its own Zaparoo Online identity."))
+	assert.True(t, runner.ContainsText("safety backup is created first."))
+	assert.True(t, runner.ContainsText("Core restarts after restore."))
+
+	// Confirm ("Yes" is focused first).
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Cloud backup restored", 2*time.Second))
+	mockSvc.AssertCalled(t, "RestoreRemoteBackup", mock.Anything, "backup-7")
+}
+
+func TestStartAuthLinkFlow_SuccessMentionsCloudBackups_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("StartAuthLink", mock.Anything).Return(&models.AuthLinkStatusResponse{
+		Status:          models.AuthLinkStatusPending,
+		UserCode:        "ABCD-1234",
+		VerificationURL: "https://zaparoo.com/link",
+	}, nil)
+	mockSvc.On("GetAuthLinkStatus", mock.Anything).Return(&models.AuthLinkStatusResponse{
+		Status: models.AuthLinkStatusApproved,
+	}, nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		startAuthLinkFlow(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("ABCD-1234", 500*time.Millisecond))
+
+	// The poll loop ticks every 2 seconds before observing approval.
+	require.True(t, runner.WaitForText("Device linked", 5*time.Second))
+	assert.True(t, runner.ContainsText("Existing backups from your account are under"))
+	assert.True(t, runner.ContainsText("Cloud backup > View backups."))
+}

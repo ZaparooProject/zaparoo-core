@@ -72,3 +72,37 @@ func TestCoordinatorShutdownCancelsAndWaitsForOperation(t *testing.T) {
 	_, err = coordinator.Begin(context.Background(), OperationLocalCreate, OperationWrite)
 	assert.ErrorIs(t, err, ErrStopped)
 }
+
+func TestCoordinatorReportsWriteFinished(t *testing.T) {
+	t.Parallel()
+	coordinator := New()
+	finished := make(chan OperationKind, 4)
+	coordinator.SetOnWriteFinished(func(kind OperationKind) { finished <- kind })
+
+	// Read operations end silently.
+	readLease, err := coordinator.Begin(context.Background(), OperationLocalInspect, OperationRead)
+	require.NoError(t, err)
+	readLease.Release()
+	select {
+	case kind := <-finished:
+		t.Fatalf("read operation must not report finished, got %s", kind)
+	default:
+	}
+
+	// A write operation reports its kind exactly once on release.
+	writeLease, err := coordinator.Begin(context.Background(), OperationRemoteUpload, OperationWrite)
+	require.NoError(t, err)
+	writeLease.Release()
+	select {
+	case kind := <-finished:
+		assert.Equal(t, OperationRemoteUpload, kind)
+	default:
+		t.Fatal("write operation release must report finished")
+	}
+	writeLease.Release()
+	select {
+	case kind := <-finished:
+		t.Fatalf("double release must not report finished again, got %s", kind)
+	default:
+	}
+}

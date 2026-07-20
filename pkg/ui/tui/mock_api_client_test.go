@@ -148,12 +148,12 @@ func (m *MockSettingsService) RunRemoteBackup(ctx context.Context) (string, erro
 	return id, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
 }
 
-func (m *MockSettingsService) ListRemoteBackups(ctx context.Context) ([]map[string]any, error) {
+func (m *MockSettingsService) ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
 	}
-	backups, ok := args.Get(0).([]map[string]any)
+	backups, ok := args.Get(0).([]RemoteBackupItem)
 	if !ok {
 		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
 	}

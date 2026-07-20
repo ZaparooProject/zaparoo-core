@@ -36,6 +36,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// PageSettingsBackupSnapshots shows one source device's cloud snapshots.
+const PageSettingsBackupSnapshots = "settings_backup_snapshots"
+
+// remoteBackupSource groups an account's cloud snapshots by the device that
+// created them, snapshots newest first.
+type remoteBackupSource struct {
+	Device  RemoteBackupSourceDevice
+	Backups []RemoteBackupItem
+}
+
+// backupCategoryOrder and backupCategoryLabels define the display order and
+// names for backup categories across list, detail, and confirmation views.
+var (
+	backupCategoryOrder  = []string{"zaparoo", "settings", "inputs", "saves", "savestates"}
+	backupCategoryLabels = map[string]string{
+		"zaparoo":    "Zaparoo",
+		"settings":   "Settings",
+		"inputs":     "Inputs",
+		"saves":      "Saves",
+		"savestates": "Save states",
+	}
+)
+
 // BuildSettingsMainMenu creates the top-level settings menu with Audio, Readers, and Advanced options.
 func BuildSettingsMainMenu(
 	cfg *config.Instance,
@@ -814,7 +837,9 @@ func pollAuthLinkStatus(
 			app.QueueUpdateDraw(func() {
 				closeModal()
 				ShowInfoModal(pages, app, "Device linked",
-					"This device is now linked to Zaparoo Online.", onDone)
+					"This device is now linked to Zaparoo Online.\n\n"+
+						"Existing backups from your account are under\n"+
+						"Cloud backup > View backups.", onDone)
 			})
 			return
 		default:
@@ -1110,24 +1135,107 @@ func buildRemoteBackupListPage(svc SettingsService, pages *tview.Pages, app *tvi
 		"Loading cloud backups...",
 		"Failed to list cloud backups",
 		backupContext, goBack,
-		func(ctx context.Context) ([]map[string]any, error) {
+		func(ctx context.Context) ([]RemoteBackupItem, error) {
 			backups, err := svc.ListRemoteBackups(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("list cloud backups: %w", err)
 			}
 			return backups, nil
 		},
-		func(backups []map[string]any) {
+		func(backups []RemoteBackupItem) {
 			renderRemoteBackupListPage(svc, pages, app, backups, goBack)
 		},
 	)
+}
+
+// groupRemoteBackupsBySource organizes the account catalog into one entry
+// per source device: this device first, then other linked devices, then
+// unlinked devices. Items without source metadata (legacy API or current
+// device) join this device's group. Snapshots sort newest first; groups
+// within a tier sort by latest snapshot, then name, then ID.
+func groupRemoteBackupsBySource(items []RemoteBackupItem) []remoteBackupSource {
+	const currentKey = "\x00current"
+	groups := make(map[string]*remoteBackupSource)
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		key := currentKey
+		device := RemoteBackupSourceDevice{Current: true, Linked: true}
+		if item.SourceDevice != nil {
+			device = *item.SourceDevice
+			if !device.Current {
+				key = device.ID
+			}
+		}
+		group, ok := groups[key]
+		if !ok {
+			group = &remoteBackupSource{Device: device}
+			groups[key] = group
+			order = append(order, key)
+		}
+		if group.Device.Name == "" && device.Name != "" {
+			// A legacy item may create the current group before an item
+			// carrying full source metadata for this device arrives.
+			group.Device = device
+		}
+		group.Backups = append(group.Backups, item)
+	}
+
+	sources := make([]remoteBackupSource, 0, len(order))
+	for _, key := range order {
+		group := groups[key]
+		slices.SortStableFunc(group.Backups, func(a, b RemoteBackupItem) int {
+			return b.CreatedAt.Compare(a.CreatedAt)
+		})
+		sources = append(sources, *group)
+	}
+	tier := func(s *remoteBackupSource) int {
+		switch {
+		case s.Device.Current:
+			return 0
+		case s.Device.Linked:
+			return 1
+		default:
+			return 2
+		}
+	}
+	slices.SortStableFunc(sources, func(a, b remoteBackupSource) int {
+		if t := tier(&a) - tier(&b); t != 0 {
+			return t
+		}
+		if c := b.Backups[0].CreatedAt.Compare(a.Backups[0].CreatedAt); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Device.Name, b.Device.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Device.ID, b.Device.ID)
+	})
+	return sources
+}
+
+// remoteBackupSourceLabel renders a source device's list label: this device
+// first-person, unlinked devices marked so the user knows the source is no
+// longer attached to the account.
+func remoteBackupSourceLabel(device *RemoteBackupSourceDevice) string {
+	switch {
+	case device.Current && device.Name == "":
+		return "This device"
+	case device.Current:
+		return device.Name + " (this device)"
+	case device.Name == "":
+		return "Unnamed device"
+	case !device.Linked:
+		return device.Name + " (unlinked)"
+	default:
+		return device.Name
+	}
 }
 
 func renderRemoteBackupListPage(
 	svc SettingsService,
 	pages *tview.Pages,
 	app *tview.Application,
-	backups []map[string]any,
+	backups []RemoteBackupItem,
 	goBack func(),
 ) {
 	frame := NewPageFrame(app).SetTitle("Settings", "Backup", "Cloud")
@@ -1139,31 +1247,17 @@ func renderRemoteBackupListPage(
 	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	list.ShowSecondaryText(true)
 	list.SetSelectedFocusOnly(true)
-	for _, backup := range backups {
-		id := backupString(backup, "id")
-		if id == "" {
-			continue
+	for _, source := range groupRemoteBackupsBySource(backups) {
+		count := "1 backup"
+		if len(source.Backups) != 1 {
+			count = fmt.Sprintf("%d backups", len(source.Backups))
 		}
-		label := backupDisplayLabel("Cloud backup", "", backupString(backup, "createdAt"))
-		if label == "Cloud backup" {
-			label = "Cloud backup " + id
-		}
-		secondary := "ID " + id
-		if size := formatBackupSize(backup, "sizeBytes"); size != "" {
-			secondary += "  " + size
-		}
-		if incompatible, ok := backup["incompatible"].(bool); ok && incompatible {
-			// Committed by a newer Core: listed, but refuses to restore.
-			list.AddItem(label+" (requires newer Core)", secondary, 0, func() {
-				ShowInfoModal(pages, app, "Incompatible backup",
-					"This backup was made by a newer Core version and cannot be restored "+
-						"until this device is updated.", func() { app.SetFocus(list) })
-			})
-			continue
-		}
-		backupID := id
-		list.AddItem(label, secondary, 0, func() {
-			showRemoteBackupRestoreConfirm(svc, pages, app, list, backupID, goBack)
+		secondary := count + "  Latest " + formatBackupTime(source.Backups[0].CreatedAt)
+		list.AddItem(remoteBackupSourceLabel(&source.Device), secondary, 0, func() {
+			renderRemoteBackupSnapshotsPage(svc, pages, app, &source, func() {
+				pages.SwitchToPage(PageSettingsBackupList)
+				app.SetFocus(list)
+			}, goBack)
 		})
 	}
 	if len(backups) == 0 {
@@ -1176,17 +1270,106 @@ func renderRemoteBackupListPage(
 	frame.FocusContent()
 }
 
+// renderRemoteBackupSnapshotsPage lists one source device's snapshots,
+// newest first. goBack returns to the source list; onRestored runs after a
+// completed restore (Core restart flow).
+func renderRemoteBackupSnapshotsPage(
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	source *remoteBackupSource,
+	goBack func(),
+	onRestored func(),
+) {
+	frame := NewPageFrame(app).SetTitle("Settings", "Cloud", remoteBackupSourceLabel(&source.Device))
+	frame.SetOnEscape(goBack)
+	buttonBar := NewButtonBar(app).AddButton("Back", goBack).SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	list := tview.NewList()
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
+	list.ShowSecondaryText(true)
+	list.SetSelectedFocusOnly(true)
+	for _, backup := range source.Backups {
+		if backup.ID == "" {
+			continue
+		}
+		label := "Cloud backup " + formatBackupTime(backup.CreatedAt)
+		secondary := remoteBackupTypeLabel(backup.BackupType)
+		if backup.SizeBytes > 0 {
+			secondary += "  " + formatHumanBytes(backup.SizeBytes)
+		}
+		if backup.Incompatible {
+			// Committed by a newer Core: listed, but refuses to restore.
+			list.AddItem(label+" (requires newer Core)", secondary, 0, func() {
+				ShowInfoModal(pages, app, "Incompatible backup",
+					"This backup was made by a newer Core version and cannot be restored "+
+						"until this device is updated.", func() { app.SetFocus(list) })
+			})
+			continue
+		}
+		item := backup
+		list.AddItem(label, secondary, 0, func() {
+			showRemoteBackupRestoreConfirm(svc, pages, app, list, &item, &source.Device, onRestored)
+		})
+	}
+
+	frame.SetContent(list)
+	frame.SetupContentToButtonNavigation()
+	pages.AddAndSwitchToPage(PageSettingsBackupSnapshots, frame, true)
+	frame.FocusContent()
+}
+
+func remoteBackupTypeLabel(backupType string) string {
+	switch backupType {
+	case "scheduled":
+		return "Scheduled"
+	case "manual":
+		return "Manual"
+	default:
+		return "Backup"
+	}
+}
+
+// remoteBackupOverwriteSummary names the categories a restore replaces on
+// this device, in display order.
+func remoteBackupOverwriteSummary(categories map[string]RemoteBackupCategory) string {
+	names := make([]string, 0, len(categories))
+	for _, category := range backupCategoryOrder {
+		if _, ok := categories[category]; ok {
+			names = append(names, backupCategoryLabels[category])
+		}
+	}
+	if len(names) == 0 {
+		return "Backup data"
+	}
+	return strings.Join(names, ", ")
+}
+
+// showRemoteBackupRestoreConfirm explains exactly what a restore does before
+// running it: the snapshot is copied onto this device, the source backup and
+// device are untouched, and this device keeps its own Online identity.
 func showRemoteBackupRestoreConfirm(
 	svc SettingsService,
 	pages *tview.Pages,
 	app *tview.Application,
 	focus tview.Primitive,
-	backupID string,
+	backup *RemoteBackupItem,
+	source *RemoteBackupSourceDevice,
 	onRestored func(),
 ) {
+	sourceName := remoteBackupSourceLabel(source)
+	message := "Restore backup from " + sourceName + "?\n\n" +
+		"Snapshot: " + formatBackupTime(backup.CreatedAt) + "\n" +
+		"Overwrites: " + remoteBackupOverwriteSummary(backup.Categories) + "\n\n" +
+		"The source backup is not changed. This device\n" +
+		"keeps its own Zaparoo Online identity. A local\n" +
+		"safety backup is created first.\n\n" +
+		"Core restarts after restore."
+	backupID := backup.ID
 	ShowConfirmModal(
 		pages, app,
-		"Restore cloud backup "+backupID+"?\n\nCore will restart after restore.",
+		message,
 		func() {
 			runBackupAction(
 				pages,
@@ -1288,21 +1471,13 @@ func formatBackupCategories(backup map[string]any) []string {
 	if !ok || len(raw) == 0 {
 		return nil
 	}
-	labels := map[string]string{
-		"zaparoo":    "Zaparoo",
-		"settings":   "Settings",
-		"inputs":     "Inputs",
-		"saves":      "Saves",
-		"savestates": "Save states",
-	}
-	ordered := []string{"zaparoo", "settings", "inputs", "saves", "savestates"}
 	lines := make([]string, 0, len(raw))
-	for _, category := range ordered {
+	for _, category := range backupCategoryOrder {
 		entry, ok := raw[category].(map[string]any)
 		if !ok {
 			continue
 		}
-		name := labels[category]
+		name := backupCategoryLabels[category]
 		files, _ := backupAnyInt64(entry["files"])
 		bytes, _ := backupAnyInt64(entry["bytes"])
 		lines = append(lines, fmt.Sprintf("%s: %d files, %s", name, files, formatHumanBytes(bytes)))

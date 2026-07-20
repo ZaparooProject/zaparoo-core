@@ -101,7 +101,7 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 	// without dropping critical user-facing notifications (tokens, readers, media state)
 	ns := make(chan models.Notification, 500)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
-	return &State{
+	state = &State{
 		runZapScript:      true,
 		platform:          platform,
 		readers:           make(map[string]readers.Reader),
@@ -111,7 +111,16 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 		launcherManager:   NewLauncherManager(),
 		backupCoordinator: backupcoordinator.New(),
 		bootUUID:          bootUUID,
-	}, ns
+	}
+	// Terminal backup.state event: clients showing a paused/throttled backup
+	// banner clear it when the operation's lease is released.
+	state.backupCoordinator.SetOnWriteFinished(func(kind backupcoordinator.OperationKind) {
+		notifications.BackupState(ns, models.BackupStateNotification{
+			Operation: string(kind),
+			Finished:  true,
+		})
+	})
+	return state, ns
 }
 
 func (s *State) BackupCoordinator() *backupcoordinator.Coordinator {

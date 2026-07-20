@@ -2363,12 +2363,12 @@ func TestRemotePackFilesSortsByCategoryThenPath(t *testing.T) {
 	}, remotePackOrder(files))
 }
 
-func TestManagerListRemoteUsesAccountScopeAndMapsSources(t *testing.T) {
+func TestManagerListRemoteMapsBackupSources(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/v1/device/backups", r.URL.Path)
-		assert.Equal(t, "account", r.URL.Query().Get("scope"))
+		assert.Empty(t, r.URL.RawQuery)
 		writeJSON(t, w, remoteListResponse{Items: []remoteBackupResponse{{
 			ID: "backup-1", BackupType: RemoteBackupTypeManual, SchemaVersion: remoteSchemaVersion,
 			Platform: testStringPointer(platformids.Mister), CreatedAt: time.Now().UTC(),
@@ -2465,9 +2465,15 @@ func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
 			_, _ = w.Write(remoteConfig)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/7/restore-complete":
 			var complete remoteRestoreCompleteRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&complete))
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&complete)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			_, parseErr := uuid.Parse(complete.RestoreID)
-			require.NoError(t, parseErr)
+			if !assert.NoError(t, parseErr) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			restoreCompleteID = complete.RestoreID
 			restoreComplete = true
 			w.WriteHeader(http.StatusNoContent)
@@ -3485,4 +3491,22 @@ func TestManagerRunRemoteThrottledStillCompletes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "backup-1", info.Backup.ID)
 	assert.True(t, pauser.IsThrottled())
+}
+
+func TestManagerRecoverInterruptedRunsSkipsActiveOperation(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	started := formatTime(time.Now().UTC())
+	require.NoError(t, env.Manager.writeRemoteStatus(&statusEntry{LastRunAt: started, LastStatus: StatusRunning}))
+
+	// A run that began before the recovery pass owns the "running" status.
+	lease, err := env.Manager.coordinator.Begin(context.Background(), OperationRemoteUpload, OperationWrite)
+	require.NoError(t, err)
+	env.Manager.RecoverInterruptedRuns()
+	assert.Equal(t, StatusRunning, env.Manager.Status().Remote.LastStatus)
+
+	lease.Release()
+	env.Manager.RecoverInterruptedRuns()
+	status := env.Manager.Status()
+	assert.Equal(t, StatusFailed, status.Remote.LastStatus)
+	assert.Equal(t, statusErrorInterrupted, status.Remote.LastError)
 }

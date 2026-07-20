@@ -229,15 +229,17 @@ type remoteBackupSourceDevice struct {
 	Current  bool    `json:"current"`
 }
 
+//nolint:tagliatelle // Remote API contract uses snake_case JSON fields.
 type remoteRestoreCompleteRequest struct {
 	RestoreID string `json:"restore_id"`
 }
 
+//nolint:tagliatelle // Remote API contract uses snake_case JSON fields.
 type remotePackResponse struct {
+	CreatedAt   time.Time `json:"created_at"`
 	PackHash    string    `json:"pack_hash"`
 	SizeBytes   int64     `json:"size_bytes"`
 	ObjectCount int       `json:"object_count"`
-	CreatedAt   time.Time `json:"created_at"`
 }
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
@@ -328,7 +330,7 @@ func (m *Manager) ListRemote(ctx context.Context) (RemoteListInfo, error) {
 		return RemoteListInfo{}, err
 	}
 	var resp remoteListResponse
-	if err := client.doJSON(ctx, http.MethodGet, "/v1/device/backups?scope=account", nil, &resp); err != nil {
+	if err := client.doJSON(ctx, http.MethodGet, "/v1/device/backups", nil, &resp); err != nil {
 		return RemoteListInfo{}, err
 	}
 	items := make([]RemoteBackupInfo, 0, len(resp.Items))
@@ -1463,20 +1465,14 @@ func remoteEndpoint(baseURL, requestPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid remote backup base URL: %w", err)
 	}
-	pathPart, rawQuery, _ := strings.Cut(requestPath, "?")
-	decodedRequestPath, err := url.PathUnescape(pathPart)
+	decodedRequestPath, err := url.PathUnescape(requestPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid remote backup request path: %w", err)
-	}
-	query, err := url.ParseQuery(rawQuery)
-	if err != nil {
-		return "", fmt.Errorf("invalid remote backup request query: %w", err)
 	}
 	basePath := strings.TrimRight(base.Path, "/")
 	baseEscapedPath := strings.TrimRight(base.EscapedPath(), "/")
 	base.Path = basePath + decodedRequestPath
-	base.RawPath = baseEscapedPath + pathPart
-	base.RawQuery = query.Encode()
+	base.RawPath = baseEscapedPath + requestPath
 	return base.String(), nil
 }
 

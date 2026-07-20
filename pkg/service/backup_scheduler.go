@@ -137,7 +137,13 @@ func remoteBackupSchedulerLoop(
 	// A run interrupted by power loss or a hard shutdown left "running" in
 	// the status file; record it as failed so it retries on the short
 	// failure interval instead of waiting out the full schedule cadence.
-	backupsvc.NewManager(cfg, pl, db).RecoverInterruptedRuns()
+	// The shared coordinator lets recovery skip a run that started between
+	// the API coming up and this pass.
+	recoveryMgr := backupsvc.NewManager(cfg, pl, db)
+	if st != nil {
+		recoveryMgr.WithCoordinator(st.BackupCoordinator())
+	}
+	recoveryMgr.RecoverInterruptedRuns()
 
 	var scheduled atomic.Bool
 	trySchedule := func() {

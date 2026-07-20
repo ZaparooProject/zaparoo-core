@@ -24,10 +24,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 )
+
+// RemoteBackupSourceDevice identifies the account device that created a
+// cloud backup snapshot, as reported by settings.backup.remote.list.
+// Current is relative to this device; a nil source on an item means the
+// snapshot belongs to this device (legacy API or current device).
+type RemoteBackupSourceDevice struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Linked   bool   `json:"linked"`
+	Current  bool   `json:"current"`
+}
+
+// RemoteBackupCategory summarizes one category inside a cloud snapshot.
+type RemoteBackupCategory struct {
+	Files int64 `json:"files"`
+	Bytes int64 `json:"bytes"`
+}
+
+// RemoteBackupItem is one cloud backup snapshot from the account catalog.
+type RemoteBackupItem struct {
+	CreatedAt    time.Time                       `json:"createdAt"`
+	SourceDevice *RemoteBackupSourceDevice       `json:"sourceDevice"`
+	Categories   map[string]RemoteBackupCategory `json:"categories"`
+	ID           string                          `json:"id"`
+	BackupType   string                          `json:"backupType"`
+	SizeBytes    int64                           `json:"sizeBytes"`
+	Incompatible bool                            `json:"incompatible"`
+}
 
 // SettingsService handles settings API operations.
 type SettingsService interface {
@@ -58,8 +88,8 @@ type SettingsService interface {
 	// RunRemoteBackup uploads a backup to the configured remote provider.
 	RunRemoteBackup(ctx context.Context) (string, error)
 
-	// ListRemoteBackups fetches remote backup snapshots.
-	ListRemoteBackups(ctx context.Context) ([]map[string]any, error)
+	// ListRemoteBackups fetches the account's cloud backup snapshots.
+	ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error)
 
 	// RestoreRemoteBackup restores a remote backup snapshot.
 	RestoreRemoteBackup(ctx context.Context, id string) error
@@ -268,13 +298,13 @@ func (s *DefaultSettingsService) RunRemoteBackup(ctx context.Context) (string, e
 	return raw.Backup.ID, nil
 }
 
-func (s *DefaultSettingsService) ListRemoteBackups(ctx context.Context) ([]map[string]any, error) {
+func (s *DefaultSettingsService) ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error) {
 	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupRemoteList, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list remote backups: %w", err)
 	}
 	var raw struct {
-		Items []map[string]any `json:"items"`
+		Items []RemoteBackupItem `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse remote backups: %w", err)

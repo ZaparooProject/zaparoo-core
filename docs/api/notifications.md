@@ -569,7 +569,9 @@ Sent on every state transition of a device link flow started with `settings.auth
 
 ### backup.state
 
-Sent while a backup operation (local create, cloud upload, or restore) is running, whenever its pause/throttle state changes because a game started or stopped. Backup work follows the same policy as media indexing: most games throttle it, storage-sensitive CD-based cores pause it entirely, and it resumes when the game stops. A notification with both `paused` and `throttled` false means the operation returned to full speed.
+Sent while a backup operation (local create, cloud upload, or restore) is running, whenever its pause/throttle state changes because a game started or stopped, and once with `finished` true when the operation ends. Backup work follows the same policy as media indexing: most games throttle it, storage-sensitive CD-based cores pause it entirely, and it resumes when the game stops. A notification with `paused`, `throttled`, and `finished` all false means the operation returned to full speed.
+
+The `finished` notification is terminal for that operation, whatever its outcome — use it to clear any paused/slowed indicator, and read `settings.backup.status` for the result.
 
 #### Parameters
 
@@ -578,8 +580,11 @@ Sent while a backup operation (local create, cloud upload, or restore) is runnin
 | operation | string  | No       | The active operation kind, matching `activeOperation` from `settings.backup.status`.     |
 | paused    | boolean | Yes      | True if the operation is fully paused until the running game stops.                      |
 | throttled | boolean | Yes      | True if the operation is running slowed to stay out of the running game's way.           |
+| finished  | boolean | No       | True when the operation has ended; no further `backup.state` events follow for it.       |
 
-#### Example
+#### Examples
+
+##### Upload paused by a running game
 
 ```json
 {
@@ -589,6 +594,21 @@ Sent while a backup operation (local create, cloud upload, or restore) is runnin
     "operation": "remote-upload",
     "paused": true,
     "throttled": false
+  }
+}
+```
+
+##### Operation finished
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "backup.state",
+  "params": {
+    "operation": "remote-upload",
+    "paused": false,
+    "throttled": false,
+    "finished": true
   }
 }
 ```
