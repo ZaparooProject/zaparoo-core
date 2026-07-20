@@ -100,7 +100,7 @@ func TestWaitForBackupShutdownReturnsAtHardDeadline(t *testing.T) {
 	case waitErr := <-waitDone:
 		require.Error(t, waitErr)
 		require.ErrorIs(t, waitErr, context.DeadlineExceeded)
-	case <-time.After(time.Second):
+	case <-time.After(250 * time.Millisecond):
 		t.Fatal("shutdown did not return at hard deadline")
 	}
 	_, _, active := coordinator.Active()
