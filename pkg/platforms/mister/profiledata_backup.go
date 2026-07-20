@@ -38,7 +38,7 @@ import (
 
 type profileRestoreMount struct {
 	ref  platforms.ProfileRef
-	item string
+	item profileDataItemSpec
 }
 
 func removeBackupDefinition(
@@ -154,7 +154,7 @@ func (d *profileDataManager) restoreProfileMounts(root string, mounts []profileR
 			err = d.applyItem(&plan)
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("restoring %s profile mount: %w", mount.item, err))
+			errs = append(errs, fmt.Errorf("restoring %s profile mount: %w", mount.item.id, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -174,8 +174,13 @@ func (d *profileDataManager) prepareBackupRestore() (func(bool) error, error) {
 		return nil, err
 	}
 	previous := make([]profileRestoreMount, 0, 2)
-	for _, item := range []string{profileDataItemSaves, profileDataItemSavestates} {
-		target := filepath.Join(root, item)
+	for _, itemID := range []string{profileDataItemSaves, profileDataItemSavestates} {
+		item, ok := findProfileDataItem(itemID)
+		if !ok {
+			d.mu.Unlock()
+			return nil, fmt.Errorf("unknown backup profile data item %q", itemID)
+		}
+		target := filepath.Join(root, item.id)
 		stack := mountsAt(mounts, target)
 		if len(stack) > 0 {
 			if entry := d.ledger.find(&stack[len(stack)-1]); entry != nil {
@@ -187,7 +192,7 @@ func (d *profileDataManager) prepareBackupRestore() (func(bool) error, error) {
 		if err = d.applyItem(&profileItemPlan{item: item, target: target}); err != nil {
 			restoreErr := d.restoreProfileMounts(root, previous)
 			d.mu.Unlock()
-			return nil, errors.Join(fmt.Errorf("exposing %s for backup restore: %w", item, err), restoreErr)
+			return nil, errors.Join(fmt.Errorf("exposing %s for backup restore: %w", item.id, err), restoreErr)
 		}
 		mounts, err = d.m.Mounts()
 		if err != nil {

@@ -143,6 +143,107 @@ func allItems() []string {
 	return []string{profileDataItemSaves, profileDataItemSavestates}
 }
 
+func allProfileItems() []string {
+	return append(allItems(), profileDataItemRetroAchievements)
+}
+
+func writeRetroAchievementsConfig(t *testing.T, fs afero.Fs, path, content string) {
+	t.Helper()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o644))
+}
+
+func TestProfileItemsIncludesRetroAchievements(t *testing.T) {
+	t.Parallel()
+	p := &Platform{}
+	assert.Contains(t, p.ProfileItems(), platforms.ProfileItem{
+		ID: profileDataItemRetroAchievements, Label: "RetroAchievements account",
+		Owner: platforms.ProfileItemOwnerProfile,
+	})
+}
+
+func TestApply_RetroAchievementsMissingIsNoOp(t *testing.T) {
+	t.Parallel()
+	m := &fakeMounter{}
+	d, fs := newTestManager(m)
+
+	require.NoError(t, d.apply(kidA(), []string{profileDataItemRetroAchievements}))
+	assert.Empty(t, m.mounts)
+	assert.Empty(t, d.ledger.entries)
+
+	profileConfig := filepath.Join(
+		misterconfig.SDRootDir, "zaparoo", "profiles", kidA().ID, retroAchievementsConfigFile,
+	)
+	exists, err := afero.Exists(fs, profileConfig)
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestApply_RetroAchievementsCopiesAndMountsConfig(t *testing.T) {
+	t.Parallel()
+	m := &fakeMounter{}
+	d, fs := newTestManager(m)
+	liveConfig := filepath.Join(misterconfig.SDRootDir, retroAchievementsConfigFile)
+	writeRetroAchievementsConfig(t, fs, liveConfig, "username=shared\npassword=secret\n")
+
+	require.NoError(t, d.apply(kidA(), []string{profileDataItemRetroAchievements}))
+
+	profileConfig := filepath.Join(
+		misterconfig.SDRootDir, "zaparoo", "profiles", kidA().ID, retroAchievementsConfigFile,
+	)
+	copied, err := afero.ReadFile(fs, profileConfig)
+	require.NoError(t, err)
+	assert.Equal(t, "username=shared\npassword=secret\n", string(copied))
+
+	stack := mountsAt(m.mounts, liveConfig)
+	require.Len(t, stack, 1)
+	assert.Equal(t, profileConfig, stack[0].Root)
+	require.Len(t, d.ledger.entries, 1)
+	assert.Equal(t, profileDataItemRetroAchievements, d.ledger.entries[0].Item)
+
+	binds := m.binds
+	require.NoError(t, d.apply(kidA(), []string{profileDataItemRetroAchievements}))
+	assert.Equal(t, binds, m.binds, "same profile must not churn config mount")
+
+	require.NoError(t, d.apply(platforms.ProfileRef{}, []string{profileDataItemRetroAchievements}))
+	assert.Empty(t, mountsAt(m.mounts, liveConfig))
+	assert.Empty(t, d.ledger.entries)
+}
+
+func TestApply_RetroAchievementsSwitchesExistingProfileConfigs(t *testing.T) {
+	t.Parallel()
+	m := &fakeMounter{}
+	d, fs := newTestManager(m)
+	liveConfig := filepath.Join(misterconfig.SDRootDir, retroAchievementsConfigFile)
+	writeRetroAchievementsConfig(t, fs, liveConfig, "username=shared\n")
+	profileBConfig := filepath.Join(
+		misterconfig.SDRootDir, "zaparoo", "profiles", kidB().ID, retroAchievementsConfigFile,
+	)
+	writeRetroAchievementsConfig(t, fs, profileBConfig, "username=kid-b\n")
+
+	require.NoError(t, d.apply(kidA(), []string{profileDataItemRetroAchievements}))
+	require.NoError(t, d.apply(kidB(), []string{profileDataItemRetroAchievements}))
+
+	stack := mountsAt(m.mounts, liveConfig)
+	require.Len(t, stack, 1)
+	assert.Equal(t, profileBConfig, stack[0].Root)
+	entry := d.ledger.find(&stack[0])
+	require.NotNil(t, entry)
+	assert.Equal(t, kidB().ID, entry.ProfileID)
+}
+
+func TestApply_RejectsUnknownItem(t *testing.T) {
+	t.Parallel()
+	m := &fakeMounter{}
+	d, _ := newTestManager(m)
+
+	err := d.apply(kidA(), []string{"../../outside"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown profile data item")
+	assert.Empty(t, m.mounts)
+	assert.Empty(t, d.ledger.entries)
+}
+
 func TestParseMountInfo(t *testing.T) {
 	t.Parallel()
 	data := `21 26 179:1 / /media/fat rw,noatime - exfat /dev/mmcblk0p1 rw,iocharset=utf8
@@ -301,6 +402,34 @@ func TestApply_SecondItemFailureRestoresPreviousProfile(t *testing.T) {
 	}
 }
 
+func TestApply_RetroAchievementsBindFailureRestoresPreviousProfile(t *testing.T) {
+	t.Parallel()
+	m := &fakeMounter{}
+	d, fs := newTestManager(m)
+	liveConfig := filepath.Join(misterconfig.SDRootDir, retroAchievementsConfigFile)
+	writeRetroAchievementsConfig(t, fs, liveConfig, "username=shared\n")
+
+	require.NoError(t, d.apply(kidA(), allProfileItems()))
+	m.bindErr = errors.New("mount: I/O error")
+	m.failBindAtTry = m.bindAttempts + 3
+
+	err := d.apply(kidB(), allProfileItems())
+	require.Error(t, err)
+
+	for _, item := range []string{profileDataItemSaves, profileDataItemSavestates} {
+		stack := mountsAt(m.mounts, filepath.Join(misterconfig.SDRootDir, item))
+		require.Len(t, stack, 1)
+		assert.Contains(t, stack[0].Root, kidA().ID)
+	}
+	configStack := mountsAt(m.mounts, liveConfig)
+	require.Len(t, configStack, 1)
+	assert.Contains(t, configStack[0].Root, kidA().ID)
+	require.Len(t, d.ledger.entries, 3)
+	for _, entry := range d.ledger.entries {
+		assert.Equal(t, kidA().ID, entry.ProfileID)
+	}
+}
+
 func TestApply_LedgerFailureRollsBackNewBind(t *testing.T) {
 	t.Parallel()
 	m := &fakeMounter{}
@@ -336,15 +465,26 @@ func TestApply_USBRoot(t *testing.T) {
 	}}
 	d, fs := newTestManager(m)
 	writeDeviceBin(t, fs, 1)
+	liveConfig := filepath.Join(misterconfig.SDRootDir, retroAchievementsConfigFile)
+	writeRetroAchievementsConfig(t, fs, liveConfig, "username=shared\n")
 
-	require.NoError(t, d.apply(kidA(), allItems()))
+	require.NoError(t, d.apply(kidA(), allProfileItems()))
 
-	// Targets and pool both follow the USB storage root.
+	// Save targets and pools follow the USB storage root.
 	saves := mountsAt(m.mounts, "/media/usb0/saves")
 	require.Len(t, saves, 1)
 	assert.Equal(t, "/zaparoo/profiles/"+kidA().ID+"/saves", saves[0].Root)
 	assert.Equal(t, "/dev/sda1", saves[0].Source)
 	assert.Empty(t, mountsAt(m.mounts, "/media/fat/saves"))
+
+	// odelot's Main hardcodes its config on the SD root, independent of
+	// main's selected save storage root.
+	configMounts := mountsAt(m.mounts, liveConfig)
+	require.Len(t, configMounts, 1)
+	assert.Equal(t, filepath.Join(
+		misterconfig.SDRootDir, "zaparoo", "profiles", kidA().ID, retroAchievementsConfigFile,
+	), configMounts[0].Root)
+	assert.Empty(t, mountsAt(m.mounts, filepath.Join(mediaRootPath, "usb0", retroAchievementsConfigFile)))
 }
 
 func TestApply_NASSavesStackOnForeignMount(t *testing.T) {

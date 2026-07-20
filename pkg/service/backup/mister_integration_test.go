@@ -27,6 +27,10 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 	writeTestFile(t, filepath.Join(rootDir, "config", "inputs", "renamed", "old.map"), "renamed input\n")
 	writeTestFile(t, filepath.Join(rootDir, "games", "MiSTer.ini"), "nested ini\n")
 	writeTestFile(t, filepath.Join(rootDir, "games", "game.rom"), "rom\n")
+	writeTestFile(t, filepath.Join(rootDir, "retroachievements.cfg"), "password=shared-secret\n")
+	writeTestFile(t, filepath.Join(rootDir, "achievement.wav"), "sound\n")
+	writeTestFile(t, filepath.Join(rootDir, "MiSTer_RA"), "custom main\n")
+	writeTestFile(t, filepath.Join(rootDir, "_RA_Cores", "RA_NES.rbf"), "custom core\n")
 	writeTestFile(t, filepath.Join(rootDir, "gamecontrollerdb_user.txt"), "root controller db\n")
 	writeTestFile(t, filepath.Join(rootDir, "linux", "gamecontrollerdb_user.txt"), "linux controller db\n")
 	profileID := "11111111-aaaa-bbbb-cccc-000000000001"
@@ -34,6 +38,9 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 		"profile save\n")
 	writeTestFile(t, filepath.Join(rootDir, "zaparoo", "profiles", profileID, "savestates", "game.ss"),
 		"profile state\n")
+	writeTestFile(t, filepath.Join(
+		rootDir, "zaparoo", "profiles", profileID, "retroachievements.cfg",
+	), "password=profile-secret\n")
 	nasProfileID := "22222222-aaaa-bbbb-cccc-000000000002"
 	writeTestFile(t, filepath.Join(rootDir, "saves", ".zaparoo-profiles", nasProfileID, "saves", "nas.sav"),
 		"nas save\n")
@@ -65,4 +72,11 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 	assert.NotContains(t, byArchive, platformArchive(filepath.Join("config", "inputs", "renamed", "old.map")))
 	assert.NotContains(t, byArchive, platformArchive(filepath.Join("games", "MiSTer.ini")))
 	assert.NotContains(t, byArchive, platformArchive(filepath.Join("games", "game.rom")))
+	assert.NotContains(t, byArchive, platformArchive("retroachievements.cfg"))
+	assert.NotContains(t, byArchive, platformArchive(filepath.Join(
+		"zaparoo", "profiles", profileID, "retroachievements.cfg",
+	)))
+	assert.NotContains(t, byArchive, platformArchive("achievement.wav"))
+	assert.NotContains(t, byArchive, platformArchive("MiSTer_RA"))
+	assert.NotContains(t, byArchive, platformArchive(filepath.Join("_RA_Cores", "RA_NES.rbf")))
 }
