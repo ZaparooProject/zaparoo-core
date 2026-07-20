@@ -137,6 +137,9 @@ type BrowseIndexResults struct {
 }
 
 type SettingsResponse struct {
+	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
+	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
+	BackupRemoteBaseURL       *string            `json:"backupRemoteBaseUrl,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
@@ -735,6 +738,75 @@ type ProfilesDataNotification struct {
 
 type SettingsAuthClaimResponse struct {
 	Domains []string `json:"domains"`
+}
+
+type SettingsAuthStatusResponse struct {
+	Linked bool `json:"linked"`
+}
+
+// SettingsAuthUnlinkResponse lists the domains whose credentials were
+// removed by settings.auth.unlink.
+type SettingsAuthUnlinkResponse struct {
+	Domains []string `json:"domains"`
+}
+
+// Auth link session statuses (settings.auth.link).
+const (
+	AuthLinkStatusNone      = "none"
+	AuthLinkStatusPending   = "pending"
+	AuthLinkStatusApproved  = "approved"
+	AuthLinkStatusFailed    = "failed"
+	AuthLinkStatusCancelled = "cancelled"
+)
+
+// AuthLinkStatusResponse is the state of the reverse (QR / user code) device
+// link flow. It is returned by settings.auth.link and
+// settings.auth.link.status, and pushed as the auth.link.status notification
+// on every transition. Notifications omit user codes and verification URLs.
+type AuthLinkStatusResponse struct {
+	ExpiresAt               *time.Time `json:"expiresAt,omitempty"`
+	Status                  string     `json:"status"`
+	UserCode                string     `json:"userCode,omitempty"`
+	VerificationURL         string     `json:"verificationUrl,omitempty"`
+	VerificationURLComplete string     `json:"verificationUrlComplete,omitempty"`
+	Error                   string     `json:"error,omitempty"`
+}
+
+type BackupCategoryStatus struct {
+	Files   int64 `json:"files"`
+	Bytes   int64 `json:"bytes"`
+	Enabled bool  `json:"enabled"`
+}
+
+type BackupWarning struct {
+	Category string `json:"category"`
+	Path     string `json:"path"`
+	Reason   string `json:"reason"`
+}
+
+type BackupStatusEntry struct {
+	LastRunAt             *string                         `json:"lastRunAt,omitempty"`
+	LastSuccessAt         *string                         `json:"lastSuccessAt,omitempty"`
+	AvailabilityCheckedAt *string                         `json:"availabilityCheckedAt,omitempty"`
+	DeviceName            *string                         `json:"deviceName,omitempty"`
+	LinkedAt              *string                         `json:"linkedAt,omitempty"`
+	Categories            map[string]BackupCategoryStatus `json:"categories,omitempty"`
+	Schedule              string                          `json:"schedule,omitempty"`
+	LastError             string                          `json:"lastError,omitempty"`
+	Availability          string                          `json:"availability,omitempty"`
+	LastStatus            string                          `json:"lastStatus"`
+	Warnings              []BackupWarning                 `json:"warnings,omitempty"`
+	LastBackupSize        int64                           `json:"lastBackupSize"`
+	SkippedFiles          int                             `json:"skippedFiles,omitempty"`
+	Linked                bool                            `json:"linked,omitempty"`
+	Enabled               bool                            `json:"enabled"`
+}
+
+type BackupStatusResponse struct {
+	ActiveSince     *string           `json:"activeSince,omitempty"`
+	ActiveOperation string            `json:"activeOperation,omitempty"`
+	Local           BackupStatusEntry `json:"local"`
+	Remote          BackupStatusEntry `json:"remote"`
 }
 
 type UpdateCheckResponse struct {

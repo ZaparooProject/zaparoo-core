@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -79,14 +80,18 @@ type State struct {
 	onMediaStopHook       func()
 	launcherManager       *LauncherManager
 	uiEvents              *uievents.Service
+	backupCoordinator     *backupcoordinator.Coordinator
 	bootUUID              string
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
+	mediaLaunchAccesses   int
 	mu                    syncutil.RWMutex
+	mediaRestoreMu        syncutil.RWMutex
 	activeMediaReady      bool
 	stopService           bool
 	restartRequested      bool
+	restorePendingRestart bool
 	runZapScript          bool
 	backgroundAutoPaused  bool
 }
@@ -97,15 +102,22 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 	ns := make(chan models.Notification, 500)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
-		runZapScript:    true,
-		platform:        platform,
-		readers:         make(map[string]readers.Reader),
-		Notifications:   ns,
-		ctx:             ctx,
-		ctxCancelFunc:   ctxCancelFunc,
-		launcherManager: NewLauncherManager(),
-		bootUUID:        bootUUID,
+		runZapScript:      true,
+		platform:          platform,
+		readers:           make(map[string]readers.Reader),
+		Notifications:     ns,
+		ctx:               ctx,
+		ctxCancelFunc:     ctxCancelFunc,
+		launcherManager:   NewLauncherManager(),
+		backupCoordinator: backupcoordinator.New(),
+		bootUUID:          bootUUID,
 	}, ns
+}
+
+func (s *State) BackupCoordinator() *backupcoordinator.Coordinator {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backupCoordinator
 }
 
 // SetUIEvents stores the process-wide UI event service.
@@ -448,9 +460,72 @@ func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
 }
 
 var (
-	ErrNoActiveMedia      = errors.New("no active media")
-	ErrActiveMediaChanged = errors.New("active media changed")
+	ErrNoActiveMedia          = errors.New("no active media")
+	ErrActiveMediaChanged     = errors.New("active media changed")
+	ErrRestoreInProgress      = errors.New("backup restore is in progress")
+	ErrMediaLaunchInProgress  = errors.New("media launch is in progress")
+	ErrRestoreRestartRequired = errors.New("backup restore restart is pending")
 )
+
+func (s *State) restoreAccessAfterLock() (func(), error) {
+	s.mu.RLock()
+	pendingRestart := s.restorePendingRestart
+	s.mu.RUnlock()
+	if pendingRestart {
+		s.mediaRestoreMu.RUnlock()
+		return nil, ErrRestoreRestartRequired
+	}
+	return s.mediaRestoreMu.RUnlock, nil
+}
+
+func (s *State) TryAcquireRestoreAccess() (func(), error) {
+	if !s.mediaRestoreMu.TryRLock() {
+		return nil, ErrRestoreInProgress
+	}
+	return s.restoreAccessAfterLock()
+}
+
+func (s *State) AcquireRestoreAccess() (func(), error) {
+	s.mediaRestoreMu.RLock()
+	return s.restoreAccessAfterLock()
+}
+
+func (s *State) AcquireMediaLaunch() (func(), error) {
+	release, err := s.TryAcquireRestoreAccess()
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.mediaLaunchAccesses++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.mediaLaunchAccesses--
+		s.mu.Unlock()
+		release()
+	}, nil
+}
+
+func (s *State) BeginRestoreGate() (func(bool), error) {
+	if !s.mediaRestoreMu.TryLock() {
+		return nil, ErrMediaLaunchInProgress
+	}
+	s.mu.RLock()
+	pendingRestart := s.restorePendingRestart
+	s.mu.RUnlock()
+	if pendingRestart {
+		s.mediaRestoreMu.Unlock()
+		return nil, ErrRestoreRestartRequired
+	}
+	return func(success bool) {
+		if success {
+			s.mu.Lock()
+			s.restorePendingRestart = true
+			s.mu.Unlock()
+		}
+		s.mediaRestoreMu.Unlock()
+	}, nil
+}
 
 func (s *State) ActiveMedia() *models.ActiveMedia {
 	s.mu.RLock()
@@ -523,6 +598,30 @@ func (s *State) MarkActiveMediaReady(gen uint64) {
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
+	if media != nil {
+		s.mu.RLock()
+		launchAccessHeld := s.mediaLaunchAccesses > 0
+		s.mu.RUnlock()
+		if launchAccessHeld {
+			s.updateActiveMediaState(media)
+			return
+		}
+		release, err := s.TryAcquireRestoreAccess()
+		if errors.Is(err, ErrRestoreInProgress) {
+			s.backupCoordinator.CancelRestore()
+			release, err = s.AcquireRestoreAccess()
+		}
+		if err != nil {
+			log.Warn().Err(err).Msg("active media update rejected during backup restore")
+			return
+		}
+		defer release()
+	}
+
+	s.updateActiveMediaState(media)
+}
+
+func (s *State) updateActiveMediaState(media *models.ActiveMedia) {
 	s.mu.Lock()
 
 	// Read oldMedia inside lock to prevent race condition where another

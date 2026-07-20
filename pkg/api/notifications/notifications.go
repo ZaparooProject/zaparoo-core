@@ -157,3 +157,7 @@ func ProfilesActiveChanged(ns chan<- models.Notification, payload models.Profile
 func ProfilesDataChanged(ns chan<- models.Notification, payload models.ProfilesDataNotification) {
 	sendNotification(ns, models.NotificationProfilesData, payload)
 }
+
+func AuthLinkStatus(ns chan<- models.Notification, payload *models.AuthLinkStatusResponse) {
+	sendNotification(ns, models.NotificationAuthLinkStatus, payload)
+}

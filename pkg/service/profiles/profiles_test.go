@@ -87,6 +87,24 @@ func TestActivateByID_NoPIN(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestActivateByIDRejectedDuringRestore(t *testing.T) {
+	t.Parallel()
+	svc, mockDB, st := newTestService(t)
+	mockDB.On("GetProfile", "profile-1").Return(pinProfile(t, ""), nil)
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+	defer finishRestore(false)
+
+	activateErr := make(chan error, 1)
+	go func() {
+		_, activateResultErr := svc.ActivateByID("profile-1", "")
+		activateErr <- activateResultErr
+	}()
+	require.ErrorIs(t, <-activateErr, state.ErrRestoreInProgress)
+	mockDB.AssertNotCalled(t, "ActivateProfile", mock.Anything, mock.Anything)
+	assert.Nil(t, st.ActiveProfile())
+}
+
 func TestActivateByID_PINEnforced(t *testing.T) {
 	t.Parallel()
 	svc, mockDB, st := newTestService(t)

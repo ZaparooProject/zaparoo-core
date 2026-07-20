@@ -765,6 +765,29 @@ func TestLoadCustomLaunchers_MissingDirectory(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to stat launchers directory")
 }
 
+func TestLoadCustomLaunchers_SkipsUnreadablePaths(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	launchersDir := t.TempDir()
+	blocked := filepath.Join(launchersDir, "blocked")
+	require.NoError(t, os.MkdirAll(blocked, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(launchersDir, "good.toml"), []byte(`
+[[launchers.custom]]
+id = "GoodLauncher"
+execute = "echo good"
+`), 0o600))
+	require.NoError(t, os.Chmod(blocked, 0o000))
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadCustomLaunchers(launchersDir))
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 1)
+	assert.Equal(t, "GoodLauncher", customs[0].ID)
+}
+
 func TestLoadCustomLaunchers_SkipsInvalidTOML(t *testing.T) {
 	t.Parallel()
 

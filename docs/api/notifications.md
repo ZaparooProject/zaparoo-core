@@ -538,3 +538,29 @@ data side.
   }
 }
 ```
+
+## Auth
+
+### auth.link.status
+
+Sent on every state transition of a device link flow started with `settings.auth.link`. Notification payloads always omit the user code and verification URLs; clients that need them read the `settings.auth.link` result or poll `settings.auth.link.status`.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                                     |
+| :-------- | :----- | :------- | :-------------------------------------------------------------- |
+| status    | string | Yes      | One of `pending`, `approved`, `failed`, or `cancelled`.         |
+| expiresAt | string | No       | RFC 3339 time when the link request expires.                    |
+| error     | string | No       | Human-readable reason when `status` is `failed`.                |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "auth.link.status",
+  "params": {
+    "status": "approved"
+  }
+}
+```

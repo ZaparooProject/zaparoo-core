@@ -113,17 +113,17 @@ func SetupFlags() *Flags {
 		Backup: flag.Bool(
 			"backup",
 			false,
-			"create a backup of the database",
+			"create a portable full-device backup ZIP",
 		),
 		Backups: flag.Bool(
 			"backups",
 			false,
-			"list available database backups",
+			"list available full-device backup ZIPs",
 		),
 		Restore: flag.String(
 			"restore",
 			"",
-			"restore the database from the named backup",
+			"restore a full-device backup ZIP and restart Core",
 		),
 		Profiles: flag.Bool(
 			"profiles",
@@ -403,7 +403,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			_, _ = fmt.Fprint(os.Stderr, "Error: restore flag requires a backup name\n")
 			os.Exit(1)
 		}
-		data, err := json.Marshal(&models.BackupRestoreParams{Name: *f.Restore})
+		data, err := json.Marshal(&models.BackupNameParams{Name: *f.Restore})
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
 			os.Exit(1)

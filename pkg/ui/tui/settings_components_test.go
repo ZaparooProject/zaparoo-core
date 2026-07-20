@@ -328,6 +328,94 @@ func TestSettingsList_AddBackWithDesc(t *testing.T) {
 	assert.Equal(t, "Custom description", sl.items[0].description)
 }
 
+func TestSettingsList_AddHeader(t *testing.T) {
+	t.Parallel()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+
+	sl.AddHeader("Local")
+	assert.Equal(t, 1, sl.GetItemCount(), "leading header adds no spacer")
+	assert.Equal(t, "header", sl.items[0].itemType)
+
+	sl.AddAction("Action", "desc", func() {})
+	sl.AddHeader("Cloud")
+	assert.Equal(t, 4, sl.GetItemCount(), "later headers are preceded by a spacer")
+	assert.Equal(t, "spacer", sl.items[2].itemType)
+	assert.Equal(t, "header", sl.items[3].itemType)
+}
+
+func TestSettingsList_HeadersAreNotSelectable(t *testing.T) {
+	t.Parallel()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+	sl.AddHeader("Local")
+	sl.AddAction("First", "desc", func() {})
+	sl.AddAction("Second", "desc", func() {})
+	sl.AddHeader("Cloud")
+	sl.AddAction("Third", "desc", func() {})
+
+	assert.False(t, sl.isSelectable(0), "header")
+	assert.True(t, sl.isSelectable(1))
+	assert.True(t, sl.isSelectable(2))
+	assert.False(t, sl.isSelectable(3), "spacer")
+	assert.False(t, sl.isSelectable(4), "header")
+	assert.True(t, sl.isSelectable(5))
+
+	// Initial selection settles on the first selectable item.
+	sl.TriggerInitialHelp()
+	assert.Equal(t, 1, sl.GetCurrentItem())
+
+	// Down from Second skips the spacer and header to reach Third.
+	sl.SetCurrentItem(2)
+	sl.moveSelection(1)
+	assert.Equal(t, 5, sl.GetCurrentItem())
+
+	// Up from Third skips back to Second.
+	sl.moveSelection(-1)
+	assert.Equal(t, 2, sl.GetCurrentItem())
+}
+
+func TestSettingsList_MoveSelectionEdges(t *testing.T) {
+	t.Parallel()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+	sl.AddHeader("Section")
+	sl.AddAction("First", "desc", func() {})
+	sl.AddAction("Second", "desc", func() {})
+	sl.TriggerInitialHelp()
+
+	// Without a navigate-out callback the selection wraps within
+	// selectable items.
+	sl.moveSelection(-1)
+	assert.Equal(t, 2, sl.GetCurrentItem(), "up from first selectable wraps to last")
+
+	// With a navigate-out callback the edge hands focus off instead.
+	navigatedOut := false
+	sl.SetOnNavigateOut(func() { navigatedOut = true })
+	sl.moveSelection(1)
+	assert.True(t, navigatedOut, "down past the last selectable navigates out")
+	assert.Equal(t, 2, sl.GetCurrentItem(), "selection stays put when navigating out")
+}
+
+func TestSettingsList_MoveSelectionRecoversFromHeader(t *testing.T) {
+	t.Parallel()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+	sl.AddHeader("Section")
+	sl.AddAction("First", "desc", func() {})
+	sl.AddAction("Second", "desc", func() {})
+
+	// Programmatic selection can land on the leading header; the next
+	// Down settles on the first selectable item.
+	sl.SetCurrentItem(0)
+	sl.moveSelection(1)
+	assert.Equal(t, 1, sl.GetCurrentItem())
+}
+
 func TestSettingsList_ClearItems(t *testing.T) {
 	t.Parallel()
 

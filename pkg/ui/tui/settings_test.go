@@ -31,6 +31,7 @@ import (
 	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +71,7 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	mockSvc.SetupGetSettings(defaultTestSettings())
 	mockSvc.SetupGetSystems(defaultTestSystems())
 	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 
 	cfg := &config.Instance{}
 
@@ -96,6 +98,8 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("Advanced"), "Advanced menu item should be visible")
 	assert.True(t, runner.ContainsText("Logs"), "Logs menu item should be visible")
 	assert.True(t, runner.ContainsText("About"), "About menu item should be visible")
+	assert.True(t, runner.ContainsText("Online"),
+		"the Online settings entry is always available")
 }
 
 func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
@@ -110,6 +114,7 @@ func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
 	mockSvc.SetupGetSettings(defaultTestSettings())
 	mockSvc.SetupGetSystems(defaultTestSystems())
 	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 
 	cfg := &config.Instance{}
 
@@ -148,6 +153,7 @@ func TestBuildSettingsMainMenu_EscapeGoesBack_Integration(t *testing.T) {
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetSettings(defaultTestSettings())
 	mockSvc.SetupGetSystems(defaultTestSystems())
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 
 	cfg := &config.Instance{}
 
@@ -544,6 +550,592 @@ func TestFindExitDelayIndex(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestFormatBackupDetailsShowsPartialWarnings(t *testing.T) {
+	t.Parallel()
+	details := formatBackupDetails("Local backup", map[string]any{
+		"status":    "partial",
+		"integrity": "unchecked",
+		"warnings": []any{
+			map[string]any{"path": "saves/broken.sav", "reason": "broken symlink"},
+		},
+	})
+	assert.NotContains(t, details, "Payload integrity")
+	assert.Contains(t, details, "saves/broken.sav (broken symlink)")
+}
+
+func TestFormatHumanBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		want  string
+		bytes int64
+	}{
+		{name: "bytes", bytes: 512, want: "512 B"},
+		{name: "exact kb", bytes: 2048, want: "2 KB"},
+		{name: "rounds up kb", bytes: 1537, want: "1.6 KB"},
+		{name: "mb", bytes: 5 * 1024 * 1024, want: "5 MB"},
+		{name: "gb", bytes: 3 * 1024 * 1024 * 1024, want: "3 GB"},
+		{name: "tb", bytes: 1298312830128, want: "1.2 TB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, formatHumanBytes(tt.bytes))
+		})
+	}
+}
+
+func backupTestStatus(linked bool) *models.BackupStatusResponse {
+	return &models.BackupStatusResponse{
+		Local: models.BackupStatusEntry{
+			Enabled:    true,
+			LastStatus: "never",
+		},
+		Remote: models.BackupStatusEntry{
+			Enabled:    false,
+			Linked:     linked,
+			Schedule:   "daily",
+			LastStatus: "never",
+		},
+	}
+}
+
+func TestBackupActionErrorTextMapsSafeGuidance(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name: "busy",
+			err: errors.New(
+				"create local backup: backup operation remote-upload has been running since now",
+			),
+			expected: "Another backup or restore is already running.",
+		},
+		{
+			name: "active media", err: errors.New("cannot restore backup while media is active"),
+			expected: "Stop active media before restoring this backup.",
+		},
+		{
+			name: "media launch", err: errors.New("cannot restore backup while media is launching"),
+			expected: "Wait for media launch to finish",
+		},
+		{
+			name: "unsupported platform", err: errors.New("full-device backup is not supported on this platform"),
+			expected: "Full-device backup is not available on this platform",
+		},
+		{
+			name: "warp", err: errors.New("remote backup is not available for this account"),
+			expected: "requires an active Zaparoo Warp subscription",
+		},
+		{
+			name: "recovery", err: errors.New("backup restore rollback requires recovery: private path"),
+			expected: "Restart Zaparoo Core to complete restore recovery",
+		},
+		{
+			name: "restart", err: errors.New("backup restore restart is pending"),
+			expected: "Restart Zaparoo Core before starting another backup",
+		},
+		{
+			name: "unlinked", err: errors.New("remote backup is unlinked"),
+			expected: "Relink this device to Zaparoo Online",
+		},
+		{
+			name: "rate limited", err: errors.New("remote backup rate limited"),
+			expected: "Wait a few minutes, then try again",
+		},
+		{
+			name: "storage", err: errors.New("insufficient disk space for backup: /private/path"),
+			expected: "Free storage space on this device",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			text := backupActionErrorText("Backup", tt.err)
+			assert.Contains(t, text, tt.expected)
+			assert.NotContains(t, text, "private path")
+			assert.NotContains(t, text, "/private/path")
+		})
+	}
+}
+
+func TestBackupActionErrorTextRedactsUnknownError(t *testing.T) {
+	t.Parallel()
+	text := backupActionErrorText(
+		"Backup", errors.New("upload failed for /media/fat/private with bearer secret-token"),
+	)
+
+	assert.Equal(t, "Backup failed.\n\nCheck Core logs for details, then try again.", text)
+	assert.NotContains(t, text, "/media/fat")
+	assert.NotContains(t, text, "secret-token")
+}
+
+func TestBuildBackupSettingsMenu_SlowFetchShowsLoader_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	release := make(chan time.Time, 1)
+	mockSvc.On("GetBackupStatus", mock.Anything).
+		WaitUntil(release).
+		Return(backupTestStatus(false), nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	// A fetch that outlives the grace period shows the loading frame.
+	require.True(t, runner.WaitForText("Loading backup status...", time.Second))
+	release <- time.Now()
+	require.True(t, runner.WaitForText("Back up now", time.Second))
+	assert.False(t, runner.ContainsText("Loading backup status..."))
+}
+
+func TestBuildBackupSettingsMenu_FastFetchSkipsLoader_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	previous := tview.NewTextView().SetText("Previous Page")
+	pages.AddPage("previous", previous, true, true)
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	// An instant fetch renders the page directly, well inside the grace
+	// period, so the loading frame never appears.
+	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	assert.False(t, runner.ContainsText("Loading backup status..."))
+}
+
+func TestBuildBackupSettingsMenu_UnlinkedShowsCloudLinkPointer_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Local"))
+	assert.True(t, runner.ContainsText("Cloud"))
+	assert.True(t, runner.ContainsText("View backups"))
+	assert.True(t, runner.ContainsText("Link account"),
+		"unlinked devices see a pointer to account linking in the Cloud section")
+	assert.False(t, runner.ContainsText("Automatic backup"))
+	assert.False(t, runner.ContainsText("Schedule"))
+}
+
+func TestBuildBackupSettingsMenu_CloudControlsVisibleWhenLinked_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Local"))
+	assert.True(t, runner.ContainsText("Cloud"))
+	assert.True(t, runner.ContainsText("Schedule"))
+	assert.True(t, runner.ContainsText("Status"))
+	assert.False(t, runner.ContainsText("Link account"),
+		"linked devices manage the account from the Online page")
+}
+
+func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+
+	// Navigate from local "Back up now" to the cloud toggle and flip it.
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForCondition(func() bool {
+		for _, call := range mockSvc.Calls {
+			if call.Method != "UpdateSettings" {
+				continue
+			}
+			params, ok := call.Arguments.Get(1).(*models.UpdateSettingsParams)
+			if ok && params.BackupRemoteEnabled != nil {
+				return true
+			}
+		}
+		return false
+	}, 100*time.Millisecond), "toggle should write BackupRemoteEnabled")
+}
+
+func TestBuildBackupSettingsMenu_UnavailableWarpBlocksUploadOnly_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	status := backupTestStatus(true)
+	status.Remote.Availability = "unavailable"
+	mockSvc.SetupGetBackupStatus(status)
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("View backups"), "restore must remain available")
+	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
+	// Back up now. Four downs land on the cloud upload action.
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	require.True(t, runner.WaitForText("Warp is required", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Cloud backup unavailable", 100*time.Millisecond))
+	mockSvc.AssertNotCalled(t, "RunRemoteBackup", mock.Anything)
+}
+
+func TestBuildBackupSettingsMenu_BackupNowCallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	release := make(chan time.Time, 1)
+	mockSvc.On("CreateBackup", mock.Anything).
+		WaitUntil(release).
+		Return("backup-20260624-150405-000000000-manual.zip", nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Creating backup", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Elapsed:", 100*time.Millisecond))
+	assert.False(t, runner.ContainsText("Hide"), "progress modal must not offer a Hide button")
+	release <- time.Now()
+	require.True(t, runner.WaitForText("Backup created", 500*time.Millisecond))
+	mockSvc.AssertCalled(t, "CreateBackup", mock.Anything)
+}
+
+func TestBuildBackupSettingsMenu_BackupErrorShowsSafeGuidance_Integration(t *testing.T) {
+	t.Parallel()
+	runner := NewTestAppRunner(t, 100, 30)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.On("CreateBackup", mock.Anything).Return(
+		"", errors.New("cannot restore backup while media is active: /private/path"),
+	)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Stop active media", 500*time.Millisecond))
+	assert.False(t, runner.ContainsText("/private/path"))
+}
+
+func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupUpdateSettingsSuccess()
+	mockSvc.On("RunRemoteBackup", mock.Anything).Return("backup-42", nil)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
+	// Back up now. Four downs land on the cloud upload action.
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Cloud backup created", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Cloud backup backup-42", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "RunRemoteBackup", mock.Anything)
+}
+
+func TestWaitForCoreRestart_DownThenUp_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	pages.AddPage("main", tview.NewTextView().SetText("Main Page"), true, true)
+	runner.Start(pages)
+	runner.Draw()
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("GetSettings", mock.Anything).Return(nil, errors.New("connection refused")).Twice()
+	mockSvc.On("GetSettings", mock.Anything).Return(&models.SettingsResponse{}, nil)
+
+	done := make(chan struct{})
+	runner.QueueUpdateDraw(func() {
+		waitForCoreRestartWith(mockSvc, pages, runner.App(),
+			10*time.Millisecond, time.Minute, time.Minute, func() { close(done) })
+	})
+
+	require.True(t, runner.WaitForText("Core is restarting.", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Core restarted", time.Second))
+	assert.False(t, runner.ContainsText("Core is restarting."))
+	select {
+	case <-done:
+		t.Fatal("onDone must wait for the user to confirm the restart modal")
+	default:
+	}
+
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	require.True(t, runner.WaitForSignal(done, time.Second),
+		"onDone should run once the restart confirmation is dismissed")
+}
+
+func TestWaitForCoreRestart_NeverDownEndsAfterGrace_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	pages.AddPage("main", tview.NewTextView().SetText("Main Page"), true, true)
+	runner.Start(pages)
+	runner.Draw()
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.On("GetSettings", mock.Anything).Return(&models.SettingsResponse{}, nil)
+
+	done := make(chan struct{})
+	runner.QueueUpdateDraw(func() {
+		waitForCoreRestartWith(mockSvc, pages, runner.App(),
+			10*time.Millisecond, 50*time.Millisecond, time.Minute, func() { close(done) })
+	})
+
+	require.True(t, runner.WaitForText("Core restarted", time.Second))
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	require.True(t, runner.WaitForSignal(done, time.Second),
+		"onDone should run after the no-drop grace period and confirmation")
+}
+
+func TestBuildBackupListPage_DisplaysBackups_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupListBackups([]map[string]any{{"name": backupName, "createdAt": "2026-06-24T15:04:05Z"}})
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	pageName, primitive := pages.GetFrontPage()
+	require.Equal(t, PageSettingsBackupList, pageName)
+	frame, ok := primitive.(*PageFrame)
+	require.True(t, ok)
+	list, ok := frame.GetContent().(*tview.List)
+	require.True(t, ok)
+	require.Positive(t, list.GetItemCount())
+	mainText, _ := list.GetItemText(0)
+	assert.Equal(t, "Local backup 2026-06-24 15:04:05 UTC", mainText)
+}
+
+func TestBuildBackupListPage_SelectShowsDetailsModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 40)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	backupDetails := map[string]any{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+		"status":    "success",
+		"integrity": "unchecked",
+		"categories": map[string]any{
+			"zaparoo":  map[string]any{"files": float64(3), "bytes": float64(1000)},
+			"settings": map[string]any{"files": float64(2), "bytes": float64(500)},
+		},
+	}
+	mockSvc.SetupListBackups([]map[string]any{{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+	}})
+	mockSvc.SetupInspectBackup(backupDetails)
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup details", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Size: 2 KB", 100*time.Millisecond))
+	assert.False(t, runner.ContainsText("Payload integrity"))
+	require.True(t, runner.WaitForText("Manifest:", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Zaparoo", 100*time.Millisecond), runner.GetScreenText())
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), runner.GetScreenText())
+}
+
+func TestBuildBackupListPage_InspectFailureDisablesRestore_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 40)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupListBackups([]map[string]any{{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+	}})
+	mockSvc.SetupInspectBackupError(errors.New("bad manifest"))
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Unable", 500*time.Millisecond), runner.GetScreenText())
+	require.True(t, runner.WaitForText("disabled", 100*time.Millisecond), runner.GetScreenText())
+	mockSvc.AssertNotCalled(t, "RestoreBackup", mock.Anything, backupName)
+}
+
+func TestBackupDetailsModal_DeleteCallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 100, 40)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	backupDetails := map[string]any{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+		"status":    "success",
+		"integrity": "unchecked",
+	}
+	mockSvc.SetupGetBackupStatus(backupTestStatus(false))
+	mockSvc.SetupListBackups([]map[string]any{{
+		"name":      backupName,
+		"createdAt": "2026-06-24T15:04:05Z",
+		"size":      float64(2048),
+	}})
+	mockSvc.SetupInspectBackup(backupDetails)
+	mockSvc.SetupDeleteBackupSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
+	})
+
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup details", 500*time.Millisecond))
+	runner.SimulateTab()
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Delete Local backup", 100*time.Millisecond))
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Backup deleted", 500*time.Millisecond))
+	mockSvc.AssertCalled(t, "DeleteBackup", mock.Anything, backupName)
+}
+
+func TestShowBackupRestoreConfirm_CallsService_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	focus := tview.NewTextView().SetText("Backup list")
+	pages.AddPage("main", focus, true, true)
+	mockSvc := NewMockSettingsService()
+	backupName := "backup-20260624-150405-000000000-manual.zip"
+	mockSvc.SetupRestoreBackupSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		showBackupRestoreConfirm(mockSvc, pages, runner.App(), focus, backupName, nil)
+	})
+
+	require.True(t, runner.WaitForText("Restore Local backup", 100*time.Millisecond))
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	require.True(t, runner.WaitForText("Backup restored", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "RestoreBackup", mock.Anything, backupName)
 }
 
 func TestBuildAdvancedSettingsMenu_ErrorReportingVisible_Integration(t *testing.T) {

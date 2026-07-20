@@ -304,7 +304,11 @@ func (c *DataSwapCoordinator) apply(req *swapRequest) {
 		}
 	}
 
-	err := c.swapper.ApplyProfile(req.ref, items)
+	release, err := c.st.AcquireRestoreAccess()
+	if err == nil {
+		err = c.swapper.ApplyProfile(req.ref, items)
+		release()
+	}
 
 	c.mu.Lock()
 	notify := c.notify

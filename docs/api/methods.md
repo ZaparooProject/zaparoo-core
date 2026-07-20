@@ -2299,6 +2299,9 @@ None.
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
+| backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and paired admin clients. |
+| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and paired admin clients. |
+| backupRemoteBaseUrl       | string                                    | No       | Configured backup remote server base URL (read-only). Only returned to localhost and paired admin clients. |
 
 ##### Reader connection object
 
@@ -2381,6 +2384,8 @@ An object containing any of the following optional keys:
 | systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
+| backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires a localhost or paired admin client. |
+| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires a localhost or paired admin client. |
 
 #### Result
 
@@ -2449,7 +2454,7 @@ Returns `null` on success.
 
 Redeem a claim token against a remote auth server and store the resulting credentials in `auth.toml`.
 
-This method performs trust discovery using the `.well-known/zaparoo` protocol. It first verifies that the claim URL's root domain supports auth (`auth: 1` in the well-known response), then redeems the claim token to obtain a bearer credential. If the root domain's well-known response includes a `trusted` list, each related domain is checked for bidirectional trust confirmation before extending the credential.
+This method performs trust discovery using the `.well-known/zaparoo` protocol. It first verifies that the claim URL's root domain supports auth (`auth: 1` in the well-known response), then redeems the claim token to obtain a bearer credential. If the root domain's well-known response includes a `trusted` list, each related domain is checked for bidirectional trust confirmation before extending the credential. Production claim URLs must use HTTPS. Plain HTTP is accepted only for loopback, private-network, or link-local development endpoints; public HTTP endpoints are rejected.
 
 #### Parameters
 
@@ -2457,7 +2462,7 @@ An object:
 
 | Key      | Type   | Required | Description                                                    |
 | :------- | :----- | :------- | :------------------------------------------------------------- |
-| claimUrl | string | Yes      | HTTPS URL of the claim endpoint to redeem the token against.   |
+| claimUrl | string | Yes      | HTTPS claim URL. HTTP is allowed only for loopback, private, or link-local development endpoints. |
 | token    | string | Yes      | The one-time claim token to redeem.                            |
 
 #### Result
@@ -2493,6 +2498,222 @@ An object:
       "https://api.example.com",
       "https://cdn.example.com"
     ]
+  }
+}
+```
+
+### settings.auth.status
+
+Report whether Core holds a stored bearer credential for an auth server URL. The check is local only: the token is never validated against the server and no token material is returned.
+
+Status probes are only answered for official Zaparoo API hosts over HTTPS and for the configured backup remote base URL. Any other URL returns `linked: false` without revealing whether a credential exists.
+
+#### Parameters
+
+An object:
+
+| Key | Type   | Required | Description                            |
+| :-- | :----- | :------- | :------------------------------------- |
+| url | string | Yes      | Auth server URL to check link state for. |
+
+#### Result
+
+| Key    | Type    | Required | Description                                              |
+| :----- | :------ | :------- | :------------------------------------------------------- |
+| linked | boolean | Yes      | Whether a stored bearer credential exists for the URL.   |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-auth-status-example",
+  "method": "settings.auth.status",
+  "params": {
+    "url": "https://api.zaparoo.com"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-auth-status-example",
+  "result": {
+    "linked": true
+  }
+}
+```
+
+### settings.auth.unlink
+
+Remove the device's Zaparoo Online credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured backup remote server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups. Removal is local only: the server has no revoke endpoint and invalidates the old token when the device links again.
+
+Requires a localhost client or a paired admin client.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type     | Required | Description                                     |
+| :------ | :------- | :------- | :---------------------------------------------- |
+| domains | string[] | Yes      | Domains whose stored credentials were removed.  |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-auth-unlink-example",
+  "method": "settings.auth.unlink"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-auth-unlink-example",
+  "result": {
+    "domains": ["https://api.zaparoo.com", "https://zpr.au"]
+  }
+}
+```
+
+### settings.auth.link
+
+Start a reverse device link flow (device-authorization style): Core requests a link from the auth server, returns a user code and verification URLs to display, then polls in the background until the user approves the link in their account. On approval the resulting claim token is redeemed through the same pipeline as `settings.auth.claim` and the credential is stored in `auth.toml`.
+
+Requires a localhost client or a paired admin client. Only one link flow can be pending at a time; starting another while one is pending returns an error. Progress is pushed via the [`auth.link.status`](./notifications.md#authlinkstatus) notification (with user code and verification URLs omitted) and can be polled with `settings.auth.link.status`.
+
+#### Parameters
+
+An object (optional):
+
+| Key | Type   | Required | Description                                                                                          |
+| :-- | :----- | :------- | :--------------------------------------------------------------------------------------------------- |
+| url | string | No       | Auth server base URL. Defaults to the official Zaparoo API. HTTP is allowed only for loopback, private, or link-local development endpoints. |
+
+#### Result
+
+A link status object:
+
+| Key                     | Type   | Required | Description                                                       |
+| :---------------------- | :----- | :------- | :---------------------------------------------------------------- |
+| status                  | string | Yes      | One of `none`, `pending`, `approved`, `failed`, or `cancelled`.   |
+| userCode                | string | No       | Short code the user enters at the verification URL.               |
+| verificationUrl         | string | No       | URL where the user approves the link.                             |
+| verificationUrlComplete | string | No       | Verification URL with the user code included, for QR display.     |
+| expiresAt               | string | No       | RFC 3339 time when the link request expires.                      |
+| error                   | string | No       | Human-readable reason when `status` is `failed`.                  |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-auth-link-example",
+  "method": "settings.auth.link"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-auth-link-example",
+  "result": {
+    "status": "pending",
+    "userCode": "ABCD-1234",
+    "verificationUrl": "https://online.zaparoo.com/link",
+    "verificationUrlComplete": "https://online.zaparoo.com/link?code=ABCD1234",
+    "expiresAt": "2026-06-24T15:14:05Z"
+  }
+}
+```
+
+### settings.auth.link.status
+
+Return the state of the active link flow as a link status object (see `settings.auth.link`). When no flow has been started, `status` is `none`.
+
+Access is tiered: localhost clients and paired admin clients receive the full object including `userCode` and verification URLs; unpaired remote clients receive only the redacted state; paired member clients are forbidden.
+
+#### Parameters
+
+None.
+
+#### Result
+
+A link status object (see `settings.auth.link`).
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-auth-link-status-example",
+  "method": "settings.auth.link.status"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-auth-link-status-example",
+  "result": {
+    "status": "approved"
+  }
+}
+```
+
+### settings.auth.link.cancel
+
+Cancel the pending link flow. Requires a localhost client or a paired admin client. Returns the terminal `cancelled` status object with user code and verification URLs omitted. When no flow is pending, returns an error (`no active link request`).
+
+#### Parameters
+
+None.
+
+#### Result
+
+A link status object (see `settings.auth.link`) with `status` set to `cancelled`.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-auth-link-cancel-example",
+  "method": "settings.auth.link.cancel"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-auth-link-cancel-example",
+  "result": {
+    "status": "cancelled"
   }
 }
 ```
@@ -2538,6 +2759,26 @@ None.
   }
 }
 ```
+
+### Device backup methods
+
+Backup methods operate on portable full-device ZIP snapshots. Portable and cloud snapshots omit paired-client credentials; restoring one restarts Core and requires clients to pair again. Mutating, listing, inspecting, and restoring methods require a localhost client or a paired admin client. Restore is refused while media is active.
+
+| Method | Parameters | Result |
+| :----- | :--------- | :----- |
+| `settings.backup` | None | Creates a bounded local ZIP and returns backup metadata. `integrity` is `valid` after creation. |
+| `settings.backup.list` | None | Lists local ZIP metadata without reading manifests. |
+| `settings.backup.inspect` | `{ "name": string }` | Reads manifest metadata. Payload `integrity` is `unchecked`; restore verifies every payload before mutation. |
+| `settings.backup.delete` | `{ "name": string }` | Deletes local ZIP and returns `null`. |
+| `settings.backup.restore` | `{ "name": string }` | Transactionally restores local ZIP, returns restore metadata, then restarts Core after response is written. |
+| `settings.backup.status` | None | Returns local/remote status, partial warnings, active operation, link state, linked device identity (`deviceName`, `linkedAt`), and Warp availability. A stale availability value triggers a background refresh; the response never blocks on the cloud API. |
+| `settings.backup.remote.run` | None | Creates manual cloud snapshot and returns upload/dedup metadata. |
+| `settings.backup.remote.list` | None | Lists cloud snapshots. Backup and device IDs are opaque strings. |
+| `settings.backup.remote.restore` | `{ "id": string }` | Transactionally restores cloud snapshot, reports completion, then restarts Core. |
+
+`backup.remote.enabled` enables automatic scheduling only. Linked devices may manually upload, list, and restore while scheduling is disabled. Warp availability gates upload and scheduling; listing and restoring existing snapshots remain available. A cloud API `401` immediately marks device unlinked until a fresh link succeeds.
+
+Archives use known categories (`zaparoo`, `settings`, `inputs`, `saves`, and `savestates`), exact platform matching, SHA-256 payload verification, and configured size limits. `partial` status means snapshot completed but one or more unsafe or unavailable source paths were skipped; inspect/status responses include structured `warnings`. Archives that fail ZIP header, manifest, or platform-policy validation return an RPC error without backup metadata. Successful inspection reports `unchecked` because payload hashes are verified during restore.
 
 ## Playtime
 

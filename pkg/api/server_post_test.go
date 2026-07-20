@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -120,6 +121,57 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 		nil, nil, nil, playbackManager, nil, nil, tracker,
 	)
 	return handler, methodMap, tracker
+}
+
+func TestHandlePostRequest_AppliesMethodSpecificTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		method  string
+		timeout time.Duration
+	}{
+		{name: "normal request", method: "test.timeout", timeout: config.APIRequestTimeout},
+		{name: "backup request", method: models.MethodSettingsBackup, timeout: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, methodMap, _ := createTestPostHandler(t)
+			deadlineCh := make(chan time.Time, 1)
+			methodMap.Store(tt.method, func(env requests.RequestEnv) (any, error) {
+				deadline, ok := env.Context.Deadline()
+				if !ok {
+					deadline = time.Time{}
+				}
+				deadlineCh <- deadline
+				return map[string]bool{"ok": true}, nil
+			})
+
+			reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"` + tt.method + `"}`
+			//nolint:noctx // test helper, no context needed
+			req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			beforeRequest := time.Now()
+			handler(rr, req)
+			require.Equal(t, http.StatusOK, rr.Code)
+
+			select {
+			case deadline := <-deadlineCh:
+				if tt.timeout == 0 {
+					assert.True(t, deadline.IsZero(), "backup request must not have a whole-operation deadline")
+				} else {
+					assert.WithinDuration(t, beforeRequest.Add(tt.timeout), deadline, time.Second)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("handler did not report request deadline")
+			}
+		})
+	}
 }
 
 func TestHandlePostRequest_InjectsPlaybackManager(t *testing.T) {

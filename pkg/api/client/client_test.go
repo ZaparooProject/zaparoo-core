@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/gorilla/websocket"
@@ -234,6 +235,43 @@ func TestLocalClient_Timeout(t *testing.T) {
 	require.Error(t, err)
 	// Either timeout or cancellation error is acceptable
 	assert.True(t, errors.Is(err, ErrRequestTimeout) || errors.Is(err, ErrRequestCancelled))
+}
+
+func TestRequestWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	timeout, bounded := requestWaitTimeout(context.Background(), models.MethodVersion)
+	assert.True(t, bounded)
+	assert.Equal(t, config.APIRequestTimeout, timeout)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer shortCancel()
+	timeout, bounded = requestWaitTimeout(shortCtx, models.MethodVersion)
+	assert.True(t, bounded)
+	assert.LessOrEqual(t, timeout, 100*time.Millisecond)
+
+	longCtx, longCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout+time.Minute)
+	defer longCancel()
+	timeout, bounded = requestWaitTimeout(longCtx, models.MethodVersion)
+	assert.True(t, bounded)
+	assert.Greater(t, timeout, config.APIRequestTimeout)
+
+	// Backup methods have no whole-operation deadline: without a caller
+	// deadline the wait is unbounded, but an explicit deadline still wins.
+	for _, method := range []string{
+		models.MethodSettingsBackup,
+		models.MethodSettingsBackupRestore,
+		models.MethodSettingsBackupRemoteRun,
+		models.MethodSettingsBackupRemoteRestore,
+	} {
+		_, bounded = requestWaitTimeout(context.Background(), method)
+		assert.False(t, bounded, method)
+		timeout, bounded = requestWaitTimeout(shortCtx, method)
+		assert.True(t, bounded, method)
+		assert.LessOrEqual(t, timeout, 100*time.Millisecond, method)
+	}
+	_, bounded = requestWaitTimeout(context.Background(), models.MethodSettingsBackupList)
+	assert.True(t, bounded)
 }
 
 func TestLocalClient_IgnoresMismatchedIDs(t *testing.T) {

@@ -372,55 +372,79 @@ func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
 	require.Error(t, err, "JSON-RPC notifications must not receive responses")
 }
 
-func TestWebSocketRunJobStartsTimeoutAtExecution(t *testing.T) {
+func TestWebSocketRunJobStartsMethodTimeoutAtExecution(t *testing.T) {
 	t.Parallel()
 
-	parentCtx, parentCancel := context.WithCancel(t.Context())
-	defer parentCancel()
-	d := &wsSessionDispatcher{
-		ctx:       parentCtx,
-		responses: make(chan *wsResponseJob, 1),
+	tests := []struct {
+		name    string
+		method  string
+		timeout time.Duration
+	}{
+		{name: "normal request", method: "test.timeout", timeout: config.APIRequestTimeout},
+		{name: "backup request", method: models.MethodSettingsBackup, timeout: 0},
 	}
 
-	deadlineCh := make(chan time.Time, 1)
-	var methodMap MethodMap
-	require.NoError(t, methodMap.AddMethod("test.timeout", func(env requests.RequestEnv) (any, error) {
-		deadline, ok := env.Context.Deadline()
-		require.True(t, ok, "runJob should install per-request deadline")
-		deadlineCh <- deadline
-		return map[string]string{"ok": "true"}, nil
-	}))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	enqueuedCtx, enqueuedCancel := context.WithTimeout(parentCtx, time.Millisecond)
-	defer enqueuedCancel()
-	job := &wsRequestJob{
-		methodMap: &methodMap,
-		env:       &requests.RequestEnv{Context: enqueuedCtx},
-		method:    "test.timeout",
-		msg:       []byte(`{"jsonrpc":"2.0","method":"test.timeout","id":1}`),
-	}
-	time.Sleep(25 * time.Millisecond)
-	require.Error(t, enqueuedCtx.Err(), "pre-existing enqueue-time context should be expired")
+			parentCtx, parentCancel := context.WithCancel(context.Background())
+			defer parentCancel()
+			d := &wsSessionDispatcher{
+				ctx:       parentCtx,
+				responses: make(chan *wsResponseJob, 1),
+			}
 
-	beforeRun := time.Now()
-	d.runJob(job)
-	require.NotNil(t, job.cancel, "runJob should install cancel func")
-	defer job.cancel()
+			deadlineCh := make(chan time.Time, 1)
+			var methodMap MethodMap
+			require.NoError(t, methodMap.AddMethod(tt.method, func(env requests.RequestEnv) (any, error) {
+				deadline, ok := env.Context.Deadline()
+				if !ok {
+					deadline = time.Time{}
+				}
+				deadlineCh <- deadline
+				return map[string]string{"ok": "true"}, nil
+			}))
 
-	select {
-	case deadline := <-deadlineCh:
-		assert.True(t, deadline.After(beforeRun), "deadline should not reuse expired enqueue-time context")
-		assert.True(t, deadline.Before(beforeRun.Add(config.APIRequestTimeout+time.Second)))
-	case <-time.After(time.Second):
-		t.Fatal("handler did not run")
-	}
+			enqueuedCtx, enqueuedCancel := context.WithTimeout(parentCtx, time.Millisecond)
+			defer enqueuedCancel()
+			job := &wsRequestJob{
+				methodMap: &methodMap,
+				env:       &requests.RequestEnv{Context: enqueuedCtx},
+				method:    tt.method,
+				msg: []byte(fmt.Sprintf(
+					`{"jsonrpc":"2.0","method":%q,"id":1}`,
+					tt.method,
+				)),
+			}
+			time.Sleep(25 * time.Millisecond)
+			require.Error(t, enqueuedCtx.Err(), "pre-existing enqueue-time context should be expired")
 
-	select {
-	case resp := <-d.responses:
-		require.NotNil(t, resp.cancel)
-		assert.True(t, resp.result.ShouldReply)
-	case <-time.After(time.Second):
-		t.Fatal("response was not queued")
+			beforeRun := time.Now()
+			d.runJob(job)
+			require.NotNil(t, job.cancel, "runJob should install cancel func")
+			defer job.cancel()
+
+			select {
+			case deadline := <-deadlineCh:
+				if tt.timeout == 0 {
+					assert.True(t, deadline.IsZero(), "backup request must not have a whole-operation deadline")
+				} else {
+					assert.True(t, deadline.After(beforeRun), "deadline should not reuse expired enqueue-time context")
+					assert.WithinDuration(t, beforeRun.Add(tt.timeout), deadline, time.Second)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("handler did not run")
+			}
+
+			select {
+			case resp := <-d.responses:
+				require.NotNil(t, resp.cancel)
+				assert.True(t, resp.result.ShouldReply)
+			case <-time.After(time.Second):
+				t.Fatal("response was not queued")
+			}
+		})
 	}
 }
 

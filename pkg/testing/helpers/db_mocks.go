@@ -548,6 +548,14 @@ func (m *MockUserDBI) ListClients() ([]database.Client, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) ReplaceAllClients(clients []database.Client) error {
+	args := m.Called(clients)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI replace all clients failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) DeleteClient(clientID string) error {
 	args := m.Called(clientID)
 	if err := args.Error(0); err != nil {
@@ -688,6 +696,24 @@ func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, e
 		return info, fmt.Errorf("mock UserDBI backup failed: %w", err)
 	}
 	return info, nil
+}
+
+func (m *MockUserDBI) BackupForTransfer(
+	ctx context.Context, reason string,
+) (database.BackupInfo, func() error, error) {
+	args := m.Called(ctx, reason)
+	info, ok := args.Get(0).(database.BackupInfo)
+	if !ok {
+		return database.BackupInfo{}, nil, errors.New("mock UserDBI transfer backup returned invalid backup info")
+	}
+	cleanup, ok := args.Get(1).(func() error)
+	if !ok {
+		return info, nil, errors.New("mock UserDBI transfer backup returned invalid cleanup")
+	}
+	if err := args.Error(2); err != nil {
+		return info, cleanup, fmt.Errorf("mock UserDBI transfer backup failed: %w", err)
+	}
+	return info, cleanup, nil
 }
 
 func (m *MockUserDBI) EnsureRecentBackup(maxAge time.Duration) (database.BackupInfo, bool, error) {

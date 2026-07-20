@@ -116,8 +116,22 @@ type ReaderWriteParams struct {
 	Text     string  `json:"text" validate:"required"`
 }
 
-type BackupRestoreParams struct {
+type BackupNameParams struct {
 	Name string `json:"name" validate:"required"`
+}
+
+type BackupRemoteRestoreParams struct {
+	ID string `json:"id" validate:"required"`
+}
+
+type SettingsAuthStatusParams struct {
+	URL string `json:"url,omitempty" validate:"omitempty,url"`
+}
+
+type SettingsAuthLinkParams struct {
+	// URL overrides the auth server base URL; defaults to the official
+	// Zaparoo API.
+	URL string `json:"url,omitempty" validate:"omitempty,url"`
 }
 
 type ReaderWriteCancelParams struct {
@@ -150,7 +164,9 @@ type UpdateSettingsParams struct {
 	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
 	ErrorReporting            *bool               `json:"errorReporting"`
 	Encryption                *bool               `json:"encryption"`
+	BackupRemoteEnabled       *bool               `json:"backupRemoteEnabled"`
 	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
+	BackupRemoteSchedule      *string             `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
 	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`

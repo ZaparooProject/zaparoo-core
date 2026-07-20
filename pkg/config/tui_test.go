@@ -40,6 +40,7 @@ func TestApplyTUIDefaults_AllNil(t *testing.T) {
 	assert.False(t, cfg.CRTMode)
 	assert.False(t, cfg.OnScreenKeyboard)
 	assert.False(t, cfg.ErrorReportingPrompted)
+	assert.False(t, cfg.EncryptionPrompted)
 }
 
 func TestApplyTUIDefaults_AllSet(t *testing.T) {
@@ -59,6 +60,7 @@ func TestApplyTUIDefaults_AllSet(t *testing.T) {
 		CRTMode:                &crt,
 		OnScreenKeyboard:       &osk,
 		ErrorReportingPrompted: &prompted,
+		EncryptionPrompted:     &prompted,
 	}
 
 	cfg := applyTUIDefaults(raw, "generic")
@@ -69,6 +71,7 @@ func TestApplyTUIDefaults_AllSet(t *testing.T) {
 	assert.True(t, cfg.CRTMode)
 	assert.True(t, cfg.OnScreenKeyboard)
 	assert.True(t, cfg.ErrorReportingPrompted)
+	assert.True(t, cfg.EncryptionPrompted)
 }
 
 func TestApplyTUIDefaults_MisterPlatformDefaults(t *testing.T) {
