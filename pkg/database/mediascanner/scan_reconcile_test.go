@@ -55,14 +55,14 @@ func mediaTagStrings(t *testing.T, db *mediadb.MediaDB, mediaDBID int64) []strin
 	return got
 }
 
-// mediaBySystem returns the system's media rows keyed by path.
+// mediaBySystem returns system media keyed by platform-native path for test fixture lookups.
 func mediaBySystem(t *testing.T, db *mediadb.MediaDB, systemID string) map[string]database.MediaWithFullPath {
 	t.Helper()
 	rows, err := db.GetMediaBySystemID(systemID)
 	require.NoError(t, err)
 	byPath := make(map[string]database.MediaWithFullPath, len(rows))
 	for _, row := range rows {
-		byPath[row.Path] = row
+		byPath[filepath.FromSlash(row.Path)] = row
 	}
 	return byPath
 }

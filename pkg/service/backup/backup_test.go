@@ -1489,7 +1489,9 @@ func TestApplyRestoreRollsBackWhenTargetDirectorySyncFails(t *testing.T) {
 		SHA256: sha256Hex(payload), Size: int64(len(payload)),
 	}}}
 
-	failPath := filepath.Join(env.RootDir, "saves")
+	physicalTargetPath, err := resolvePhysicalRestorePath(targetPath)
+	require.NoError(t, err)
+	failPath := filepath.Dir(physicalTargetPath)
 	failed := false
 	env.Manager.directorySync = func(path string) error {
 		if filepath.Clean(path) == filepath.Clean(failPath) && !failed {
@@ -1499,7 +1501,7 @@ func TestApplyRestoreRollsBackWhenTargetDirectorySyncFails(t *testing.T) {
 		return syncDirectory(path)
 	}
 
-	err := env.Manager.applyRestore(context.Background(), manifest, func(FileRef) (io.ReadCloser, error) {
+	err = env.Manager.applyRestore(context.Background(), manifest, func(FileRef) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(payload)), nil
 	})
 	require.Error(t, err)

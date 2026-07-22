@@ -3293,7 +3293,7 @@ func TestMediaDB_BrowseRouteCountsDegradeOnSubTimeout_Integration(t *testing.T) 
 	// presence probe a real budget, so the route degrades to "present, unknown
 	// count" instead of erroring the whole browse.
 	origCount, origProbe := browseRouteCountSubTimeout, browseRouteProbeSubTimeout
-	browseRouteCountSubTimeout = time.Nanosecond
+	browseRouteCountSubTimeout = -time.Second
 	browseRouteProbeSubTimeout = 5 * time.Second
 	defer func() {
 		browseRouteCountSubTimeout = origCount

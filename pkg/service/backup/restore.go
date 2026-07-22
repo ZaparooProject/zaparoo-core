@@ -32,6 +32,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1706,7 +1707,8 @@ func syncDirectory(path string) error {
 	}
 	syncErr := dir.Sync()
 	closeErr := dir.Close()
-	if syncErr != nil {
+	// Windows does not support flushing directory handles through os.File.Sync.
+	if syncErr != nil && (runtime.GOOS != "windows" || !errors.Is(syncErr, os.ErrPermission)) {
 		return fmt.Errorf("syncing directory: %w", syncErr)
 	}
 	if closeErr != nil {

@@ -65,6 +65,24 @@ type failDirectorySyncFs struct {
 	failAt int
 }
 
+type transientRenameFs struct {
+	afero.Fs
+	err      error
+	failures int
+	attempts int
+}
+
+func (fs *transientRenameFs) Rename(oldPath, newPath string) error {
+	fs.attempts++
+	if fs.attempts <= fs.failures {
+		return fs.err
+	}
+	if err := fs.Fs.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("rename transient test file: %w", err)
+	}
+	return nil
+}
+
 func (fs *failDirectorySyncFs) Open(name string) (afero.File, error) {
 	file, err := fs.Fs.Open(name)
 	if err != nil {
@@ -90,6 +108,51 @@ func (fs failStagedInstallFs) Rename(oldPath, newPath string) error {
 		return fmt.Errorf("rename test path: %w", err)
 	}
 	return nil
+}
+
+func TestRenameDatabaseFileWithRetry(t *testing.T) {
+	t.Parallel()
+
+	transientErr := errors.New("transient rename failure")
+	for _, tt := range []struct {
+		name             string
+		failures         int
+		expectedAttempts int
+		retryable        bool
+		expectError      bool
+	}{
+		{name: "retries transient error", retryable: true, failures: 2, expectedAttempts: 3},
+		{name: "stops on permanent error", failures: 2, expectedAttempts: 1, expectError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs := &transientRenameFs{Fs: afero.NewMemMapFs(), err: transientErr, failures: tt.failures}
+			dir := "rename-test"
+			oldPath := filepath.Join(dir, "old.db")
+			newPath := filepath.Join(dir, "new.db")
+			require.NoError(t, fs.MkdirAll(dir, 0o750))
+			require.NoError(t, afero.WriteFile(fs, oldPath, []byte("database"), 0o600))
+
+			waits := 0
+			err := renameDatabaseFileWithRetry(
+				fs,
+				oldPath,
+				newPath,
+				func(err error) bool { return tt.retryable && errors.Is(err, transientErr) },
+				func() { waits++ },
+			)
+			if tt.expectError {
+				require.ErrorIs(t, err, transientErr)
+			} else {
+				require.NoError(t, err)
+				contents, readErr := afero.ReadFile(fs, newPath)
+				require.NoError(t, readErr)
+				assert.Equal(t, []byte("database"), contents)
+			}
+			assert.Equal(t, tt.expectedAttempts, fs.attempts)
+			assert.Equal(t, tt.expectedAttempts-1, waits)
+		})
+	}
 }
 
 func TestReplaceDatabaseFromBackup_RestoresOriginalAfterInstallFailure(t *testing.T) {
