@@ -93,11 +93,12 @@ func (db *UserDB) CloseHangingMediaHistory() error {
 }
 
 // CleanupMediaHistory removes media history older than the retention period.
-func (db *UserDB) CleanupMediaHistory(retentionDays int) (int64, error) {
+// When requireSynced is true, only server-acknowledged versions are removed.
+func (db *UserDB) CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error) {
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlCleanupMediaHistory(db.ctx, db.sql.Load(), retentionDays)
+	return sqlCleanupMediaHistory(db.ctx, db.sql.Load(), retentionDays, requireSynced)
 }
 
 // HealTimestamps corrects timestamps for records created with unreliable clocks (MiSTer boot without NTP).
@@ -141,8 +142,8 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		INSERT INTO MediaHistory(
 			ID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history insert statement: %w", err)
@@ -182,6 +183,7 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		entry.UpdatedAt.Unix(),
 		deviceID,
 		profileID,
+		database.EncodeTagStrings(entry.Tags),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute media history insert: %w", err)
@@ -198,7 +200,7 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, playTime int) error {
 	stmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
-		SET PlayTime = ?, DurationSec = ?, UpdatedAt = ?
+		SET PlayTime = ?, DurationSec = ?, UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
 		WHERE DBID = ?;
 	`)
 	if err != nil {
@@ -221,8 +223,8 @@ func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, play
 func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime time.Time, playTime int) error {
 	stmt, err := db.PrepareContext(ctx, `
 		UPDATE MediaHistory
-		SET EndTime = ?, PlayTime = ?, DurationSec = ?, UpdatedAt = ?,
-		    WallDuration = (? - StartTime)
+		SET EndTime = ?, PlayTime = ?, DurationSec = ?, UpdatedAt = MAX(?, UpdatedAt + 1),
+		    WallDuration = (? - StartTime), SyncedAt = NULL
 		WHERE DBID = ?;
 	`)
 	if err != nil {
@@ -234,7 +236,9 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 		}
 	}()
 
-	// Use endTime as UpdatedAt: both represent the moment the session ended.
+	// Use endTime as the wall-clock candidate. SQL advances UpdatedAt by at
+	// least one second so concurrent sync acknowledgements can compare exact
+	// local versions even when two changes happen in the same second.
 	endUnix := endTime.Unix()
 	_, err = stmt.ExecContext(ctx, endUnix, playTime, playTime, endUnix, endUnix, dbid)
 	if err != nil {
@@ -439,7 +443,8 @@ func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
 		SET EndTime = StartTime + PlayTime,
 		    DurationSec = PlayTime,
 		    WallDuration = PlayTime,
-		    UpdatedAt = unixepoch()
+		    UpdatedAt = MAX(unixepoch(), UpdatedAt + 1),
+		    SyncedAt = NULL
 		WHERE EndTime IS NULL;
 	`)
 	if err != nil {
@@ -464,10 +469,16 @@ func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) (int64, error) {
+func sqlCleanupMediaHistory(
+	ctx context.Context, db *sql.DB, retentionDays int, requireSynced bool,
+) (int64, error) {
 	cutoffTime := time.Now().AddDate(0, 0, -retentionDays).Unix()
 
-	stmt, err := db.PrepareContext(ctx, `DELETE FROM MediaHistory WHERE StartTime < ?;`)
+	query := `DELETE FROM MediaHistory WHERE StartTime < ?;`
+	if requireSynced {
+		query = `DELETE FROM MediaHistory WHERE StartTime < ? AND SyncedAt IS NOT NULL;`
+	}
+	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history cleanup statement: %w", err)
 	}
@@ -547,7 +558,8 @@ func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBoo
 		    END,
 		    ClockReliable = 1,
 		    ClockSource = 'healed',
-		    UpdatedAt = unixepoch()
+		    UpdatedAt = MAX(unixepoch(), UpdatedAt + 1),
+		    SyncedAt = NULL
 		WHERE BootUUID = ? AND ClockReliable = 0 AND MonotonicStart > 0;
 	`)
 	if err != nil {

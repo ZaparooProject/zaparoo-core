@@ -83,6 +83,7 @@ type MediaHistoryEntry struct {
 	SystemName     string     `json:"systemName"`
 	MediaPath      string     `json:"mediaPath"`
 	MediaName      string     `json:"mediaName"`
+	Tags           []string   `json:"tags,omitempty"`
 	DBID           int64      `db:"DBID" json:"id"`
 	WallDuration   int        `json:"wallDuration"`
 	DurationSec    int        `json:"durationSec"`
@@ -91,6 +92,13 @@ type MediaHistoryEntry struct {
 	TimeSkewFlag   bool       `json:"timeSkewFlag"`
 	ClockReliable  bool       `json:"clockReliable"`
 	IsDeleted      bool       `json:"isDeleted,omitempty"`
+}
+
+// MediaHistorySyncRef identifies the exact local version acknowledged by a
+// play-history upload. UpdatedAt is a monotonic per-row version watermark.
+type MediaHistorySyncRef struct {
+	UpdatedAt time.Time
+	DBID      int64
 }
 
 type MediaHistoryTopEntry struct {
@@ -211,10 +219,16 @@ type MediaUserData struct {
 	SystemID         string
 	Path             string
 	LauncherOverride string
-	DBID             int64
-	CreatedAt        int64
-	UpdatedAt        int64
-	IsFavorite       bool
+	// MediaName and Tags snapshot the scanner's identity for this path at
+	// write time (display name + disambiguating type:value tags), so the
+	// row stays matchable to a canonical game after MediaDB is rebuilt or
+	// the file disappears. Empty when no scanner entry existed.
+	MediaName  string
+	Tags       []string
+	DBID       int64
+	CreatedAt  int64
+	UpdatedAt  int64
+	IsFavorite bool
 }
 
 // MediaPathID identifies a Media row by its system ID and path, used for batch
@@ -793,7 +807,11 @@ type UserDBI interface {
 	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
 	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
-	CleanupMediaHistory(retentionDays int) (int64, error)
+	CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error)
+	BackfillMediaHistoryUUIDs() (int64, error)
+	ResetMediaHistorySyncAfter(watermark *time.Time) error
+	GetMediaHistorySyncBatch(after time.Time, afterDBID int64, limit int) ([]MediaHistoryEntry, error)
+	MarkMediaHistorySynced(refs []MediaHistorySyncRef, syncedAt time.Time) error
 	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)
 	SumMediaPlayTimeForDay(dayStart time.Time) (int64, error)
 	SumMediaPlayTimeForDayByProfile(dayStart time.Time, profileID string) (int64, error)
@@ -806,6 +824,7 @@ type UserDBI interface {
 	GetMediaUserData(systemID, path string) (MediaUserData, bool, error)
 	SetMediaUserFavorite(systemID, path string, favorite bool) error
 	SetMediaUserLauncherOverride(systemID, path, launcherID string) error
+	SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error
 	UpsertMediaUserData(data *MediaUserData) error
 	DeleteMediaUserData(systemID, path string) error
 	ListMediaUserData() ([]MediaUserData, error)

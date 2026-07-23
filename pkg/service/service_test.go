@@ -199,9 +199,24 @@ scan_history = 7
 	mockUserDB := &testhelpers.MockUserDBI{}
 	db := &database.Database{UserDB: mockUserDB}
 	mockUserDB.On("CleanupHistory", 7).Return(int64(2), nil).Once()
-	mockUserDB.On("CleanupMediaHistory", 14).Return(int64(3), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", 14, false).Return(int64(3), nil).Once()
 
-	cleanupHistoryRetention(context.Background(), cfg, db)
+	cleanupHistoryRetention(context.Background(), cfg, db, false)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestCleanupHistoryRetention_ProtectsUnsyncedPlayHistory(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetPlaytimeRetention(14)
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockUserDB.On("CleanupHistory", 30).Return(int64(0), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", 14, true).Return(int64(2), nil).Once()
+
+	cleanupHistoryRetention(context.Background(), cfg, db, true)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -219,7 +234,7 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 		cancel()
 	}).Return(int64(1), nil).Once()
 
-	cleanupHistoryRetention(ctx, cfg, db)
+	cleanupHistoryRetention(ctx, cfg, db, false)
 
 	mockUserDB.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "CleanupMediaHistory", mock.Anything)

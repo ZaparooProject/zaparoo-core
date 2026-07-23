@@ -251,3 +251,43 @@ func TestListMediaUserData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, all, 3)
 }
+
+func TestSetMediaUserSnapshot(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	path := filepath.Join("roms", "SNES", "Super Metroid (USA).sfc")
+
+	// Snapshot on a missing row is a no-op: identity without user intent
+	// is meaningless.
+	require.NoError(t, userDB.SetMediaUserSnapshot("SNES", path, "Super Metroid", []string{"region:us"}))
+	_, found, err := userDB.GetMediaUserData("SNES", path)
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// Favourite first, then snapshot the scanner identity onto the row.
+	require.NoError(t, userDB.SetMediaUserFavorite("SNES", path, true))
+	require.NoError(t, userDB.SetMediaUserSnapshot(
+		"SNES", path, "Super Metroid", []string{"region:us", "rev:1"}))
+	got, found, err := userDB.GetMediaUserData("SNES", path)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "Super Metroid", got.MediaName)
+	assert.Equal(t, []string{"region:us", "rev:1"}, got.Tags)
+
+	// A successful lookup with no tags clears stale disambiguation while
+	// retaining the current scanner name.
+	require.NoError(t, userDB.SetMediaUserSnapshot("SNES", path, "Super Metroid", nil))
+	got, found, err = userDB.GetMediaUserData("SNES", path)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "Super Metroid", got.MediaName)
+	assert.Empty(t, got.Tags)
+
+	// The snapshot survives in listings too.
+	list, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, "Super Metroid", list[0].MediaName)
+	assert.Empty(t, list[0].Tags)
+}

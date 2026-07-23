@@ -32,6 +32,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBackfillMediaHistoryUUIDsAtStartup(t *testing.T) {
+	t.Parallel()
+	userDB := testhelpers.NewMockUserDBI()
+	userDB.On("BackfillMediaHistoryUUIDs").Return(int64(3), nil).Once()
+
+	backfillMediaHistoryUUIDs(userDB)
+
+	userDB.AssertExpectations(t)
+}
+
 // seedMediaUserData inserts one favourited and one launcher-overridden media into
 // media.db, mimicking a database written by a version that stored this data only
 // there. Returns the two paths.

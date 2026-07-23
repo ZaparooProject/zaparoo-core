@@ -134,6 +134,11 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					profileID := activeProfile.ProfileID
 					entry.ProfileID = &profileID
 				}
+				// Snapshot the scanner's disambiguating tags now: MediaDB
+				// is disposable, so tags not captured at record time are
+				// lost to this row forever (rescan, deleted file,
+				// re-imaged card).
+				entry.Tags = t.lookupMediaTags(activeMedia.SystemID, activeMedia.Path)
 				dbid, addErr := t.db.UserDB.AddMediaHistory(entry)
 				if addErr != nil {
 					log.Error().Err(addErr).Msg("failed to add media history entry")
@@ -201,6 +206,19 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 // updatePlayTime periodically updates the PlayTime for the currently active media
 // history entry every 15 seconds. This limits crash-loss to at most 15 seconds of
 // playtime and keeps the history accurate for users who care about tracking.
+// lookupMediaTags snapshots the scanner's disambiguating tags for the
+// launched media. Best effort with a short timeout: a launch outside the
+// index simply records no tags.
+func (t *mediaHistoryTracker) lookupMediaTags(systemID, path string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	identity, found := database.LookupMediaIdentity(ctx, t.db.MediaDB, systemID, path)
+	if !found {
+		return nil
+	}
+	return identity.Tags
+}
+
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 	ticker := t.clock.NewTicker(15 * time.Second)
 	defer ticker.Stop()

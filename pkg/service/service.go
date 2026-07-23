@@ -533,7 +533,8 @@ func Start(
 		st.GetContext(), "history-retention-cleanup",
 		5*time.Second, 300*time.Second,
 		func(ctx context.Context) {
-			cleanupHistoryRetention(ctx, cfg, db)
+			remoteLinked := backupsvc.NewManager(cfg, pl, db).Status().Remote.Linked
+			cleanupHistoryRetention(ctx, cfg, db, cfg.PlaytimeSyncEnabled() && remoteLinked)
 		},
 	)
 	idleSched.Schedule(

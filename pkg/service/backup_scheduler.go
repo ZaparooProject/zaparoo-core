@@ -58,6 +58,12 @@ const (
 	remoteHeartbeatInterval       = 24 * time.Hour
 	remoteHeartbeatInitialBackoff = 1 * time.Minute
 	remoteHeartbeatMaxBackoff     = 1 * time.Hour
+	// playSyncInterval paces play-history uploads to the remote API. Like
+	// heartbeats, sync runs for any linked device (it is not gated on
+	// remote backup being enabled or available); a pass with no new
+	// sessions is one GET and one empty local query. Failures back off on
+	// the shared heartbeat backoff schedule.
+	playSyncInterval = 1 * time.Hour
 	// remoteBackupStaleAfter is how long scheduling may go without a
 	// successful run before the user is told via the inbox. The inbox
 	// message wording assumes roughly a week.
@@ -194,9 +200,33 @@ func remoteBackupSchedulerLoop(
 		}
 	}
 
+	// Play-history sync reuses the heartbeat pacing state: interval on
+	// success, exponential backoff on failure. The first pass after linking
+	// is the bulk import of the whole local history.
+	playSyncState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
+	tryPlaySync := func() {
+		now := time.Now()
+		if !playSyncDue(&playSyncState, now) {
+			return
+		}
+		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+		info, err := mgr.SyncPlayHistory(ctx)
+		if err != nil {
+			// Unlinked, disabled, or unreachable: sync is best-effort.
+			playSyncState.recordFailure(now)
+			log.Debug().Err(err).Msg("play history sync not run")
+			return
+		}
+		playSyncState.recordSuccess(now)
+		if info.Uploaded > 0 {
+			log.Info().Int("sessions", info.Uploaded).Msg("scheduled play history sync completed")
+		}
+	}
+
 	tryHeartbeat()
 	trySchedule()
 	tryStaleNotice()
+	tryPlaySync()
 	ticker := newTicker(remoteBackupSchedulerCheckInterval)
 	defer ticker.Stop()
 	for {
@@ -205,10 +235,20 @@ func remoteBackupSchedulerLoop(
 			tryHeartbeat()
 			trySchedule()
 			tryStaleNotice()
+			tryPlaySync()
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// playSyncDue reports whether a play-history sync pass should run now,
+// honoring the success interval and failure backoff.
+func playSyncDue(s *remoteHeartbeatState, now time.Time) bool {
+	if !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < playSyncInterval {
+		return false
+	}
+	return s.nextAttempt.IsZero() || !now.Before(s.nextAttempt)
 }
 
 func scheduledRemoteBackupDue(

@@ -112,7 +112,7 @@ func authStatusProbeAllowed(rawURL, configuredBackupURL string) bool {
 	return strings.EqualFold(parsed.Scheme, configured.Scheme) && strings.EqualFold(parsed.Host, configured.Host)
 }
 
-// HandleSettingsAuthUnlink removes the device's Zaparoo Online credentials
+// HandleSettingsAuthUnlink removes the device's online account credentials
 // and marks remote backup unlinked. The claim/link flow tags every entry it
 // creates with the root domain that created it (linked_via), so unlink
 // removes the configured backup server's entry plus everything tagged with

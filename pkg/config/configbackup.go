@@ -32,7 +32,7 @@ const (
 	DefaultBackupRemoteSchedule = "daily"
 )
 
-// OfficialAuthHosts are the hosts of the official Zaparoo Online API
+// OfficialAuthHosts are the hosts of the official hosted API
 // services. settings.auth.status only answers link probes for these hosts
 // (over HTTPS) and the configured backup server; other URLs report
 // linked=false without revealing whether a credential exists. The claim

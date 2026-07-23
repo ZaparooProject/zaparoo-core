@@ -84,6 +84,7 @@ func TestSqlAddMediaHistory_Success(t *testing.T) {
 			entry.UpdatedAt.Unix(),
 			nil,
 			nil,
+			database.EncodeTagStrings(entry.Tags),
 		).
 		WillReturnResult(sqlmock.NewResult(expectedDBID, 1))
 
@@ -142,6 +143,7 @@ func TestSqlAddMediaHistory_DatabaseError(t *testing.T) {
 			entry.UpdatedAt.Unix(),
 			nil,
 			nil,
+			database.EncodeTagStrings(entry.Tags),
 		).
 		WillReturnError(sqlmock.ErrCancelled)
 
@@ -629,7 +631,27 @@ func TestSqlCleanupMediaHistory_Success(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
 
-	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays)
+	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
+	require.NoError(t, err)
+	assert.Equal(t, rowsDeleted, rowsAffected)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlCleanupMediaHistory_RequiresSyncedRows(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	retentionDays := 365
+	rowsDeleted := int64(4)
+
+	mock.ExpectPrepare(`DELETE FROM MediaHistory WHERE StartTime.*SyncedAt IS NOT NULL`).
+		ExpectExec().
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+
+	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, true)
 	require.NoError(t, err)
 	assert.Equal(t, rowsDeleted, rowsAffected)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -648,7 +670,7 @@ func TestSqlCleanupMediaHistory_NoRowsToDelete(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays)
+	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), rowsAffected)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -667,7 +689,7 @@ func TestSqlCleanupMediaHistory_DeleteError(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnError(sqlmock.ErrCancelled)
 
-	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays)
+	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays, false)
 	require.Error(t, err)
 	assert.Equal(t, int64(0), rowsAffected)
 	assert.Contains(t, err.Error(), "failed to execute media history cleanup")

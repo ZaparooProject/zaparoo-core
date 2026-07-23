@@ -20,9 +20,13 @@
 package methods
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/rs/zerolog/log"
 )
 
 // setMediaUserFavorite records the favourite intent for a media path in UserDB,
@@ -33,6 +37,7 @@ func setMediaUserFavorite(env *requests.RequestEnv, systemID, path string, favor
 	if err := env.Database.UserDB.SetMediaUserFavorite(systemID, path, favorite); err != nil {
 		return fmt.Errorf("failed to set media user favorite: %w", err)
 	}
+	snapshotMediaUserIdentity(env, systemID, path)
 	return nil
 }
 
@@ -43,5 +48,23 @@ func setMediaUserLauncherOverride(env *requests.RequestEnv, systemID, path, laun
 	if err := env.Database.UserDB.SetMediaUserLauncherOverride(systemID, path, launcherID); err != nil {
 		return fmt.Errorf("failed to set media user launcher override: %w", err)
 	}
+	snapshotMediaUserIdentity(env, systemID, path)
 	return nil
+}
+
+// snapshotMediaUserIdentity best-effort captures the scanner's identity
+// (display name + disambiguating tags) onto the user-data row just written.
+// MediaDB is disposable, so this is the only durable record of what the path
+// identified when the user marked it. Failures are logged, never surfaced:
+// user intent was already recorded.
+func snapshotMediaUserIdentity(env *requests.RequestEnv, systemID, path string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	identity, found := database.LookupMediaIdentity(ctx, env.Database.MediaDB, systemID, path)
+	if !found {
+		return
+	}
+	if err := env.Database.UserDB.SetMediaUserSnapshot(systemID, path, identity.Name, identity.Tags); err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("failed to store media user identity snapshot")
+	}
 }

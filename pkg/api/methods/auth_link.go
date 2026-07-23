@@ -47,7 +47,7 @@ import (
 
 // Reverse device link flow (RFC 8628 device-authorization style): the device
 // starts a link request, displays a user code / QR URL, and polls until the
-// user approves it in Zaparoo Online. On approval, the poll returns a claim
+// user approves it in the account service. On approval, the poll returns a claim
 // token that goes through the same redemption pipeline as the forward flow.
 
 const (

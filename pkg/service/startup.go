@@ -107,6 +107,8 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		return db, err
 	}
 
+	backfillMediaHistoryUUIDs(userDB)
+
 	// migrate old boltdb mappings if required
 	log.Debug().Msg("checking for boltdb migration")
 	err = boltmigration.MaybeMigrate(pl, userDB)
@@ -121,6 +123,28 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	success = true
 	return db, nil
+}
+
+// backfillMediaHistoryUUIDs assigns stable IDs to history written by older
+// versions. Best-effort and idempotent: failure is retried at next startup.
+func backfillMediaHistoryUUIDs(userDB database.UserDBI) {
+	if userDB == nil {
+		return
+	}
+
+	startedAt := time.Now()
+	backfilled, err := userDB.BackfillMediaHistoryUUIDs()
+	duration := time.Since(startedAt)
+	if err != nil {
+		log.Error().Err(err).Dur("duration", duration).Msg("failed to backfill media history UUIDs")
+		return
+	}
+	if backfilled > 0 {
+		log.Info().Int64("backfilled", backfilled).Dur("duration", duration).
+			Msg("backfilled media history UUIDs")
+		return
+	}
+	log.Debug().Dur("duration", duration).Msg("media history UUID backfill completed")
 }
 
 // backfillMediaUserData seeds UserDB from favourites/launcher overrides that older
@@ -238,7 +262,9 @@ func startupMaintenanceCancelled(ctx context.Context, message string) bool {
 	return false
 }
 
-func cleanupHistoryRetention(ctx context.Context, cfg *config.Instance, db *database.Database) {
+func cleanupHistoryRetention(
+	ctx context.Context, cfg *config.Instance, db *database.Database, protectUnsyncedPlayHistory bool,
+) {
 	if startupMaintenanceCancelled(ctx, "skipping history retention cleanup: startup maintenance cancelled") {
 		return
 	}
@@ -275,7 +301,7 @@ func cleanupHistoryRetention(ctx context.Context, cfg *config.Instance, db *data
 	playtimeRetention := cfg.PlaytimeRetention()
 	if playtimeRetention > 0 {
 		log.Info().Msgf("cleaning up media history older than %d days", playtimeRetention)
-		rowsDeleted, cleanupErr := db.UserDB.CleanupMediaHistory(playtimeRetention)
+		rowsDeleted, cleanupErr := db.UserDB.CleanupMediaHistory(playtimeRetention, protectUnsyncedPlayHistory)
 		switch {
 		case cleanupErr != nil:
 			log.Error().Err(cleanupErr).Msg("error cleaning up media history")

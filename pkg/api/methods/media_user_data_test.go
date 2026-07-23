@@ -59,6 +59,10 @@ func TestMediaTagsUpdate_PersistsUserDBTruthWhenProjectionFails(t *testing.T) {
 
 	path := filepath.Join("roms", "NES", "Game.nes")
 	mockDB := testhelpers.NewMockMediaDBI()
+	// The identity snapshot after a user-data write is best-effort; an empty
+	// search result means no snapshot and is not part of what these tests prove.
+	mockDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResult{}, nil).Maybe()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: favouriteRow(path)}, nil).Once()
 	mockDB.On("BeginTransaction", false).Return(errors.New("projection boom")).Once()
@@ -92,6 +96,10 @@ func TestMediaMetaUpdate_PersistsUserDBTruthWhenProjectionFails(t *testing.T) {
 
 	path := filepath.Join("roms", "NES", "Game.nes")
 	mockDB := testhelpers.NewMockMediaDBI()
+	// The identity snapshot after a user-data write is best-effort; an empty
+	// search result means no snapshot and is not part of what these tests prove.
+	mockDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResult{}, nil).Maybe()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: favouriteRow(path)}, nil).Once()
 	mockDB.On("FindOrInsertTagType", database.TagType{

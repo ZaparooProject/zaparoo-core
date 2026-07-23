@@ -32,7 +32,11 @@ import (
 )
 
 func onlineTestSettings(baseURL string) *models.SettingsResponse {
-	return &models.SettingsResponse{BackupRemoteBaseURL: &baseURL}
+	playtimeSyncEnabled := true
+	return &models.SettingsResponse{
+		BackupRemoteBaseURL: &baseURL,
+		PlaytimeSyncEnabled: &playtimeSyncEnabled,
+	}
 }
 
 func TestOnlineServerHost(t *testing.T) {
@@ -62,6 +66,7 @@ func TestBuildOnlineSettingsMenu_NotLinkedShowsLinkAction_Integration(t *testing
 
 	require.True(t, runner.WaitForText("Link account", 100*time.Millisecond))
 	assert.True(t, runner.ContainsText("Not linked"), "link status shows on the menu line")
+	assert.True(t, runner.ContainsText("Play history sync"), "sync consent is configurable before linking")
 	assert.True(t, runner.ContainsText("Cloud backup"), "features are discoverable while unlinked")
 	assert.False(t, runner.ContainsText("Unlink account"))
 	assert.False(t, runner.ContainsText("Warp:"), "Warp status is hidden until an account is linked")
@@ -86,9 +91,47 @@ func TestBuildOnlineSettingsMenu_LinkedShowsAccountControls_Integration(t *testi
 	require.True(t, runner.WaitForText("Account", 100*time.Millisecond))
 	assert.True(t, runner.ContainsText("Linked"), "link status shows on the menu line")
 	assert.True(t, runner.ContainsText("Warp"), "Warp subscription status shows on the menu line")
+	assert.True(t, runner.ContainsText("Play history sync"))
 	assert.True(t, runner.ContainsText("Cloud backup"))
 	assert.True(t, runner.ContainsText("Unlink account"))
 	assert.False(t, runner.ContainsText("Link account"))
+}
+
+func TestBuildOnlineSettingsMenu_PlayHistoryToggleUpdatesConsent_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
+	mockSvc.SetupGetSettings(onlineTestSettings(config.DefaultBackupRemoteBaseURL))
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.QueueUpdateDraw(func() {
+		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
+	})
+	require.True(t, runner.WaitForText("Play history sync", 100*time.Millisecond))
+
+	// Account, Warp, Unlink account, then Play history sync.
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForCondition(func() bool {
+		for _, call := range mockSvc.Calls {
+			if call.Method != "UpdateSettings" {
+				continue
+			}
+			params, ok := call.Arguments.Get(1).(*models.UpdateSettingsParams)
+			if ok && params.PlaytimeSyncEnabled != nil && !*params.PlaytimeSyncEnabled {
+				return true
+			}
+		}
+		return false
+	}, 100*time.Millisecond), "toggle should disable playtime sync consent")
 }
 
 func TestBuildOnlineSettingsMenu_LinkedShowsDeviceName_Integration(t *testing.T) {
@@ -185,7 +228,8 @@ func TestBuildOnlineSettingsMenu_CloudBackupNavigatesToBackupPage_Integration(t 
 	})
 	require.True(t, runner.WaitForText("Cloud backup", 100*time.Millisecond))
 
-	// Account row, Warp row, Unlink account, then Cloud backup in Features.
+	// Account, Warp, Unlink account, Play history sync, then Cloud backup.
+	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
