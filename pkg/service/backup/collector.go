@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,7 +53,6 @@ type sourceCollector struct {
 	files              []FileRef
 	warnings           []models.BackupWarning
 	logicalSize        int64
-	maxLogicalSize     int64
 	maxFiles           int
 	maxWarnings        int
 }
@@ -113,13 +113,13 @@ func (r *cancelableSource) Close() error {
 }
 
 func newSourceCollector(
-	ctx context.Context, maxLogicalSize int64, excludedSources map[string]struct{},
+	ctx context.Context, excludedSources map[string]struct{},
 ) *sourceCollector {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return &sourceCollector{
-		ctx: ctx, maxLogicalSize: maxLogicalSize, excludedSources: excludedSources,
+		ctx: ctx, excludedSources: excludedSources,
 		maxFiles: maxArchiveEntries - 1, maxWarnings: maxArchiveEntries,
 	}
 }
@@ -477,8 +477,12 @@ func (c *sourceCollector) appendFile(file *FileRef) {
 		c.err = fmt.Errorf("backup has too many files: exceeds %d", c.maxFiles)
 		return
 	}
-	if file.Size < 0 || c.maxLogicalSize <= 0 || file.Size > c.maxLogicalSize-c.logicalSize {
-		c.err = fmt.Errorf("backup exceeds logical size limit of %d bytes", c.maxLogicalSize)
+	if file.Size < 0 {
+		c.err = errors.New("backup source has negative size")
+		return
+	}
+	if file.Size > math.MaxInt64-c.logicalSize {
+		c.err = errors.New("backup logical size overflow")
 		return
 	}
 	c.logicalSize += file.Size

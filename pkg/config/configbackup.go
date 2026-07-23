@@ -30,7 +30,6 @@ import (
 const (
 	DefaultBackupRemoteBaseURL  = "https://api.zaparoo.com"
 	DefaultBackupRemoteSchedule = "daily"
-	DefaultBackupMaxSizeBytes   = int64(5 << 30)
 )
 
 // OfficialAuthHosts are the hosts of the official Zaparoo Online API
@@ -57,10 +56,9 @@ const (
 )
 
 type Backup struct {
-	LocalDir     string       `toml:"local_dir,omitempty"`
-	Scope        string       `toml:"scope,omitempty"`
-	Remote       BackupRemote `toml:"remote,omitempty"`
-	MaxSizeBytes int64        `toml:"max_size_bytes,omitempty"`
+	LocalDir string       `toml:"local_dir,omitempty"`
+	Scope    string       `toml:"scope,omitempty"`
+	Remote   BackupRemote `toml:"remote,omitempty"`
 }
 
 type BackupRemote struct {
@@ -97,21 +95,6 @@ func (c *Instance) SetBackupScope(scope string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Backup.Scope = scope
-}
-
-func (c *Instance) BackupMaxSizeBytes() int64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.vals.Backup.MaxSizeBytes <= 0 {
-		return DefaultBackupMaxSizeBytes
-	}
-	return c.vals.Backup.MaxSizeBytes
-}
-
-func (c *Instance) SetBackupMaxSizeBytes(maxSize int64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Backup.MaxSizeBytes = maxSize
 }
 
 func (c *Instance) BackupRemoteEnabled() bool {

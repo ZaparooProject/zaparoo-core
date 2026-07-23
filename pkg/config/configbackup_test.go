@@ -32,7 +32,6 @@ func TestBackupDefaults(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, cfg.BackupLocalDir())
-	assert.Equal(t, DefaultBackupMaxSizeBytes, cfg.BackupMaxSizeBytes())
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
 	assert.Equal(t, DefaultBackupRemoteSchedule, cfg.BackupRemoteSchedule())
@@ -65,15 +64,6 @@ func TestSetBackupLocalDir(t *testing.T) {
 
 	cfg.SetBackupLocalDir("/media/usb/zaparoo-backups")
 	assert.Equal(t, "/media/usb/zaparoo-backups", cfg.BackupLocalDir())
-}
-
-func TestSetBackupMaxSizeBytes(t *testing.T) {
-	t.Parallel()
-	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
-	require.NoError(t, err)
-
-	cfg.SetBackupMaxSizeBytes(1024)
-	assert.Equal(t, int64(1024), cfg.BackupMaxSizeBytes())
 }
 
 func TestValidateBackupRemoteBaseURL(t *testing.T) {

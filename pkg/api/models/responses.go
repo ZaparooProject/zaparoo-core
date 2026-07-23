@@ -787,6 +787,7 @@ type BackupWarning struct {
 type BackupStatusEntry struct {
 	LastRunAt             *string                         `json:"lastRunAt,omitempty"`
 	LastSuccessAt         *string                         `json:"lastSuccessAt,omitempty"`
+	LastSnapshotCreatedAt *string                         `json:"lastSnapshotCreatedAt,omitempty"`
 	AvailabilityCheckedAt *string                         `json:"availabilityCheckedAt,omitempty"`
 	DeviceName            *string                         `json:"deviceName,omitempty"`
 	LinkedAt              *string                         `json:"linkedAt,omitempty"`
@@ -800,6 +801,11 @@ type BackupStatusEntry struct {
 	SkippedFiles          int                             `json:"skippedFiles,omitempty"`
 	Linked                bool                            `json:"linked,omitempty"`
 	Enabled               bool                            `json:"enabled"`
+	// LastRunNoChanges marks the most recent successful run as verified-
+	// unchanged: the server already held an identical snapshot, so nothing
+	// new was stored. LastSuccessAt still advances on such runs;
+	// LastSnapshotCreatedAt is when the stored content last changed.
+	LastRunNoChanges bool `json:"lastRunNoChanges,omitempty"`
 }
 
 type BackupStatusResponse struct {

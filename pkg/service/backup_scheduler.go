@@ -261,11 +261,19 @@ func runScheduledRemoteBackup(
 		log.Info().Str("availability", availability).Msg("skipping scheduled remote backup")
 		return
 	}
-	if _, err := mgr.RunRemote(ctx, backupsvc.RemoteBackupTypeScheduled); err != nil {
+	info, err := mgr.RunRemote(ctx, backupsvc.RemoteBackupTypeScheduled)
+	if err != nil {
 		log.Warn().Err(err).Msg("scheduled remote backup failed")
 		return
 	}
-	log.Info().Msg("scheduled remote backup completed")
+	log.Info().
+		Int("uploadedFiles", info.UploadedFiles).
+		Int("dedupedFiles", info.DedupedFiles).
+		Int64("uploadedBytes", info.UploadedBytes).
+		Bool("noChanges", info.NoChanges).
+		Str("backupID", info.Backup.ID).
+		Time("snapshotCreatedAt", info.Backup.CreatedAt).
+		Msg("scheduled remote backup completed")
 }
 
 func remoteBackupDue(now time.Time, status *models.BackupStatusEntry, schedule string) bool {
