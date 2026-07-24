@@ -48,12 +48,12 @@ func (db *UserDB) UpdateMediaHistoryTime(dbid int64, playTime int) error {
 	return sqlUpdateMediaHistoryTime(db.ctx, db.sql.Load(), dbid, playTime)
 }
 
-// UpdateMediaHistoryTags stores the scanner-derived identity tags for a history entry.
-func (db *UserDB) UpdateMediaHistoryTags(dbid int64, tags []string) error {
+// UpdateMediaHistoryIdentity stores the scanner-derived name and tags for a history entry.
+func (db *UserDB) UpdateMediaHistoryIdentity(dbid int64, identity database.MediaIdentity) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
-	return sqlUpdateMediaHistoryTags(db.ctx, db.sql.Load(), dbid, tags)
+	return sqlUpdateMediaHistoryIdentity(db.ctx, db.sql.Load(), dbid, identity)
 }
 
 // CloseMediaHistory finalizes a media history entry with end time and final play time.
@@ -228,14 +228,16 @@ func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, play
 	return nil
 }
 
-func sqlUpdateMediaHistoryTags(ctx context.Context, db *sql.DB, dbid int64, tags []string) error {
+func sqlUpdateMediaHistoryIdentity(
+	ctx context.Context, db *sql.DB, dbid int64, identity database.MediaIdentity,
+) error {
 	_, err := db.ExecContext(ctx, `
 		UPDATE MediaHistory
-		SET Tags = ?, UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
+		SET MediaName = ?, Tags = ?, UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
 		WHERE DBID = ?;
-	`, database.EncodeTagStrings(tags), time.Now().Unix(), dbid)
+	`, identity.Name, database.EncodeTagStrings(identity.Tags), time.Now().Unix(), dbid)
 	if err != nil {
-		return fmt.Errorf("failed to execute media history tags update: %w", err)
+		return fmt.Errorf("failed to execute media history identity update: %w", err)
 	}
 	return nil
 }

@@ -802,7 +802,7 @@ type UserDBI interface {
 	CleanupHistory(retentionDays int) (int64, error)
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
-	UpdateMediaHistoryTags(dbid int64, tags []string) error
+	UpdateMediaHistoryIdentity(dbid int64, identity MediaIdentity) error
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
 	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)

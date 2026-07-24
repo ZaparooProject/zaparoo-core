@@ -193,10 +193,13 @@ func TestSqlUpdateMediaHistoryTime_DatabaseError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlUpdateMediaHistoryTags(t *testing.T) {
+func TestSqlUpdateMediaHistoryIdentity(t *testing.T) {
 	t.Parallel()
 
-	tags := []string{"region:us", "year:1990"}
+	identity := database.MediaIdentity{
+		Name: "Indexed Name",
+		Tags: []string{"region:us", "year:1990"},
+	}
 	tests := []struct {
 		execErr error
 		name    string
@@ -212,18 +215,20 @@ func TestSqlUpdateMediaHistoryTags(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
 
-			expectation := mockDB.ExpectExec(`UPDATE MediaHistory SET Tags`).
-				WithArgs(database.EncodeTagStrings(tags), sqlmock.AnyArg(), int64(42))
+			expectation := mockDB.ExpectExec(
+				`UPDATE MediaHistory SET MediaName = \?, Tags = \?, `+
+					`UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), SyncedAt = NULL WHERE DBID = \?;`,
+			).WithArgs(identity.Name, database.EncodeTagStrings(identity.Tags), sqlmock.AnyArg(), int64(42))
 			if tt.execErr != nil {
 				expectation.WillReturnError(tt.execErr)
 			} else {
 				expectation.WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 
-			err = sqlUpdateMediaHistoryTags(context.Background(), db, 42, tags)
+			err = sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, identity)
 			if tt.execErr != nil {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "failed to execute media history tags update")
+				assert.Contains(t, err.Error(), "failed to execute media history identity update")
 			} else {
 				require.NoError(t, err)
 			}
@@ -293,13 +298,15 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "nes", "Nintendo Entertainment System",
-			"/games/mario.nes", "Super Mario Bros.", "retroarch", 3600,
+			filepath.Join(string(filepath.Separator), "games", "mario.nes"),
+			"Super Mario Bros.", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
 			true, "system", startTime, startTime, nil, nil, `["region:us"]`,
 		).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "snes", "Super Nintendo",
-			"/games/zelda.sfc", "The Legend of Zelda", "retroarch", 7200,
+			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"),
+			"The Legend of Zelda", "retroarch", 7200,
 			"boot-1", int64(2000), 7200, 7200, false,
 			true, "system", startTime, startTime, nil, nil, "",
 		)
@@ -478,7 +485,7 @@ func TestSqlGetMediaHistory_LargeLastID(t *testing.T) {
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
 	}).AddRow(
 		int64(math.MaxInt32)+50, "uuid-1", time.Now().Unix(), nil, "nes", "NES",
-		"/games/mario.nes", "Mario", "retroarch", 100,
+		filepath.Join(string(filepath.Separator), "games", "mario.nes"), "Mario", "retroarch", 100,
 		"boot-1", int64(1000), 100, 100, false,
 		true, "system", time.Now().Unix(), time.Now().Unix(), nil, nil, "",
 	)
@@ -513,7 +520,8 @@ func TestSqlGetMediaHistory_SingleSystemFilter(t *testing.T) {
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "SNES", "Super Nintendo",
-			"/games/zelda.sfc", "The Legend of Zelda", "retroarch", 3600,
+			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"),
+			"The Legend of Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
 			true, "system", startTime, startTime, nil, nil, `["region:jp"]`,
 		)
@@ -549,13 +557,13 @@ func TestSqlGetMediaHistory_MultipleSystemIDs(t *testing.T) {
 	}).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "SNES", "Super Nintendo",
-			"/games/zelda.sfc", "Zelda", "retroarch", 3600,
+			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"), "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
 			true, "system", startTime, startTime, nil, nil, "",
 		).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "NES", "NES",
-			"/games/mario.nes", "Mario", "retroarch", 1800,
+			filepath.Join(string(filepath.Separator), "games", "mario.nes"), "Mario", "retroarch", 1800,
 			"boot-1", int64(2000), 1800, 1800, false,
 			true, "system", startTime, startTime, nil, nil, "",
 		)
@@ -593,7 +601,7 @@ func TestSqlGetMediaHistory_SystemFilterWithPagination(t *testing.T) {
 	}).
 		AddRow(
 			int64(8), "uuid-8", startTime, endTime, "SNES", "Super Nintendo",
-			"/games/zelda.sfc", "Zelda", "retroarch", 3600,
+			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"), "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
 			true, "system", startTime, startTime, nil, nil, "",
 		)
@@ -751,9 +759,11 @@ func TestSqlGetMediaHistoryTop_MultipleSessionsAggregated(t *testing.T) {
 		"SystemName", "MediaPath",
 	}).
 		AddRow("SNES", "Super Mario World", 7200, 12, now.Unix(),
-			"Super Nintendo Entertainment System", "/games/snes/smw.sfc").
+			"Super Nintendo Entertainment System",
+			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc")).
 		AddRow("NES", "Super Mario Bros", 3600, 5, now.Add(-time.Hour).Unix(),
-			"Nintendo Entertainment System", "/games/nes/smb.nes")
+			"Nintendo Entertainment System",
+			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"))
 
 	mock.ExpectPrepare(`SELECT.*sub\.SystemID.*FROM.*GROUP BY SystemID, MediaName.*ORDER BY sub\.TotalPlayTime DESC`).
 		ExpectQuery().
@@ -768,7 +778,8 @@ func TestSqlGetMediaHistoryTop_MultipleSessionsAggregated(t *testing.T) {
 	assert.Equal(t, 7200, entries[0].TotalPlayTime)
 	assert.Equal(t, 12, entries[0].SessionCount)
 	assert.Equal(t, "Super Nintendo Entertainment System", entries[0].SystemName)
-	assert.Equal(t, "/games/snes/smw.sfc", entries[0].MediaPath)
+	assert.Equal(t,
+		filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"), entries[0].MediaPath)
 
 	assert.Equal(t, "NES", entries[1].SystemID)
 	assert.Equal(t, 3600, entries[1].TotalPlayTime)
@@ -791,7 +802,8 @@ func TestSqlGetMediaHistoryTop_SystemFilter(t *testing.T) {
 		"SystemName", "MediaPath",
 	}).
 		AddRow("SNES", "Super Mario World", 7200, 12, now.Unix(),
-			"Super Nintendo Entertainment System", "/games/snes/smw.sfc")
+			"Super Nintendo Entertainment System",
+			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc"))
 
 	mock.ExpectPrepare(`SELECT.*WHERE SystemID = \?.*GROUP BY`).
 		ExpectQuery().
@@ -911,7 +923,7 @@ func TestSqlGetMediaHistoryTop_BothFilters(t *testing.T) {
 		"SystemName", "MediaPath",
 	}).
 		AddRow("Genesis", "Sonic", 1800, 3, now.Unix(),
-			"Sega Genesis", "/games/gen/sonic.md")
+			"Sega Genesis", filepath.Join(string(filepath.Separator), "games", "gen", "sonic.md"))
 
 	mock.ExpectPrepare(`SELECT.*WHERE SystemID = \? AND StartTime >= \?.*GROUP BY`).
 		ExpectQuery().
@@ -940,9 +952,11 @@ func TestSqlGetMediaHistoryTop_MultipleSystemIDs(t *testing.T) {
 		"SystemName", "MediaPath",
 	}).
 		AddRow("SNES", "Super Mario World", 7200, 12, now.Unix(),
-			"Super Nintendo Entertainment System", "/games/snes/smw.sfc").
+			"Super Nintendo Entertainment System",
+			filepath.Join(string(filepath.Separator), "games", "snes", "smw.sfc")).
 		AddRow("NES", "Super Mario Bros", 3600, 5, now.Add(-time.Hour).Unix(),
-			"Nintendo Entertainment System", "/games/nes/smb.nes")
+			"Nintendo Entertainment System",
+			filepath.Join(string(filepath.Separator), "games", "nes", "smb.nes"))
 
 	mock.ExpectPrepare(`SELECT.*WHERE SystemID IN \(\?, \?\).*GROUP BY`).
 		ExpectQuery().

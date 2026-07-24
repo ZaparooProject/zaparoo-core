@@ -359,10 +359,10 @@ func (m *MockUserDBI) UpdateMediaHistoryTime(dbid int64, playTime int) error {
 	return nil
 }
 
-func (m *MockUserDBI) UpdateMediaHistoryTags(dbid int64, tags []string) error {
-	args := m.Called(dbid, tags)
+func (m *MockUserDBI) UpdateMediaHistoryIdentity(dbid int64, identity database.MediaIdentity) error {
+	args := m.Called(dbid, identity)
 	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI update media history tags failed: %w", err)
+		return fmt.Errorf("mock UserDBI update media history identity failed: %w", err)
 	}
 	return nil
 }
