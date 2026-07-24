@@ -1328,6 +1328,15 @@ func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platform
 	return results
 }
 
+func (p *Platform) RefreshLauncherDependencies() error {
+	cores.GlobalRBFCache.SetFilesystem(p.filesystem())
+	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
+	if err := cores.GlobalRBFCache.ForceRefresh(); err != nil {
+		return fmt.Errorf("force refresh RBF cache: %w", err)
+	}
+	return nil
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Launchers is invoked from many hot paths (token scans, RPC handlers,
 	// indexing). The Refresh fast path stats only the snapshot directories

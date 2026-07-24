@@ -42,6 +42,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type reloadAPICaller func(
+	ctx context.Context,
+	cfg *config.Instance,
+	method string,
+	params string,
+) (string, error)
+
 type Flags struct {
 	Write                *string
 	Read                 *bool
@@ -103,7 +110,7 @@ func SetupFlags() *Flags {
 		Reload: flag.Bool(
 			"reload",
 			false,
-			"reload config and mappings from disk",
+			"reload config, mappings, launchers, and platform launcher data",
 		),
 		Pair: flag.Bool(
 			"pair",
@@ -174,6 +181,16 @@ func logClientCommandError(err error, msg string) {
 		return
 	}
 	log.Error().Err(err).Msg(msg)
+}
+
+func reloadCore(ctx context.Context, cfg *config.Instance, call reloadAPICaller) error {
+	if _, err := call(ctx, cfg, models.MethodSettingsReload, ""); err != nil {
+		return fmt.Errorf("reload settings: %w", err)
+	}
+	if _, err := call(ctx, cfg, models.MethodLaunchersRefresh, ""); err != nil {
+		return fmt.Errorf("refresh launchers: %w", err)
+	}
+	return nil
 }
 
 func runFlag(cfg *config.Instance, value string) {
@@ -373,9 +390,9 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			sanitizeForOutput(*f.ProfileResetSwitchID), sanitizeForOutput(switchID))
 		os.Exit(0)
 	case *f.Reload:
-		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
+		err := reloadCore(context.Background(), cfg, client.LocalClient)
 		if err != nil {
-			logClientCommandError(err, "error reloading settings")
+			logClientCommandError(err, "error reloading Core")
 			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
 			os.Exit(1)
 		}

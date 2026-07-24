@@ -2420,7 +2420,7 @@ Returns `null` on success.
 
 ### settings.reload
 
-Reload settings from the configuration file.
+Reload settings and mappings from disk.
 
 #### Parameters
 
@@ -3591,7 +3591,7 @@ None.
 
 ### launchers.refresh
 
-Refresh the internal launcher cache, forcing a reload of launcher configurations.
+Refresh internal launcher cache, forcing reload of launcher configurations and supported platform launcher dependencies. On MiSTer, this forces an RBF filesystem rescan and rewrites the persisted RBF cache.
 
 #### Parameters
 

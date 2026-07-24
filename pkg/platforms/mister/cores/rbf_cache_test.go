@@ -605,6 +605,174 @@ func TestBuildFromRBFs_PrefersOriginalWhenForkAlsoExists(t *testing.T) {
 	assert.Equal(t, "_Console/GBA", rbf.MglName)
 }
 
+func TestUnstableCoreBaseName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		shortName string
+		wantBase  string
+		wantOK    bool
+	}{
+		{name: "3DO", shortName: "3DO_unstable_20260715_0995eb", wantBase: "3DO", wantOK: true},
+		{
+			name:      "base with underscore",
+			shortName: "Saturn_DualSDRAM_unstable_20260720_176386",
+			wantBase:  "Saturn_DualSDRAM",
+			wantOK:    true,
+		},
+		{
+			name:      "base with hyphen",
+			shortName: "ZX-Spectrum_unstable_20260713_0746f6",
+			wantBase:  "ZX-Spectrum",
+			wantOK:    true,
+		},
+		{name: "case insensitive marker", shortName: "NES_UNSTABLE_20260720_13773d", wantBase: "NES", wantOK: true},
+		{name: "missing base", shortName: "_unstable_20260715_0995eb"},
+		{name: "invalid date", shortName: "3DO_unstable_2026071_0995eb"},
+		{name: "invalid hash", shortName: "3DO_unstable_20260715_not-hex"},
+		{name: "missing hash", shortName: "3DO_unstable_20260715_"},
+		{name: "extra suffix", shortName: "3DO_unstable_20260715_0995eb_extra"},
+		{name: "different marker", shortName: "3DO_beta_20260715_0995eb"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base, ok := unstableCoreBaseName(tc.shortName)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantBase, base)
+		})
+	}
+}
+
+func TestBuildFromRBFs_UsesUnstableNightlyFallback(t *testing.T) {
+	t.Parallel()
+
+	unstablePath := filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260715_0995eb.rbf")
+	unstableMGL := filepath.Join("_Unstable", "3DO_unstable_20260715_0995eb")
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      unstablePath,
+		Filename:  filepath.Base(unstablePath),
+		ShortName: "3DO_unstable_20260715_0995eb",
+		MglName:   unstableMGL,
+	}})
+
+	got, err := cache.Resolve(nil, &Core{ID: "3DO", RBF: filepath.Join("_Console", "3DO")})
+	require.NoError(t, err)
+	assert.Equal(t, unstablePath, got.Path)
+	assert.Equal(t, unstableMGL, got.MglName)
+
+	_, exactFound := cache.GetByShortName("3DO")
+	assert.False(t, exactFound, "unstable fallback must not become an exact short-name alias")
+	_, rbfCount := cache.Count()
+	assert.Equal(t, 1, rbfCount)
+}
+
+func TestBuildFromRBFs_PrefersOfficialOverUnstable(t *testing.T) {
+	t.Parallel()
+
+	official := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Console", "3DO_20260717.rbf"),
+		Filename:  "3DO_20260717.rbf",
+		ShortName: "3DO",
+		MglName:   filepath.Join("_Console", "3DO"),
+	}
+	unstable := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260715_0995eb.rbf"),
+		Filename:  "3DO_unstable_20260715_0995eb.rbf",
+		ShortName: "3DO_unstable_20260715_0995eb",
+		MglName:   filepath.Join("_Unstable", "3DO_unstable_20260715_0995eb"),
+	}
+
+	for _, files := range [][]RBFInfo{{unstable, official}, {official, unstable}} {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+		got, ok := cache.GetBySystemID("3DO")
+		require.True(t, ok)
+		assert.Equal(t, official.Path, got.Path)
+	}
+}
+
+func TestBuildFromRBFs_SelectsNewestUnstableNightly(t *testing.T) {
+	t.Parallel()
+
+	older := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260714_ffffff.rbf"),
+		Filename:  "3DO_unstable_20260714_ffffff.rbf",
+		ShortName: "3DO_unstable_20260714_ffffff",
+		MglName:   filepath.Join("_Unstable", "3DO_unstable_20260714_ffffff"),
+	}
+	newer := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Unstable", "3DO_unstable_20260715_000001.rbf"),
+		Filename:  "3DO_unstable_20260715_000001.rbf",
+		ShortName: "3DO_unstable_20260715_000001",
+		MglName:   filepath.Join("_Unstable", "3DO_unstable_20260715_000001"),
+	}
+
+	for _, files := range [][]RBFInfo{{older, newer}, {newer, older}} {
+		cache := &RBFCache{}
+		cache.BuildFromRBFs(files)
+		got, ok := cache.GetBySystemID("3DO")
+		require.True(t, ok)
+		assert.Equal(t, newer.Path, got.Path)
+	}
+}
+
+func TestRBFCache_ForceRefreshBypassesFastPath(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	consoleDir := filepath.Join(root, "_Console")
+	require.NoError(t, fs.MkdirAll(consoleDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(consoleDir, "NES_20260701.rbf"), nil, 0o600))
+
+	cache := &RBFCache{fs: fs, sdRoot: root}
+	cache.Refresh()
+	_, found := cache.GetBySystemID("NES")
+	require.True(t, found)
+
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(consoleDir, "3DO_20260717.rbf"), nil, 0o600))
+	var err error
+	cache.lastDirMtimes, err = snapshotDirMtimesWithFS(fs, root)
+	require.NoError(t, err)
+	cache.lastRootRBFs, err = snapshotRootRBFsWithFS(fs, root)
+	require.NoError(t, err)
+
+	cache.Refresh()
+	_, found = cache.GetBySystemID("3DO")
+	assert.False(t, found, "normal refresh should use unchanged-snapshot fast path")
+
+	require.NoError(t, cache.ForceRefresh())
+	got, found := cache.GetBySystemID("3DO")
+	require.True(t, found)
+	assert.Equal(t, filepath.Join("_Console", "3DO"), got.MglName)
+}
+
+func TestRBFCache_ForceRefreshFailurePreservesCache(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{
+		fs:     afero.NewMemMapFs(),
+		sdRoot: filepath.Join("missing", "root"),
+	}
+	existing := RBFInfo{
+		Path:      filepath.Join("media", "fat", "_Console", "NES_20260701.rbf"),
+		Filename:  "NES_20260701.rbf",
+		ShortName: "NES",
+		MglName:   filepath.Join("_Console", "NES"),
+	}
+	cache.BuildFromRBFs([]RBFInfo{existing})
+
+	require.Error(t, cache.ForceRefresh())
+	got, found := cache.GetBySystemID("NES")
+	require.True(t, found)
+	assert.Equal(t, existing, got)
+	assert.True(t, cache.NeedsRescan())
+}
+
 func TestGetByLauncherID_GlobRegisteredAltCore(t *testing.T) {
 	t.Parallel()
 
