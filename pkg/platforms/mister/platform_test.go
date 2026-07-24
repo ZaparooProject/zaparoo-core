@@ -35,8 +35,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,12 +47,87 @@ import (
 // mockLauncherManager is a minimal mock for testing
 type mockLauncherManager struct{}
 
+// recordingLauncherRBFCache stays local because shared test helpers have no
+// MiSTer RBF cache double with call-order recording and configurable refresh errors.
+type recordingLauncherRBFCache struct {
+	fs          afero.Fs
+	forceErr    error
+	persistPath string
+	calls       []string
+}
+
+func (c *recordingLauncherRBFCache) SetFilesystem(fs afero.Fs) {
+	c.calls = append(c.calls, "filesystem")
+	c.fs = fs
+}
+
+func (c *recordingLauncherRBFCache) SetPersistPath(path string) {
+	c.calls = append(c.calls, "persist")
+	c.persistPath = path
+}
+
+func (c *recordingLauncherRBFCache) ForceRefresh() error {
+	c.calls = append(c.calls, "refresh")
+	return c.forceErr
+}
+
 func (*mockLauncherManager) GetContext() context.Context {
 	return context.Background()
 }
 
 func (*mockLauncherManager) NewContext() context.Context {
 	return context.Background()
+}
+
+func TestRefreshLauncherDependencies(t *testing.T) {
+	t.Run("global cache fallback", func(t *testing.T) {
+		// Keep this subtest sequential while replacing the package singleton.
+		oldCache := cores.GlobalRBFCache
+		cache := &cores.RBFCache{}
+		cores.GlobalRBFCache = cache
+		defer func() { cores.GlobalRBFCache = oldCache }()
+
+		platform := &Platform{fs: afero.NewMemMapFs()}
+		require.Nil(t, platform.launcherRBFCache)
+		var refresher platforms.LauncherRefreshProvider = platform
+
+		err := refresher.RefreshLauncherDependencies()
+		require.ErrorIs(t, err, os.ErrNotExist)
+		assert.True(t, cache.NeedsRescan())
+	})
+
+	refreshErr := errors.New("refresh failed")
+	tests := []struct {
+		forceErr error
+		name     string
+	}{
+		{name: "success"},
+		{name: "refresh error", forceErr: refreshErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			cache := &recordingLauncherRBFCache{forceErr: tt.forceErr}
+			platform := &Platform{fs: fs, launcherRBFCache: cache}
+			var refresher platforms.LauncherRefreshProvider = platform
+
+			err := refresher.RefreshLauncherDependencies()
+			if tt.forceErr != nil {
+				require.ErrorIs(t, err, tt.forceErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Same(t, fs, cache.fs)
+			assert.Equal(t,
+				filepath.Join(helpers.DataDir(platform), config.CacheDir, cores.RBFCacheFileName),
+				cache.persistPath,
+			)
+			assert.Equal(t, []string{"filesystem", "persist", "refresh"}, cache.calls)
+		})
+	}
 }
 
 func TestConfigureTLSRootFallback_ConfiguresDefaultsAndCustomTransports(t *testing.T) {

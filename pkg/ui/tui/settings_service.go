@@ -67,6 +67,9 @@ type SettingsService interface {
 	// UpdateSettings sends a settings update to the API.
 	UpdateSettings(ctx context.Context, params *models.UpdateSettingsParams) error
 
+	// ReloadCore reloads settings, mappings, launchers, and platform launcher dependencies.
+	ReloadCore(ctx context.Context) error
+
 	// CreateBackup creates a local backup ZIP.
 	CreateBackup(ctx context.Context) (string, error)
 
@@ -201,6 +204,16 @@ func (s *DefaultSettingsService) UpdateSettings(ctx context.Context, params *mod
 	_, err = s.apiClient.Call(ctx, models.MethodSettingsUpdate, string(data))
 	if err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
+	}
+	return nil
+}
+
+func (s *DefaultSettingsService) ReloadCore(ctx context.Context) error {
+	if _, err := s.apiClient.Call(ctx, models.MethodSettingsReload, ""); err != nil {
+		return fmt.Errorf("failed to reload settings: %w", err)
+	}
+	if _, err := s.apiClient.Call(ctx, models.MethodLaunchersRefresh, ""); err != nil {
+		return fmt.Errorf("failed to refresh launchers: %w", err)
 	}
 	return nil
 }

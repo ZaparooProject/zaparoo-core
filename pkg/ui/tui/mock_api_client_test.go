@@ -88,6 +88,11 @@ func (m *MockSettingsService) UpdateSettings(ctx context.Context, params *models
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
+func (m *MockSettingsService) ReloadCore(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
 func (m *MockSettingsService) CreateBackup(ctx context.Context) (string, error) {
 	args := m.Called(ctx)
 	return args.String(0), args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
@@ -224,6 +229,10 @@ func (m *MockSettingsService) SetupUpdateSettingsSuccess() {
 // SetupUpdateSettingsError configures the mock to return an error on update.
 func (m *MockSettingsService) SetupUpdateSettingsError(err error) {
 	m.On("UpdateSettings", mock.Anything, mock.Anything).Return(err)
+}
+
+func (m *MockSettingsService) SetupReloadCore(err error) {
+	m.On("ReloadCore", mock.Anything).Return(err)
 }
 
 func (m *MockSettingsService) SetupGetBackupStatus(status *models.BackupStatusResponse) {

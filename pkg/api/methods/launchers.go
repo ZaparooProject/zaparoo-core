@@ -21,6 +21,7 @@ package methods
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -73,6 +75,17 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	return models.LaunchersResponse{Launchers: resp}, nil
 }
 
+func refreshLauncherDependencies(pl platforms.Platform) error {
+	refresher, ok := pl.(platforms.LauncherRefreshProvider)
+	if !ok {
+		return nil
+	}
+	if err := refresher.RefreshLauncherDependencies(); err != nil {
+		return fmt.Errorf("refresh platform launcher dependencies: %w", err)
+	}
+	return nil
+}
+
 func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
 	log.Info().Msg("received launchers refresh request")
 
@@ -89,6 +102,10 @@ func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:goc
 		return nil, errors.New("error loading custom launchers")
 	}
 
+	if err = refreshLauncherDependencies(env.Platform); err != nil {
+		log.Error().Err(err).Msg("error refreshing launcher dependencies")
+		return nil, errors.New("error refreshing launcher dependencies")
+	}
 	env.LauncherCache.Refresh(env.Platform, env.Config)
 
 	log.Info().Msg("launcher cache refreshed")

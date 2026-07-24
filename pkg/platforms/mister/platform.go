@@ -71,6 +71,12 @@ type amigaVisionVirtualPath struct {
 	GameName    string
 }
 
+type launcherRBFCache interface {
+	SetFilesystem(afero.Fs)
+	SetPersistPath(string)
+	ForceRefresh() error
+}
+
 var (
 	amigaVisionListings = []amigaVisionListing{
 		{Path: amigaVisionGamesListing, BrowseDir: amigaVisionGamesBrowseDir},
@@ -112,6 +118,7 @@ type Platform struct {
 	launchShortCore     func(string) error
 	launchBasicFile     func(string) error
 	closeConsole        func() error
+	launcherRBFCache    launcherRBFCache
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
@@ -1326,6 +1333,19 @@ func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platform
 		})
 	}
 	return results
+}
+
+func (p *Platform) RefreshLauncherDependencies() error {
+	cache := p.launcherRBFCache
+	if cache == nil {
+		cache = cores.GlobalRBFCache
+	}
+	cache.SetFilesystem(p.filesystem())
+	cache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
+	if err := cache.ForceRefresh(); err != nil {
+		return fmt.Errorf("force refresh RBF cache: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {

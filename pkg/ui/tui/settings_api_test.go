@@ -110,6 +110,48 @@ func TestDefaultSettingsService_UpdateSettings_Error(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestDefaultSettingsService_ReloadCore(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	settingsCall := mockClient.On("Call", testifymock.Anything, models.MethodSettingsReload, "").
+		Return(`{}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodLaunchersRefresh, "").
+		Return(`{}`, nil).Once().NotBefore(settingsCall)
+
+	svc := NewSettingsService(mockClient)
+	require.NoError(t, svc.ReloadCore(context.Background()))
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_ReloadCoreSettingsError(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.On("Call", testifymock.Anything, models.MethodSettingsReload, "").
+		Return("", errors.New("reload failed")).Once()
+
+	svc := NewSettingsService(mockClient)
+	err := svc.ReloadCore(context.Background())
+	require.ErrorContains(t, err, "failed to reload settings")
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_ReloadCoreLaunchersError(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	settingsCall := mockClient.On("Call", testifymock.Anything, models.MethodSettingsReload, "").
+		Return(`{}`, nil).Once()
+	mockClient.On("Call", testifymock.Anything, models.MethodLaunchersRefresh, "").
+		Return("", errors.New("refresh failed")).Once().NotBefore(settingsCall)
+
+	svc := NewSettingsService(mockClient)
+	err := svc.ReloadCore(context.Background())
+	require.ErrorContains(t, err, "failed to refresh launchers")
+	mockClient.AssertExpectations(t)
+}
+
 func TestDefaultSettingsService_LocalBackupAPIContracts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -132,7 +132,19 @@ func (c *RBFCache) Refresh() {
 		return
 	}
 
-	c.scanLocked()
+	if err := c.scanLocked(); err != nil {
+		log.Warn().Err(err).Msg("RBF cache: scan failed, keeping previous cache")
+	}
+}
+
+// ForceRefresh bypasses filesystem fast paths and immediately rebuilds the
+// cache from the live RBF files. A failed scan leaves existing entries intact.
+func (c *RBFCache) ForceRefresh() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.initialized = true
+	return c.scanLocked()
 }
 
 // tryLoadFromDiskLocked attempts to populate the cache from the persisted
@@ -183,59 +195,70 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 
 // scanLocked runs the synchronous SD scan, rebuilds the in-memory maps,
 // and (when persistence is configured) writes the result to disk. Caller
-// must hold c.mu.
-func (c *RBFCache) scanLocked() {
+// must hold c.mu. Failed or unstable scans leave existing entries intact.
+func (c *RBFCache) scanLocked() error {
 	const maxScanAttempts = 2
-	var rbfFiles []RBFInfo
-	var manifest []string
-	stable := false
+	var lastErr error
 	for range maxScanAttempts {
 		beforeManifest, beforeErr := c.snapshotRBFManifest()
-		files, err := shallowScanRBFWithFS(c.filesystem(), c.root())
-		if err != nil {
-			log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
-			c.BuildFromRBFs(nil)
-			c.needsRescan = true
-			return
+		if beforeErr != nil {
+			lastErr = fmt.Errorf("snapshot RBF manifest before scan: %w", beforeErr)
+			continue
 		}
-		rbfFiles = files
-		afterManifest, afterErr := c.snapshotRBFManifest()
-		if beforeErr == nil && afterErr == nil && rbfManifestsMatch(beforeManifest, afterManifest) {
-			manifest = afterManifest
-			stable = true
-			break
-		}
-	}
-	c.BuildFromRBFs(rbfFiles)
-	c.needsRescan = !stable
-	log.Info().
-		Int("rbf_files", len(rbfFiles)).
-		Int("systems_mapped", len(c.bySystemID)).
-		Msg("RBF cache initialized")
 
-	if c.persistPath == "" || !stable {
-		return
+		rbfFiles, err := shallowScanRBFWithFS(c.filesystem(), c.root())
+		if err != nil {
+			c.needsRescan = true
+			return fmt.Errorf("scan RBF files: %w", err)
+		}
+		afterManifest, afterErr := c.snapshotRBFManifest()
+		if afterErr != nil {
+			lastErr = fmt.Errorf("snapshot RBF manifest after scan: %w", afterErr)
+			continue
+		}
+		if !rbfManifestsMatch(beforeManifest, afterManifest) {
+			lastErr = errors.New("RBF manifest changed during scan")
+			continue
+		}
+
+		c.BuildFromRBFs(rbfFiles)
+		c.needsRescan = false
+		log.Info().
+			Int("rbf_files", len(rbfFiles)).
+			Int("systems_mapped", len(c.bySystemID)).
+			Msg("RBF cache initialized")
+
+		if c.persistPath == "" {
+			return nil
+		}
+		snapshot, snapErr := c.snapshotDirMtimes()
+		if snapErr != nil {
+			c.needsRescan = true
+			return fmt.Errorf("snapshot RBF directory mtimes: %w", snapErr)
+		}
+		rootRBFs, rootErr := c.snapshotRootRBFs()
+		if rootErr != nil {
+			c.needsRescan = true
+			return fmt.Errorf("snapshot root RBFs: %w", rootErr)
+		}
+		c.lastDirMtimes = snapshot
+		c.lastRootRBFs = rootRBFs
+		if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, afterManifest); writeErr != nil {
+			log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
+			return nil
+		}
+		log.Debug().
+			Int("rbf_files", len(rbfFiles)).
+			Str("path", c.persistPath).
+			Msg("RBF cache persisted to disk")
+		return nil
 	}
-	snapshot, snapErr := c.snapshotDirMtimes()
-	if snapErr != nil {
-		log.Warn().Err(snapErr).Msg("RBF cache: failed to snapshot directory mtimes, skipping persist")
-		return
+
+	c.needsRescan = true
+	if lastErr == nil {
+		lastErr = errors.New("RBF scan did not produce a stable manifest")
 	}
-	rootRBFs, rootErr := c.snapshotRootRBFs()
-	if rootErr != nil {
-		log.Warn().Err(rootErr).Msg("RBF cache: failed to snapshot root RBFs, skipping persist")
-		return
-	}
-	c.lastDirMtimes = snapshot
-	c.lastRootRBFs = rootRBFs
-	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, manifest); writeErr != nil {
-		log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
-		return
-	}
-	log.Debug().
-		Int("rbf_files", len(rbfFiles)).
-		Str("path", c.persistPath).
-		Msg("RBF cache persisted to disk")
+	return lastErr
 }
 
 func (c *RBFCache) filesystem() afero.Fs {
@@ -275,16 +298,40 @@ func (c *RBFCache) snapshotRootRBFs() ([]string, error) {
 	return snapshotRootRBFsWithFS(c.filesystem(), c.root())
 }
 
+func unstableCoreBaseName(shortName string) (string, bool) {
+	const marker = "_unstable_"
+	markerIndex := strings.LastIndex(strings.ToLower(shortName), marker)
+	if markerIndex <= 0 {
+		return "", false
+	}
+
+	parts := strings.Split(shortName[markerIndex+len(marker):], "_")
+	if len(parts) != 2 || !isNDigits(parts[0], 8) || !isHexish(parts[1]) {
+		return "", false
+	}
+	return shortName[:markerIndex], true
+}
+
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a
-// scanned RBF list, preferring each system's canonical directory when multiple
-// RBFs share a short name. No filesystem access; safe to call in tests.
+// scanned RBF list. Exact core names take precedence over standardized
+// unstable-nightly fallbacks. No filesystem access; safe to call in tests.
 func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 	c.bySystemID = make(map[string]RBFInfo)
 	c.byShortName = make(map[string][]RBFInfo)
+	unstableByBase := make(map[string][]RBFInfo)
 
 	for _, rbf := range rbfFiles {
 		key := strings.ToLower(rbf.ShortName)
 		c.byShortName[key] = append(c.byShortName[key], rbf)
+		if baseName, ok := unstableCoreBaseName(rbf.ShortName); ok {
+			baseKey := strings.ToLower(baseName)
+			unstableByBase[baseKey] = append(unstableByBase[baseKey], rbf)
+		}
+	}
+	for key := range unstableByBase {
+		sort.SliceStable(unstableByBase[key], func(i, j int) bool {
+			return unstableByBase[key][i].ShortName > unstableByBase[key][j].ShortName
+		})
 	}
 
 	for _, system := range Systems {
@@ -292,8 +339,12 @@ func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 			continue
 		}
 		canonicalDir, shortName := splitRBFPath(system.RBF)
-		candidates := c.byShortName[strings.ToLower(shortName)]
-		if rbf, ok := selectByCanonicalDir(candidates, canonicalDir); ok {
+		key := strings.ToLower(shortName)
+		if rbf, ok := selectByCanonicalDir(c.byShortName[key], canonicalDir); ok {
+			c.bySystemID[system.ID] = rbf
+			continue
+		}
+		if rbf, ok := selectByCanonicalDir(unstableByBase[key], canonicalDir); ok {
 			c.bySystemID[system.ID] = rbf
 		}
 	}

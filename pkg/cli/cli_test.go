@@ -21,15 +21,75 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"syscall"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestReloadCore(t *testing.T) {
+	t.Parallel()
+
+	var methods []string
+	call := func(_ context.Context, _ *config.Instance, method, _ string) (string, error) {
+		methods = append(methods, method)
+		return "", nil
+	}
+
+	require.NoError(t, reloadCore(context.Background(), nil, call))
+	assert.Equal(t, []string{models.MethodSettingsReload, models.MethodLaunchersRefresh}, methods)
+}
+
+func TestReloadCore_StopsAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		failed      string
+		errContains string
+		expected    []string
+	}{
+		{
+			name:        "settings reload",
+			failed:      models.MethodSettingsReload,
+			expected:    []string{models.MethodSettingsReload},
+			errContains: "reload settings",
+		},
+		{
+			name:        "launcher refresh",
+			failed:      models.MethodLaunchersRefresh,
+			expected:    []string{models.MethodSettingsReload, models.MethodLaunchersRefresh},
+			errContains: "refresh launchers",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var methods []string
+			call := func(_ context.Context, _ *config.Instance, method, _ string) (string, error) {
+				methods = append(methods, method)
+				if method == tt.failed {
+					return "", errors.New("request failed")
+				}
+				return "", nil
+			}
+
+			err := reloadCore(context.Background(), nil, call)
+			require.ErrorContains(t, err, tt.errContains)
+			assert.Equal(t, tt.expected, methods)
+		})
+	}
+}
 
 func TestLogClientCommandError(t *testing.T) {
 	tests := []struct {
