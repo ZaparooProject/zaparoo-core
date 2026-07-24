@@ -33,10 +33,11 @@ const (
 
 // Launcher groups used as stable configuration references.
 const (
-	LauncherGroupNative    = "Native"
-	LauncherGroupEmuDeck   = "EmuDeck"
-	LauncherGroupRetroDECK = "RetroDECK"
-	LauncherGroupKodi      = "Kodi"
-	LauncherGroupKodiTV    = "KodiTV"
-	LauncherGroupKodiMusic = "KodiMusic"
+	LauncherGroupNative            = "Native"
+	LauncherGroupEmuDeck           = "EmuDeck"
+	LauncherGroupRetroDECK         = "RetroDECK"
+	LauncherGroupRetroAchievements = "RetroAchievements"
+	LauncherGroupKodi              = "Kodi"
+	LauncherGroupKodiTV            = "KodiTV"
+	LauncherGroupKodiMusic         = "KodiMusic"
 )
