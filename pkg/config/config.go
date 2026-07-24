@@ -157,6 +157,9 @@ var BaseDefaults = Values{
 			Schedule: DefaultBackupRemoteSchedule,
 		},
 	},
+	Playtime: Playtime{
+		BaseURL: DefaultPlaytimeBaseURL,
+	},
 	Readers: Readers{
 		AutoDetect: true,
 		Scan: ReadersScan{

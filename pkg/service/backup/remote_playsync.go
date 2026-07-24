@@ -138,7 +138,7 @@ func (m *Manager) SyncPlayHistory(ctx context.Context) (PlaySyncInfo, error) {
 	if !m.cfg.PlaytimeSyncEnabled() {
 		return PlaySyncInfo{}, errPlaySyncDisabled
 	}
-	client, err := m.newRemoteClient()
+	client, err := m.newPlaytimeRemoteClient()
 	if err != nil {
 		return PlaySyncInfo{}, err
 	}

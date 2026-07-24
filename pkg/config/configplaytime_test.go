@@ -27,6 +27,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPlaytimeBaseURL(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
+
+	require.NoError(t, cfg.LoadTOML(`[playtime]
+base_url = "https://playtime.example.com/api"
+`))
+	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
+}
+
+func TestSetPlaytimeBaseURL(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.SetPlaytimeBaseURL("https://playtime.example.com/api/"))
+	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
+	require.Error(t, cfg.SetPlaytimeBaseURL("http://example.com"))
+	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
+}
+
 func TestPlaytimeSyncEnabled(t *testing.T) {
 	t.Parallel()
 

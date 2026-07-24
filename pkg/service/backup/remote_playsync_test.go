@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	testifymock "github.com/stretchr/testify/mock"
@@ -84,14 +85,25 @@ func playSyncTestServer(t *testing.T, watermark *time.Time) (*httptest.Server, *
 	return server, &batches
 }
 
+func configurePlaytimeTestAuth(t *testing.T, manager *Manager, baseURL string) {
+	t.Helper()
+	require.NoError(t, manager.cfg.SetPlaytimeBaseURL(baseURL))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(baseURL): {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+}
+
 func TestSyncPlayHistory_BulkImport(t *testing.T) {
-	// No t.Parallel(): configureRemoteTestAuth mutates the global auth config.
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
 	env := newBackupTestEnv(t, "mister")
 	env.Manager.cfg.SetPlaytimeSync(true)
 	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
 
 	server, batches := playSyncTestServer(t, nil)
-	configureRemoteTestAuth(t, env.Manager, server.URL)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+	assert.Equal(t, config.DefaultBackupRemoteBaseURL, env.Manager.cfg.BackupRemoteBaseURL())
+	assert.Equal(t, server.URL, env.Manager.cfg.PlaytimeBaseURL())
 
 	first := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
 	second := playSyncTestEntry(2, "22222222-2222-4222-8222-222222222222", "Game B", base.Add(time.Hour))
@@ -123,13 +135,13 @@ func TestSyncPlayHistory_BulkImport(t *testing.T) {
 }
 
 func TestSyncPlayHistory_ResumesFromServerWatermark(t *testing.T) {
-	// No t.Parallel(): configureRemoteTestAuth mutates the global auth config.
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
 	env := newBackupTestEnv(t, "mister")
 	env.Manager.cfg.SetPlaytimeSync(true)
 	watermark := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Hour)
 
 	server, batches := playSyncTestServer(t, &watermark)
-	configureRemoteTestAuth(t, env.Manager, server.URL)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
 
 	env.UserDB.On(
 		"ResetMediaHistorySyncAfter",
@@ -149,13 +161,13 @@ func TestSyncPlayHistory_ResumesFromServerWatermark(t *testing.T) {
 }
 
 func TestSyncPlayHistory_PaginatesFullBatches(t *testing.T) {
-	// No t.Parallel(): configureRemoteTestAuth mutates the global auth config.
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
 	env := newBackupTestEnv(t, "mister")
 	env.Manager.cfg.SetPlaytimeSync(true)
 	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
 
 	server, batches := playSyncTestServer(t, nil)
-	configureRemoteTestAuth(t, env.Manager, server.URL)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
 
 	// A full first batch forces a second query cursored after its last row.
 	full := make([]database.MediaHistoryEntry, 0, playSyncBatchSize)
@@ -188,12 +200,12 @@ func TestSyncPlayHistory_PaginatesFullBatches(t *testing.T) {
 }
 
 func TestSyncPlayHistory_StopsWhenConsentRevokedDuringPass(t *testing.T) {
-	// No t.Parallel(): configureRemoteTestAuth mutates the global auth config.
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
 	env := newBackupTestEnv(t, "mister")
 	env.Manager.cfg.SetPlaytimeSync(true)
 	base := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
 	server, batches := playSyncTestServer(t, nil)
-	configureRemoteTestAuth(t, env.Manager, server.URL)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
 	entry := playSyncTestEntry(1, "11111111-1111-4111-8111-111111111111", "Game A", base)
 
 	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
@@ -227,7 +239,7 @@ func TestSyncPlayHistory_DisabledByConfig(t *testing.T) {
 }
 
 func TestSyncPlayHistory_Unlinked(t *testing.T) {
-	// No t.Parallel(): configureRemoteTestAuth mutates the global auth config.
+	// No t.Parallel(): other play-sync tests mutate the global auth config.
 	env := newBackupTestEnv(t, "mister")
 	env.Manager.cfg.SetPlaytimeSync(true)
 	// No credential configured: sync must report unlinked, not upload.
