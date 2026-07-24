@@ -47,6 +47,8 @@ import (
 // mockLauncherManager is a minimal mock for testing
 type mockLauncherManager struct{}
 
+// recordingLauncherRBFCache stays local because shared test helpers have no
+// MiSTer RBF cache double with call-order recording and configurable refresh errors.
 type recordingLauncherRBFCache struct {
 	fs          afero.Fs
 	forceErr    error
@@ -78,7 +80,21 @@ func (*mockLauncherManager) NewContext() context.Context {
 }
 
 func TestRefreshLauncherDependencies(t *testing.T) {
-	t.Parallel()
+	t.Run("global cache fallback", func(t *testing.T) {
+		// Keep this subtest sequential while replacing the package singleton.
+		oldCache := cores.GlobalRBFCache
+		cache := &cores.RBFCache{}
+		cores.GlobalRBFCache = cache
+		defer func() { cores.GlobalRBFCache = oldCache }()
+
+		platform := &Platform{fs: afero.NewMemMapFs()}
+		require.Nil(t, platform.launcherRBFCache)
+		var refresher platforms.LauncherRefreshProvider = platform
+
+		err := refresher.RefreshLauncherDependencies()
+		require.ErrorIs(t, err, os.ErrNotExist)
+		assert.True(t, cache.NeedsRescan())
+	})
 
 	refreshErr := errors.New("refresh failed")
 	tests := []struct {
