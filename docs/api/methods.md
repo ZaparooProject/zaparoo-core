@@ -2300,6 +2300,7 @@ None.
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
 | backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and paired admin clients. |
+| playtimeSyncEnabled       | boolean                                   | No       | Whether play history sync is enabled. Defaults to false. Only returned to localhost and paired admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and paired admin clients. |
 | backupRemoteBaseUrl       | string                                    | No       | Configured backup remote server base URL (read-only). Only returned to localhost and paired admin clients. |
 
@@ -2385,6 +2386,7 @@ An object containing any of the following optional keys:
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires a localhost or paired admin client. |
+| playtimeSyncEnabled       | boolean                                   | No       | Enable play history sync. Requires a localhost or paired admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires a localhost or paired admin client. |
 
 #### Result
@@ -2551,7 +2553,7 @@ An object:
 
 ### settings.auth.unlink
 
-Remove the device's Zaparoo Online credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured backup remote server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups. Removal is local only: the server has no revoke endpoint and invalidates the old token when the device links again.
+Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured backup remote server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups. Removal is local only: the server has no revoke endpoint and invalidates the old token when the device links again.
 
 Requires a localhost client or a paired admin client.
 

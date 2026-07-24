@@ -1158,7 +1158,7 @@ func (m *Manager) notifyRemoteFailure(err error) {
 	case errors.Is(err, errRemoteUnlinked):
 		title = "Remote backup needs relinking"
 		body = "Remote backup could not run because this device is not linked. " +
-			"Relink Zaparoo Online to resume remote backups."
+			"Relink your online account to resume remote backups."
 		category = inboxservice.CategoryBackupRemoteUnlinked
 	case errors.As(err, &busy):
 		// Not a failure worth an inbox message: another run is in flight.

@@ -615,9 +615,11 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 
 	debugLogging := true
 	backupRemoteEnabled := true
+	playtimeSyncEnabled := true
 	params := models.UpdateSettingsParams{
 		DebugLogging:        &debugLogging,
 		BackupRemoteEnabled: &backupRemoteEnabled,
+		PlaytimeSyncEnabled: &playtimeSyncEnabled,
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -633,21 +635,24 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 
 	_, err = HandleSettingsUpdate(env)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "backup settings require a local or admin client")
+	assert.Contains(t, err.Error(), "online settings require a local or admin client")
 	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
 	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.False(t, cfg.PlaytimeSyncEnabled(), "consent setting must not change on rejected request")
 
 	// A remote member client is rejected the same way.
 	env.ClientRole = string(permissions.RoleMember)
 	_, err = HandleSettingsUpdate(env)
 	require.Error(t, err)
 	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.False(t, cfg.PlaytimeSyncEnabled())
 
 	// A paired admin client is as privileged as a local connection.
 	env.ClientRole = string(permissions.RoleAdmin)
 	_, err = HandleSettingsUpdate(env)
 	require.NoError(t, err)
 	assert.True(t, cfg.BackupRemoteEnabled())
+	assert.True(t, cfg.PlaytimeSyncEnabled())
 }
 
 func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
@@ -1303,10 +1308,13 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, resp.BackupRemoteBaseURL)
 	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
+	require.NotNil(t, resp.PlaytimeSyncEnabled)
+	assert.False(t, *resp.PlaytimeSyncEnabled)
 
 	result, err = HandleSettings(requests.RequestEnv{Config: cfg, State: appState, IsLocal: false})
 	require.NoError(t, err)
 	resp, ok = result.(models.SettingsResponse)
 	require.True(t, ok)
 	assert.Nil(t, resp.BackupRemoteBaseURL)
+	assert.Nil(t, resp.PlaytimeSyncEnabled)
 }

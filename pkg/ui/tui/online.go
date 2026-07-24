@@ -120,6 +120,26 @@ func renderOnlineSettingsMenu(
 	}
 
 	menu.AddHeader("Features")
+	playtimeSyncEnabled := false
+	if data.settings != nil && data.settings.PlaytimeSyncEnabled != nil {
+		playtimeSyncEnabled = *data.settings.PlaytimeSyncEnabled
+	}
+	playtimeSyncDesc := "Upload play history to your linked Zaparoo Online account"
+	if !status.Remote.Linked {
+		playtimeSyncDesc = "Upload play history when this device is linked to Zaparoo Online"
+	}
+	menu.AddToggle("Play history sync", playtimeSyncDesc, &playtimeSyncEnabled, func(value bool) {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{PlaytimeSyncEnabled: &value}); err != nil {
+			playtimeSyncEnabled = !value
+			menu.refreshAllItems(menu.GetCurrentItem())
+			log.Warn().Err(err).Msg("error updating play history sync setting")
+			ShowErrorModal(pages, app, "Failed to save play history sync setting", func() {
+				app.SetFocus(menu.List)
+			})
+		}
+	})
 	cloudDesc := "Create, restore, and schedule cloud backups of this device"
 	if !status.Remote.Linked {
 		cloudDesc = "Keep this device backed up to the cloud — included with Zaparoo Warp"

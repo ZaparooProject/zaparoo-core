@@ -359,6 +359,14 @@ func (m *MockUserDBI) UpdateMediaHistoryTime(dbid int64, playTime int) error {
 	return nil
 }
 
+func (m *MockUserDBI) UpdateMediaHistoryIdentity(dbid int64, identity database.MediaIdentity) error {
+	args := m.Called(dbid, identity)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update media history identity failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
 	args := m.Called(dbid, endTime, playTime)
 	if err := args.Error(0); err != nil {
@@ -416,8 +424,8 @@ func (m *MockUserDBI) CloseHangingMediaHistory() error {
 	return nil
 }
 
-func (m *MockUserDBI) CleanupMediaHistory(retentionDays int) (int64, error) {
-	args := m.Called(retentionDays)
+func (m *MockUserDBI) CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error) {
+	args := m.Called(retentionDays, requireSynced)
 	rowsDeleted, ok := args.Get(0).(int64)
 	if !ok {
 		rowsDeleted = 0
@@ -426,6 +434,56 @@ func (m *MockUserDBI) CleanupMediaHistory(retentionDays int) (int64, error) {
 		return rowsDeleted, fmt.Errorf("mock UserDBI cleanup media history failed: %w", err)
 	}
 	return rowsDeleted, nil
+}
+
+func (m *MockUserDBI) SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error {
+	args := m.Called(systemID, path, mediaName, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI set media user snapshot failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) BackfillMediaHistoryUUIDs() (int64, error) {
+	args := m.Called()
+	backfilled, ok := args.Get(0).(int64)
+	if !ok {
+		backfilled = 0
+	}
+	if err := args.Error(1); err != nil {
+		return backfilled, fmt.Errorf("mock UserDBI backfill media history uuids failed: %w", err)
+	}
+	return backfilled, nil
+}
+
+func (m *MockUserDBI) ResetMediaHistorySyncAfter(watermark *time.Time) error {
+	args := m.Called(watermark)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI reset media history sync state failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetMediaHistorySyncBatch(
+	after time.Time, afterDBID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(after, afterDBID, limit)
+	entries, ok := args.Get(0).([]database.MediaHistoryEntry)
+	if !ok {
+		entries = nil
+	}
+	if err := args.Error(1); err != nil {
+		return entries, fmt.Errorf("mock UserDBI get media history sync batch failed: %w", err)
+	}
+	return entries, nil
+}
+
+func (m *MockUserDBI) MarkMediaHistorySynced(refs []database.MediaHistorySyncRef, syncedAt time.Time) error {
+	args := m.Called(refs, syncedAt)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI mark media history synced failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error) {

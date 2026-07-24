@@ -237,7 +237,8 @@ func TestPropertyGetMediaHistoryLimitClamping(t *testing.T) {
 			MediaPath TEXT, MediaName TEXT, LauncherID TEXT, PlayTime INTEGER,
 			BootUUID TEXT, MonotonicStart INTEGER, DurationSec INTEGER, WallDuration INTEGER,
 			TimeSkewFlag INTEGER, ClockReliable INTEGER, ClockSource TEXT,
-			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT
+			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT,
+			Tags TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	require.NoError(t, err)
@@ -274,7 +275,8 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 			MediaPath TEXT, MediaName TEXT, LauncherID TEXT, PlayTime INTEGER,
 			BootUUID TEXT, MonotonicStart INTEGER, DurationSec INTEGER, WallDuration INTEGER,
 			TimeSkewFlag INTEGER, ClockReliable INTEGER, ClockSource TEXT,
-			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT
+			CreatedAt INTEGER, UpdatedAt INTEGER, DeviceID TEXT, ProfileID TEXT,
+			Tags TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	require.NoError(t, err)

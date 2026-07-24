@@ -27,6 +27,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPlaytimeSyncEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		sync *bool
+		name string
+		want bool
+	}{
+		{name: "unset defaults disabled", sync: nil, want: false},
+		{name: "explicitly disabled", sync: boolPtr(false), want: false},
+		{name: "explicitly enabled", sync: boolPtr(true), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{vals: Values{Playtime: Playtime{Sync: tt.sync}}}
+			assert.Equal(t, tt.want, inst.PlaytimeSyncEnabled())
+		})
+	}
+}
+
 func TestPlaytimeLimitsEnabled(t *testing.T) {
 	t.Parallel()
 

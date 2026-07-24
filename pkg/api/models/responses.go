@@ -138,6 +138,7 @@ type BrowseIndexResults struct {
 
 type SettingsResponse struct {
 	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
+	PlaytimeSyncEnabled       *bool              `json:"playtimeSyncEnabled,omitempty"`
 	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
 	BackupRemoteBaseURL       *string            `json:"backupRemoteBaseUrl,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
