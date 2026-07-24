@@ -754,7 +754,9 @@ func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) 
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	const pathPrefix = "/media/fat/_Arcade/_Organized/_Horizontal/"
+	pathPrefix := filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "media", "fat", "_Arcade", "_Organized", "_Horizontal",
+	)) + "/"
 	mock.ExpectQuery(
 		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), ` +
 			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.Path LIKE \? ` +

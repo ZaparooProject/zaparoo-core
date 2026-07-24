@@ -1881,9 +1881,11 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 func TestCmdRandom_AbsolutePathTimeoutFallsBackToFilesystem(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	fs := helpers.NewMemoryFS()
+	dir := launchTestAbsPath("games")
+	require.NoError(t, fs.Fs.MkdirAll(dir, 0o750))
 	romPath := filepath.Join(dir, "game.mra")
-	require.NoError(t, os.WriteFile(romPath, []byte("x"), 0o600))
+	require.NoError(t, afero.WriteFile(fs.Fs, romPath, []byte("x"), 0o600))
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
@@ -1906,7 +1908,7 @@ func TestCmdRandom_AbsolutePathTimeoutFallsBackToFilesystem(t *testing.T) {
 		Database: &database.Database{MediaDB: mockMediaDB},
 	}
 
-	result, err := cmdRandom(mockPlatform, env)
+	result, err := cmdRandomWithFS(fs.Fs, mockPlatform, &env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
