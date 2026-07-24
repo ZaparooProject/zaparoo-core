@@ -208,10 +208,20 @@ func newBackupTestEnvWithClients(
 	}
 }
 
+func stageTestZip(t *testing.T, zipPath string) *zipReadResult {
+	t.Helper()
+	staged, err := stageLocalArchive(
+		context.Background(), zipPath, localStagingOptions{parent: filepath.Dir(zipPath)},
+	)
+	require.NoError(t, err)
+	t.Cleanup(staged.cleanup)
+	return staged.result
+}
+
 // collectPlatformFiles runs the source collector over platform definitions
 // without a Manager, for asserting collection results in isolation.
 func collectPlatformFiles(files []FileRef, definitions []platforms.BackupDefinition) []FileRef {
-	collector := newSourceCollector(context.Background(), config.DefaultBackupMaxSizeBytes, nil)
+	collector := newSourceCollector(context.Background(), nil)
 	for i := range files {
 		collector.appendFile(&files[i])
 	}
@@ -328,8 +338,7 @@ func TestManagerCreateBackupSkipsUnreadableSource(t *testing.T) {
 	status := env.Manager.Status()
 	assert.Equal(t, StatusPartial, status.Local.LastStatus)
 	assert.Equal(t, 1, status.Local.SkippedFiles)
-	result, err := readAndVerifyZipLimit(info.Path, env.Manager.cfg.BackupMaxSizeBytes())
-	require.NoError(t, err)
+	result := stageTestZip(t, info.Path)
 	for _, file := range result.Manifest.Files {
 		assert.NotEqual(t, filepath.ToSlash(filepath.Join("saves", "game.sav")), file.RestorePath)
 	}
@@ -352,7 +361,7 @@ func TestManagerCreateBackupSkipsNonportablePathAndSelfInspects(t *testing.T) {
 		Path:     "saves/literal%5Cname.sav",
 		Reason:   "source path is not portable",
 	})
-	inspected, err := inspectZipManifest(info.Path, env.Manager.cfg.BackupMaxSizeBytes())
+	inspected, err := inspectZipManifest(info.Path)
 	require.NoError(t, err)
 	assert.Equal(t, info.Warnings, inspected.Warnings)
 }
@@ -368,7 +377,7 @@ func TestWriteZipRejectsInvalidWarningBeforeCreatingArchive(t *testing.T) {
 		}},
 	}
 
-	err := writeZip(context.Background(), zipPath, nil, &manifest, config.DefaultBackupMaxSizeBytes)
+	err := writeZip(context.Background(), zipPath, nil, &manifest)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid warning metadata")
 	_, statErr := os.Stat(zipPath)
@@ -614,8 +623,7 @@ func TestManagerCreateZaparooScopeExcludesPlatformFiles(t *testing.T) {
 	assert.Zero(t, info.Categories[CategorySaves].Files)
 	assert.Zero(t, info.Categories[CategorySavestates].Files)
 
-	zipResult, err := readAndVerifyZipLimit(info.Path, config.DefaultBackupMaxSizeBytes)
-	require.NoError(t, err)
+	zipResult := stageTestZip(t, info.Path)
 	for _, file := range zipResult.Manifest.Files {
 		assert.Equal(t, CategoryZaparoo, file.Category, file.RestorePath)
 	}
@@ -1057,44 +1065,113 @@ func TestManagerRestoreRejectsWrongPlatformBeforePayloadVerification(t *testing.
 	assert.NotContains(t, err.Error(), "hash mismatch")
 }
 
-func TestManagerCreateEnforcesConfiguredLogicalLimit(t *testing.T) {
+func TestSourceCollectorAcceptsLargeLogicalTotal(t *testing.T) {
 	t.Parallel()
-	env := newBackupTestEnv(t, platformids.Mister)
-	env.Manager.cfg.SetBackupMaxSizeBytes(1)
+	collector := newSourceCollector(context.Background(), nil)
+	files := []FileRef{
+		{Category: CategoryZaparoo, ArchivePath: "files/zaparoo/one", RestorePath: "one", Size: 4 << 30},
+		{Category: CategoryZaparoo, ArchivePath: "files/zaparoo/two", RestorePath: "two", Size: 3 << 30},
+	}
+	for i := range files {
+		collector.appendFile(&files[i])
+	}
 
-	_, err := env.Manager.Create(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "logical size limit")
+	require.NoError(t, collector.err)
+	assert.Len(t, collector.files, 2)
+	assert.Equal(t, int64(7<<30), collector.logicalSize)
+}
+
+func TestSourceCollectorRejectsLogicalSizeOverflow(t *testing.T) {
+	t.Parallel()
+	collector := newSourceCollector(context.Background(), nil)
+	first := FileRef{
+		Category: CategoryZaparoo, ArchivePath: "files/zaparoo/one", RestorePath: "one", Size: math.MaxInt64,
+	}
+	second := FileRef{Category: CategoryZaparoo, ArchivePath: "files/zaparoo/two", RestorePath: "two", Size: 1}
+
+	collector.appendFile(&first)
+	collector.appendFile(&second)
+
+	require.Error(t, collector.err)
+	assert.Contains(t, collector.err.Error(), "overflow")
+	assert.Len(t, collector.files, 1)
 }
 
 func TestValidateZipHeadersRejectsArchiveLimits(t *testing.T) {
 	t.Parallel()
 
 	tooMany := make([]*zip.File, maxArchiveEntries+1)
-	_, err := validateZipHeaders(tooMany, config.DefaultBackupMaxSizeBytes)
+	_, err := validateZipHeaders(tooMany)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too many entries")
 
 	longPath := &zip.File{FileHeader: zip.FileHeader{Name: strings.Repeat("a", maxArchivePathLen+1)}}
-	_, err = validateZipHeaders([]*zip.File{longPath}, config.DefaultBackupMaxSizeBytes)
+	_, err = validateZipHeaders([]*zip.File{longPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path exceeds")
 
 	first := &zip.File{FileHeader: zip.FileHeader{Name: "files/zaparoo/user.db"}}
 	second := &zip.File{FileHeader: zip.FileHeader{Name: "files/zaparoo/user.db"}}
-	_, err = validateZipHeaders([]*zip.File{first, second}, config.DefaultBackupMaxSizeBytes)
+	_, err = validateZipHeaders([]*zip.File{first, second})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate ZIP entry")
 }
 
-func TestValidateLogicalSizeRejectsOverflowAndLimit(t *testing.T) {
+func TestValidateZipHeadersAcceptsLargeLogicalTotal(t *testing.T) {
 	t.Parallel()
-	_, err := validateLogicalSize([]FileRef{{Size: 7}, {Size: 4}}, 10)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "logical size limit")
+	files := []*zip.File{
+		{FileHeader: zip.FileHeader{Name: "files/zaparoo/one", UncompressedSize64: 4 << 30}},
+		{FileHeader: zip.FileHeader{Name: "files/zaparoo/two", UncompressedSize64: 3 << 30}},
+	}
 
-	_, err = validateLogicalSize([]FileRef{{Size: -1}}, 10)
+	_, err := validateZipHeaders(files)
+	require.NoError(t, err)
+
+	overflow := []*zip.File{
+		{FileHeader: zip.FileHeader{Name: "files/zaparoo/one", UncompressedSize64: math.MaxInt64}},
+		{FileHeader: zip.FileHeader{Name: "files/zaparoo/two", UncompressedSize64: 1}},
+	}
+	_, err = validateZipHeaders(overflow)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overflow")
+}
+
+func TestLogicalSizeAcceptsLargeTotalAndRejectsInvalidMetadata(t *testing.T) {
+	t.Parallel()
+	total, err := sumLogicalSize([]FileRef{{Size: 4 << 30}, {Size: 3 << 30}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(7<<30), total)
+
+	_, err = sumLogicalSize([]FileRef{{Size: -1}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "negative size")
+
+	_, err = sumLogicalSize([]FileRef{{Size: math.MaxInt64}, {Size: 1}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overflow")
+}
+
+func TestRemoteTransferTimeoutSaturates(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, remoteRequestTimeout, remoteTransferTimeout(0))
+	assert.Equal(t, time.Duration(math.MaxInt64), remoteTransferTimeout(math.MaxInt64))
+}
+
+func TestStageLocalArchiveHonorsCancellationAndCleansUp(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = stageLocalArchive(ctx, info.Path, localStagingOptions{
+		parent: env.Manager.backupDir(), validatePolicy: env.Manager.validateManifestPolicy,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	stagingDirs, err := filepath.Glob(filepath.Join(env.Manager.backupDir(), "local-restore-*"))
+	require.NoError(t, err)
+	assert.Empty(t, stagingDirs)
 }
 
 func TestReadAndVerifyZipRejectsUnsafeEntry(t *testing.T) {
@@ -1105,7 +1182,9 @@ func TestReadAndVerifyZipRejectsUnsafeEntry(t *testing.T) {
 		path.Join("..", "evil.txt"): "bad",
 	})
 
-	_, err := readAndVerifyZipLimit(zipPath, config.DefaultBackupMaxSizeBytes)
+	_, err := stageLocalArchive(
+		context.Background(), zipPath, localStagingOptions{parent: filepath.Dir(zipPath)},
+	)
 	require.Error(t, err)
 }
 
@@ -1152,7 +1231,7 @@ func TestSourceCollectorEnforcesFileBudgetDuringTraversal(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "one.sav"), "one")
 	writeTestFile(t, filepath.Join(root, "two.sav"), "two")
-	collector := newSourceCollector(context.Background(), 1<<20, nil)
+	collector := newSourceCollector(context.Background(), nil)
 	collector.maxFiles = 1
 	spec := collectorDefinition{
 		definition: platforms.BackupDefinition{
@@ -1173,7 +1252,7 @@ func TestSourceCollectorStopsWhenContextCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	collector := newSourceCollector(ctx, 1<<20, nil)
+	collector := newSourceCollector(ctx, nil)
 	collector.collect(&collectorDefinition{})
 	require.ErrorIs(t, collector.err, context.Canceled)
 	assert.Empty(t, collector.files)
@@ -1237,7 +1316,7 @@ func TestSourceCollectorMatchesBasenameGlobThroughTrustedDirectorySymlink(t *tes
 	writeTestFile(t, filepath.Join(target, "nested", "pad.map"), "nested map\n")
 	link := filepath.Join(root, "input-link")
 	require.NoError(t, os.Symlink(target, link))
-	collector := newSourceCollector(context.Background(), 1<<20, nil)
+	collector := newSourceCollector(context.Background(), nil)
 	collector.collect(&collectorDefinition{
 		definition: platforms.BackupDefinition{
 			Category: CategoryInputs, SourceRoot: link, RestoreRoot: filepath.Join("config", "inputs"),
@@ -1261,7 +1340,7 @@ func TestSourceCollectorRejectsDirectorySymlinkIntoExcludedPath(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "renamed", "pad.map"), "excluded map\n")
 	require.NoError(t, os.Symlink(filepath.Join(root, "renamed"), filepath.Join(root, "alias")))
-	collector := newSourceCollector(context.Background(), 1<<20, nil)
+	collector := newSourceCollector(context.Background(), nil)
 	collector.collect(&collectorDefinition{
 		definition: platforms.BackupDefinition{
 			Category: CategoryInputs, SourceRoot: root, RestoreRoot: filepath.Join("config", "inputs"),
@@ -1290,7 +1369,7 @@ func TestSourceCollectorEnforcesNonRecursivePhysicalSymlinkPolicy(t *testing.T) 
 	target := filepath.Join(root, "nested", "MiSTer.ini")
 	writeTestFile(t, target, "nested ini\n")
 	require.NoError(t, os.Symlink(target, filepath.Join(root, "MiSTer.ini")))
-	collector := newSourceCollector(context.Background(), 1<<20, nil)
+	collector := newSourceCollector(context.Background(), nil)
 	collector.collect(&collectorDefinition{
 		definition: platforms.BackupDefinition{
 			Category: CategorySettings, SourceRoot: root, NonRecursive: true,
@@ -1489,7 +1568,9 @@ func TestApplyRestoreRollsBackWhenTargetDirectorySyncFails(t *testing.T) {
 		SHA256: sha256Hex(payload), Size: int64(len(payload)),
 	}}}
 
-	failPath := filepath.Join(env.RootDir, "saves")
+	physicalTargetPath, err := resolvePhysicalRestorePath(targetPath)
+	require.NoError(t, err)
+	failPath := filepath.Dir(physicalTargetPath)
 	failed := false
 	env.Manager.directorySync = func(path string) error {
 		if filepath.Clean(path) == filepath.Clean(failPath) && !failed {
@@ -1499,7 +1580,7 @@ func TestApplyRestoreRollsBackWhenTargetDirectorySyncFails(t *testing.T) {
 		return syncDirectory(path)
 	}
 
-	err := env.Manager.applyRestore(context.Background(), manifest, func(FileRef) (io.ReadCloser, error) {
+	err = env.Manager.applyRestore(context.Background(), manifest, func(FileRef) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(payload)), nil
 	})
 	require.Error(t, err)
@@ -1622,8 +1703,7 @@ func TestValidateRestoreJournalRejectsUnsafeOperationID(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
 
 	err := env.Manager.validateRestoreJournal(&restoreJournal{
-		OperationID:    "../../outside",
-		MaxLogicalSize: env.Manager.cfg.BackupMaxSizeBytes(),
+		OperationID: "../../outside",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "operation ID")
@@ -1837,6 +1917,34 @@ func TestApplyRestoreRollsBackUserDBAfterRestoreFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "injected database restore failure")
 	env.UserDB.AssertNumberOfCalls(t, "RestoreBackup", 2)
 	assert.NoDirExists(t, env.Manager.restoreTransactionPath())
+}
+
+func TestRecoverRestoreCleansStaleStagingDirectories(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	backupDir := env.Manager.backupDir()
+	localStaging := filepath.Join(backupDir, localRestoreStagingPrefix+"stale")
+	remoteStaging := filepath.Join(backupDir, remoteRestoreStagingPrefix+"stale")
+	unrelatedDir := filepath.Join(backupDir, "keep-me")
+	writeTestFile(t, filepath.Join(localStaging, "payload"), "local")
+	writeTestFile(t, filepath.Join(remoteStaging, "payload"), "remote")
+	writeTestFile(t, filepath.Join(unrelatedDir, "payload"), "keep")
+	reservedFile := filepath.Join(backupDir, localRestoreStagingPrefix+"not-a-directory")
+	writeTestFile(t, reservedFile, "keep")
+	stagingLink := filepath.Join(backupDir, remoteRestoreStagingPrefix+"symlink")
+	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Symlink(unrelatedDir, stagingLink))
+	}
+
+	require.NoError(t, env.Manager.RecoverRestore(context.Background()))
+	assert.NoDirExists(t, localStaging)
+	assert.NoDirExists(t, remoteStaging)
+	assert.DirExists(t, unrelatedDir)
+	assert.FileExists(t, reservedFile)
+	if runtime.GOOS != "windows" {
+		_, err := os.Lstat(stagingLink)
+		require.NoError(t, err)
+	}
 }
 
 func TestRecoverRestoreRetainsTransactionOwnedUserDBRollbackAcrossRetries(t *testing.T) {
@@ -2234,7 +2342,7 @@ func TestManagerRunRemoteBackupUploadsPackedSnapshot(t *testing.T) {
 				t, "backup-1", platformids.Mister, &committed,
 			))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
-			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 99, StorageQuotaBytes: 1000})
+			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 99, StorageQuotaBytes: 1 << 30})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -2361,11 +2469,10 @@ func TestManagerRunRemoteBackupReportsQuotaExceeded(t *testing.T) {
 				return
 			}
 			writeJSON(t, w, remoteCheckResponse{Missing: req.Hashes})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 0, StorageQuotaBytes: 1})
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{
-				"error":{"code":"quota_exceeded","message":"Backup storage quota exceeded"}
-			}`))
+			t.Fatal("quota preflight must reject before uploading a pack")
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -2395,6 +2502,189 @@ func TestManagerRunRemoteBackupReportsQuotaExceeded(t *testing.T) {
 	default:
 		t.Fatal("expected inbox notification")
 	}
+}
+
+func TestRemotePackPlanReportsExactUploadBytes(t *testing.T) {
+	t.Parallel()
+	files := []FileRef{
+		{Category: CategorySaves, RestorePath: "saves/one", SHA256: strings.Repeat("1", 64), Size: 10},
+		{Category: CategorySaves, RestorePath: "saves/two", SHA256: strings.Repeat("2", 64), Size: 20},
+	}
+	missing := map[string]struct{}{files[0].SHA256: {}, files[1].SHA256: {}}
+
+	plan, err := planRemotePacks(files, missing)
+	require.NoError(t, err)
+	require.Len(t, plan.packs, 1)
+	expected, err := remotePackEncodedSize(plan.packs[0].files)
+	require.NoError(t, err)
+	assert.Equal(t, expected, plan.packs[0].size)
+	assert.Equal(t, expected, plan.uploadBytes)
+}
+
+func TestLocateRemotePacksRejectsInvalidServerResponses(t *testing.T) {
+	t.Parallel()
+
+	requestedHash := strings.Repeat("a", 64)
+	otherHash := strings.Repeat("b", 64)
+	packHash := strings.Repeat("c", 64)
+	validRef := remotePackObjectRef{Hash: requestedHash, Offset: 0, Length: 3}
+
+	tests := []struct {
+		name     string
+		wantErr  string
+		response remoteLocateResponse
+	}{
+		{
+			name:     "reported missing",
+			response: remoteLocateResponse{Missing: []string{requestedHash}},
+			wantErr:  "no longer available",
+		},
+		{
+			name: "conflicting pack sizes",
+			response: remoteLocateResponse{Packs: []remotePackObjects{
+				{PackHash: packHash, SizeBytes: 3, Objects: []remotePackObjectRef{validRef}},
+				{PackHash: packHash, SizeBytes: 4},
+			}},
+			wantErr: "conflicting sizes",
+		},
+		{
+			name: "invalid pack size",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 0, Objects: []remotePackObjectRef{validRef},
+			}}},
+			wantErr: "invalid size",
+		},
+		{
+			name: "unrequested object",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 3,
+				Objects: []remotePackObjectRef{{Hash: otherHash, Offset: 0, Length: 3}},
+			}}},
+			wantErr: "unrequested object",
+		},
+		{
+			name: "duplicate object",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 6, Objects: []remotePackObjectRef{
+					validRef,
+					{Hash: requestedHash, Offset: 3, Length: 3},
+				},
+			}}},
+			wantErr: "located more than once",
+		},
+		{
+			name: "range outside pack",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 3,
+				Objects: []remotePackObjectRef{{Hash: requestedHash, Offset: 1, Length: 3}},
+			}}},
+			wantErr: "inconsistent pack range",
+		},
+		{
+			name: "requested object omitted",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 3,
+			}}},
+			wantErr: "response is missing 1 objects",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/v1/device/backup-objects/locate", r.URL.Path)
+				writeJSON(t, w, tt.response)
+			}))
+			t.Cleanup(server.Close)
+			client := &remoteClient{httpClient: server.Client(), baseURL: server.URL}
+
+			_, err := locateRemotePacks(context.Background(), client, map[string]int64{requestedHash: 3})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDownloadPackAttemptRejectsIntegrityMismatch(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("pack-data")
+	tests := []struct {
+		name     string
+		packHash string
+		wantErr  string
+		size     int64
+	}{
+		{name: "short body", packHash: sha256Hex(body), size: int64(len(body) + 1), wantErr: "size mismatch"},
+		{name: "extra body", packHash: sha256Hex(body), size: int64(len(body) - 1), wantErr: "size mismatch"},
+		{name: "wrong hash", packHash: strings.Repeat("0", 64), size: int64(len(body)), wantErr: "hash mismatch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(body)
+			}))
+			t.Cleanup(server.Close)
+			dir := t.TempDir()
+			client := &remoteClient{httpClient: server.Client(), baseURL: server.URL}
+
+			_, err := client.downloadPackAttempt(context.Background(), &remotePackObjects{
+				PackHash: tt.packHash, SizeBytes: tt.size,
+			}, dir)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			entries, readErr := os.ReadDir(dir)
+			require.NoError(t, readErr)
+			assert.Empty(t, entries, "failed pack download must remove its staging file")
+		})
+	}
+}
+
+func TestExtractPackObjectRejectsHashMismatch(t *testing.T) {
+	t.Parallel()
+
+	packPath := filepath.Join(t.TempDir(), "pack")
+	require.NoError(t, os.WriteFile(packPath, []byte("payload"), 0o600))
+	// #nosec G304 -- packPath is created inside this test's temporary directory.
+	pack, err := os.Open(packPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pack.Close()) })
+
+	err = extractPackObject(pack, &remotePackObjectRef{
+		Hash: strings.Repeat("0", 64), Offset: 0, Length: int64(len("payload")),
+	}, filepath.Join(t.TempDir(), "object"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "staged pack object hash mismatch")
+}
+
+func TestEnsureRemoteUploadCapacity(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, ensureRemoteUploadCapacity(100, 200, 100))
+	require.ErrorIs(t, ensureRemoteUploadCapacity(100, 200, 101), errRemoteQuotaExceeded)
+	require.ErrorIs(t, ensureRemoteUploadCapacity(201, 200, 0), errRemoteQuotaExceeded)
+	require.Error(t, ensureRemoteUploadCapacity(-1, 200, 1))
+}
+
+func TestRemoteUploadKeepsServerQuotaCheckAuthoritative(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"quota_exceeded","message":"full"}}`))
+	}))
+	defer server.Close()
+	client := &remoteClient{
+		httpClient: server.Client(), baseURL: server.URL, bearer: "test-token", platform: "test",
+	}
+
+	err := client.doBytes(
+		context.Background(), http.MethodPut, "/v1/device/backup-packs/hash", []byte("pack"), nil,
+	)
+	require.ErrorIs(t, err, errRemoteQuotaExceeded)
 }
 
 func TestRemotePackFilesSortsByCategoryThenPath(t *testing.T) {
@@ -2486,7 +2776,7 @@ func TestManagerRestoreRemoteRejectsMissingUserDBBeforePreRestoreBackup(t *testi
 	env.UserDB.AssertNotCalled(t, "RestoreBackup", testifymock.Anything)
 }
 
-func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
+func TestManagerRestoreRemoteStagesViaPacks(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
 	newSave := []byte("remote-save\n")
 	hash := sha256Hex(newSave)
@@ -2502,6 +2792,7 @@ func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
 	require.NoError(t, err)
 	restoreComplete := false
 	var restoreCompleteID string
+	pack := newTestPackFixture(t, newSave, remoteConfig)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -2516,10 +2807,10 @@ func TestManagerRestoreRemoteDownloadsObjects(t *testing.T) {
 				},
 				Manifest: manifestData, CreatedAt: time.Now().UTC(),
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+hash:
-			_, _ = w.Write(newSave)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+configHash:
-			_, _ = w.Write(remoteConfig)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/locate":
+			pack.handleLocate(t, w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-packs/"+pack.packHash:
+			_, _ = w.Write(pack.body)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/7/restore-complete":
 			var complete remoteRestoreCompleteRequest
 			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&complete)) {
@@ -2597,6 +2888,81 @@ func parseTestPack(t *testing.T, body []byte) map[string][]byte {
 }
 
 func testStringPointer(value string) *string { return &value }
+
+// testPackFixture is one server-side pack over a set of payloads, in the
+// exact wire format the pack restore protocol serves: concatenated file
+// bytes + JSON footer + 4-byte footer-length trailer.
+type testPackFixture struct {
+	body     []byte
+	packHash string
+	objects  []remotePackObjectRef
+}
+
+func newTestPackFixture(t *testing.T, payloads ...[]byte) *testPackFixture {
+	t.Helper()
+	var buf bytes.Buffer
+	refs := make([]remotePackObjectRef, 0, len(payloads))
+	entries := make([]packFooterEntry, 0, len(payloads))
+	seen := make(map[string]struct{}, len(payloads))
+	for _, payload := range payloads {
+		hash := sha256Hex(payload)
+		if _, dup := seen[hash]; dup {
+			continue
+		}
+		seen[hash] = struct{}{}
+		offset := int64(buf.Len())
+		refs = append(refs, remotePackObjectRef{Hash: hash, Offset: offset, Length: int64(len(payload))})
+		entries = append(entries, packFooterEntry{Hash: hash, Offset: offset, Length: int64(len(payload))})
+		_, _ = buf.Write(payload)
+	}
+	footer, err := json.Marshal(entries)
+	require.NoError(t, err)
+	_, _ = buf.Write(footer)
+	var trailer [4]byte
+	//nolint:gosec // test footers are tiny, far below uint32 range.
+	binary.BigEndian.PutUint32(trailer[:], uint32(len(footer)))
+	_, _ = buf.Write(trailer[:])
+	return &testPackFixture{
+		body: buf.Bytes(), packHash: sha256Hex(buf.Bytes()), objects: refs,
+	}
+}
+
+// locateResponse resolves the requested hashes against this pack, listing
+// unknown hashes as missing — what a real locate endpoint would return for
+// a single-pack account.
+func (f *testPackFixture) locateResponse(hashes []string) remoteLocateResponse {
+	have := make(map[string]remotePackObjectRef, len(f.objects))
+	for _, ref := range f.objects {
+		have[ref.Hash] = ref
+	}
+	resp := remoteLocateResponse{Missing: []string{}}
+	pack := remotePackObjects{PackHash: f.packHash, SizeBytes: int64(len(f.body))}
+	for _, hash := range hashes {
+		if ref, ok := have[hash]; ok {
+			pack.Objects = append(pack.Objects, ref)
+		} else {
+			resp.Missing = append(resp.Missing, hash)
+		}
+	}
+	if len(pack.Objects) > 0 {
+		resp.Packs = append(resp.Packs, pack)
+	}
+	return resp
+}
+
+// handleLocate decodes a locate request and answers it from this pack.
+func (f *testPackFixture) handleLocate(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	var req remoteLocateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		t.Errorf("decoding locate request: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	assert.NotContains(t, req.Hashes, remoteEmptyContentSHA256,
+		"the empty-content hash must never be located")
+	writeJSON(t, w, f.locateResponse(req.Hashes))
+}
 
 func testCommittedRemoteResponse(
 	t *testing.T, id, platform string, request *remoteSnapshotRequest,
@@ -2824,6 +3190,8 @@ func TestManagerRestoreRemoteSynthesizesEmptyFiles(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	pack := newTestPackFixture(t, newSave)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups/8":
@@ -2837,10 +3205,11 @@ func TestManagerRestoreRemoteSynthesizesEmptyFiles(t *testing.T) {
 				},
 				Manifest: manifestData, CreatedAt: time.Now().UTC(),
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+hash:
-			_, _ = w.Write(newSave)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+remoteEmptyContentSHA256:
-			t.Error("the empty object must never be downloaded")
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/locate":
+			// handleLocate asserts the empty-content hash is never requested.
+			pack.handleLocate(t, w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-packs/"+pack.packHash:
+			_, _ = w.Write(pack.body)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/8/restore-complete":
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -2865,12 +3234,14 @@ func TestManagerRestoreRemoteLeavesDeviceUntouchedOnDownloadFailure(t *testing.T
 	first := []byte("first-save\n")
 	second := []byte("second-save\n")
 	manifestData, manifestHash, err := canonicalRemoteManifest(map[string][]remoteManifestEntry{
+		CategoryZaparoo: {{Path: config.UserDbFile, SHA256: remoteEmptyContentSHA256, Size: 0}},
 		CategorySaves: {
 			{Path: "saves/a.sav", SHA256: sha256Hex(first), Size: int64(len(first))},
 			{Path: "saves/b.sav", SHA256: sha256Hex(second), Size: int64(len(second))},
 		},
 	})
 	require.NoError(t, err)
+	pack := newTestPackFixture(t, first, second)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -2880,15 +3251,16 @@ func TestManagerRestoreRemoteLeavesDeviceUntouchedOnDownloadFailure(t *testing.T
 				Platform:     testStringPointer(platformids.Mister),
 				ManifestHash: manifestHash, SizeBytes: int64(len(first) + len(second)),
 				Categories: map[string]remoteCategorySummary{
-					CategorySaves: {Files: 2, Bytes: int64(len(first) + len(second))},
+					CategoryZaparoo: {Files: 1, Bytes: 0},
+					CategorySaves:   {Files: 2, Bytes: int64(len(first) + len(second))},
 				},
 				Manifest: manifestData, CreatedAt: time.Now().UTC(),
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+sha256Hex(first):
-			_, _ = w.Write(first)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-objects/"+sha256Hex(second):
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/locate":
+			pack.handleLocate(t, w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-packs/"+pack.packHash:
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"Object not found"}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"Pack not found"}}`))
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -2907,6 +3279,45 @@ func TestManagerRestoreRemoteLeavesDeviceUntouchedOnDownloadFailure(t *testing.T
 	assert.Equal(t, []byte("old-a\n"), current)
 	_, err = os.Stat(filepath.Join(env.RootDir, "saves", "b.sav"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestManagerRestoreRemoteFailsWhenObjectsMissing(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	newSave := []byte("missing-object-save\n")
+	manifestData, manifestHash, err := canonicalRemoteManifest(map[string][]remoteManifestEntry{
+		CategoryZaparoo: {{Path: config.UserDbFile, SHA256: remoteEmptyContentSHA256, Size: 0}},
+		CategorySaves: {
+			{Path: "saves/game.sav", SHA256: sha256Hex(newSave), Size: int64(len(newSave))},
+		},
+	})
+	require.NoError(t, err)
+	// The fixture holds no payloads, so locate reports the hash missing.
+	pack := newTestPackFixture(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups/9":
+			writeJSON(t, w, remoteBackupResponse{
+				ID: "9", BackupType: RemoteBackupTypeManual, SchemaVersion: remoteSchemaVersion,
+				Platform:     testStringPointer(platformids.Mister),
+				ManifestHash: manifestHash, SizeBytes: int64(len(newSave)),
+				Categories: map[string]remoteCategorySummary{
+					CategoryZaparoo: {Files: 1, Bytes: 0},
+					CategorySaves:   {Files: 1, Bytes: int64(len(newSave))},
+				},
+				Manifest: manifestData, CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/locate":
+			pack.handleLocate(t, w, r)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	_, err = env.Manager.RestoreRemote(context.Background(), "9")
+	require.ErrorContains(t, err, "no longer available")
 }
 
 func TestManagerRunRemoteRechecksDeduplicatedSourcesBeforeCommit(t *testing.T) {
@@ -2999,7 +3410,7 @@ func TestManagerRunRemoteRetriesOnceOnIntegrityMismatch(t *testing.T) {
 				t, "backup-2", platformids.Mister, &committed,
 			))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
-			writeJSON(t, w, remoteListResponse{})
+			writeJSON(t, w, remoteListResponse{StorageQuotaBytes: 1 << 30})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -3063,7 +3474,7 @@ func TestManagerRunRemoteRepairsMissingObjectsOnce(t *testing.T) {
 				t, "backup-repaired", platformids.Mister, &committed,
 			))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
-			writeJSON(t, w, remoteListResponse{})
+			writeJSON(t, w, remoteListResponse{StorageQuotaBytes: 1 << 30})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -3493,7 +3904,7 @@ func newRemoteBackupSuccessServer(t *testing.T, requests *atomic.Int32) *httptes
 			}
 			writeJSON(t, w, testCommittedRemoteResponse(t, "backup-1", platformids.Mister, &committed))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
-			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 1, StorageQuotaBytes: 1000})
+			writeJSON(t, w, remoteListResponse{StorageUsedBytes: 1, StorageQuotaBytes: 1 << 30})
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -3566,4 +3977,289 @@ func TestManagerRecoverInterruptedRunsSkipsActiveOperation(t *testing.T) {
 	status := env.Manager.Status()
 	assert.Equal(t, StatusFailed, status.Remote.LastStatus)
 	assert.Equal(t, statusErrorInterrupted, status.Remote.LastError)
+}
+
+func testRateLimitWaits() *rateLimitWaits {
+	return &rateLimitWaits{
+		minWait:     time.Millisecond,
+		defaultWait: time.Millisecond,
+		maxWait:     5 * time.Millisecond,
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 30*time.Second, parseRetryAfter("30"))
+	assert.Equal(t, 5*time.Second, parseRetryAfter(" 5 "))
+	assert.Equal(t, time.Duration(0), parseRetryAfter(""))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("-3"))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("soon"))
+	// HTTP-date form is valid per spec but unused by the backup server;
+	// it degrades to the default wait rather than being parsed.
+	assert.Equal(t, time.Duration(0), parseRetryAfter("Wed, 21 Oct 2026 07:28:00 GMT"))
+}
+
+func TestRemoteStatusErrorRateLimited(t *testing.T) {
+	t.Parallel()
+
+	t.Run("route-level plain-text 429 with Retry-After", func(t *testing.T) {
+		t.Parallel()
+		resp := &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": []string{"30"}},
+			Body:       io.NopCloser(strings.NewReader("Too Many Requests\n")),
+		}
+		err := remoteStatusError(resp)
+		require.ErrorIs(t, err, errRemoteRateLimited)
+		var rateLimited *remoteRateLimitedError
+		require.ErrorAs(t, err, &rateLimited)
+		assert.Equal(t, 30*time.Second, rateLimited.retryAfter)
+	})
+
+	t.Run("handler-level JSON rate_limited without header", func(t *testing.T) {
+		t.Parallel()
+		resp := &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"code":"rate_limited","message":"Snapshot commit rate limit reached"}}`,
+			)),
+		}
+		err := remoteStatusError(resp)
+		require.ErrorIs(t, err, errRemoteRateLimited)
+		var rateLimited *remoteRateLimitedError
+		require.ErrorAs(t, err, &rateLimited)
+		assert.Equal(t, time.Duration(0), rateLimited.retryAfter)
+	})
+}
+
+func TestRemoteClientRetryRateLimited(t *testing.T) {
+	t.Parallel()
+	newClient := func() *remoteClient {
+		return &remoteClient{retryWaits: *testRateLimitWaits()}
+	}
+
+	t.Run("waits out rate limits and succeeds", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := newClient().retryRateLimited(context.Background(), func() error {
+			attempts++
+			if attempts < 3 {
+				return &remoteRateLimitedError{retryAfter: time.Millisecond}
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, attempts)
+	})
+
+	t.Run("gives up after the attempt cap", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := newClient().retryRateLimited(context.Background(), func() error {
+			attempts++
+			return &remoteRateLimitedError{retryAfter: time.Millisecond}
+		})
+		require.ErrorIs(t, err, errRemoteRateLimited)
+		assert.Equal(t, remoteRateLimitMaxAttempts, attempts)
+	})
+
+	t.Run("other errors return immediately", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := newClient().retryRateLimited(context.Background(), func() error {
+			attempts++
+			return errRemoteQuotaExceeded
+		})
+		require.ErrorIs(t, err, errRemoteQuotaExceeded)
+		assert.Equal(t, 1, attempts)
+	})
+
+	t.Run("context cancellation interrupts the wait", func(t *testing.T) {
+		t.Parallel()
+		client := &remoteClient{retryWaits: rateLimitWaits{
+			minWait: time.Hour, defaultWait: time.Hour, maxWait: time.Hour,
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		attempts := 0
+		err := client.retryRateLimited(ctx, func() error {
+			attempts++
+			return &remoteRateLimitedError{}
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, 1, attempts)
+	})
+}
+
+func TestManagerRestoreRemoteRetriesRateLimitedPackDownload(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	env.Manager.rateLimitWaits = testRateLimitWaits()
+	newSave := []byte("rate-limited-save\n")
+	manifestData, manifestHash, err := canonicalRemoteManifest(map[string][]remoteManifestEntry{
+		CategoryZaparoo: {{Path: config.UserDbFile, SHA256: remoteEmptyContentSHA256, Size: 0}},
+		CategorySaves: {
+			{Path: "saves/game.sav", SHA256: sha256Hex(newSave), Size: int64(len(newSave))},
+		},
+	})
+	require.NoError(t, err)
+	pack := newTestPackFixture(t, newSave)
+	packGets := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups/11":
+			writeJSON(t, w, remoteBackupResponse{
+				ID: "11", BackupType: RemoteBackupTypeManual, SchemaVersion: remoteSchemaVersion,
+				Platform:     testStringPointer(platformids.Mister),
+				ManifestHash: manifestHash, SizeBytes: int64(len(newSave)),
+				Categories: map[string]remoteCategorySummary{
+					CategoryZaparoo: {Files: 1, Bytes: 0},
+					CategorySaves:   {Files: 1, Bytes: int64(len(newSave))},
+				},
+				Manifest: manifestData, CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/locate":
+			pack.handleLocate(t, w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backup-packs/"+pack.packHash:
+			packGets++
+			if packGets <= 2 {
+				// Route-level rate limiter shape: plain text + Retry-After.
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte("Too Many Requests\n"))
+				return
+			}
+			_, _ = w.Write(pack.body)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/11/restore-complete":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	_, err = env.Manager.RestoreRemote(context.Background(), "11")
+	require.NoError(t, err)
+	assert.Equal(t, 3, packGets, "two rate-limited responses are waited out and retried")
+	restored, err := os.ReadFile(filepath.Join(env.RootDir, "saves", "game.sav"))
+	require.NoError(t, err)
+	assert.Equal(t, newSave, restored)
+}
+
+func TestManagerRunRemoteRetriesRateLimitedPackUpload(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	env.Manager.rateLimitWaits = testRateLimitWaits()
+	putCalls := 0
+	var committed remoteSnapshotRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			var request remoteCheckRequest
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&request)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, remoteCheckResponse{Missing: request.Hashes})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
+			putCalls++
+			if putCalls == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte("Too Many Requests\n"))
+				return
+			}
+			body, readErr := io.ReadAll(r.Body)
+			if !assert.NoError(t, readErr) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(t, w, remotePackResponse{PackHash: sha256Hex(body), CreatedAt: time.Now().UTC()})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&committed)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, testCommittedRemoteResponse(
+				t, "backup-rate-limited", platformids.Mister, &committed,
+			))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageQuotaBytes: 1 << 30})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	info, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err)
+	assert.Equal(t, "backup-rate-limited", info.Backup.ID)
+	assert.GreaterOrEqual(t, putCalls, 2, "the rate-limited pack upload is retried")
+}
+
+func TestManagerRunRemoteRecordsNoChangesOnDedupe(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	snapshotCreatedAt := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	verifiedAt := time.Now().UTC()
+	started := time.Now().UTC().Add(-time.Second)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			writeJSON(t, w, remoteCheckResponse{})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			var committed remoteSnapshotRequest
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&committed)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			// The server dedupe returns the EXISTING snapshot: an older
+			// created_at and, here, a different backup type than the
+			// manual run that committed — only deduplicated responses may
+			// mismatch the requested type.
+			response := testCommittedRemoteResponse(t, "backup-existing", platformids.Mister, &committed)
+			response.BackupType = RemoteBackupTypeScheduled
+			response.CreatedAt = snapshotCreatedAt
+			response.VerifiedAt = &verifiedAt
+			response.Deduplicated = true
+			writeJSON(t, w, response)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageQuotaBytes: 1 << 30})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	info, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err,
+		"a manual run deduplicating onto a scheduled snapshot must pass response validation")
+	assert.True(t, info.NoChanges)
+	assert.Equal(t, "backup-existing", info.Backup.ID)
+	assert.True(t, info.Backup.CreatedAt.Equal(snapshotCreatedAt))
+	require.NotNil(t, info.Backup.VerifiedAt)
+
+	remote := env.Manager.Status().Remote
+	assert.True(t, remote.LastRunNoChanges, "status records the run as verified-unchanged")
+	require.NotNil(t, remote.LastSuccessAt)
+	lastSuccess, err := time.Parse(time.RFC3339Nano, *remote.LastSuccessAt)
+	require.NoError(t, err)
+	assert.False(t, lastSuccess.Before(started),
+		"lastSuccessAt is the run's own time, not the deduped snapshot's created_at")
+	require.NotNil(t, remote.LastSnapshotCreatedAt)
+	assert.Equal(t, formatTime(snapshotCreatedAt), *remote.LastSnapshotCreatedAt,
+		"lastSnapshotCreatedAt preserves when the stored content last changed")
 }

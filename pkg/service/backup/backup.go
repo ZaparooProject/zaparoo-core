@@ -82,11 +82,13 @@ const (
 	maxArchiveEntries    = 100_000
 	maxArchivePathLen    = 512
 
-	manifestName  = "manifest.json"
-	filesRoot     = "files"
-	zaparooRoot   = "zaparoo"
-	platformRoot  = "platform"
-	backupDirName = "files"
+	manifestName               = "manifest.json"
+	filesRoot                  = "files"
+	zaparooRoot                = "zaparoo"
+	platformRoot               = "platform"
+	backupDirName              = "files"
+	localRestoreStagingPrefix  = "local-restore-"
+	remoteRestoreStagingPrefix = "remote-restore-"
 )
 
 type sourceOpener func(context.Context, *FileRef) (io.ReadCloser, error)
@@ -102,6 +104,9 @@ type Manager struct {
 	directorySync func(string) error
 	sourceOpener  sourceOpener
 	pauser        *syncutil.Pauser
+	// rateLimitWaits overrides the 429 retry wait bounds; nil uses the
+	// defaults. Set only by tests to avoid multi-second waits.
+	rateLimitWaits *rateLimitWaits
 }
 
 type sourceIdentity struct {
@@ -159,6 +164,17 @@ type zipReadResult struct {
 	Manifest Manifest
 }
 
+type localStagingOptions struct {
+	validatePolicy func(*Manifest) error
+	parent         string
+}
+
+type stagedLocalArchive struct {
+	result  *zipReadResult
+	staging *restoreStaging
+	cleanup func()
+}
+
 type fileCollection struct {
 	Cleanup  func() error
 	Files    []FileRef
@@ -174,6 +190,7 @@ type statusEntry struct {
 	Categories            map[string]models.BackupCategoryStatus `json:"categories,omitempty"`
 	LastRunAt             string                                 `json:"lastRunAt,omitempty"`
 	LastSuccessAt         string                                 `json:"lastSuccessAt,omitempty"`
+	LastSnapshotCreatedAt string                                 `json:"lastSnapshotCreatedAt,omitempty"`
 	AvailabilityCheckedAt string                                 `json:"availabilityCheckedAt,omitempty"`
 	ScheduleEnabledSince  string                                 `json:"scheduleEnabledSince,omitempty"`
 	LastError             string                                 `json:"lastError,omitempty"`
@@ -185,6 +202,7 @@ type statusEntry struct {
 	LastBackupSize        int64                                  `json:"lastBackupSize"`
 	SkippedFiles          int                                    `json:"skippedFiles,omitempty"`
 	Unlinked              bool                                   `json:"unlinked,omitempty"`
+	LastRunNoChanges      bool                                   `json:"lastRunNoChanges,omitempty"`
 }
 
 func NewManager(cfg *config.Instance, pl platforms.Platform, db *database.Database) *Manager {
@@ -320,7 +338,7 @@ func (m *Manager) createBackup(ctx context.Context, preRestore bool) (result Inf
 	if policyErr := m.validateManifestPolicy(&manifest); policyErr != nil {
 		return Info{}, fmt.Errorf("backup would fail restore policy: %w", policyErr)
 	}
-	if writeErr := writeZip(ctx, tmpPath, files, &manifest, m.cfg.BackupMaxSizeBytes()); writeErr != nil {
+	if writeErr := writeZip(ctx, tmpPath, files, &manifest); writeErr != nil {
 		_ = os.Remove(tmpPath)
 		return Info{}, writeErr
 	}
@@ -412,7 +430,7 @@ func (m *Manager) Inspect(ctx context.Context, name string) (Info, error) {
 	if validateErr := m.validateLocalArchiveManifest(backupPath); validateErr != nil {
 		return Info{}, validateErr
 	}
-	info, err := inspectZipManifest(backupPath, m.cfg.BackupMaxSizeBytes())
+	info, err := inspectZipManifest(backupPath)
 	if err != nil {
 		return Info{}, fmt.Errorf("inspecting backup ZIP: %w", err)
 	}
@@ -458,14 +476,14 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 	if err != nil {
 		return RestoreInfo{}, err
 	}
-	if validateErr := m.validateLocalArchiveManifest(backupPath); validateErr != nil {
-		return RestoreInfo{}, validateErr
-	}
-	zipResult, err := readAndVerifyZipLimit(backupPath, m.cfg.BackupMaxSizeBytes())
+	staged, err := stageLocalArchive(ctx, backupPath, localStagingOptions{
+		parent: m.backupDir(), validatePolicy: m.validateManifestPolicy,
+	})
 	if err != nil {
 		return RestoreInfo{}, err
 	}
-	if validateErr := validateFiles(zipResult.Manifest.Files); validateErr != nil {
+	defer staged.cleanup()
+	if validateErr := validateFiles(staged.result.Manifest.Files); validateErr != nil {
 		return RestoreInfo{}, validateErr
 	}
 	pre, err := m.createBackup(ctx, true)
@@ -479,14 +497,16 @@ func (m *Manager) Restore(ctx context.Context, name string) (RestoreInfo, error)
 	if err != nil {
 		return RestoreInfo{}, err
 	}
-	if err = m.applyRestoreFromZip(ctx, backupPath, &zipResult.Manifest); err != nil {
+	if err = m.applyRestore(ctx, &staged.result.Manifest, func(file FileRef) (io.ReadCloser, error) {
+		return staged.staging.open(file.SHA256, file.Size)
+	}); err != nil {
 		return RestoreInfo{}, errors.Join(err, finishPlatformRestore(false))
 	}
 	if finishErr := finishPlatformRestore(true); finishErr != nil {
 		log.Warn().Err(finishErr).Msg("committed restore profile cleanup deferred until restart")
 	}
 	restoreSucceeded = true
-	return RestoreInfo{PreRestoreBackup: &pre, RestoredFrom: zipResult.Info}, nil
+	return RestoreInfo{PreRestoreBackup: &pre, RestoredFrom: staged.result.Info}, nil
 }
 
 func (m *Manager) Status() models.BackupStatusResponse {
@@ -709,7 +729,7 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 	if err != nil {
 		return fileCollection{}, errors.Join(err, cleanup())
 	}
-	collector := newSourceCollector(ctx, m.cfg.BackupMaxSizeBytes(), excludedSources)
+	collector := newSourceCollector(ctx, excludedSources)
 	collector.excludedIdentities = excludedIdentities
 	collector.pauser = m.pauser
 	if err = collector.addTrustedFile(
@@ -811,30 +831,6 @@ func (m *Manager) resolveBackupPath(name string) (string, error) {
 	return backupPath, nil
 }
 
-func (m *Manager) applyRestoreFromZip(ctx context.Context, zipPath string, manifest *Manifest) error {
-	zr, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("opening backup ZIP: %w", err)
-	}
-	defer func() {
-		if closeErr := zr.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
-		}
-	}()
-	entries := zipEntriesByName(zr.File)
-	return m.applyRestore(ctx, manifest, func(file FileRef) (io.ReadCloser, error) {
-		entry, ok := entries[file.ArchivePath]
-		if !ok {
-			return nil, fmt.Errorf("backup ZIP missing payload for %s", file.ArchivePath)
-		}
-		opened, openErr := entry.Open()
-		if openErr != nil {
-			return nil, fmt.Errorf("opening backup ZIP payload %s: %w", file.ArchivePath, openErr)
-		}
-		return opened, nil
-	})
-}
-
 func readRestorePayload(
 	file *FileRef, openPayload func(FileRef) (io.ReadCloser, error), limit int64,
 ) (data []byte, err error) {
@@ -934,12 +930,22 @@ func installVerifiedPayload(
 	}
 
 	hash := sha256.New()
-	limited := &io.LimitedReader{R: &contextReader{ctx: ctx, reader: payload}, N: file.Size + 1}
+	reader := &contextReader{ctx: ctx, reader: payload}
+	limited := &io.LimitedReader{R: reader, N: file.Size}
 	written, copyErr := io.Copy(io.MultiWriter(tmp, hash), limited)
+	var extra [1]byte
+	var extraSize int
+	var extraErr error
+	if copyErr == nil && written == file.Size {
+		extraSize, extraErr = reader.Read(extra[:])
+	}
 	syncErr := tmp.Sync()
 	closeErr := tmp.Close()
 	if copyErr != nil {
 		return fmt.Errorf("staging restore payload %s: %w", file.RestorePath, copyErr)
+	}
+	if extraErr != nil && !errors.Is(extraErr, io.EOF) {
+		return fmt.Errorf("checking restore payload size %s: %w", file.RestorePath, extraErr)
 	}
 	if syncErr != nil {
 		return fmt.Errorf("syncing restore payload %s: %w", file.RestorePath, syncErr)
@@ -947,7 +953,7 @@ func installVerifiedPayload(
 	if closeErr != nil {
 		return fmt.Errorf("closing restore payload %s: %w", file.RestorePath, closeErr)
 	}
-	if written != file.Size {
+	if written != file.Size || extraSize != 0 {
 		return fmt.Errorf("restore payload size mismatch: %s", file.RestorePath)
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != file.SHA256 {
@@ -1028,16 +1034,26 @@ func hashSourceFile(ctx context.Context, file *FileRef, opener sourceOpener) (st
 		return "", err
 	}
 	hash := sha256.New()
-	limited := &io.LimitedReader{R: &contextReader{ctx: ctx, reader: source}, N: file.Size + 1}
+	reader := &contextReader{ctx: ctx, reader: source}
+	limited := &io.LimitedReader{R: reader, N: file.Size}
 	size, readErr := io.Copy(hash, limited)
+	var extra [1]byte
+	var extraSize int
+	var extraErr error
+	if readErr == nil && size == file.Size {
+		extraSize, extraErr = reader.Read(extra[:])
+	}
 	closeErr := source.Close()
 	if readErr != nil {
 		return "", fmt.Errorf("reading backup source %s: %w", file.RestorePath, readErr)
 	}
+	if extraErr != nil && !errors.Is(extraErr, io.EOF) {
+		return "", fmt.Errorf("checking backup source size %s: %w", file.RestorePath, extraErr)
+	}
 	if closeErr != nil {
 		return "", fmt.Errorf("closing backup source %s: %w", file.RestorePath, closeErr)
 	}
-	if size != file.Size {
+	if size != file.Size || extraSize != 0 {
 		return "", fmt.Errorf("%w: source size changed for %s", errSourceIdentityChanged, file.RestorePath)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
@@ -1134,18 +1150,18 @@ func validateSlashPath(p string) error {
 }
 
 func writeZip(
-	ctx context.Context, zipPath string, files []FileRef, manifest *Manifest, maxLogicalSize int64,
+	ctx context.Context, zipPath string, files []FileRef, manifest *Manifest,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("writing backup archive: %w", err)
 	}
-	if err := validateManifestMetadata(manifest, maxLogicalSize); err != nil {
+	if err := validateManifestMetadata(manifest); err != nil {
 		return err
 	}
 	if len(files)+1 > maxArchiveEntries {
 		return fmt.Errorf("backup has too many entries: %d exceeds %d", len(files)+1, maxArchiveEntries)
 	}
-	expectedSize, err := validateLogicalSize(files, maxLogicalSize)
+	expectedSize, err := sumLogicalSize(files)
 	if err != nil {
 		return err
 	}
@@ -1164,15 +1180,12 @@ func writeZip(
 		return fmt.Errorf("creating backup ZIP: %w", err)
 	}
 	zw := zip.NewWriter(out)
-	written := int64(0)
 	for i := range files {
-		remaining := maxLogicalSize - written
-		if err = writeZipFile(ctx, zw, &files[i], remaining); err != nil {
+		if err = writeZipFile(ctx, zw, &files[i]); err != nil {
 			_ = zw.Close()
 			_ = out.Close()
 			return err
 		}
-		written += files[i].Size
 	}
 	manifest.Files = files
 	manifest.Categories = summarize(files)
@@ -1206,9 +1219,9 @@ func writeZip(
 	return nil
 }
 
-func writeZipFile(ctx context.Context, zw *zip.Writer, file *FileRef, remaining int64) error {
-	if remaining < 0 {
-		return errors.New("backup exceeds logical size limit")
+func writeZipFile(ctx context.Context, zw *zip.Writer, file *FileRef) error {
+	if file.Size < 0 {
+		return errors.New("backup source has negative size")
 	}
 	in, err := openSourceContext(ctx, file)
 	if err != nil {
@@ -1226,15 +1239,21 @@ func writeZipFile(ctx context.Context, zw *zip.Writer, file *FileRef, remaining 
 		return fmt.Errorf("creating ZIP entry %s: %w", file.ArchivePath, err)
 	}
 	hash := sha256.New()
-	limited := &io.LimitedReader{R: &contextReader{ctx: ctx, reader: in}, N: remaining + 1}
+	reader := &contextReader{ctx: ctx, reader: in}
+	limited := &io.LimitedReader{R: reader, N: file.Size}
 	size, err := io.Copy(io.MultiWriter(w, hash), limited)
 	if err != nil {
 		return fmt.Errorf("writing ZIP entry %s: %w", file.ArchivePath, err)
 	}
-	if size > remaining {
-		return fmt.Errorf("backup exceeds logical size limit while reading %s", file.RestorePath)
-	}
 	if file.Size != size {
+		return fmt.Errorf("backup source changed size while reading %s", file.RestorePath)
+	}
+	var extra [1]byte
+	extraSize, readErr := reader.Read(extra[:])
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return fmt.Errorf("checking ZIP entry source size %s: %w", file.ArchivePath, readErr)
+	}
+	if extraSize != 0 {
 		return fmt.Errorf("backup source changed size while reading %s", file.RestorePath)
 	}
 	actualHash := hex.EncodeToString(hash.Sum(nil))
@@ -1246,14 +1265,14 @@ func writeZipFile(ctx context.Context, zw *zip.Writer, file *FileRef, remaining 
 	return nil
 }
 
-func validateLogicalSize(files []FileRef, maxLogicalSize int64) (int64, error) {
-	if maxLogicalSize <= 0 || maxLogicalSize == math.MaxInt64 {
-		return 0, errors.New("backup logical size limit must be positive")
-	}
+func sumLogicalSize(files []FileRef) (int64, error) {
 	var total int64
 	for _, file := range files {
-		if file.Size < 0 || file.Size > maxLogicalSize-total {
-			return 0, fmt.Errorf("backup exceeds logical size limit of %d bytes", maxLogicalSize)
+		if file.Size < 0 {
+			return 0, errors.New("backup file has negative size")
+		}
+		if file.Size > math.MaxInt64-total {
+			return 0, errors.New("backup logical size overflow")
 		}
 		total += file.Size
 	}
@@ -1323,7 +1342,7 @@ func infoFromManifest(zipPath string, manifest *Manifest) (Info, error) {
 	}, nil
 }
 
-func inspectZipManifest(zipPath string, maxLogicalSize int64) (Info, error) {
+func inspectZipManifest(zipPath string) (Info, error) {
 	zr, openErr := zip.OpenReader(zipPath)
 	if openErr != nil {
 		return Info{}, fmt.Errorf("opening backup ZIP: %w", openErr)
@@ -1333,11 +1352,11 @@ func inspectZipManifest(zipPath string, maxLogicalSize int64) (Info, error) {
 			log.Debug().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
 		}
 	}()
-	entries, err := validateZipHeaders(zr.File, maxLogicalSize)
+	entries, err := validateZipHeaders(zr.File)
 	if err != nil {
 		return Info{}, err
 	}
-	manifest, err := readManifestFromZipLimit(zr.File, entries, maxLogicalSize)
+	manifest, err := readManifestFromZip(zr.File, entries)
 	if err != nil {
 		return Info{}, err
 	}
@@ -1355,21 +1374,20 @@ func (m *Manager) validateLocalArchiveManifest(zipPath string) error {
 		return fmt.Errorf("opening backup ZIP: %w", err)
 	}
 	defer func() { _ = zr.Close() }()
-	entries, err := validateZipHeaders(zr.File, m.cfg.BackupMaxSizeBytes())
+	entries, err := validateZipHeaders(zr.File)
 	if err != nil {
 		return err
 	}
-	manifest, err := readManifestFromZipLimit(zr.File, entries, m.cfg.BackupMaxSizeBytes())
+	manifest, err := readManifestFromZip(zr.File, entries)
 	if err != nil {
 		return err
 	}
 	return m.validateManifestPolicy(manifest)
 }
 
-func readManifestFromZipLimit(
+func readManifestFromZip(
 	files []*zip.File,
 	entries map[string]*zip.File,
-	maxLogicalSize int64,
 ) (*Manifest, error) {
 	manifestEntry, ok := entries[manifestName]
 	if !ok {
@@ -1386,13 +1404,17 @@ func readManifestFromZipLimit(
 	if manifest.Version != 1 {
 		return nil, fmt.Errorf("unsupported backup manifest version: %d", manifest.Version)
 	}
-	if validateErr := validateManifest(&manifest, files, entries, maxLogicalSize); validateErr != nil {
+	if validateErr := validateManifest(&manifest, files, entries); validateErr != nil {
 		return nil, validateErr
 	}
 	return &manifest, nil
 }
 
-func readAndVerifyZipLimit(zipPath string, maxLogicalSize int64) (*zipReadResult, error) {
+func stageLocalArchive(
+	ctx context.Context,
+	zipPath string,
+	options localStagingOptions,
+) (*stagedLocalArchive, error) {
 	zr, openErr := zip.OpenReader(zipPath)
 	if openErr != nil {
 		return nil, fmt.Errorf("opening backup ZIP: %w", openErr)
@@ -1402,33 +1424,100 @@ func readAndVerifyZipLimit(zipPath string, maxLogicalSize int64) (*zipReadResult
 			log.Debug().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
 		}
 	}()
-	entries, err := validateZipHeaders(zr.File, maxLogicalSize)
+	entries, err := validateZipHeaders(zr.File)
 	if err != nil {
 		return nil, err
 	}
-	manifest, err := readManifestFromZipLimit(zr.File, entries, maxLogicalSize)
+	manifest, err := readManifestFromZip(zr.File, entries)
 	if err != nil {
 		return nil, err
 	}
+	if options.validatePolicy != nil {
+		if policyErr := options.validatePolicy(manifest); policyErr != nil {
+			return nil, policyErr
+		}
+	}
+	required, err := uniquePayloadBytes(manifest.Files)
+	if err != nil {
+		return nil, err
+	}
+	free, err := helpers.FreeDiskSpace(options.parent)
+	if err != nil {
+		return nil, fmt.Errorf("checking local restore staging space: %w", err)
+	}
+	if uint64(required) > free { //nolint:gosec // uniquePayloadBytes rejects negative totals before conversion.
+		return nil, fmt.Errorf("insufficient disk space to stage local restore: need %d bytes", required)
+	}
+	dir, err := os.MkdirTemp(options.parent, localRestoreStagingPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("creating local restore staging directory: %w", err)
+	}
+	staging := &restoreStaging{dir: dir}
+	cleanup := func() {
+		if removeErr := os.RemoveAll(dir); removeErr != nil {
+			log.Debug().Err(removeErr).Str("dir", dir).Msg("failed to remove local restore staging directory")
+		}
+	}
+
+	seen := make(map[string]struct{}, len(manifest.Files))
 	for i := range manifest.Files {
+		if err = ctx.Err(); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("staging local restore: %w", err)
+		}
 		file := &manifest.Files[i]
+		if file.SHA256 == remoteEmptyContentSHA256 {
+			continue
+		}
+		if _, ok := seen[file.SHA256]; ok {
+			continue
+		}
+		seen[file.SHA256] = struct{}{}
 		entry := entries[file.ArchivePath]
-		if verifyErr := verifyZipEntry(entry, file); verifyErr != nil {
-			return nil, verifyErr
+		opened, openErr := entry.Open()
+		if openErr != nil {
+			cleanup()
+			return nil, fmt.Errorf("opening backup ZIP payload %s: %w", file.ArchivePath, openErr)
+		}
+		if installErr := installVerifiedPayload(ctx, staging.path(file.SHA256), file, opened); installErr != nil {
+			cleanup()
+			return nil, installErr
 		}
 	}
 	info, err := infoFromManifest(zipPath, manifest)
 	if err != nil {
+		cleanup()
 		return nil, err
 	}
 	info.Integrity = IntegrityValid
-	return &zipReadResult{Manifest: *manifest, Info: info}, nil
+	return &stagedLocalArchive{
+		result: &zipReadResult{Manifest: *manifest, Info: info}, staging: staging, cleanup: cleanup,
+	}, nil
 }
 
-func validateZipHeaders(files []*zip.File, maxLogicalSize int64) (map[string]*zip.File, error) {
-	if maxLogicalSize <= 0 || maxLogicalSize == math.MaxInt64 {
-		return nil, errors.New("backup logical size limit must be positive")
+func uniquePayloadBytes(files []FileRef) (int64, error) {
+	sizes := make(map[string]int64, len(files))
+	var total int64
+	for _, file := range files {
+		if size, ok := sizes[file.SHA256]; ok {
+			if size != file.Size {
+				return 0, fmt.Errorf("backup manifest has conflicting sizes for %s", file.SHA256)
+			}
+			continue
+		}
+		if file.Size < 0 {
+			return 0, errors.New("backup payload has negative size")
+		}
+		if file.Size > math.MaxInt64-total {
+			return 0, errors.New("backup payload staging size overflow")
+		}
+		sizes[file.SHA256] = file.Size
+		total += file.Size
 	}
+	return total, nil
+}
+
+func validateZipHeaders(files []*zip.File) (map[string]*zip.File, error) {
 	if len(files) > maxArchiveEntries {
 		return nil, fmt.Errorf("backup has too many entries: %d exceeds %d", len(files), maxArchiveEntries)
 	}
@@ -1455,19 +1544,19 @@ func validateZipHeaders(files []*zip.File, maxLogicalSize int64) (map[string]*zi
 		if file.Name == manifestName {
 			continue
 		}
-		if file.UncompressedSize64 > uint64(maxLogicalSize) {
-			return nil, fmt.Errorf("backup exceeds logical size limit of %d bytes", maxLogicalSize)
+		if file.UncompressedSize64 > math.MaxInt64 {
+			return nil, fmt.Errorf("ZIP entry size cannot be represented: %s", file.Name)
 		}
-		size := int64(file.UncompressedSize64) //nolint:gosec // bounded by positive maxLogicalSize above.
-		if size > maxLogicalSize-total {
-			return nil, fmt.Errorf("backup exceeds logical size limit of %d bytes", maxLogicalSize)
+		size := int64(file.UncompressedSize64) //nolint:gosec // bounded by math.MaxInt64 above.
+		if size > math.MaxInt64-total {
+			return nil, errors.New("backup logical size overflow")
 		}
 		total += size
 	}
 	return entries, nil
 }
 
-func validateManifestMetadata(manifest *Manifest, maxLogicalSize int64) error {
+func validateManifestMetadata(manifest *Manifest) error {
 	if manifest.Version != 1 {
 		return fmt.Errorf("unsupported backup manifest version: %d", manifest.Version)
 	}
@@ -1480,7 +1569,7 @@ func validateManifestMetadata(manifest *Manifest, maxLogicalSize int64) error {
 	if err := validateFiles(manifest.Files); err != nil {
 		return err
 	}
-	if _, err := validateLogicalSize(manifest.Files, maxLogicalSize); err != nil {
+	if _, err := sumLogicalSize(manifest.Files); err != nil {
 		return err
 	}
 	if !categorySummariesEqual(manifest.Categories, summarize(manifest.Files)) {
@@ -1499,9 +1588,8 @@ func validateManifest(
 	manifest *Manifest,
 	files []*zip.File,
 	entries map[string]*zip.File,
-	maxLogicalSize int64,
 ) error {
-	if err := validateManifestMetadata(manifest, maxLogicalSize); err != nil {
+	if err := validateManifestMetadata(manifest); err != nil {
 		return err
 	}
 	if len(manifest.Files)+1 != len(files) {
@@ -1552,28 +1640,6 @@ func categorySummariesEqual(
 		}
 	}
 	return true
-}
-
-func verifyZipEntry(entry *zip.File, file *FileRef) error {
-	r, err := entry.Open()
-	if err != nil {
-		return fmt.Errorf("opening ZIP entry %s: %w", entry.Name, err)
-	}
-	defer func() { _ = r.Close() }()
-
-	hash := sha256.New()
-	limited := &io.LimitedReader{R: r, N: file.Size + 1}
-	size, err := io.Copy(hash, limited)
-	if err != nil {
-		return fmt.Errorf("reading ZIP entry %s: %w", entry.Name, err)
-	}
-	if size != file.Size {
-		return fmt.Errorf("backup ZIP size mismatch: %s", entry.Name)
-	}
-	if hex.EncodeToString(hash.Sum(nil)) != file.SHA256 {
-		return fmt.Errorf("backup ZIP hash mismatch: %s", entry.Name)
-	}
-	return nil
 }
 
 func zipEntriesByName(files []*zip.File) map[string]*zip.File {
@@ -1637,6 +1703,8 @@ func toStatusEntry(st *statusEntry, enabled bool, schedule string) models.Backup
 	return models.BackupStatusEntry{
 		LastRunAt:             optionalString(st.LastRunAt),
 		LastSuccessAt:         optionalString(st.LastSuccessAt),
+		LastSnapshotCreatedAt: optionalString(st.LastSnapshotCreatedAt),
+		LastRunNoChanges:      st.LastRunNoChanges,
 		AvailabilityCheckedAt: optionalString(st.AvailabilityCheckedAt),
 		DeviceName:            optionalString(st.DeviceName),
 		LinkedAt:              optionalString(st.LinkedAt),

@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -37,10 +38,12 @@ import (
 )
 
 const (
-	backupDirName  = "backups"
-	backupPrefix   = "backup-"
-	backupExt      = ".db"
-	autoBackupKeep = 3
+	backupDirName            = "backups"
+	backupPrefix             = "backup-"
+	backupExt                = ".db"
+	autoBackupKeep           = 3
+	databaseRenameAttempts   = 100
+	databaseRenameRetryDelay = 50 * time.Millisecond
 )
 
 func (db *UserDB) backupDir() string {
@@ -366,6 +369,36 @@ func copyFileSyncContext(ctx context.Context, src, dst string, mode os.FileMode)
 	return nil
 }
 
+func renameDatabaseFile(fs afero.Fs, oldPath, newPath string) error {
+	return renameDatabaseFileWithRetry(
+		fs,
+		oldPath,
+		newPath,
+		isRetryableDatabaseRenameError,
+		func() { time.Sleep(databaseRenameRetryDelay) },
+	)
+}
+
+func renameDatabaseFileWithRetry(
+	fs afero.Fs,
+	oldPath string,
+	newPath string,
+	retryable func(error) bool,
+	wait func(),
+) error {
+	for attempt := range databaseRenameAttempts {
+		err := fs.Rename(oldPath, newPath)
+		if err == nil {
+			return nil
+		}
+		if !retryable(err) || attempt == databaseRenameAttempts-1 {
+			return fmt.Errorf("rename database file: %w", err)
+		}
+		wait()
+	}
+	return errors.New("database rename attempts exhausted")
+}
+
 func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err error) {
 	dbDir := filepath.Dir(dbPath)
 	tmp, err := afero.TempFile(fs, dbDir, ".userdb-restore-*")
@@ -385,7 +418,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 
 	rollbackPath := dbPath + ".restore-rollback"
 	_ = fs.Remove(rollbackPath)
-	if err = fs.Rename(dbPath, rollbackPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err = renameDatabaseFile(fs, dbPath, rollbackPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to preserve user database before restore: %w", err)
 	}
 	originalPreserved := err == nil
@@ -400,7 +433,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 	}
 
 	database.RemoveSidecars(dbPath)
-	if err = fs.Rename(tmpPath, dbPath); err != nil {
+	if err = renameDatabaseFile(fs, tmpPath, dbPath); err != nil {
 		if originalPreserved {
 			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
 			return errors.Join(
@@ -433,7 +466,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 
 func restoreDatabaseRollback(fs afero.Fs, rollbackPath, dbPath string) error {
 	_ = fs.Remove(dbPath)
-	if err := fs.Rename(rollbackPath, dbPath); err != nil {
+	if err := renameDatabaseFile(fs, rollbackPath, dbPath); err != nil {
 		return fmt.Errorf("failed to restore original user database: %w", err)
 	}
 	if err := syncAferoDirectory(fs, filepath.Dir(dbPath)); err != nil {
@@ -449,7 +482,8 @@ func syncAferoDirectory(fs afero.Fs, path string) error {
 	}
 	syncErr := dir.Sync()
 	closeErr := dir.Close()
-	if syncErr != nil {
+	// Windows does not support flushing directory handles through os.File.Sync.
+	if syncErr != nil && (runtime.GOOS != "windows" || !errors.Is(syncErr, os.ErrPermission)) {
 		return fmt.Errorf("failed to sync directory: %w", syncErr)
 	}
 	if closeErr != nil {

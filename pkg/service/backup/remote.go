@@ -36,6 +36,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,14 @@ const (
 	// stuck behind a stale negative result.
 	remoteAvailabilityTTL      = 1 * time.Hour
 	remoteAvailabilityRetryTTL = 5 * time.Minute
+
+	// Rate-limited (429) responses are waited out and retried instead of
+	// failing the whole operation. The wait honors the server's Retry-After
+	// clamped to [min, max]; the default applies when no header is sent.
+	remoteRateLimitMaxAttempts = 10
+	remoteRateLimitMinWait     = 5 * time.Second
+	remoteRateLimitDefaultWait = 15 * time.Second
+	remoteRateLimitMaxWait     = 2 * time.Minute
 )
 
 var (
@@ -110,6 +119,10 @@ type RemoteRunInfo struct {
 	UploadedBytes     int64                            `json:"uploadedBytes"`
 	StorageUsedBytes  int64                            `json:"storageUsedBytes,omitempty"`
 	StorageQuotaBytes int64                            `json:"storageQuotaBytes,omitempty"`
+	// NoChanges marks a run whose manifest matched the server's existing
+	// snapshot: the run succeeded and the content is verified stored, but
+	// nothing new was uploaded and no new snapshot record was created.
+	NoChanges bool `json:"noChanges,omitempty"`
 }
 
 // RemoteRestoreInfo describes one completed remote restore.
@@ -135,6 +148,7 @@ type RemoteListInfo struct {
 type RemoteBackupInfo struct {
 	CoreVersion   *string                          `json:"coreVersion,omitempty"`
 	Platform      *string                          `json:"platform,omitempty"`
+	VerifiedAt    *time.Time                       `json:"verifiedAt,omitempty"`
 	RestoredAt    *time.Time                       `json:"restoredAt,omitempty"`
 	SourceDevice  *RemoteBackupSourceDevice        `json:"sourceDevice,omitempty"`
 	Categories    map[string]remoteCategorySummary `json:"categories"`
@@ -197,6 +211,31 @@ type remoteCheckResponse struct {
 	Missing []string `json:"missing"`
 }
 
+type remoteLocateRequest struct {
+	Hashes []string `json:"hashes"`
+}
+
+//nolint:tagliatelle // Remote API contract uses snake_case JSON fields.
+type remotePackObjectRef struct {
+	Hash   string `json:"hash"`
+	Offset int64  `json:"offset"`
+	Length int64  `json:"length"`
+}
+
+//nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
+type remotePackObjects struct {
+	PackHash  string                `json:"pack_hash"`
+	SizeBytes int64                 `json:"size_bytes"`
+	Objects   []remotePackObjectRef `json:"objects"`
+}
+
+// remoteLocateResponse maps requested content hashes to the live packs
+// holding their bytes; Missing lists hashes with no live object.
+type remoteLocateResponse struct {
+	Packs   []remotePackObjects `json:"packs"`
+	Missing []string            `json:"missing"`
+}
+
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
 type remoteListResponse struct {
 	Items             []remoteBackupResponse `json:"items"`
@@ -208,6 +247,7 @@ type remoteListResponse struct {
 type remoteBackupResponse struct {
 	CoreVersion   *string                          `json:"core_version,omitempty"`
 	Platform      *string                          `json:"platform,omitempty"`
+	VerifiedAt    *time.Time                       `json:"verified_at,omitempty"`
 	RestoredAt    *time.Time                       `json:"restored_at,omitempty"`
 	SourceDevice  *remoteBackupSourceDevice        `json:"source_device,omitempty"`
 	Categories    map[string]remoteCategorySummary `json:"categories"`
@@ -218,6 +258,9 @@ type remoteBackupResponse struct {
 	ID            string                           `json:"id"`
 	SchemaVersion int                              `json:"schema_version"`
 	SizeBytes     int64                            `json:"size_bytes"`
+	// Deduplicated is set on commit responses whose manifest matched this
+	// existing snapshot: the run succeeded with no changes to store.
+	Deduplicated bool `json:"deduplicated,omitempty"`
 }
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
@@ -265,12 +308,47 @@ type packFooterEntry struct {
 	Length int64  `json:"length"`
 }
 
+// uploadResult summarizes one upload pass: how many packs and bytes went
+// over the wire, and which files were skipped as unstorable.
+type uploadResult struct {
+	skipped       []FileRef
+	packs         int
+	bytesUploaded int64
+}
+
+type plannedRemotePack struct {
+	files []FileRef
+	size  int64
+}
+
+type remotePackPlan struct {
+	packs       []plannedRemotePack
+	skipped     []FileRef
+	uploadBytes int64
+}
+
+// remoteRateLimitedError is a 429 from the backup server. retryAfter is the
+// server-requested wait (zero when the header is absent). errors.Is matches
+// the errRemoteRateLimited sentinel.
+type remoteRateLimitedError struct {
+	retryAfter time.Duration
+}
+
+// rateLimitWaits bounds how long a rate-limited request waits before a
+// retry. Carried per client so tests can shrink the waits.
+type rateLimitWaits struct {
+	minWait     time.Duration
+	defaultWait time.Duration
+	maxWait     time.Duration
+}
+
 type remoteClient struct {
 	httpClient     *http.Client
 	onUnauthorized func()
 	baseURL        string
 	bearer         string
 	platform       string
+	retryWaits     rateLimitWaits
 }
 
 func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunInfo, error) {
@@ -312,14 +390,21 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 	if len(info.Warnings) > 0 || info.SkippedFiles > 0 {
 		lastStatus = StatusPartial
 	}
+	// LastSuccessAt is the run's own completion time, never the snapshot
+	// record's CreatedAt: a deduplicated run returns the existing snapshot
+	// with its original timestamp, and stamping that here would make a
+	// healthy daily schedule look like it stopped on the last content
+	// change (and eventually trip the false stale-backup notice).
 	_ = m.writeRemoteStatus(&statusEntry{
-		LastRunAt:      formatTime(started),
-		LastSuccessAt:  formatTime(info.Backup.CreatedAt),
-		LastStatus:     lastStatus,
-		LastBackupSize: info.Backup.SizeBytes,
-		Categories:     remoteCategoriesToStatus(info.Categories),
-		Warnings:       info.Warnings,
-		SkippedFiles:   len(info.Warnings) + info.SkippedFiles,
+		LastRunAt:             formatTime(started),
+		LastSuccessAt:         formatTime(time.Now().UTC()),
+		LastSnapshotCreatedAt: formatTime(info.Backup.CreatedAt),
+		LastRunNoChanges:      info.NoChanges,
+		LastStatus:            lastStatus,
+		LastBackupSize:        info.Backup.SizeBytes,
+		Categories:            remoteCategoriesToStatus(info.Categories),
+		Warnings:              info.Warnings,
+		SkippedFiles:          len(info.Warnings) + info.SkippedFiles,
 	})
 	return info, nil
 }
@@ -330,7 +415,10 @@ func (m *Manager) ListRemote(ctx context.Context) (RemoteListInfo, error) {
 		return RemoteListInfo{}, err
 	}
 	var resp remoteListResponse
-	if err := client.doJSON(ctx, http.MethodGet, "/v1/device/backups", nil, &resp); err != nil {
+	if err := client.retryRateLimited(ctx, func() error {
+		resp = remoteListResponse{}
+		return client.doJSON(ctx, http.MethodGet, "/v1/device/backups", nil, &resp)
+	}); err != nil {
 		return RemoteListInfo{}, err
 	}
 	items := make([]RemoteBackupInfo, 0, len(resp.Items))
@@ -389,7 +477,10 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 	}
 	var resp remoteBackupResponse
 	backupPath := remoteBackupPath(id)
-	getErr := client.doJSONLimit(ctx, http.MethodGet, backupPath, nil, &resp, remoteManifestResponseLimit)
+	getErr := client.retryRateLimited(ctx, func() error {
+		resp = remoteBackupResponse{}
+		return client.doJSONLimit(ctx, http.MethodGet, backupPath, nil, &resp, remoteManifestResponseLimit)
+	})
 	if getErr != nil {
 		return RemoteRestoreInfo{}, getErr
 	}
@@ -415,7 +506,7 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 	if len(files) > maxArchiveEntries-1 {
 		return RemoteRestoreInfo{}, fmt.Errorf("remote backup has too many files: %d", len(files))
 	}
-	if _, validateErr := validateLogicalSize(files, m.cfg.BackupMaxSizeBytes()); validateErr != nil {
+	if _, validateErr := sumLogicalSize(files); validateErr != nil {
 		return RemoteRestoreInfo{}, validateErr
 	}
 	for _, file := range files {
@@ -473,15 +564,15 @@ func (m *Manager) RestoreRemote(ctx context.Context, id string) (RemoteRestoreIn
 	return RemoteRestoreInfo{PreRestoreBackup: &preInfo, RestoredFrom: remoteBackupToInfo(&resp)}, nil
 }
 
-// remoteStaging holds downloaded, hash-verified payloads on disk, keyed by
-// content hash, so the apply phase never depends on the network.
-type remoteStaging struct {
+// restoreStaging holds hash-verified payloads on disk, keyed by content hash,
+// so restore application never depends on an archive or network stream.
+type restoreStaging struct {
 	dir string
 }
 
-func (s *remoteStaging) path(hash string) string { return filepath.Join(s.dir, hash) }
+func (s *restoreStaging) path(hash string) string { return filepath.Join(s.dir, hash) }
 
-func (s *remoteStaging) open(hash string, wantSize int64) (io.ReadCloser, error) {
+func (s *restoreStaging) open(hash string, wantSize int64) (io.ReadCloser, error) {
 	if hash == remoteEmptyContentSHA256 {
 		return io.NopCloser(strings.NewReader("")), nil
 	}
@@ -501,72 +592,314 @@ func (s *remoteStaging) open(hash string, wantSize int64) (io.ReadCloser, error)
 	return file, nil
 }
 
-// stageRemotePayloads downloads and verifies every unique non-empty object
-// referenced by files into a temporary directory under the backup dir. The
-// returned cleanup removes the staging directory; it is safe to call after a
-// partial failure.
+// stageRemotePayloads stages every unique non-empty object referenced by
+// files into a temporary directory under the backup dir, downloading whole
+// packs and slicing objects out by the server-reported offsets — one GET
+// per pack rather than one per object. The returned cleanup removes the
+// staging directory; it is safe to call after a partial failure.
 func (m *Manager) stageRemotePayloads(
 	ctx context.Context,
 	client *remoteClient,
 	files []FileRef,
-) (*remoteStaging, func(), error) {
+) (*restoreStaging, func(), error) {
 	if err := os.MkdirAll(m.backupDir(), 0o750); err != nil {
 		return nil, nil, fmt.Errorf("creating backup directory: %w", err)
 	}
-	var required int64
-	sizes := make(map[string]int64, len(files))
-	for _, file := range files {
-		if file.SHA256 == remoteEmptyContentSHA256 {
-			continue
-		}
-		if size, ok := sizes[file.SHA256]; ok {
-			if size != file.Size {
-				return nil, nil, fmt.Errorf("remote manifest has conflicting sizes for %s", file.SHA256)
-			}
-			continue
-		}
-		if file.Size < 0 || file.Size > m.cfg.BackupMaxSizeBytes()-required {
-			return nil, nil, errors.New("remote restore exceeds backup size limit")
-		}
-		sizes[file.SHA256] = file.Size
-		required += file.Size
+	sizes, required, err := uniqueRemotePayloadSizes(files)
+	if err != nil {
+		return nil, nil, err
 	}
+	packs, err := locateRemotePacks(ctx, client, sizes)
+	if err != nil {
+		return nil, nil, err
+	}
+	// One pack sits on disk while its objects are sliced out, so staging
+	// needs headroom for the largest pack on top of the payload bytes.
+	var largestPack int64
+	for i := range packs {
+		largestPack = max(largestPack, packs[i].SizeBytes)
+	}
+	if required > math.MaxInt64-largestPack {
+		return nil, nil, errors.New("remote restore staging size overflow")
+	}
+	required += largestPack
 	free, err := helpers.FreeDiskSpace(m.backupDir())
 	if err != nil {
 		return nil, nil, fmt.Errorf("checking remote restore staging space: %w", err)
 	}
+	//nolint:gosec // required is non-negative: summed from validated sizes with overflow checks.
 	if uint64(required) > free {
 		return nil, nil, fmt.Errorf("insufficient disk space to stage remote restore: need %d bytes", required)
 	}
-	dir, err := os.MkdirTemp(m.backupDir(), "remote-restore-")
+	dir, err := os.MkdirTemp(m.backupDir(), remoteRestoreStagingPrefix)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating restore staging directory: %w", err)
 	}
-	staging := &remoteStaging{dir: dir}
+	staging := &restoreStaging{dir: dir}
 	cleanup := func() {
 		if removeErr := os.RemoveAll(dir); removeErr != nil {
 			log.Debug().Err(removeErr).Str("dir", dir).Msg("failed to remove restore staging directory")
 		}
 	}
 
-	seen := make(map[string]struct{}, len(files))
+	for i := range packs {
+		if stageErr := client.stagePackObjects(ctx, &packs[i], staging); stageErr != nil {
+			cleanup()
+			return nil, nil, stageErr
+		}
+	}
+	return staging, cleanup, nil
+}
+
+// uniqueRemotePayloadSizes maps each unique non-empty content hash to its
+// size and totals the bytes restore staging needs on disk.
+func uniqueRemotePayloadSizes(files []FileRef) (sizes map[string]int64, required int64, err error) {
+	sizes = make(map[string]int64, len(files))
 	for _, file := range files {
 		if file.SHA256 == remoteEmptyContentSHA256 {
 			continue
 		}
-		if _, ok := seen[file.SHA256]; ok {
+		if size, ok := sizes[file.SHA256]; ok {
+			if size != file.Size {
+				return nil, 0, fmt.Errorf("remote manifest has conflicting sizes for %s", file.SHA256)
+			}
 			continue
 		}
-		seen[file.SHA256] = struct{}{}
-		downloadErr := client.downloadObject(
-			ctx, file.SHA256, file.Size, staging.path(file.SHA256),
-		)
-		if downloadErr != nil {
-			cleanup()
-			return nil, nil, downloadErr
+		if file.Size < 0 {
+			return nil, 0, errors.New("remote restore payload has negative size")
+		}
+		if file.Size > math.MaxInt64-required {
+			return nil, 0, errors.New("remote restore staging size overflow")
+		}
+		sizes[file.SHA256] = file.Size
+		required += file.Size
+	}
+	return sizes, required, nil
+}
+
+// locateRemotePacks resolves the needed content hashes to the live packs
+// holding their bytes and validates the response against the manifest:
+// every hash located exactly once, sizes matching, ranges inside the pack.
+// A live snapshot's packs are GC-protected, so any missing hash is a hard
+// error rather than something to work around.
+func locateRemotePacks(
+	ctx context.Context,
+	client *remoteClient,
+	sizes map[string]int64,
+) ([]remotePackObjects, error) {
+	if len(sizes) == 0 {
+		return nil, nil
+	}
+	hashes := make([]string, 0, len(sizes))
+	for hash := range sizes {
+		hashes = append(hashes, hash)
+	}
+	sort.Strings(hashes)
+
+	groups := make(map[string]*remotePackObjects)
+	missing := 0
+	for start := 0; start < len(hashes); start += remoteCheckBatchSize {
+		end := min(start+remoteCheckBatchSize, len(hashes))
+		var resp remoteLocateResponse
+		req := remoteLocateRequest{Hashes: hashes[start:end]}
+		if err := client.retryRateLimited(ctx, func() error {
+			resp = remoteLocateResponse{}
+			return client.doJSON(ctx, http.MethodPost, "/v1/device/backup-objects/locate", &req, &resp)
+		}); err != nil {
+			return nil, err
+		}
+		missing += len(resp.Missing)
+		for i := range resp.Packs {
+			pack := resp.Packs[i]
+			group, ok := groups[pack.PackHash]
+			if !ok {
+				groups[pack.PackHash] = &pack
+				continue
+			}
+			if group.SizeBytes != pack.SizeBytes {
+				return nil, fmt.Errorf("remote pack %s reported with conflicting sizes", pack.PackHash)
+			}
+			group.Objects = append(group.Objects, pack.Objects...)
 		}
 	}
-	return staging, cleanup, nil
+	if missing > 0 {
+		return nil, fmt.Errorf("remote backup objects are no longer available on the server: %d missing", missing)
+	}
+
+	located := make(map[string]struct{}, len(sizes))
+	packs := make([]remotePackObjects, 0, len(groups))
+	for _, group := range groups {
+		if group.SizeBytes <= 0 || group.SizeBytes > remoteMaxPackBytes {
+			return nil, fmt.Errorf("remote pack %s has invalid size %d", group.PackHash, group.SizeBytes)
+		}
+		for _, ref := range group.Objects {
+			want, needed := sizes[ref.Hash]
+			if !needed {
+				return nil, fmt.Errorf("remote locate returned unrequested object %s", ref.Hash)
+			}
+			if _, dup := located[ref.Hash]; dup {
+				return nil, fmt.Errorf("remote object %s located more than once", ref.Hash)
+			}
+			located[ref.Hash] = struct{}{}
+			if ref.Length != want || ref.Offset < 0 || ref.Offset > group.SizeBytes-ref.Length {
+				return nil, fmt.Errorf("remote object %s has an inconsistent pack range", ref.Hash)
+			}
+		}
+		packs = append(packs, *group)
+	}
+	if len(located) != len(sizes) {
+		return nil, fmt.Errorf("remote locate response is missing %d objects", len(sizes)-len(located))
+	}
+	sort.Slice(packs, func(i, j int) bool { return packs[i].PackHash < packs[j].PackHash })
+	return packs, nil
+}
+
+// stagePackObjects downloads one pack and slices its objects into the
+// staging directory, verifying the whole-pack hash and every slice's hash.
+// The transient pack file is removed once its objects are staged.
+func (c *remoteClient) stagePackObjects(
+	ctx context.Context,
+	pack *remotePackObjects,
+	staging *restoreStaging,
+) error {
+	packPath, err := c.downloadPack(ctx, pack, staging.dir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if removeErr := os.Remove(packPath); removeErr != nil {
+			log.Debug().Err(removeErr).Str("path", packPath).Msg("failed to remove staged pack file")
+		}
+	}()
+	return extractPackObjects(packPath, pack, staging)
+}
+
+// downloadPack fetches a whole pack blob into a temporary file inside dir,
+// verifying its size and sha256 against the locate response. Rate-limited
+// responses are waited out; each attempt uses a fresh temporary file.
+func (c *remoteClient) downloadPack(
+	ctx context.Context,
+	pack *remotePackObjects,
+	dir string,
+) (string, error) {
+	var packPath string
+	err := c.retryRateLimited(ctx, func() error {
+		path, attemptErr := c.downloadPackAttempt(ctx, pack, dir)
+		if attemptErr != nil {
+			return attemptErr
+		}
+		packPath = path
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return packPath, nil
+}
+
+func (c *remoteClient) downloadPackAttempt(
+	ctx context.Context,
+	pack *remotePackObjects,
+	dir string,
+) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, remoteTransferTimeout(pack.SizeBytes))
+	defer cancel()
+	out, err := os.CreateTemp(dir, ".pack-*")
+	if err != nil {
+		return "", fmt.Errorf("creating pack staging file: %w", err)
+	}
+	path := out.Name()
+
+	downloadPath := "/v1/device/backup-packs/" + pack.PackHash
+	rawErr := c.doRaw(ctx, http.MethodGet, downloadPath, nil, "", func(resp *http.Response) error {
+		hasher := sha256.New()
+		limited := &io.LimitedReader{R: resp.Body, N: pack.SizeBytes}
+		written, copyErr := io.Copy(io.MultiWriter(out, hasher), limited)
+		if copyErr != nil {
+			return fmt.Errorf("reading remote backup pack: %w", copyErr)
+		}
+		if written != pack.SizeBytes {
+			return fmt.Errorf("remote backup pack size mismatch: %s", pack.PackHash)
+		}
+		var extra [1]byte
+		extraSize, readErr := resp.Body.Read(extra[:])
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return fmt.Errorf("checking remote backup pack size: %w", readErr)
+		}
+		if extraSize != 0 {
+			return fmt.Errorf("remote backup pack size mismatch: %s", pack.PackHash)
+		}
+		if hex.EncodeToString(hasher.Sum(nil)) != pack.PackHash {
+			return fmt.Errorf("remote backup pack hash mismatch: %s", pack.PackHash)
+		}
+		if syncErr := out.Sync(); syncErr != nil {
+			return fmt.Errorf("syncing pack staging file: %w", syncErr)
+		}
+		return nil
+	})
+	closeErr := out.Close()
+	if rawErr == nil && closeErr != nil {
+		rawErr = fmt.Errorf("closing pack staging file: %w", closeErr)
+	}
+	if rawErr != nil {
+		if removeErr := os.Remove(path); removeErr != nil {
+			log.Debug().Err(removeErr).Str("path", path).Msg("failed to remove failed pack download")
+		}
+		return "", rawErr
+	}
+	return path, nil
+}
+
+// extractPackObjects slices each located object out of a downloaded,
+// hash-verified pack file into its content-addressed staging file,
+// re-verifying every slice's sha256.
+func extractPackObjects(packPath string, pack *remotePackObjects, staging *restoreStaging) error {
+	// #nosec G304 -- packPath is a temp file created inside the private staging directory.
+	packFile, err := os.Open(packPath)
+	if err != nil {
+		return fmt.Errorf("opening staged pack file: %w", err)
+	}
+	defer func() {
+		if closeErr := packFile.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Str("path", packPath).Msg("failed to close staged pack file")
+		}
+	}()
+	for i := range pack.Objects {
+		if err := extractPackObject(packFile, &pack.Objects[i], staging.path(pack.Objects[i].Hash)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractPackObject(packFile *os.File, ref *remotePackObjectRef, destination string) (err error) {
+	// #nosec G304 -- destination is a validated hash inside a private staging directory.
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating remote restore staging file: %w", err)
+	}
+	defer func() {
+		if closeErr := out.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("closing remote restore staging file: %w", closeErr))
+		}
+	}()
+
+	hasher := sha256.New()
+	section := io.NewSectionReader(packFile, ref.Offset, ref.Length)
+	written, copyErr := io.Copy(io.MultiWriter(out, hasher), section)
+	if copyErr != nil {
+		return fmt.Errorf("reading staged pack object: %w", copyErr)
+	}
+	if written != ref.Length {
+		return fmt.Errorf("staged pack object size mismatch: %s", ref.Hash)
+	}
+	if hex.EncodeToString(hasher.Sum(nil)) != ref.Hash {
+		return fmt.Errorf("staged pack object hash mismatch: %s", ref.Hash)
+	}
+	if syncErr := out.Sync(); syncErr != nil {
+		return fmt.Errorf("syncing remote restore staging file: %w", syncErr)
+	}
+	return nil
 }
 
 func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (result RemoteRunInfo, err error) {
@@ -607,7 +940,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 			"backup has too many entries: %d exceeds %d", len(files), maxArchiveEntries-1,
 		)
 	}
-	if _, sizeErr := validateLogicalSize(files, m.cfg.BackupMaxSizeBytes()); sizeErr != nil {
+	if _, sizeErr := sumLogicalSize(files); sizeErr != nil {
 		return RemoteRunInfo{}, sizeErr
 	}
 	files, unreadableWarnings, err := prepareSourceFiles(ctx, files, m.sourceOpener, m.pauser)
@@ -626,7 +959,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		return RemoteRunInfo{}, err
 	}
 	missingSet := stringSet(missing)
-	uploaded, err := client.uploadMissing(ctx, files, missingSet, m.pauser)
+	uploaded, err := m.uploadMissingWithQuotaPreflight(ctx, client, files, missingSet)
 	if err != nil {
 		return RemoteRunInfo{}, err
 	}
@@ -665,7 +998,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 			return RemoteRunInfo{}, checkErr
 		}
 		repairSet := stringSet(repairMissing)
-		repair, repairErr := client.uploadMissing(ctx, files, repairSet, m.pauser)
+		repair, repairErr := m.uploadMissingWithQuotaPreflight(ctx, client, files, repairSet)
 		if repairErr != nil {
 			return RemoteRunInfo{}, repairErr
 		}
@@ -715,6 +1048,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 		UploadedBytes:     uploaded.bytesUploaded,
 		StorageUsedBytes:  list.StorageUsedBytes,
 		StorageQuotaBytes: list.StorageQuotaBytes,
+		NoChanges:         backup.Deduplicated,
 	}, nil
 }
 
@@ -770,6 +1104,10 @@ func (m *Manager) newRemoteClient() (*remoteClient, error) {
 		return nil, errRemoteUnlinked
 	}
 	bearer := entry.Bearer
+	retryWaits := defaultRateLimitWaits
+	if m.rateLimitWaits != nil {
+		retryWaits = *m.rateLimitWaits
+	}
 	return &remoteClient{
 		// Timeouts are applied per request (scaled to transfer size for
 		// uploads/downloads), not on the client, so a large pack on a slow
@@ -778,9 +1116,10 @@ func (m *Manager) newRemoteClient() (*remoteClient, error) {
 		onUnauthorized: func() {
 			m.markRemoteUnlinkedIfCurrent(bearer)
 		},
-		baseURL:  baseURL,
-		bearer:   bearer,
-		platform: m.pl.ID(),
+		baseURL:    baseURL,
+		bearer:     bearer,
+		platform:   m.pl.ID(),
+		retryWaits: retryWaits,
 	}, nil
 }
 
@@ -788,11 +1127,15 @@ func (m *Manager) newRemoteClient() (*remoteClient, error) {
 // given size: the base request timeout plus time for the bytes at a
 // deliberately pessimistic throughput floor.
 func remoteTransferTimeout(sizeBytes int64) time.Duration {
-	timeout := remoteRequestTimeout
-	if sizeBytes > 0 {
-		timeout += time.Duration(sizeBytes/remoteTransferBytesPerSec) * time.Second
+	if sizeBytes <= 0 {
+		return remoteRequestTimeout
 	}
-	return timeout
+	transferSeconds := sizeBytes / remoteTransferBytesPerSec
+	maxTransferSeconds := int64((time.Duration(math.MaxInt64) - remoteRequestTimeout) / time.Second)
+	if transferSeconds > maxTransferSeconds {
+		return time.Duration(math.MaxInt64)
+	}
+	return remoteRequestTimeout + time.Duration(transferSeconds)*time.Second
 }
 
 func (m *Manager) notifyRemoteFailure(err error) {
@@ -1087,6 +1430,9 @@ func (m *Manager) writeRemoteStatus(remote *statusEntry) error {
 	if remote.LastSuccessAt == "" {
 		remote.LastSuccessAt = st.Remote.LastSuccessAt
 	}
+	if remote.LastSnapshotCreatedAt == "" {
+		remote.LastSnapshotCreatedAt = st.Remote.LastSnapshotCreatedAt
+	}
 	if remote.Availability == "" {
 		remote.Availability = st.Remote.Availability
 	}
@@ -1202,9 +1548,10 @@ func (c *remoteClient) checkMissing(ctx context.Context, hashes []string) ([]str
 		}
 		var resp remoteCheckResponse
 		req := remoteCheckRequest{Hashes: hashes[start:end]}
-		if err := c.doJSON(
-			ctx, http.MethodPost, "/v1/device/backup-objects/check", &req, &resp,
-		); err != nil {
+		if err := c.retryRateLimited(ctx, func() error {
+			resp = remoteCheckResponse{}
+			return c.doJSON(ctx, http.MethodPost, "/v1/device/backup-objects/check", &req, &resp)
+		}); err != nil {
 			return nil, err
 		}
 		missing = append(missing, resp.Missing...)
@@ -1212,23 +1559,58 @@ func (c *remoteClient) checkMissing(ctx context.Context, hashes []string) ([]str
 	return missing, nil
 }
 
-// uploadResult summarizes one uploadMissing pass: how many packs and bytes
-// went over the wire, and which files were skipped as unstorable.
-type uploadResult struct {
-	skipped       []FileRef
-	packs         int
-	bytesUploaded int64
+func (c *remoteClient) backupStorageUsage(ctx context.Context) (used, quota int64, err error) {
+	var resp remoteListResponse
+	if err := c.retryRateLimited(ctx, func() error {
+		resp = remoteListResponse{}
+		return c.doJSONLimit(
+			ctx, http.MethodGet, "/v1/device/backups", nil, &resp, remoteManifestResponseLimit,
+		)
+	}); err != nil {
+		return 0, 0, err
+	}
+	if resp.StorageUsedBytes < 0 || resp.StorageQuotaBytes < 0 {
+		return 0, 0, errors.New("remote backup storage response contains negative bytes")
+	}
+	return resp.StorageUsedBytes, resp.StorageQuotaBytes, nil
 }
 
-func (c *remoteClient) uploadMissing(
+func ensureRemoteUploadCapacity(used, quota, required int64) error {
+	if used < 0 || quota < 0 || required < 0 {
+		return errors.New("remote backup capacity values must be nonnegative")
+	}
+	if used > quota || required > quota-used {
+		return errRemoteQuotaExceeded
+	}
+	return nil
+}
+
+func (m *Manager) uploadMissingWithQuotaPreflight(
 	ctx context.Context,
+	client *remoteClient,
 	files []FileRef,
 	missing map[string]struct{},
-	pauser *syncutil.Pauser,
 ) (uploadResult, error) {
-	var result uploadResult
+	plan, err := planRemotePacks(files, missing)
+	if err != nil {
+		return uploadResult{}, err
+	}
+	if plan.uploadBytes > 0 {
+		used, quota, usageErr := client.backupStorageUsage(ctx)
+		if usageErr != nil {
+			return uploadResult{}, usageErr
+		}
+		if capacityErr := ensureRemoteUploadCapacity(used, quota, plan.uploadBytes); capacityErr != nil {
+			return uploadResult{}, capacityErr
+		}
+	}
+	return client.uploadPackPlan(ctx, &plan, m.pauser)
+}
+
+func planRemotePacks(files []FileRef, missing map[string]struct{}) (remotePackPlan, error) {
+	var plan remotePackPlan
 	if len(missing) == 0 {
-		return result, nil
+		return plan, nil
 	}
 	candidates := make([]FileRef, 0, len(files))
 	for _, file := range files {
@@ -1237,8 +1619,6 @@ func (c *remoteClient) uploadMissing(
 		}
 		// Empty files are never packed: a zero-length range cannot live in
 		// a pack, and the server treats the empty object as always-present.
-		// (A current server never reports it missing; this also covers one
-		// that predates that rule.)
 		if file.Size == 0 || file.SHA256 == remoteEmptyContentSHA256 {
 			continue
 		}
@@ -1262,23 +1642,18 @@ func (c *remoteClient) uploadMissing(
 		if len(current) == 0 {
 			return nil
 		}
-		if waitErr := pauser.Wait(ctx); waitErr != nil {
-			return fmt.Errorf("uploading remote backup pack: %w", waitErr)
+		size, err := remotePackEncodedSize(current)
+		if err != nil {
+			return err
 		}
-		body, packHash, buildErr := buildRemotePack(ctx, current, pauser)
-		if buildErr != nil {
-			return buildErr
+		if size > remoteMaxPackBytes {
+			return fmt.Errorf("remote backup pack exceeds maximum size: %d bytes", size)
 		}
-		if len(body) > remoteMaxPackBytes {
-			return fmt.Errorf("remote backup pack exceeds maximum size: %d bytes", len(body))
+		if size > math.MaxInt64-plan.uploadBytes {
+			return errors.New("remote backup upload size overflow")
 		}
-		var resp remotePackResponse
-		uploadPath := "/v1/device/backup-packs/" + packHash
-		if uploadErr := c.doBytes(ctx, http.MethodPut, uploadPath, body, &resp); uploadErr != nil {
-			return uploadErr
-		}
-		result.packs++
-		result.bytesUploaded += int64(len(body))
+		plan.packs = append(plan.packs, plannedRemotePack{files: current, size: size})
+		plan.uploadBytes += size
 		current = nil
 		currentBytes = 0
 		return nil
@@ -1287,68 +1662,111 @@ func (c *remoteClient) uploadMissing(
 	for i := range unique {
 		file := &unique[i]
 		if remoteSingleFilePackExceedsMax(file) {
-			// There is no way to store a file that cannot fit inside one
-			// pack: skip it and let the caller drop it from the manifest.
 			log.Warn().Str("path", file.RestorePath).Int64("size", file.Size).
 				Msg("skipping file too large for remote backup")
-			result.skipped = append(result.skipped, *file)
+			plan.skipped = append(plan.skipped, *file)
 			continue
 		}
 		categoryChanged := len(current) > 0 && current[0].Category != file.Category
 		packFull := len(current) > 0 && currentBytes+file.Size > remotePackTargetBytes
 		if categoryChanged || packFull {
 			if err := flush(); err != nil {
-				return result, err
+				return plan, err
 			}
 		}
 		current = append(current, *file)
 		currentBytes += file.Size
 	}
 	if err := flush(); err != nil {
-		return result, err
+		return plan, err
 	}
-	result.skipped = expandSkippedFiles(files, result.skipped)
+	plan.skipped = expandSkippedFiles(files, plan.skipped)
+	return plan, nil
+}
+
+func (c *remoteClient) uploadPackPlan(
+	ctx context.Context,
+	plan *remotePackPlan,
+	pauser *syncutil.Pauser,
+) (uploadResult, error) {
+	result := uploadResult{skipped: plan.skipped}
+	for i := range plan.packs {
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			return result, fmt.Errorf("uploading remote backup pack: %w", waitErr)
+		}
+		pack := &plan.packs[i]
+		body, packHash, buildErr := buildRemotePack(ctx, pack.files, pauser)
+		if buildErr != nil {
+			return result, buildErr
+		}
+		if int64(len(body)) != pack.size {
+			return result, errors.New("remote backup pack size changed after planning")
+		}
+		var resp remotePackResponse
+		uploadPath := "/v1/device/backup-packs/" + packHash
+		// PUT-by-content-hash is idempotent, so a rate-limited upload is
+		// safe to wait out and retry.
+		if uploadErr := c.retryRateLimited(ctx, func() error {
+			resp = remotePackResponse{}
+			return c.doBytes(ctx, http.MethodPut, uploadPath, body, &resp)
+		}); uploadErr != nil {
+			return result, uploadErr
+		}
+		result.packs++
+		result.bytesUploaded += int64(len(body))
+	}
 	return result, nil
 }
 
-func (c *remoteClient) downloadObject(
+func (c *remoteClient) uploadMissing(
 	ctx context.Context,
-	hash string,
-	wantSize int64,
-	destination string,
-) error {
-	ctx, cancel := context.WithTimeout(ctx, remoteTransferTimeout(wantSize))
-	defer cancel()
-	downloadPath := "/v1/device/backup-objects/" + hash
-	return c.doRaw(ctx, http.MethodGet, downloadPath, nil, "", func(resp *http.Response) (err error) {
-		// #nosec G304 -- destination is a validated hash inside a private staging directory.
-		out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("creating remote restore staging file: %w", err)
-		}
-		defer func() {
-			if closeErr := out.Close(); closeErr != nil {
-				err = errors.Join(err, fmt.Errorf("closing remote restore staging file: %w", closeErr))
-			}
-		}()
+	files []FileRef,
+	missing map[string]struct{},
+	pauser *syncutil.Pauser,
+) (uploadResult, error) {
+	plan, err := planRemotePacks(files, missing)
+	if err != nil {
+		return uploadResult{}, err
+	}
+	return c.uploadPackPlan(ctx, &plan, pauser)
+}
 
-		hasher := sha256.New()
-		limited := &io.LimitedReader{R: resp.Body, N: wantSize + 1}
-		written, copyErr := io.Copy(io.MultiWriter(out, hasher), limited)
-		if copyErr != nil {
-			return fmt.Errorf("reading remote backup object: %w", copyErr)
+func (*remoteRateLimitedError) Error() string { return errRemoteRateLimited.Error() }
+
+func (*remoteRateLimitedError) Is(target error) bool { return errors.Is(errRemoteRateLimited, target) }
+
+var defaultRateLimitWaits = rateLimitWaits{
+	minWait:     remoteRateLimitMinWait,
+	defaultWait: remoteRateLimitDefaultWait,
+	maxWait:     remoteRateLimitMaxWait,
+}
+
+// retryRateLimited runs op, waiting out and retrying rate-limited (429)
+// responses instead of failing the operation. The wait honors the server's
+// Retry-After when sent, clamped to the client's wait bounds; other errors
+// and context cancellation return immediately.
+func (c *remoteClient) retryRateLimited(ctx context.Context, op func() error) error {
+	for attempt := 1; ; attempt++ {
+		err := op()
+		var rateLimited *remoteRateLimitedError
+		if err == nil || !errors.As(err, &rateLimited) || attempt >= remoteRateLimitMaxAttempts {
+			return err
 		}
-		if written != wantSize {
-			return fmt.Errorf("remote backup object size mismatch: %s", hash)
+		wait := rateLimited.retryAfter
+		if wait <= 0 {
+			wait = c.retryWaits.defaultWait
 		}
-		if hex.EncodeToString(hasher.Sum(nil)) != hash {
-			return fmt.Errorf("remote backup object hash mismatch: %s", hash)
+		wait = min(max(wait, c.retryWaits.minWait), c.retryWaits.maxWait)
+		log.Info().Dur("wait", wait).Int("attempt", attempt).
+			Msg("remote backup server rate limited request, waiting to retry")
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("waiting out remote backup rate limit: %w", ctx.Err())
+		case <-timer.C:
 		}
-		if syncErr := out.Sync(); syncErr != nil {
-			return fmt.Errorf("syncing remote restore staging file: %w", syncErr)
-		}
-		return nil
-	})
+	}
 }
 
 func (c *remoteClient) doJSON(ctx context.Context, method, path string, body, out any) error {
@@ -1480,6 +1898,12 @@ func remoteStatusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
 	var apiErr remoteAPIError
 	_ = json.Unmarshal(body, &apiErr)
+	// Route-level 429s carry a plain-text body with a Retry-After header;
+	// handler-level ones carry the JSON rate_limited code. Both surface as
+	// a typed error so callers can wait the request out and retry.
+	if resp.StatusCode == http.StatusTooManyRequests || apiErr.Error.Code == "rate_limited" {
+		return &remoteRateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+	}
 	switch apiErr.Error.Code {
 	case "not_available":
 		return errRemoteNotAvailable
@@ -1487,8 +1911,6 @@ func remoteStatusError(resp *http.Response) error {
 		return errRemoteQuotaExceeded
 	case "payload_too_large":
 		return errors.New("remote backup payload too large")
-	case "rate_limited":
-		return errRemoteRateLimited
 	case "missing_objects":
 		return errRemoteMissingObjects
 	case "backup_too_large":
@@ -1511,6 +1933,16 @@ func remoteStatusError(resp *http.Response) error {
 		msg = resp.Status
 	}
 	return fmt.Errorf("remote backup server returned status %d: %s", resp.StatusCode, msg)
+}
+
+// parseRetryAfter reads a Retry-After header's delay-seconds form; absent
+// or malformed values yield zero and the caller applies its default wait.
+func parseRetryAfter(raw string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || seconds < 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func hashRemoteFiles(ctx context.Context, files []FileRef, pauser *syncutil.Pauser) ([]FileRef, error) {
@@ -1593,12 +2025,32 @@ func remoteCategoryRank(category string) int {
 }
 
 func remoteSingleFilePackExceedsMax(file *FileRef) bool {
-	footer := []packFooterEntry{{Hash: file.SHA256, Offset: 0, Length: file.Size}}
+	size, err := remotePackEncodedSize([]FileRef{*file})
+	return err != nil || size > remoteMaxPackBytes
+}
+
+func remotePackEncodedSize(files []FileRef) (int64, error) {
+	footer := make([]packFooterEntry, 0, len(files))
+	var payloadBytes int64
+	for i := range files {
+		file := &files[i]
+		if file.Size < 0 || file.Size > math.MaxInt64-payloadBytes {
+			return 0, errors.New("remote backup pack size overflow")
+		}
+		footer = append(footer, packFooterEntry{
+			Hash: file.SHA256, Offset: payloadBytes, Length: file.Size,
+		})
+		payloadBytes += file.Size
+	}
 	footerData, err := json.Marshal(footer)
 	if err != nil {
-		return true
+		return 0, fmt.Errorf("encoding remote backup pack footer: %w", err)
 	}
-	return file.Size+int64(len(footerData))+remotePackFooterTrailerSize > remoteMaxPackBytes
+	overhead := int64(len(footerData)) + remotePackFooterTrailerSize
+	if overhead > math.MaxInt64-payloadBytes {
+		return 0, errors.New("remote backup pack size overflow")
+	}
+	return payloadBytes + overhead, nil
 }
 
 func buildRemotePack(
@@ -1742,6 +2194,7 @@ func remoteBackupToInfo(resp *remoteBackupResponse) RemoteBackupInfo {
 		Categories:    resp.Categories,
 		Manifest:      resp.Manifest,
 		CreatedAt:     resp.CreatedAt,
+		VerifiedAt:    resp.VerifiedAt,
 		RestoredAt:    resp.RestoredAt,
 	}
 	if resp.SourceDevice != nil {
@@ -1765,7 +2218,14 @@ func validateCommittedRemoteBackup(
 	if err != nil {
 		return err
 	}
-	if resp.ID == "" || resp.BackupType != expectedType || resp.SchemaVersion != remoteSchemaVersion {
+	if resp.ID == "" || resp.SchemaVersion != remoteSchemaVersion {
+		return errors.New("remote backup commit response metadata mismatch")
+	}
+	// A deduplicated commit returns the existing snapshot, which may have
+	// been created by a run of a different type (e.g. a manual run whose
+	// content matches the scheduled snapshot). Manifest equality is what
+	// matters; only fresh commits must echo the requested type.
+	if !resp.Deduplicated && resp.BackupType != expectedType {
 		return errors.New("remote backup commit response metadata mismatch")
 	}
 	actualFiles := remoteManifestFiles(manifest)

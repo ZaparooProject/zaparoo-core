@@ -32,6 +32,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -91,7 +92,6 @@ type restoreJournal struct {
 	CreatedDirs       []restoreJournalDir      `json:"createdDirs,omitempty"`
 	Version           int                      `json:"version"`
 	Sequence          int                      `json:"sequence"`
-	MaxLogicalSize    int64                    `json:"maxLogicalSize"`
 	UserDBRestoreUsed bool                     `json:"userDbRestoreUsed,omitempty"`
 	UserDBStarted     bool                     `json:"userDbStarted,omitempty"`
 }
@@ -179,7 +179,36 @@ func (m *Manager) RecoverRestore(ctx context.Context) error {
 		return err
 	}
 	defer lease.Release()
-	return m.recoverRestoreLocked(lease.Context())
+	if recoveryErr := m.recoverRestoreLocked(lease.Context()); recoveryErr != nil {
+		return recoveryErr
+	}
+	return m.cleanupStaleRestoreStaging()
+}
+
+func (m *Manager) cleanupStaleRestoreStaging() error {
+	entries, err := os.ReadDir(m.backupDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("listing stale restore staging directories: %w", err)
+	}
+	var cleanupErr error
+	for _, entry := range entries {
+		if !entry.IsDir() ||
+			(!strings.HasPrefix(entry.Name(), localRestoreStagingPrefix) &&
+				!strings.HasPrefix(entry.Name(), remoteRestoreStagingPrefix)) {
+			continue
+		}
+		stalePath := filepath.Join(m.backupDir(), entry.Name())
+		if removeErr := os.RemoveAll(stalePath); removeErr != nil {
+			cleanupErr = errors.Join(
+				cleanupErr,
+				fmt.Errorf("removing stale restore staging directory %s: %w", entry.Name(), removeErr),
+			)
+		}
+	}
+	return cleanupErr
 }
 
 func (m *Manager) recoverRestoreLocked(ctx context.Context) error {
@@ -292,10 +321,9 @@ func (m *Manager) prepareRestoreJournal(
 		return restoreJournal{}, err
 	}
 	journal = restoreJournal{
-		Version:        restoreJournalVersion,
-		OperationID:    operationID,
-		Phase:          restorePhasePrepared,
-		MaxLogicalSize: m.cfg.BackupMaxSizeBytes(),
+		Version:     restoreJournalVersion,
+		OperationID: operationID,
+		Phase:       restorePhasePrepared,
 	}
 
 	if hasUserDBRestore(manifest.Files) {
@@ -357,13 +385,13 @@ func (m *Manager) prepareRestoreJournal(
 		if entryErr := inspectRollbackEntry(&entry, len(journal.Entries)); entryErr != nil {
 			return restoreJournal{}, entryErr
 		}
-		if entry.RollbackSize > m.cfg.BackupMaxSizeBytes()-rollbackBytes {
-			return restoreJournal{}, errors.New("restore rollback exceeds backup size limit")
+		if entry.RollbackSize < 0 || entry.RollbackSize > math.MaxInt64-rollbackBytes {
+			return restoreJournal{}, errors.New("restore rollback size overflow")
 		}
 		rollbackBytes += entry.RollbackSize
 		journal.Entries = append(journal.Entries, entry)
-		if file.Size > m.cfg.BackupMaxSizeBytes()-targetBytes[target.root] {
-			return restoreJournal{}, errors.New("restore target data exceeds backup size limit")
+		if file.Size > math.MaxInt64-targetBytes[target.root] {
+			return restoreJournal{}, errors.New("restore target data size overflow")
 		}
 		targetBytes[target.root] += file.Size
 
@@ -835,12 +863,22 @@ func installPayloadAtTarget(
 	}
 	defer func() { _ = root.Remove(tmpRel) }()
 	hash := sha256.New()
-	limited := &io.LimitedReader{R: &contextReader{ctx: ctx, reader: payload}, N: file.Size + 1}
+	reader := &contextReader{ctx: ctx, reader: payload}
+	limited := &io.LimitedReader{R: reader, N: file.Size}
 	written, copyErr := io.Copy(io.MultiWriter(tmp, hash), limited)
+	var extra [1]byte
+	var extraSize int
+	var extraErr error
+	if copyErr == nil && written == file.Size {
+		extraSize, extraErr = reader.Read(extra[:])
+	}
 	syncErr := tmp.Sync()
 	closeErr := tmp.Close()
 	if copyErr != nil {
 		return fmt.Errorf("staging restore payload %s: %w", file.RestorePath, copyErr)
+	}
+	if extraErr != nil && !errors.Is(extraErr, io.EOF) {
+		return fmt.Errorf("checking restore payload size %s: %w", file.RestorePath, extraErr)
 	}
 	if syncErr != nil {
 		return fmt.Errorf("syncing restore payload %s: %w", file.RestorePath, syncErr)
@@ -848,7 +886,7 @@ func installPayloadAtTarget(
 	if closeErr != nil {
 		return fmt.Errorf("closing restore payload %s: %w", file.RestorePath, closeErr)
 	}
-	if written != file.Size {
+	if written != file.Size || extraSize != 0 {
 		return fmt.Errorf("restore payload size mismatch: %s", file.RestorePath)
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != file.SHA256 {
@@ -1592,15 +1630,12 @@ func (m *Manager) validateRestoreJournal(journal *restoreJournal) error {
 	if err != nil || len(operationID) != 12 {
 		return errors.New("restore journal has invalid operation ID")
 	}
-	if journal.MaxLogicalSize <= 0 || journal.MaxLogicalSize == math.MaxInt64 {
-		return errors.New("restore journal has invalid logical size limit")
-	}
 	if len(journal.Entries) > maxArchiveEntries-1 {
 		return errors.New("restore journal has too many entries")
 	}
 	files := make([]FileRef, 0, len(journal.Entries)+1)
 	entryTargets := make(map[string][]string, len(journal.Entries))
-	var total int64
+	var total, rollbackTotal int64
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		if entry.State != restoreEntryPending && entry.State != restoreEntryStarted &&
@@ -1614,9 +1649,8 @@ func (m *Manager) validateRestoreJournal(journal *restoreJournal) error {
 			return errors.New("committed restore journal contains incomplete entry")
 		}
 		files = append(files, entry.File)
-		if journal.MaxLogicalSize <= 0 || entry.File.Size < 0 ||
-			entry.File.Size > journal.MaxLogicalSize-total {
-			return errors.New("restore journal exceeds backup size limit")
+		if entry.File.Size < 0 || entry.File.Size > math.MaxInt64-total {
+			return errors.New("restore journal payload size overflow")
 		}
 		total += entry.File.Size
 		hash, err := hex.DecodeString(entry.File.SHA256)
@@ -1627,9 +1661,11 @@ func (m *Manager) validateRestoreJournal(journal *restoreJournal) error {
 			expectedRollback := filepath.Join(restoreRollbackDir, fmt.Sprintf("%06d", i))
 			rollbackHash, hashErr := hex.DecodeString(entry.RollbackSHA256)
 			if entry.RollbackPath != expectedRollback || entry.RollbackSize < 0 ||
+				entry.RollbackSize > math.MaxInt64-rollbackTotal ||
 				hashErr != nil || len(rollbackHash) != sha256.Size {
 				return errors.New("restore journal has invalid rollback metadata")
 			}
+			rollbackTotal += entry.RollbackSize
 		} else if entry.RollbackPath != "" || entry.RollbackSHA256 != "" || entry.RollbackSize != 0 {
 			return errors.New("restore journal has rollback metadata for a new file")
 		}
@@ -1646,7 +1682,7 @@ func (m *Manager) validateRestoreJournal(journal *restoreJournal) error {
 		artifactHash, artifactHashErr := hex.DecodeString(artifact.SHA256)
 		if journal.UserDBFile == nil ||
 			artifact.Path != filepath.Join(restoreRollbackDir, restoreUserDBRollbackName) ||
-			artifact.Size < 0 || artifact.Size > journal.MaxLogicalSize ||
+			artifact.Size < 0 || artifact.Size > math.MaxInt64-rollbackTotal ||
 			artifactHashErr != nil || len(artifactHash) != sha256.Size {
 			return errors.New("restore journal has invalid user database rollback metadata")
 		}
@@ -1658,7 +1694,7 @@ func (m *Manager) validateRestoreJournal(journal *restoreJournal) error {
 		hash, hashErr := hex.DecodeString(journal.UserDBFile.SHA256)
 		if journal.UserDBFile.Category != CategoryZaparoo ||
 			journal.UserDBFile.RestorePath != "user.db" || journal.UserDBFile.Size < 0 ||
-			journal.UserDBFile.Size > journal.MaxLogicalSize-total ||
+			journal.UserDBFile.Size > math.MaxInt64-total ||
 			hashErr != nil || len(hash) != sha256.Size {
 			return errors.New("restore journal has invalid user database payload metadata")
 		}
@@ -1706,7 +1742,8 @@ func syncDirectory(path string) error {
 	}
 	syncErr := dir.Sync()
 	closeErr := dir.Close()
-	if syncErr != nil {
+	// Windows does not support flushing directory handles through os.File.Sync.
+	if syncErr != nil && (runtime.GOOS != "windows" || !errors.Is(syncErr, os.ErrPermission)) {
 		return fmt.Errorf("syncing directory: %w", syncErr)
 	}
 	if closeErr != nil {
