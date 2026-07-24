@@ -359,6 +359,14 @@ func (m *MockUserDBI) UpdateMediaHistoryTime(dbid int64, playTime int) error {
 	return nil
 }
 
+func (m *MockUserDBI) UpdateMediaHistoryTags(dbid int64, tags []string) error {
+	args := m.Called(dbid, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update media history tags failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
 	args := m.Called(dbid, endTime, playTime)
 	if err := args.Error(0); err != nil {

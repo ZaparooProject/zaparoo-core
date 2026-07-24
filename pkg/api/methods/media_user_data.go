@@ -58,7 +58,7 @@ func setMediaUserLauncherOverride(env *requests.RequestEnv, systemID, path, laun
 // identified when the user marked it. Failures are logged, never surfaced:
 // user intent was already recorded.
 func snapshotMediaUserIdentity(env *requests.RequestEnv, systemID, path string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(env.Context, 2*time.Second)
 	defer cancel()
 	identity, found := database.LookupMediaIdentity(ctx, env.Database.MediaDB, systemID, path)
 	if !found {

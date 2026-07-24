@@ -47,6 +47,29 @@ func favouriteRow(path string) database.MediaFullRow {
 	}
 }
 
+func TestSnapshotMediaUserIdentityUsesRequestContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	path := filepath.Join("roms", "NES", "Game.nes")
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On(
+		"SearchMediaPathExact",
+		mock.MatchedBy(func(got context.Context) bool { return errors.Is(got.Err(), context.Canceled) }),
+		mock.Anything,
+		path,
+	).Return([]database.SearchResult(nil), context.Canceled).Once()
+	env := requests.RequestEnv{
+		Context:  ctx,
+		Database: &database.Database{MediaDB: mockDB},
+	}
+
+	snapshotMediaUserIdentity(&env, "NES", path)
+
+	mockDB.AssertExpectations(t)
+}
+
 // TestMediaTagsUpdate_PersistsUserDBTruthWhenProjectionFails proves the truth-first
 // ordering: the UserDB favourite is saved even though the media.db projection write
 // then fails, so the next reindex can re-materialize it.

@@ -98,6 +98,78 @@ func TestMediaHistoryTracker_Listen_Started(t *testing.T) {
 	assert.Equal(t, startTime, tracker.currentMediaStartTime)
 }
 
+func TestMediaHistoryTracker_Listen_StartedResolvesTagsAsynchronously(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	tracker := &mediaHistoryTracker{
+		st:    st,
+		db:    &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		clock: clockwork.NewFakeClock(),
+	}
+	activeMedia := &models.ActiveMedia{
+		Started: tracker.clock.Now(), SystemID: "NES", SystemName: "Nintendo Entertainment System",
+		Path: filepath.Join("roms", "NES", "Game.nes"), Name: "Game", LauncherID: "NES",
+	}
+	st.SetActiveMedia(activeMedia)
+
+	lookupStarted := make(chan struct{})
+	releaseLookup := make(chan struct{})
+	tagsUpdated := make(chan struct{})
+	mockUserDB.On("AddMediaHistory", mock.MatchedBy(func(entry *database.MediaHistoryEntry) bool {
+		return entry.SystemID == "NES" && entry.MediaPath == activeMedia.Path && len(entry.Tags) == 0
+	})).Return(int64(42), nil).Once()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, activeMedia.Path).
+		Run(func(_ mock.Arguments) {
+			close(lookupStarted)
+			<-releaseLookup
+		}).
+		Return([]database.SearchResult{{MediaID: 7, Name: "Game"}}, nil).Once()
+	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(7)).
+		Return([]database.TagInfo{{Type: "region", Tag: "us"}}, nil).Once()
+	mockUserDB.On("UpdateMediaHistoryTags", int64(42), []string{"region:us"}).
+		Run(func(_ mock.Arguments) { close(tagsUpdated) }).Return(nil).Once()
+
+	notifChan := make(chan models.Notification, 1)
+	notifChan <- models.Notification{Method: models.NotificationStarted}
+	close(notifChan)
+	listenDone := make(chan struct{})
+	go func() {
+		tracker.listen(notifChan)
+		close(listenDone)
+	}()
+
+	select {
+	case <-lookupStarted:
+	case <-time.After(time.Second):
+		close(releaseLookup)
+		t.Fatal("tag lookup did not start")
+	}
+	select {
+	case <-listenDone:
+		// Notification processing must not wait for MediaDB lookup.
+	case <-time.After(time.Second):
+		close(releaseLookup)
+		<-listenDone
+		t.Fatal("notification processing blocked on tag lookup")
+	}
+
+	// Mutating current state cannot retarget the already captured launch identity.
+	activeMedia.SystemID = "SNES"
+	activeMedia.Path = filepath.Join("roms", "SNES", "Other.sfc")
+	close(releaseLookup)
+	select {
+	case <-tagsUpdated:
+	case <-time.After(time.Second):
+		t.Fatal("resolved tags were not persisted")
+	}
+	mockUserDB.AssertExpectations(t)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestMediaHistoryTracker_Listen_Started_NoActiveMedia(t *testing.T) {
 	t.Parallel()
 

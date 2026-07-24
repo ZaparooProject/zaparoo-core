@@ -107,7 +107,8 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		return db, err
 	}
 
-	backfillMediaHistoryUUIDs(userDB)
+	// Best-effort, idempotent backfill must not delay database initialization.
+	go backfillMediaHistoryUUIDs(userDB)
 
 	// migrate old boltdb mappings if required
 	log.Debug().Msg("checking for boltdb migration")
