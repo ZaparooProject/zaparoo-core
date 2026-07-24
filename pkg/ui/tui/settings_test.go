@@ -415,7 +415,20 @@ func TestBuildAdvancedSettingsMenu_ReloadCore_Integration(t *testing.T) {
 	pages := tview.NewPages()
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetSettings(defaultTestSettings())
-	mockSvc.SetupReloadCore(nil)
+	reloadStarted := make(chan struct{})
+	releaseReload := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(releaseReload)
+		}
+	}()
+	mockSvc.On("ReloadCore", mock.Anything).
+		Run(func(_ mock.Arguments) {
+			close(reloadStarted)
+			<-releaseReload
+		}).
+		Return(nil)
 
 	runner.Start(pages)
 	runner.Draw()
@@ -425,7 +438,33 @@ func TestBuildAdvancedSettingsMenu_ReloadCore_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Reload Core", 100*time.Millisecond))
 
 	runner.SimulateArrowDown()
-	runner.SimulateEnter()
+	enterDone := make(chan struct{})
+	go func() {
+		runner.SimulateEnter()
+		close(enterDone)
+	}()
+
+	select {
+	case <-reloadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reload did not start")
+	}
+	uiResponsive := make(chan struct{})
+	go func() {
+		runner.QueueUpdateDraw(func() { close(uiResponsive) })
+	}()
+	select {
+	case <-uiResponsive:
+	case <-time.After(time.Second):
+		t.Fatal("reload blocked TUI event loop")
+	}
+	close(releaseReload)
+	released = true
+	select {
+	case <-enterDone:
+	case <-time.After(time.Second):
+		t.Fatal("reload action did not return")
+	}
 
 	require.True(t, runner.WaitForText("Core reloaded", 100*time.Millisecond))
 	mockSvc.AssertCalled(t, "ReloadCore", mock.Anything)
