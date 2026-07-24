@@ -1497,15 +1497,22 @@ func sqlRandomGameWithQueryAndStats(
 	// Use shared helper to build WHERE clause and arguments
 	whereClause, args := buildMediaQueryWhereClause(query)
 
+	// Path-prefix and tag filters reference Media directly. Avoid joining every
+	// matching row to metadata tables unless those tables supply a filter.
+	statsFrom := "FROM Media"
+	if len(query.Systems) > 0 || query.PathGlob != "" {
+		statsFrom = `FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID`
+	}
+
 	// Step 1: Get count, min DBID, and max DBID for this query
-	//nolint:gosec // whereClause is built from safe conditions, no user input
+	//nolint:gosec // clauses are selected internally; whereClause contains placeholders
 	statsQuery := fmt.Sprintf(`
 		SELECT COUNT(*), COALESCE(MIN(Media.DBID), 0), COALESCE(MAX(Media.DBID), 0)
-		FROM Media
-		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		%s
-	`, whereClause)
+		%s
+	`, statsFrom, whereClause)
 
 	err := db.QueryRowContext(ctx, statsQuery, args...).Scan(&stats.Count, &stats.MinDBID, &stats.MaxDBID)
 	if err != nil {

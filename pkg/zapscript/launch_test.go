@@ -1878,6 +1878,73 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdRandom_AbsolutePathTimeoutFallsBackToFilesystem(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	romPath := filepath.Join(dir, "game.mra")
+	require.NoError(t, os.WriteFile(romPath, []byte("x"), 0o600))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{}, context.DeadlineExceeded)
+	mockPlatform.On(
+		"LaunchMedia", cfg, romPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathTimeoutWithTagsDoesNotFallback(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{}, context.DeadlineExceeded)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				string(zapscript.KeyTags): "genre:shmup",
+			}),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	t.Parallel()
 

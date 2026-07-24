@@ -390,8 +390,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
-		if errors.Is(searchErr, sql.ErrNoRows) {
-			// Fallback: pick random file directly from disk for unindexed paths
+		fallbackToFilesystem := errors.Is(searchErr, sql.ErrNoRows) ||
+			(len(tagFilters) == 0 && errors.Is(searchErr, context.DeadlineExceeded))
+		if fallbackToFilesystem {
+			// Slow indexed lookups should not block direct directory launches.
 			entries, readErr := os.ReadDir(cleanedPath)
 			if readErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to read path '%s': %w", cleanedPath, readErr)
