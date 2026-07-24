@@ -39,6 +39,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type recordingProcessFocuser struct {
+	pids chan uint32
+}
+
+func (f *recordingProcessFocuser) Focus(_ context.Context, pid uint32) error {
+	f.pids <- pid
+	return nil
+}
+
+var (
+	_ platforms.TrackedProcessWaiter       = (*Platform)(nil)
+	_ platforms.TrackedProcessMediaClearer = (*Platform)(nil)
+)
+
 func TestWindowsHasKodiLocalLauncher(t *testing.T) {
 	t.Parallel()
 
@@ -137,6 +151,83 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			assert.Equal(t, tt.customKillCalled, killCalled, "custom Kill called mismatch")
 		})
 	}
+}
+
+func TestSetTrackedProcess_FocusesLaunchedProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+
+	focuser := &recordingProcessFocuser{pids: make(chan uint32, 1)}
+	p := &Platform{
+		setActiveMedia: func(_ *models.ActiveMedia) {},
+		windowFocuser:  focuser,
+	}
+	p.SetTrackedProcess(cmd.Process)
+
+	select {
+	case pid := <-focuser.pids:
+		assert.Equal(t, uint32(cmd.Process.Pid), pid) //nolint:gosec // Windows process IDs are 32-bit values
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for process focus request")
+	}
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForPreemption))
+}
+
+func TestWaitTrackedProcess_ClearsCompletedProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.CommandContext(context.Background(), "cmd", "/C", "exit", "0")
+	require.NoError(t, cmd.Start())
+
+	mediaCleared := false
+	p := &Platform{setActiveMedia: func(media *models.ActiveMedia) {
+		if media == nil {
+			mediaCleared = true
+		}
+	}}
+	p.SetTrackedProcess(cmd.Process)
+
+	require.NoError(t, p.WaitTrackedProcess(cmd.Process))
+	p.processMu.RLock()
+	assert.Nil(t, p.trackedProcess)
+	assert.Same(t, cmd.Process, p.completedTrackedProcess)
+	p.processMu.RUnlock()
+
+	assert.True(t, p.ClearTrackedProcessMedia(cmd.Process))
+	assert.True(t, mediaCleared)
+	assert.False(t, p.ClearTrackedProcessMedia(cmd.Process))
+}
+
+func TestClearTrackedProcessMedia_DoesNotClearReplacement(t *testing.T) {
+	t.Parallel()
+
+	oldCmd := exec.CommandContext(context.Background(), "cmd", "/C", "exit", "0")
+	require.NoError(t, oldCmd.Start())
+	newCmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+	require.NoError(t, newCmd.Start())
+	t.Cleanup(func() {
+		_ = newCmd.Process.Kill()
+		_, _ = newCmd.Process.Wait()
+	})
+
+	mediaCleared := false
+	p := &Platform{setActiveMedia: func(_ *models.ActiveMedia) {
+		mediaCleared = true
+	}}
+	p.SetTrackedProcess(oldCmd.Process)
+	require.NoError(t, p.WaitTrackedProcess(oldCmd.Process))
+	p.SetTrackedProcess(newCmd.Process)
+
+	assert.False(t, p.ClearTrackedProcessMedia(oldCmd.Process))
+	assert.False(t, mediaCleared)
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForPreemption))
 }
 
 func TestLaunchMedia_RetroBatStopsRunningGameBeforeLaunch(t *testing.T) {

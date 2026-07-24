@@ -50,6 +50,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows/windowfocus"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -65,19 +66,28 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type processWindowFocuser interface {
+	Focus(context.Context, uint32) error
+}
+
 type Platform struct {
 	activeMedia             func() *models.ActiveMedia
 	setActiveMedia          func(*models.ActiveMedia)
 	customPlatformToSystem  map[string]string
 	systemToCustomPlatforms map[string][]string
 	trackedProcess          *os.Process
+	completedTrackedProcess *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
+	launcherManager         platforms.LauncherContextManager
+	windowFocuser           processWindowFocuser
 	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
 	platformMappingsMu      syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
 }
+
+const windowsErrorInvalidParameter syscall.Errno = 87
 
 var retroBatLaunchSettleDelay = 2 * time.Second
 
@@ -119,7 +129,7 @@ func (*Platform) StartPre(_ *config.Instance) error {
 func (p *Platform) StartPost(
 	_ context.Context,
 	cfg *config.Instance,
-	_ platforms.LauncherContextManager,
+	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
@@ -127,6 +137,8 @@ func (p *Platform) StartPost(
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
+	p.launcherManager = launcherManager
+	p.windowFocuser = windowfocus.New()
 
 	// Initialize LaunchBox pipe server if LaunchBox is installed
 	p.initLaunchBoxPipe(cfg)
@@ -145,6 +157,10 @@ func (p *Platform) StartPost(
 }
 
 func (p *Platform) Stop() error {
+	if p.launcherManager != nil {
+		p.launcherManager.NewContext()
+	}
+
 	// Stop Steam tracker
 	if p.steamTracker != nil {
 		p.steamTracker.Stop()
@@ -181,17 +197,77 @@ func (*Platform) Settings() platforms.Settings {
 
 func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
-	defer p.processMu.Unlock()
+	if p.trackedProcess != nil && proc != nil && p.trackedProcess.Pid == proc.Pid {
+		p.processMu.Unlock()
+		return
+	}
 
-	// Kill any existing tracked process before setting new one
 	if p.trackedProcess != nil {
-		if err := p.trackedProcess.Kill(); err != nil {
+		if err := p.trackedProcess.Kill(); err != nil && !isProcessFinishedError(err) {
 			log.Warn().Err(err).Msg("failed to kill previous tracked process")
 		}
 	}
 
 	p.trackedProcess = proc
+	p.completedTrackedProcess = nil
+	focuser := p.windowFocuser
+	launcherManager := p.launcherManager
+	p.processMu.Unlock()
+
 	log.Debug().Msgf("set tracked process: %v", proc)
+	if proc == nil || focuser == nil {
+		return
+	}
+
+	focusCtx := context.Background()
+	if launcherManager != nil {
+		if ctx := launcherManager.GetContext(); ctx != nil {
+			focusCtx = ctx
+		}
+	}
+	pid := uint32(proc.Pid) //nolint:gosec // Windows process IDs are 32-bit values
+	go func() {
+		if err := focuser.Focus(focusCtx, pid); err != nil && !errors.Is(err, context.Canceled) {
+			log.Debug().Err(err).Int("pid", proc.Pid).Msg("launched process window was not focused")
+		}
+	}()
+}
+
+func isProcessFinishedError(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, windowsErrorInvalidParameter)
+}
+
+// WaitTrackedProcess waits for proc and removes its stale process handle when it exits.
+func (p *Platform) WaitTrackedProcess(proc *os.Process) error {
+	_, err := proc.Wait()
+
+	p.processMu.Lock()
+	if p.trackedProcess == proc {
+		p.trackedProcess = nil
+		p.completedTrackedProcess = proc
+	}
+	p.processMu.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("wait for tracked process: %w", err)
+	}
+	return nil
+}
+
+// ClearTrackedProcessMedia clears active media only when proc is still the latest completed launch.
+func (p *Platform) ClearTrackedProcessMedia(proc *os.Process) bool {
+	p.processMu.Lock()
+	if p.completedTrackedProcess != proc || p.trackedProcess != nil {
+		p.processMu.Unlock()
+		return false
+	}
+	p.completedTrackedProcess = nil
+	p.processMu.Unlock()
+
+	if p.setActiveMedia != nil {
+		p.setActiveMedia(nil)
+	}
+	return true
 }
 
 func (p *Platform) setLastLauncher(l *platforms.Launcher) {
@@ -201,10 +277,15 @@ func (p *Platform) setLastLauncher(l *platforms.Launcher) {
 }
 
 func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+	if p.launcherManager != nil {
+		p.launcherManager.NewContext()
+	}
+
 	p.processMu.Lock()
 
 	customKill := p.lastLauncher.Kill
 	p.lastLauncher = platforms.Launcher{}
+	p.completedTrackedProcess = nil
 
 	if customKill != nil {
 		p.trackedProcess = nil
@@ -216,7 +297,7 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	} else {
 		// Kill tracked process if exists
 		if p.trackedProcess != nil {
-			if err := p.trackedProcess.Kill(); err != nil {
+			if err := p.trackedProcess.Kill(); err != nil && !isProcessFinishedError(err) {
 				log.Warn().Err(err).Msg("failed to kill tracked process")
 			}
 			p.trackedProcess = nil
@@ -225,7 +306,9 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 		p.processMu.Unlock()
 	}
 
-	p.setActiveMedia(nil)
+	if p.setActiveMedia != nil {
+		p.setActiveMedia(nil)
+	}
 	return nil
 }
 
