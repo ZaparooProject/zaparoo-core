@@ -2521,6 +2521,146 @@ func TestRemotePackPlanReportsExactUploadBytes(t *testing.T) {
 	assert.Equal(t, expected, plan.uploadBytes)
 }
 
+func TestLocateRemotePacksRejectsInvalidServerResponses(t *testing.T) {
+	t.Parallel()
+
+	requestedHash := strings.Repeat("a", 64)
+	otherHash := strings.Repeat("b", 64)
+	packHash := strings.Repeat("c", 64)
+	validRef := remotePackObjectRef{Hash: requestedHash, Offset: 0, Length: 3}
+
+	tests := []struct {
+		name     string
+		wantErr  string
+		response remoteLocateResponse
+	}{
+		{
+			name:     "reported missing",
+			response: remoteLocateResponse{Missing: []string{requestedHash}},
+			wantErr:  "no longer available",
+		},
+		{
+			name: "conflicting pack sizes",
+			response: remoteLocateResponse{Packs: []remotePackObjects{
+				{PackHash: packHash, SizeBytes: 3, Objects: []remotePackObjectRef{validRef}},
+				{PackHash: packHash, SizeBytes: 4},
+			}},
+			wantErr: "conflicting sizes",
+		},
+		{
+			name: "invalid pack size",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 0, Objects: []remotePackObjectRef{validRef},
+			}}},
+			wantErr: "invalid size",
+		},
+		{
+			name: "unrequested object",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 3,
+				Objects: []remotePackObjectRef{{Hash: otherHash, Offset: 0, Length: 3}},
+			}}},
+			wantErr: "unrequested object",
+		},
+		{
+			name: "duplicate object",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 6, Objects: []remotePackObjectRef{
+					validRef,
+					{Hash: requestedHash, Offset: 3, Length: 3},
+				},
+			}}},
+			wantErr: "located more than once",
+		},
+		{
+			name: "range outside pack",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 3,
+				Objects: []remotePackObjectRef{{Hash: requestedHash, Offset: 1, Length: 3}},
+			}}},
+			wantErr: "inconsistent pack range",
+		},
+		{
+			name: "requested object omitted",
+			response: remoteLocateResponse{Packs: []remotePackObjects{{
+				PackHash: packHash, SizeBytes: 3,
+			}}},
+			wantErr: "response is missing 1 objects",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/v1/device/backup-objects/locate", r.URL.Path)
+				writeJSON(t, w, tt.response)
+			}))
+			t.Cleanup(server.Close)
+			client := &remoteClient{httpClient: server.Client(), baseURL: server.URL}
+
+			_, err := locateRemotePacks(context.Background(), client, map[string]int64{requestedHash: 3})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDownloadPackAttemptRejectsIntegrityMismatch(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("pack-data")
+	tests := []struct {
+		name     string
+		packHash string
+		wantErr  string
+		size     int64
+	}{
+		{name: "short body", packHash: sha256Hex(body), size: int64(len(body) + 1), wantErr: "size mismatch"},
+		{name: "extra body", packHash: sha256Hex(body), size: int64(len(body) - 1), wantErr: "size mismatch"},
+		{name: "wrong hash", packHash: strings.Repeat("0", 64), size: int64(len(body)), wantErr: "hash mismatch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(body)
+			}))
+			t.Cleanup(server.Close)
+			dir := t.TempDir()
+			client := &remoteClient{httpClient: server.Client(), baseURL: server.URL}
+
+			_, err := client.downloadPackAttempt(context.Background(), &remotePackObjects{
+				PackHash: tt.packHash, SizeBytes: tt.size,
+			}, dir)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			entries, readErr := os.ReadDir(dir)
+			require.NoError(t, readErr)
+			assert.Empty(t, entries, "failed pack download must remove its staging file")
+		})
+	}
+}
+
+func TestExtractPackObjectRejectsHashMismatch(t *testing.T) {
+	t.Parallel()
+
+	packPath := filepath.Join(t.TempDir(), "pack")
+	require.NoError(t, os.WriteFile(packPath, []byte("payload"), 0o600))
+	// #nosec G304 -- packPath is created inside this test's temporary directory.
+	pack, err := os.Open(packPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pack.Close()) })
+
+	err = extractPackObject(pack, &remotePackObjectRef{
+		Hash: strings.Repeat("0", 64), Offset: 0, Length: int64(len("payload")),
+	}, filepath.Join(t.TempDir(), "object"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "staged pack object hash mismatch")
+}
+
 func TestEnsureRemoteUploadCapacity(t *testing.T) {
 	t.Parallel()
 	require.NoError(t, ensureRemoteUploadCapacity(100, 200, 100))
