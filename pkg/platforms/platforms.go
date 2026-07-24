@@ -405,6 +405,12 @@ type Scraper struct {
 	SupportedSystemIDs []string
 }
 
+// LauncherRefreshProvider is optionally implemented by platforms that cache
+// runtime launcher dependencies and can force their rediscovery.
+type LauncherRefreshProvider interface {
+	RefreshLauncherDependencies() error
+}
+
 // TrackedProcessWaiter is optionally implemented by platforms that coordinate
 // process waiting with StopActiveLauncher. Exactly one caller must reap a process.
 type TrackedProcessWaiter interface {

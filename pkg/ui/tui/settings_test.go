@@ -400,10 +400,59 @@ func TestBuildAdvancedSettingsMenu_Integration(t *testing.T) {
 
 	// Verify menu items
 	assert.True(t, runner.ContainsText("Ignore systems"), "Ignore systems should be visible")
+	assert.True(t, runner.ContainsText("Reload Core"), "Reload Core should be visible")
 	assert.True(t, runner.ContainsText("Debug logging"), "Debug logging should be visible")
 
 	// Verify count indicator (2 systems selected)
 	assert.True(t, runner.ContainsText("2 selected"), "Should show 2 systems selected")
+}
+
+func TestBuildAdvancedSettingsMenu_ReloadCore_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSettings(defaultTestSettings())
+	mockSvc.SetupReloadCore(nil)
+
+	runner.Start(pages)
+	runner.Draw()
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+	require.True(t, runner.WaitForText("Reload Core", 100*time.Millisecond))
+
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForText("Core reloaded", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "ReloadCore", mock.Anything)
+}
+
+func TestBuildAdvancedSettingsMenu_ReloadCoreError_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+	pages := tview.NewPages()
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSettings(defaultTestSettings())
+	mockSvc.SetupReloadCore(errors.New("reload failed"))
+
+	runner.Start(pages)
+	runner.Draw()
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+	require.True(t, runner.WaitForText("Reload Core", 100*time.Millisecond))
+
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
+
+	require.True(t, runner.WaitForText("Failed to reload Core", 100*time.Millisecond))
+	mockSvc.AssertCalled(t, "ReloadCore", mock.Anything)
 }
 
 func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) {
@@ -429,7 +478,8 @@ func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) 
 
 	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
 
-	// Navigate to debug logging (second item)
+	// Navigate to debug logging (third item)
+	runner.Screen().InjectArrowDown()
 	runner.Screen().InjectArrowDown()
 	runner.Draw()
 
@@ -1193,7 +1243,8 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingShowsConfirmModal_Integration(t
 
 	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
 
-	// Navigate to error reporting (third item: ignore systems, debug logging, error reporting)
+	// Navigate to error reporting (fourth item)
+	runner.SimulateArrowDown() // to reload Core
 	runner.SimulateArrowDown() // to debug logging
 	runner.SimulateArrowDown() // to error reporting
 
@@ -1229,6 +1280,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingCancelDoesNotEnable_Integration
 	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
 
 	// Navigate to error reporting
+	runner.SimulateArrowDown() // to reload Core
 	runner.SimulateArrowDown() // to debug logging
 	runner.SimulateArrowDown() // to error reporting
 
@@ -1272,6 +1324,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingConfirmEnables_Integration(t *t
 	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
 
 	// Navigate to error reporting
+	runner.SimulateArrowDown() // to reload Core
 	runner.SimulateArrowDown() // to debug logging
 	runner.SimulateArrowDown() // to error reporting
 
@@ -1316,6 +1369,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingDisableNoConfirm_Integration(t 
 	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
 
 	// Navigate to error reporting
+	runner.SimulateArrowDown() // to reload Core
 	runner.SimulateArrowDown() // to debug logging
 	runner.SimulateArrowDown() // to error reporting
 

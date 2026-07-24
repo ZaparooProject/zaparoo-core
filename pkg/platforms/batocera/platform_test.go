@@ -1200,6 +1200,22 @@ func TestRootDirs_AlwaysIncludesDefaultPath(t *testing.T) {
 	assert.Contains(t, roots, "/userdata/roms", "default ROM path must always be included")
 }
 
+func TestRefreshLauncherDependencies_InvalidatesESConfig(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{
+		esConfigCache: &ESSystemConfig{Systems: map[string]ESSystem{
+			"nes": {Name: "nes"},
+		}},
+	}
+	var refresher platforms.LauncherRefreshProvider = platform
+
+	require.NoError(t, refresher.RefreshLauncherDependencies())
+	platform.esConfigMu.RLock()
+	defer platform.esConfigMu.RUnlock()
+	assert.Nil(t, platform.esConfigCache)
+}
+
 // TestRootDirs_IncludesESDiscoveredPaths verifies that paths from ES config
 // are included alongside the default path.
 func TestRootDirs_IncludesESDiscoveredPaths(t *testing.T) {

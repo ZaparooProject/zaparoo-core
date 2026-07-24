@@ -21,6 +21,8 @@ package methods
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -34,6 +36,17 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+type refreshableMockPlatform struct {
+	*mocks.MockPlatform
+	refreshErr   error
+	refreshCalls int
+}
+
+func (p *refreshableMockPlatform) RefreshLauncherDependencies() error {
+	p.refreshCalls++
+	return p.refreshErr
+}
 
 // TestHandleLaunchersRefresh_ReloadsFromDisk tests that HandleLaunchersRefresh
 // reloads config and custom launcher files from disk before refreshing the cache.
@@ -81,6 +94,72 @@ func TestHandleLaunchersRefresh_ReloadsFromDisk(t *testing.T) {
 
 	// Verify Launchers was called (cache was refreshed)
 	mockPlatform.AssertCalled(t, "Launchers", mock.AnythingOfType("*config.Instance"))
+}
+
+func TestHandleLaunchersRefresh_ForcesPlatformDependencies(t *testing.T) {
+	t.Parallel()
+
+	memFS := helpers.NewMemoryFS()
+	dataDir := filepath.Join(string(filepath.Separator), "data")
+	configDir := filepath.Join(string(filepath.Separator), "config")
+	require.NoError(t, memFS.Fs.MkdirAll(configDir, 0o750))
+	require.NoError(t, memFS.Fs.MkdirAll(filepath.Join(dataDir, config.LaunchersDir), 0o750))
+
+	cfg, err := helpers.NewTestConfig(memFS, configDir)
+	require.NoError(t, err)
+
+	basePlatform := mocks.NewMockPlatform()
+	basePlatform.On("ID").Return("test-platform").Maybe()
+	basePlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+	basePlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{ID: "3DO", SystemID: "3DO"},
+	})
+	refreshable := &refreshableMockPlatform{MockPlatform: basePlatform}
+	cache := &corehelpers.LauncherCache{}
+
+	result, err := HandleLaunchersRefresh(requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      refreshable,
+		Config:        cfg,
+		LauncherCache: cache,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, result)
+	assert.Equal(t, 1, refreshable.refreshCalls)
+	require.Len(t, cache.GetAllLaunchers(), 1)
+}
+
+func TestHandleLaunchersRefresh_PropagatesPlatformRefreshError(t *testing.T) {
+	t.Parallel()
+
+	memFS := helpers.NewMemoryFS()
+	dataDir := filepath.Join(string(filepath.Separator), "data")
+	configDir := filepath.Join(string(filepath.Separator), "config")
+	require.NoError(t, memFS.Fs.MkdirAll(configDir, 0o750))
+	require.NoError(t, memFS.Fs.MkdirAll(filepath.Join(dataDir, config.LaunchersDir), 0o750))
+
+	cfg, err := helpers.NewTestConfig(memFS, configDir)
+	require.NoError(t, err)
+
+	basePlatform := mocks.NewMockPlatform()
+	basePlatform.On("ID").Return("test-platform").Maybe()
+	basePlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+	refreshable := &refreshableMockPlatform{
+		MockPlatform: basePlatform,
+		refreshErr:   errors.New("RBF scan failed"),
+	}
+	cache := &corehelpers.LauncherCache{}
+
+	result, err := HandleLaunchersRefresh(requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      refreshable,
+		Config:        cfg,
+		LauncherCache: cache,
+	})
+	require.ErrorContains(t, err, "error refreshing launcher dependencies")
+	assert.Nil(t, result)
+	assert.Equal(t, 1, refreshable.refreshCalls)
+	assert.Empty(t, cache.GetAllLaunchers())
 }
 
 // TestHandleLaunchersRefresh_CacheUpdatesOnSecondCall tests that the cache

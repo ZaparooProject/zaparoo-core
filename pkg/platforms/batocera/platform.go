@@ -257,6 +257,15 @@ func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return result
 }
 
+// RefreshLauncherDependencies invalidates external EmulationStation config so
+// the following launcher rebuild reparses current system paths and extensions.
+func (p *Platform) RefreshLauncherDependencies() error {
+	p.esConfigMu.Lock()
+	defer p.esConfigMu.Unlock()
+	p.esConfigCache = nil
+	return nil
+}
+
 // getESConfig returns cached ES system config, parsing it on first access.
 func (p *Platform) getESConfig() *ESSystemConfig {
 	p.esConfigMu.RLock()

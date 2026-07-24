@@ -48,6 +48,12 @@ func TestParseRBFPath_StripsOnlyOfficialDateSuffix(t *testing.T) {
 			wantMglName:   filepath.Join("_Console", "GBA"),
 		},
 		{
+			name:          "official 3DO release",
+			relPath:       filepath.Join("_Console", "3DO_20260717.rbf"),
+			wantShortName: "3DO",
+			wantMglName:   filepath.Join("_Console", "3DO"),
+		},
+		{
 			name:          "underscore core strips date only",
 			relPath:       filepath.Join("_Console", "Saturn_DS_20230410.rbf"),
 			wantShortName: "Saturn_DS",

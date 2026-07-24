@@ -112,15 +112,6 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading mappings")
 	}
 
-	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
-	err = env.Config.LoadCustomLaunchers(launchersDir)
-	if err != nil {
-		log.Error().Err(err).Msg("error loading custom launchers")
-		return nil, errors.New("error loading custom launchers")
-	}
-
-	env.LauncherCache.Refresh(env.Platform, env.Config)
-
 	if env.Player != nil {
 		env.Player.ClearFileCache()
 		env.Player.SetVolume(float64(env.Config.AudioVolume()) / 100.0)

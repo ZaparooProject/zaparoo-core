@@ -1655,6 +1655,23 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 		buildIgnoreSystemsPage(svc, pages, app)
 	})
 
+	menu.AddAction("Reload Core", "Reload settings, mappings, and launcher configuration", func() {
+		reloadCtx, reloadCancel := tuiContext()
+		err := svc.ReloadCore(reloadCtx)
+		reloadCancel()
+		if err != nil {
+			log.Warn().Err(err).Msg("error reloading Core")
+			ShowErrorModal(pages, app, "Failed to reload Core", func() {
+				app.SetFocus(menu.List)
+			})
+			return
+		}
+		ShowInfoModal(
+			pages, app, "Core reloaded", "Settings, mappings, and launcher configuration reloaded.",
+			func() { app.SetFocus(menu.List) },
+		)
+	})
+
 	menu.AddToggle("Debug logging", "Enable verbose debug output", &debugLogging, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
