@@ -308,6 +308,40 @@ type packFooterEntry struct {
 	Length int64  `json:"length"`
 }
 
+// uploadResult summarizes one upload pass: how many packs and bytes went
+// over the wire, and which files were skipped as unstorable.
+type uploadResult struct {
+	skipped       []FileRef
+	packs         int
+	bytesUploaded int64
+}
+
+type plannedRemotePack struct {
+	files []FileRef
+	size  int64
+}
+
+type remotePackPlan struct {
+	packs       []plannedRemotePack
+	skipped     []FileRef
+	uploadBytes int64
+}
+
+// remoteRateLimitedError is a 429 from the backup server. retryAfter is the
+// server-requested wait (zero when the header is absent). errors.Is matches
+// the errRemoteRateLimited sentinel.
+type remoteRateLimitedError struct {
+	retryAfter time.Duration
+}
+
+// rateLimitWaits bounds how long a rate-limited request waits before a
+// retry. Carried per client so tests can shrink the waits.
+type rateLimitWaits struct {
+	minWait     time.Duration
+	defaultWait time.Duration
+	maxWait     time.Duration
+}
+
 type remoteClient struct {
 	httpClient     *http.Client
 	onUnauthorized func()
@@ -1573,25 +1607,6 @@ func (m *Manager) uploadMissingWithQuotaPreflight(
 	return client.uploadPackPlan(ctx, &plan, m.pauser)
 }
 
-// uploadResult summarizes one upload pass: how many packs and bytes went
-// over the wire, and which files were skipped as unstorable.
-type uploadResult struct {
-	skipped       []FileRef
-	packs         int
-	bytesUploaded int64
-}
-
-type plannedRemotePack struct {
-	files []FileRef
-	size  int64
-}
-
-type remotePackPlan struct {
-	packs       []plannedRemotePack
-	skipped     []FileRef
-	uploadBytes int64
-}
-
 func planRemotePacks(files []FileRef, missing map[string]struct{}) (remotePackPlan, error) {
 	var plan remotePackPlan
 	if len(missing) == 0 {
@@ -1716,24 +1731,9 @@ func (c *remoteClient) uploadMissing(
 	return c.uploadPackPlan(ctx, &plan, pauser)
 }
 
-// remoteRateLimitedError is a 429 from the backup server. retryAfter is the
-// server-requested wait (zero when the header is absent). errors.Is matches
-// the errRemoteRateLimited sentinel.
-type remoteRateLimitedError struct {
-	retryAfter time.Duration
-}
-
 func (*remoteRateLimitedError) Error() string { return errRemoteRateLimited.Error() }
 
 func (*remoteRateLimitedError) Is(target error) bool { return errors.Is(errRemoteRateLimited, target) }
-
-// rateLimitWaits bounds how long a rate-limited request waits before a
-// retry. Carried per client so tests can shrink the waits.
-type rateLimitWaits struct {
-	minWait     time.Duration
-	defaultWait time.Duration
-	maxWait     time.Duration
-}
 
 var defaultRateLimitWaits = rateLimitWaits{
 	minWait:     remoteRateLimitMinWait,
