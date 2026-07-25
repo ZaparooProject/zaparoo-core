@@ -1097,8 +1097,19 @@ func (m *Manager) newRemoteClient() (*remoteClient, error) {
 		}
 		return nil, errRemoteUnlinked
 	}
-	baseURL := strings.TrimRight(m.cfg.BackupRemoteBaseURL(), "/")
-	lookupURL := config.BackupAuthLookupURL(baseURL)
+	return m.newAuthenticatedRemoteClient(m.cfg.BackupRemoteBaseURL(), m.markRemoteUnlinkedIfCurrent)
+}
+
+func (m *Manager) newPlaytimeRemoteClient() (*remoteClient, error) {
+	return m.newAuthenticatedRemoteClient(m.cfg.PlaytimeBaseURL(), nil)
+}
+
+func (m *Manager) newAuthenticatedRemoteClient(
+	rawBaseURL string,
+	onUnauthorized func(string),
+) (*remoteClient, error) {
+	baseURL := strings.TrimRight(rawBaseURL, "/")
+	lookupURL := config.RemoteAuthLookupURL(baseURL)
 	entry := config.LookupAuth(config.GetAuthCfg(), lookupURL)
 	if entry == nil || entry.Bearer == "" {
 		return nil, errRemoteUnlinked
@@ -1108,18 +1119,22 @@ func (m *Manager) newRemoteClient() (*remoteClient, error) {
 	if m.rateLimitWaits != nil {
 		retryWaits = *m.rateLimitWaits
 	}
+	var unauthorizedCallback func()
+	if onUnauthorized != nil {
+		unauthorizedCallback = func() {
+			onUnauthorized(bearer)
+		}
+	}
 	return &remoteClient{
 		// Timeouts are applied per request (scaled to transfer size for
 		// uploads/downloads), not on the client, so a large pack on a slow
 		// uplink is not killed at the base timeout.
-		httpClient: &http.Client{},
-		onUnauthorized: func() {
-			m.markRemoteUnlinkedIfCurrent(bearer)
-		},
-		baseURL:    baseURL,
-		bearer:     bearer,
-		platform:   m.pl.ID(),
-		retryWaits: retryWaits,
+		httpClient:     &http.Client{},
+		onUnauthorized: unauthorizedCallback,
+		baseURL:        baseURL,
+		bearer:         bearer,
+		platform:       m.pl.ID(),
+		retryWaits:     retryWaits,
 	}, nil
 }
 

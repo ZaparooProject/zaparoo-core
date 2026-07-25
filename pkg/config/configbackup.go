@@ -20,7 +20,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -139,20 +138,26 @@ func (c *Instance) SetBackupRemoteBaseURL(rawURL string) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Backup.Remote.BaseURL = normalizeBackupBaseURL(rawURL)
+	c.vals.Backup.Remote.BaseURL = normalizeRemoteBaseURL(rawURL)
 	return nil
 }
 
 func ValidateBackupRemoteBaseURL(rawURL string) error {
+	return validateRemoteBaseURL(rawURL, "backup remote")
+}
+
+func validateRemoteBaseURL(rawURL, setting string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("invalid backup remote base URL: %w", err)
+		return fmt.Errorf("invalid %s base URL: %w", setting, err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return errors.New("backup remote base URL must use http or https")
+		return fmt.Errorf("%s base URL must use http or https", setting)
 	}
 	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("backup remote base URL must include only scheme, host, optional port, and optional path")
+		return fmt.Errorf(
+			"%s base URL must include only scheme, host, optional port, and optional path", setting,
+		)
 	}
 	if parsed.Scheme == "https" {
 		return nil
@@ -164,15 +169,15 @@ func ValidateBackupRemoteBaseURL(rawURL string) error {
 	}
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
-		return errors.New("http backup remote base URL must use localhost or a private IP literal")
+		return fmt.Errorf("http %s base URL must use localhost or a private IP literal", setting)
 	}
-	if isAllowedHTTPBackupAddr(addr) {
+	if isAllowedHTTPRemoteAddr(addr) {
 		return nil
 	}
-	return errors.New("http backup remote base URL must use localhost or a private IP literal")
+	return fmt.Errorf("http %s base URL must use localhost or a private IP literal", setting)
 }
 
-func normalizeBackupBaseURL(rawURL string) string {
+func normalizeRemoteBaseURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
@@ -183,7 +188,7 @@ func normalizeBackupBaseURL(rawURL string) string {
 	return parsed.String()
 }
 
-func isAllowedHTTPBackupAddr(addr netip.Addr) bool {
+func isAllowedHTTPRemoteAddr(addr netip.Addr) bool {
 	if addr.IsLoopback() || addr.IsLinkLocalUnicast() {
 		return true
 	}
@@ -209,6 +214,10 @@ func isAllowedHTTPBackupAddr(addr netip.Addr) bool {
 }
 
 func BackupAuthLookupURL(rawURL string) string {
+	return RemoteAuthLookupURL(rawURL)
+}
+
+func RemoteAuthLookupURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
