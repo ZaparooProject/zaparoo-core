@@ -37,6 +37,10 @@ var debugWriterOnce sync.Once
 // is otherwise never captured because Core creates no session log file.
 type zerologDebugWriter struct{}
 
+// Write splits p on newlines and logs each non-empty line. go-pn532 emits every
+// debug message in a single Fprintf, which performs exactly one Write of the
+// fully formatted, newline-terminated string, so p never holds a partial line
+// and no buffering across calls is needed.
 func (zerologDebugWriter) Write(p []byte) (int, error) {
 	for line := range strings.Lines(string(p)) {
 		line = strings.TrimRight(line, "\r\n")
