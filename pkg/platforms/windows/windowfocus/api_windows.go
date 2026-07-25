@@ -22,6 +22,13 @@ const (
 	showRestore       = 9
 )
 
+type windowSearchState struct {
+	pids  map[uint32]struct{}
+	found uintptr
+}
+
+type windowsAPI struct{}
+
 var (
 	user32                       = windows.NewLazySystemDLL("user32.dll")
 	procAllowSetForegroundWindow = user32.NewProc("AllowSetForegroundWindow")
@@ -38,9 +45,8 @@ var (
 	procSetFocus                 = user32.NewProc("SetFocus")
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	procShowWindow               = user32.NewProc("ShowWindow")
+	enumWindowsCallback          = syscall.NewCallback(enumWindow)
 )
-
-type windowsAPI struct{}
 
 // New creates a Windows process-window focus manager.
 func New() *Manager {
@@ -58,28 +64,33 @@ func (windowsAPI) findProcessWindow(pid uint32) (uintptr, bool) {
 	return findWindowForPIDs(processTreePIDs(pid))
 }
 
+func enumWindow(hwnd, lparam uintptr) uintptr {
+	//nolint:gosec,govet // Win32 synchronously passes caller-owned state through uintptr lParam.
+	state := (*windowSearchState)(unsafe.Pointer(lparam))
+	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
+		return 1
+	}
+	if owner, _, _ := procGetWindow.Call(hwnd, getWindowOwner); owner != 0 {
+		return 1
+	}
+
+	var windowPID uint32
+	//nolint:gosec // Win32 API requires a pointer to receive the owning process ID.
+	_, _, _ = procGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
+	if _, ok := state.pids[windowPID]; !ok {
+		return 1
+	}
+
+	state.found = hwnd
+	return 0
+}
+
 func findWindowForPIDs(pids map[uint32]struct{}) (uintptr, bool) {
-	var found uintptr
-	callback := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
-		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
-			return 1
-		}
-		if owner, _, _ := procGetWindow.Call(hwnd, getWindowOwner); owner != 0 {
-			return 1
-		}
-
-		var windowPID uint32
-		//nolint:gosec // Win32 API requires a pointer to receive the owning process ID.
-		_, _, _ = procGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
-		if _, ok := pids[windowPID]; !ok {
-			return 1
-		}
-
-		found = hwnd
-		return 0
-	})
-	_, _, _ = procEnumWindows.Call(callback, 0)
-	return found, found != 0
+	state := windowSearchState{pids: pids}
+	//nolint:gosec // EnumWindows synchronously reads and updates state through lParam.
+	_, _, _ = procEnumWindows.Call(enumWindowsCallback, uintptr(unsafe.Pointer(&state)))
+	runtime.KeepAlive(&state)
+	return state.found, state.found != 0
 }
 
 func processTreePIDs(rootPID uint32) map[uint32]struct{} {

@@ -81,6 +81,7 @@ type Platform struct {
 	steamTracker            *steamtracker.WindowsPlatformIntegration
 	launcherManager         platforms.LauncherContextManager
 	windowFocuser           processWindowFocuser
+	windowFocusCancel       context.CancelFunc
 	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
 	platformMappingsMu      syncutil.RWMutex
@@ -202,6 +203,10 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 		return
 	}
 
+	if p.windowFocusCancel != nil {
+		p.windowFocusCancel()
+		p.windowFocusCancel = nil
+	}
 	if p.trackedProcess != nil {
 		if err := p.trackedProcess.Kill(); err != nil && !isProcessFinishedError(err) {
 			log.Warn().Err(err).Msg("failed to kill previous tracked process")
@@ -211,20 +216,22 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.trackedProcess = proc
 	p.completedTrackedProcess = nil
 	focuser := p.windowFocuser
-	launcherManager := p.launcherManager
-	p.processMu.Unlock()
-
-	log.Debug().Msgf("set tracked process: %v", proc)
 	if proc == nil || focuser == nil {
+		p.processMu.Unlock()
+		log.Debug().Msgf("set tracked process: %v", proc)
 		return
 	}
 
 	focusCtx := context.Background()
-	if launcherManager != nil {
-		if ctx := launcherManager.GetContext(); ctx != nil {
+	if p.launcherManager != nil {
+		if ctx := p.launcherManager.GetContext(); ctx != nil {
 			focusCtx = ctx
 		}
 	}
+	focusCtx, p.windowFocusCancel = context.WithCancel(focusCtx)
+	p.processMu.Unlock()
+
+	log.Debug().Msgf("set tracked process: %v", proc)
 	pid := uint32(proc.Pid) //nolint:gosec // Windows process IDs are 32-bit values
 	go func() {
 		if err := focuser.Focus(focusCtx, pid); err != nil && !errors.Is(err, context.Canceled) {
