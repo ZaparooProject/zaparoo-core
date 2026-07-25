@@ -181,18 +181,16 @@ func LocalClient(
 		return "", fmt.Errorf("failed to write json to websocket: %w", err)
 	}
 
-	timeout := config.APIRequestTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
+	var timerC <-chan time.Time
+	if timeout, bounded := requestWaitTimeout(ctx, method); bounded {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		timerC = timer.C
 	}
-	timer := time.NewTimer(timeout)
 	select {
 	case <-done:
 
-	case <-timer.C:
+	case <-timerC:
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
 		return "", ErrRequestCancelled
@@ -213,6 +211,25 @@ func LocalClient(
 	}
 
 	return string(b), nil
+}
+
+// requestWaitTimeout returns how long to wait for a response and whether the
+// wait is bounded at all. A caller deadline always wins. Without one,
+// unbounded-runtime backup methods wait on cancellation alone — the server
+// runs them with no deadline either — and every other method falls back to
+// the default request timeout.
+func requestWaitTimeout(ctx context.Context, method string) (timeout time.Duration, bounded bool) {
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			return remaining, true
+		}
+		return 0, true
+	}
+	if models.MethodHasUnboundedRuntime(method) {
+		return 0, false
+	}
+	return config.APIRequestTimeout, true
 }
 
 func WaitNotification(

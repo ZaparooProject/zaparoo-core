@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -331,6 +330,10 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return cmdRandomWithFS(afero.NewOsFs(), pl, &env)
+}
+
+func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -342,16 +345,16 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	var args zapscript.LaunchRandomArgs
-	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+	if err := ParseAdvArgs(pl, env, &args); err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
 	explicitLauncher := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher) != ""
-	launch := getLaunchClosure(pl, &env, explicitLauncher)
+	launch := getLaunchClosure(pl, env, explicitLauncher)
 	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
-	ctx, cancel := mediaDBLookupContext(&env)
+	ctx, cancel := mediaDBLookupContext(env)
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
@@ -390,9 +393,11 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
-		if errors.Is(searchErr, sql.ErrNoRows) {
-			// Fallback: pick random file directly from disk for unindexed paths
-			entries, readErr := os.ReadDir(cleanedPath)
+		fallbackToFilesystem := len(tagFilters) == 0 &&
+			(errors.Is(searchErr, sql.ErrNoRows) || errors.Is(searchErr, context.DeadlineExceeded))
+		if fallbackToFilesystem {
+			// Slow indexed lookups should not block direct directory launches.
+			entries, readErr := afero.ReadDir(fs, cleanedPath)
 			if readErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to read path '%s': %w", cleanedPath, readErr)
 			}
@@ -646,16 +651,24 @@ func getLaunchClosure(
 			}
 		}
 
+		var launcher *platforms.Launcher
 		if launcherID != "" {
-			launcher := findLauncher(pl, env, launcherID)
+			launcher = findLauncher(pl, env, launcherID)
 			if launcher == nil {
 				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
 			log.Info().Msgf("launching with launcher: %s", launcherID)
-			return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 		}
 
-		return pl.LaunchMedia(env.Cfg, target.path, nil, env.Database, opts)
+		releaseLaunch := func() {}
+		if env.AcquireMediaLaunch != nil {
+			releaseLaunch, err = env.AcquireMediaLaunch()
+			if err != nil {
+				return fmt.Errorf("acquiring media launch gate: %w", err)
+			}
+		}
+		defer releaseLaunch()
+		return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 	}
 }
 

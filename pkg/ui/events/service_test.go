@@ -432,6 +432,24 @@ func TestServiceContextCancellationAndShutdown(t *testing.T) {
 	require.ErrorIs(t, err, ErrClosed)
 }
 
+func TestServiceOpenWithCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	for range 100 {
+		service, _ := newTestService(clockwork.NewRealClock(), nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		handle, err := service.Open(ctx, &Request{
+			Kind:    models.UIEventKindNotice,
+			Timeout: time.Minute,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, models.UIOutcomeCancelled, receiveResult(t, handle.Results).Resolution.Outcome)
+		assert.Empty(t, service.State().Events)
+	}
+}
+
 func TestServiceUpdateNotifiesRenderer(t *testing.T) {
 	t.Parallel()
 

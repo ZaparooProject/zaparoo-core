@@ -81,6 +81,16 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
+	if isLocalOrAdmin(&env) {
+		backupRemoteEnabled := env.Config.BackupRemoteEnabled()
+		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
+		backupRemoteBaseURL := env.Config.BackupRemoteBaseURL()
+		playtimeSyncEnabled := env.Config.PlaytimeSyncEnabled()
+		resp.BackupRemoteEnabled = &backupRemoteEnabled
+		resp.BackupRemoteSchedule = &backupRemoteSchedule
+		resp.BackupRemoteBaseURL = &backupRemoteBaseURL
+		resp.PlaytimeSyncEnabled = &playtimeSyncEnabled
+	}
 
 	return resp, nil
 }
@@ -101,15 +111,6 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		log.Error().Err(err).Msg("error loading mappings")
 		return nil, errors.New("error loading mappings")
 	}
-
-	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
-	err = env.Config.LoadCustomLaunchers(launchersDir)
-	if err != nil {
-		log.Error().Err(err).Msg("error loading custom launchers")
-		return nil, errors.New("error loading custom launchers")
-	}
-
-	env.LauncherCache.Refresh(env.Platform, env.Config)
 
 	if env.Player != nil {
 		env.Player.ClearFileCache()
@@ -138,6 +139,13 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if !env.IsLocal {
 		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
 			return nil, err
+		}
+	}
+
+	if params.BackupRemoteEnabled != nil || params.BackupRemoteSchedule != nil ||
+		params.PlaytimeSyncEnabled != nil {
+		if !isLocalOrAdmin(&env) {
+			return nil, models.ClientErrf("online settings require a local or admin client")
 		}
 	}
 
@@ -202,6 +210,21 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.Encryption != nil {
 		log.Debug().Bool("encryption", *params.Encryption).Msg("updating setting")
 		env.Config.SetEncryptionEnabled(*params.Encryption)
+	}
+
+	if params.BackupRemoteEnabled != nil {
+		log.Debug().Bool("backupRemoteEnabled", *params.BackupRemoteEnabled).Msg("updating setting")
+		env.Config.SetBackupRemoteEnabled(*params.BackupRemoteEnabled)
+	}
+
+	if params.BackupRemoteSchedule != nil {
+		log.Debug().Str("backupRemoteSchedule", *params.BackupRemoteSchedule).Msg("updating setting")
+		env.Config.SetBackupRemoteSchedule(*params.BackupRemoteSchedule)
+	}
+
+	if params.PlaytimeSyncEnabled != nil {
+		log.Debug().Bool("playtimeSyncEnabled", *params.PlaytimeSyncEnabled).Msg("updating setting")
+		env.Config.SetPlaytimeSync(*params.PlaytimeSyncEnabled)
 	}
 
 	if params.ReadersScanMode != nil {

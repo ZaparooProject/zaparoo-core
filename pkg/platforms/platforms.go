@@ -149,19 +149,20 @@ type CmdEnv struct {
 	LauncherCtx context.Context
 	// ServiceCtx is canceled during full service shutdown or process stop. Use it
 	// for work tied to service lifetime rather than the current launcher lifetime.
-	ServiceCtx        context.Context
-	WaitForMediaReady func(context.Context) error
-	PlaybackManager   audio.PlaybackManager
-	UI                *uievents.Service
-	Playlist          playlists.PlaylistController
-	Cfg               *config.Instance
-	Database          *database.Database
-	ExprEnv           *zapscript.ArgExprEnv
-	Source            string
-	Cmd               zapscript.Command
-	TotalCommands     int
-	CurrentIndex      int
-	Unsafe            bool
+	ServiceCtx         context.Context
+	WaitForMediaReady  func(context.Context) error
+	AcquireMediaLaunch func() (func(), error)
+	PlaybackManager    audio.PlaybackManager
+	UI                 *uievents.Service
+	Playlist           playlists.PlaylistController
+	Cfg                *config.Instance
+	Database           *database.Database
+	ExprEnv            *zapscript.ArgExprEnv
+	Source             string
+	Cmd                zapscript.Command
+	TotalCommands      int
+	CurrentIndex       int
+	Unsafe             bool
 }
 
 // ProfileSwitchRequest asks the script runner to change the device's
@@ -310,6 +311,49 @@ type Launcher struct {
 	Available bool
 }
 
+type BackupPattern struct {
+	Glob     string
+	Contains string
+	All      bool
+}
+
+type BackupDefinition struct {
+	SourceRoot         string
+	RestoreRoot        string
+	Category           string
+	Include            []BackupPattern
+	Exclude            []BackupPattern
+	SourceTrustedRoots []string
+	NonRecursive       bool
+}
+
+type BackupWarning struct {
+	Category string
+	Path     string
+	Reason   string
+}
+
+type BackupPlan struct {
+	Definitions []BackupDefinition
+	Warnings    []BackupWarning
+}
+
+type BackupProvider interface {
+	BackupDefinitions() []BackupDefinition
+}
+
+type BackupPlanningProvider interface {
+	BackupPlan() BackupPlan
+}
+
+type BackupRestoreRootProvider interface {
+	BackupRestoreRoot() string
+}
+
+type BackupRestorePreparer interface {
+	PrepareBackupRestore() (func(bool) error, error)
+}
+
 // Settings defines all simple settings/configuration values available for a
 // platform.
 type Settings struct {
@@ -359,6 +403,12 @@ type Scraper struct {
 	ID                 string
 	Name               string
 	SupportedSystemIDs []string
+}
+
+// LauncherRefreshProvider is optionally implemented by platforms that cache
+// runtime launcher dependencies and can force their rediscovery.
+type LauncherRefreshProvider interface {
+	RefreshLauncherDependencies() error
 }
 
 // TrackedProcessWaiter is optionally implemented by platforms that coordinate

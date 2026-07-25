@@ -20,11 +20,48 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreserveRestoreOverrides(t *testing.T) {
+	t.Parallel()
+	source := []byte(`[service]
+device_id = "source-device"
+api_port = 7497
+
+[future]
+value = "preserved"
+`)
+	data, err := PreserveRestoreOverrides(source, "destination-device", false)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(data), configHeader))
+	assert.Contains(t, string(data), `device_id = 'destination-device'`)
+	assert.NotContains(t, string(data), "source-device")
+	assert.Contains(t, string(data), "[future]")
+	assert.Contains(t, string(data), `value = 'preserved'`)
+	assert.NotContains(t, string(data), "encryption")
+
+	data, err = PreserveRestoreOverrides(source, "destination-device", true)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "encryption = true")
+
+	// A backup made with encryption on must not lock down a destination
+	// that has it off.
+	data, err = PreserveRestoreOverrides([]byte("[service]\nencryption = true\n"), "dest", false)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "encryption")
+
+	// No destination device ID: leave it unset so the next Save
+	// generates one, and never keep the source's identity.
+	data, err = PreserveRestoreOverrides(source, "", false)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "device_id")
+	assert.NotContains(t, string(data), "source-device")
+}
 
 func TestServiceHooks(t *testing.T) {
 	t.Parallel()

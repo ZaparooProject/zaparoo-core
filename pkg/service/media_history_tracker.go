@@ -144,6 +144,11 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					t.currentMediaStartTimeMono = nowMono
 					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Msg("created media history entry")
+
+					// MediaDB lookup may block behind indexing. Capture lookup keys now,
+					// then enrich the durable history row off the notification path.
+					systemID, mediaPath := entry.SystemID, entry.MediaPath
+					go t.snapshotMediaHistoryIdentity(dbid, systemID, mediaPath)
 				}
 			}
 
@@ -198,9 +203,26 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 	}
 }
 
-// updatePlayTime periodically updates the PlayTime for the currently active media
-// history entry every 15 seconds. This limits crash-loss to at most 15 seconds of
-// playtime and keeps the history accurate for users who care about tracking.
+// lookupMediaIdentity snapshots scanner-derived identity for launched media.
+// Best effort with a short timeout: a launch outside the index has no snapshot.
+func (t *mediaHistoryTracker) lookupMediaIdentity(systemID, path string) (database.MediaIdentity, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return database.LookupMediaIdentity(ctx, t.db.MediaDB, systemID, path)
+}
+
+// snapshotMediaHistoryIdentity enriches a persisted entry without blocking notifications.
+func (t *mediaHistoryTracker) snapshotMediaHistoryIdentity(dbid int64, systemID, path string) {
+	identity, found := t.lookupMediaIdentity(systemID, path)
+	if !found {
+		return
+	}
+	if err := t.db.UserDB.UpdateMediaHistoryIdentity(dbid, identity); err != nil {
+		log.Warn().Err(err).Int64("dbid", dbid).Msg("failed to store media history identity")
+	}
+}
+
+// updatePlayTime periodically updates the current entry, limiting crash-loss to 15 seconds.
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 	ticker := t.clock.NewTicker(15 * time.Second)
 	defer ticker.Stop()

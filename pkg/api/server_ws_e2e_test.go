@@ -155,7 +155,7 @@ func TestWSInjectsPlaybackManager(t *testing.T) {
 	m := newWebSocketSession()
 	m.HandleMessage(handleWSMessage(
 		methodMap, platform, cfg, st, make(chan tokens.Token, 1), make(chan chan error, 1), db,
-		nil, nil, nil, playbackManager, nil, nil, nil, nil, nil,
+		nil, nil, nil, playbackManager, nil, nil, nil, nil, nil, nil,
 	))
 
 	mux := http.NewServeMux()

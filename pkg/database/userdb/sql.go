@@ -762,6 +762,39 @@ func sqlCreateClient(ctx context.Context, db *sql.DB, c *database.Client) error 
 	return nil
 }
 
+func sqlReplaceAllClients(ctx context.Context, db *sql.DB, clients []database.Client) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin client replace transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				err = errors.Join(err, fmt.Errorf("failed to roll back client replace: %w", rbErr))
+			}
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM Clients;`); err != nil {
+		return fmt.Errorf("failed to clear clients: %w", err)
+	}
+	for i := range clients {
+		c := &clients[i]
+		if strings.ContainsRune(c.AuthToken, ':') {
+			return ErrInvalidAuthToken
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO Clients (ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt)
+			VALUES (?, ?, ?, ?, ?, ?, ?);
+		`, c.ClientID, c.ClientName, c.AuthToken, c.Role, c.PairingKey, c.CreatedAt, c.LastSeenAt); err != nil {
+			return fmt.Errorf("failed to insert replacement client: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit client replace: %w", err)
+	}
+	return nil
+}
+
 func sqlGetClientByToken(ctx context.Context, db *sql.DB, authToken string) (*database.Client, error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT DBID, ClientID, ClientName, AuthToken, Role, PairingKey, CreatedAt, LastSeenAt

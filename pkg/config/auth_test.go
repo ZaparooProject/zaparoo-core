@@ -800,3 +800,79 @@ bearer = "existing-token"
 	assert.Equal(t, "existing-token", creds["https://existing.com"].Bearer)
 	assert.Equal(t, "new-token", creds["https://api.zaparoo.com"].Bearer)
 }
+
+func TestDeleteAuthEntries_RemovesOnlyTargetedDomains(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	require.NoError(t, cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{Bearer: "token1"}))
+	require.NoError(t, cfg.SaveAuthEntry("https://zpr.au", CredentialEntry{Bearer: "token2"}))
+	require.NoError(t, cfg.SaveAuthEntry("https://other.example.com", CredentialEntry{Bearer: "token3"}))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com", "https://zpr.au"})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 1)
+	assert.Equal(t, "token3", creds["https://other.example.com"].Bearer)
+}
+
+func TestDeleteAuthEntries_MatchesCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	require.NoError(t, cfg.SaveAuthEntry("https://API.Zaparoo.com", CredentialEntry{Bearer: "token1"}))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	assert.Empty(t, creds)
+}
+
+func TestDeleteAuthEntries_PreservesAPIKeys(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	existingData := []byte(`api_keys = ["key1", "key2"]
+
+[creds."https://api.zaparoo.com"]
+bearer = "token"
+`)
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, existingData, 0o600))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.NoError(t, err)
+
+	keys := readAPIKeysFromInstance(t, cfg)
+	assert.Equal(t, []string{"key1", "key2"}, keys)
+	creds := readAuthFromInstance(t, cfg)
+	assert.Empty(t, creds)
+}
+
+func TestDeleteAuthEntries_MissingDomainIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	require.NoError(t, cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{Bearer: "token"}))
+
+	err := cfg.DeleteAuthEntries([]string{"https://unrelated.example.com"})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 1)
+	assert.Equal(t, "token", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestDeleteAuthEntries_NoAuthFileIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.NoError(t, err)
+}

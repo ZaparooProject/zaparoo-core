@@ -71,6 +71,12 @@ type amigaVisionVirtualPath struct {
 	GameName    string
 }
 
+type launcherRBFCache interface {
+	SetFilesystem(afero.Fs)
+	SetPersistPath(string)
+	ForceRefresh() error
+}
+
 var (
 	amigaVisionListings = []amigaVisionListing{
 		{Path: amigaVisionGamesListing, BrowseDir: amigaVisionGamesBrowseDir},
@@ -110,7 +116,9 @@ type Platform struct {
 	consoleManager      *MiSTerConsoleManager
 	profileData         *profileDataManager
 	launchShortCore     func(string) error
+	launchBasicFile     func(string) error
 	closeConsole        func() error
+	launcherRBFCache    launcherRBFCache
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
@@ -124,6 +132,7 @@ func NewPlatform() *Platform {
 		platformMu:      syncutil.Mutex{},
 		fs:              afero.NewOsFs(),
 		launchShortCore: mgls.LaunchShortCore,
+		launchBasicFile: mgls.LaunchBasicFile,
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)
@@ -589,6 +598,116 @@ func stopTrackedProcess(proc *os.Process, done chan struct{}, processGroup bool,
 	}
 
 	killRemainingProcessGroup(proc, processGroup)
+}
+
+func (p *Platform) BackupDefinitions() []platforms.BackupDefinition {
+	return BackupDefinitions(p.Settings())
+}
+
+func (p *Platform) BackupPlan() platforms.BackupPlan {
+	definitions := BackupDefinitions(p.Settings())
+	if p.profileData == nil {
+		return platforms.BackupPlan{Definitions: definitions}
+	}
+	return p.profileData.backupPlan(p.Settings(), definitions)
+}
+
+func (p *Platform) PrepareBackupRestore() (func(bool) error, error) {
+	if p.profileData == nil {
+		return func(bool) error { return nil }, nil
+	}
+	return p.profileData.prepareBackupRestore()
+}
+
+func (p *Platform) BackupRestoreRoot() string {
+	return BackupRestoreRoot(p.Settings())
+}
+
+func BackupRestoreRoot(settings platforms.Settings) string {
+	return filepath.Dir(settings.DataDir)
+}
+
+func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition {
+	root := BackupRestoreRoot(settings)
+	return []platforms.BackupDefinition{
+		{
+			Category:     "settings",
+			SourceRoot:   root,
+			RestoreRoot:  "",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "MiSTer.ini"},
+				{Glob: "MiSTer_alt_*.ini"},
+				{Glob: "MiSTer_*.ini"},
+				{Glob: "MiSTer.ini.*"},
+				{Glob: "downloader.ini"},
+			},
+			Exclude: []platforms.BackupPattern{{Glob: "MiSTer_example.ini"}},
+		},
+		{
+			Category:    "settings",
+			SourceRoot:  filepath.Join(root, "config"),
+			RestoreRoot: "config",
+			Include: []platforms.BackupPattern{
+				{Glob: "*.cfg"},
+				{Glob: "*.dat"},
+				{Glob: "*.f2"},
+			},
+			Exclude: []platforms.BackupPattern{{Contains: "_recent"}},
+		},
+		{
+			Category:     "inputs",
+			SourceRoot:   root,
+			RestoreRoot:  "",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "gamecontrollerdb_user.txt"},
+			},
+		},
+		{
+			Category:     "inputs",
+			SourceRoot:   filepath.Join(root, "linux"),
+			RestoreRoot:  "linux",
+			NonRecursive: true,
+			Include: []platforms.BackupPattern{
+				{Glob: "gamecontrollerdb_user.txt"},
+			},
+		},
+		{
+			Category:    "inputs",
+			SourceRoot:  filepath.Join(root, "config", "inputs"),
+			RestoreRoot: filepath.Join("config", "inputs"),
+			Include: []platforms.BackupPattern{
+				{Glob: "*.map"},
+				{Glob: "*.zip"},
+			},
+			Exclude: []platforms.BackupPattern{{Glob: filepath.Join("renamed", "*")}},
+		},
+		{
+			Category:    "saves",
+			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include:     []platforms.BackupPattern{{Contains: "/saves/"}},
+		},
+		{
+			Category:    "savestates",
+			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include:     []platforms.BackupPattern{{Contains: "/savestates/"}},
+		},
+		{
+			Category:    "saves",
+			SourceRoot:  filepath.Join(root, "saves"),
+			RestoreRoot: "saves",
+			Include:     []platforms.BackupPattern{{All: true}},
+		},
+		{
+			Category:    "savestates",
+			SourceRoot:  filepath.Join(root, "savestates"),
+			RestoreRoot: "savestates",
+			Include:     []platforms.BackupPattern{{All: true}},
+		},
+	}
 }
 
 func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
@@ -1216,11 +1335,25 @@ func amigaVisionMGLScanResults(installPath string, mglPaths []string) []platform
 	return results
 }
 
+func (p *Platform) RefreshLauncherDependencies() error {
+	cache := p.launcherRBFCache
+	if cache == nil {
+		cache = cores.GlobalRBFCache
+	}
+	cache.SetFilesystem(p.filesystem())
+	cache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
+	if err := cache.ForceRefresh(); err != nil {
+		return fmt.Errorf("force refresh RBF cache: %w", err)
+	}
+	return nil
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Launchers is invoked from many hot paths (token scans, RPC handlers,
 	// indexing). The Refresh fast path stats only the snapshot directories
 	// and returns early when nothing has changed, so the syscall cost per
 	// call is bounded to ~one readdir plus one stat per top-level _* dir.
+	cores.GlobalRBFCache.SetFilesystem(p.filesystem())
 	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
 	cores.GlobalRBFCache.Refresh()
 

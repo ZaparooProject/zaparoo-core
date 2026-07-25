@@ -747,6 +747,41 @@ func TestSqlSearchMediaBySlugIn_AllEmptySlugs(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	pathPrefix := filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "media", "fat", "_Arcade", "_Organized", "_Horizontal",
+	)) + "/"
+	mock.ExpectQuery(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), ` +
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.Path LIKE \? ` +
+			`AND Media\.IsMissing = 0`,
+	).WithArgs(pathPrefix + "%").WillReturnRows(
+		sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42),
+	)
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* `+
+			`WHERE Media\.Path LIKE \? AND Media\.IsMissing = 0 AND Media\.DBID >= \?`,
+	).WithArgs(pathPrefix+"%", int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("Arcade", pathPrefix+"game.mra", 42),
+	)
+
+	result, stats, err := sqlRandomGameWithQueryAndStats(context.Background(), db, &database.MediaQuery{
+		PathPrefix: pathPrefix,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, pathPrefix+"game.mra", result.Path)
+	assert.Equal(t, MediaStats{Count: 1, MinDBID: 42, MaxDBID: 42}, stats)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // Disambiguation behavior is exercised end-to-end against a real database in
 // disambiguation_test.go (RecomputeSystemDisambiguation + attachZapScriptTags),
 // since the logic now lives in stored per-title types rather than in-memory

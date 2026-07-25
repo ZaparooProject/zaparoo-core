@@ -248,7 +248,13 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		launchersDir,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return err
+				// One unreadable entry must not abort the walk and drop
+				// every other launcher file.
+				log.Warn().Err(err).Str("path", path).Msg("skipping unreadable path in launchers directory")
+				if info != nil && info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 
 			if info.IsDir() {

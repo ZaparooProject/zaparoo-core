@@ -71,6 +71,17 @@ func TestLookupByFolderName(t *testing.T) {
 			wantID:     systemdefs.SystemGameCube,
 			wantExists: true,
 		},
+		{name: "Apple IIGS", folder: "apple2gs", wantID: systemdefs.SystemAppleIIGS, wantExists: true},
+		{name: "Commodore CDTV", folder: "amigacdtv", wantID: systemdefs.SystemCommodoreCDTV, wantExists: true},
+		{name: "Commodore Plus4", folder: "cplus4", wantID: systemdefs.SystemCommodorePlus4, wantExists: true},
+		{name: "Amstrad GX4000", folder: "gx4000", wantID: systemdefs.SystemAmstradGX4000, wantExists: true},
+		{name: "Sega Pico", folder: "pico", wantID: systemdefs.SystemSegaPico, wantExists: true},
+		{
+			name: "Super Cassette Vision", folder: "scv",
+			wantID: systemdefs.SystemSuperCassetteVision, wantExists: true,
+		},
+		{name: "Uzebox", folder: "uzebox", wantID: systemdefs.SystemUzebox, wantExists: true},
+		{name: "Pinball", folder: "vpinball", wantID: systemdefs.SystemPinball, wantExists: true},
 	}
 
 	for _, tt := range tests {

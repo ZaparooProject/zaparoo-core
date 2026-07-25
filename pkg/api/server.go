@@ -274,16 +274,22 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
 		// settings
-		models.MethodSettings:              methods.HandleSettings,
-		models.MethodSettingsUpdate:        methods.HandleSettingsUpdate,
-		models.MethodSettingsReload:        methods.HandleSettingsReload,
-		models.MethodSettingsLogsDownload:  methods.HandleLogsDownload,
-		models.MethodSettingsBackup:        methods.HandleBackup,
-		models.MethodSettingsBackupList:    methods.HandleBackupList,
-		models.MethodSettingsBackupRestore: methods.HandleBackupRestore,
-		models.MethodPlaytimeLimits:        methods.HandlePlaytimeLimits,
-		models.MethodPlaytimeLimitsUpdate:  methods.HandlePlaytimeLimitsUpdate,
-		models.MethodPlaytime:              methods.HandlePlaytime,
+		models.MethodSettings:                    methods.HandleSettings,
+		models.MethodSettingsUpdate:              methods.HandleSettingsUpdate,
+		models.MethodSettingsReload:              methods.HandleSettingsReload,
+		models.MethodSettingsLogsDownload:        methods.HandleLogsDownload,
+		models.MethodSettingsBackup:              methods.HandleBackup,
+		models.MethodSettingsBackupList:          methods.HandleBackupList,
+		models.MethodSettingsBackupInspect:       methods.HandleBackupInspect,
+		models.MethodSettingsBackupDelete:        methods.HandleBackupDelete,
+		models.MethodSettingsBackupRestore:       methods.HandleBackupRestore,
+		models.MethodSettingsBackupStatus:        methods.HandleBackupStatus,
+		models.MethodSettingsBackupRemoteRun:     methods.HandleBackupRemoteRun,
+		models.MethodSettingsBackupRemoteList:    methods.HandleBackupRemoteList,
+		models.MethodSettingsBackupRemoteRestore: methods.HandleBackupRemoteRestore,
+		models.MethodPlaytimeLimits:              methods.HandlePlaytimeLimits,
+		models.MethodPlaytimeLimitsUpdate:        methods.HandlePlaytimeLimitsUpdate,
+		models.MethodPlaytime:                    methods.HandlePlaytime,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
@@ -341,6 +347,13 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
 		},
+		models.MethodSettingsAuthStatus: methods.HandleSettingsAuthStatus,
+		models.MethodSettingsAuthUnlink: methods.HandleSettingsAuthUnlink,
+		models.MethodSettingsAuthLink: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleSettingsAuthLink(env, zapscript.FetchWellKnown)
+		},
+		models.MethodSettingsAuthLinkStatus: methods.HandleSettingsAuthLinkStatus,
+		models.MethodSettingsAuthLinkCancel: methods.HandleSettingsAuthLinkCancel,
 		// update
 		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateCheck(env, updater.Check)
@@ -382,6 +395,16 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 	}
 }
 
+// apiMethodManagesRestoreAccess lists methods that coordinate with the
+// backup-restore gate themselves instead of taking the shared read lock:
+// the restore methods hold the write side, and media.active.update resolves
+// its own access so an active game can cancel an in-flight restore.
+func apiMethodManagesRestoreAccess(method string) bool {
+	return method == models.MethodSettingsBackupRestore ||
+		method == models.MethodSettingsBackupRemoteRestore ||
+		method == models.MethodMediaActiveUpdate
+}
+
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
 //
@@ -397,6 +420,16 @@ func handleRequest(
 	if !ok {
 		log.Warn().Str("method", req.Method).Msg("unknown method")
 		return nil, &JSONRPCErrorMethodNotFound
+	}
+
+	if env.State != nil && !apiMethodManagesRestoreAccess(req.Method) {
+		release, accessErr := env.State.TryAcquireRestoreAccess()
+		if accessErr != nil {
+			log.Warn().Err(accessErr).Str("method", req.Method).Msg("API request rejected during backup restore")
+			rpcError := makeJSONRPCError(1, accessErr.Error())
+			return nil, &rpcError
+		}
+		defer release()
 	}
 
 	env.Params = req.Params
@@ -986,6 +1019,7 @@ func handleWSMessage(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	tracker RequestTracker,
@@ -1101,6 +1135,7 @@ func handleWSMessage(
 			ConfirmQueue:    confirmQueue,
 			IndexPauser:     indexPauser,
 			ScrapePauser:    scrapePauser,
+			BackupPauser:    backupPauser,
 			IsLocal:         isLocal,
 			ClientID:        session.Request.RemoteAddr,
 		}
@@ -1302,6 +1337,7 @@ func handlePostRequest(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1340,11 +1376,15 @@ func handlePostRequest(
 			return
 		}
 
-		// Derive from r.Context() (already has APIRequestTimeout from middleware)
-		// but also cancel on app shutdown via st.GetContext().
-		reqCtx, reqCancel := context.WithCancel(r.Context())
-		context.AfterFunc(st.GetContext(), reqCancel)
-		defer reqCancel()
+		// Apply a method-specific deadline while preserving client-disconnect
+		// cancellation from the HTTP request and app-shutdown cancellation.
+		method := methodFromAPIRequestPayload(body)
+		reqCtx, reqCancel := requestContextForAPIMethod(r.Context(), method)
+		stopAppCancel := context.AfterFunc(st.GetContext(), reqCancel)
+		defer func() {
+			stopAppCancel()
+			reqCancel()
+		}()
 
 		env := requests.RequestEnv{
 			Context:         reqCtx,
@@ -1362,6 +1402,7 @@ func handlePostRequest(
 			ConfirmQueue:    confirmQueue,
 			IndexPauser:     indexPauser,
 			ScrapePauser:    scrapePauser,
+			BackupPauser:    backupPauser,
 			IsLocal:         apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:        r.RemoteAddr,
 		}
@@ -1431,11 +1472,12 @@ func Start(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, profilesSvc,
-		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, tracker, nil,
+		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, backupPauser, tracker, nil,
 	)
 }
 
@@ -1457,6 +1499,7 @@ func StartWithReady(
 	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	backupPauser *syncutil.Pauser,
 	tracker RequestTracker,
 	ready chan<- error,
 ) error {
@@ -1716,13 +1759,14 @@ func StartWithReady(
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
-		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		// Method handlers apply their own deadline after parsing JSON-RPC.
+		// Server ReadTimeout bounds body reads without limiting backup work.
 
 		postHandler := handlePostRequest(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, profilesSvc, player, playbackManager,
-			indexPauser, scrapePauser, tracker,
+			indexPauser, scrapePauser, backupPauser, tracker,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1764,8 +1808,8 @@ func StartWithReady(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, encGateway,
-			lastSeenTracker, tracker,
+			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
+			encGateway, lastSeenTracker, tracker,
 		),
 	))
 
@@ -1794,6 +1838,7 @@ func StartWithReady(
 		Addr:              cfg.APIListen(),
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       config.APIRequestTimeout,
 	}
 
 	serverDone := make(chan error, 1)

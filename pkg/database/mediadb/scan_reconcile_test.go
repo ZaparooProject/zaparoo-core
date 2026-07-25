@@ -57,7 +57,9 @@ func TestReconcileStagedSystem_FullScanInsertsTitlesMediaAndTags(t *testing.T) {
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	gamePath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Super Game (USA) (Rev 2).sfc")
+	gamePath := filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "roms", "SNES", "Super Game (USA) (Rev 2).sfc",
+	))
 	stats := scantest.IndexMediaPaths(t, mediaDB, "SNES", gamePath)
 
 	assert.True(t, stats.SystemKnown)
@@ -80,7 +82,7 @@ func TestReconcileStagedSystem_IdempotentRescanIsNoOp(t *testing.T) {
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	gamePath := filepath.Join(string(filepath.Separator), "roms", "Genesis", "Game.md")
+	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "Genesis", "Game.md"))
 	scantest.IndexMediaPaths(t, mediaDB, "Genesis", gamePath)
 
 	stats := scantest.IndexMediaPaths(t, mediaDB, "Genesis", gamePath)
@@ -99,8 +101,8 @@ func TestReconcileStagedSystem_IncompleteScanPreservesMissingState(t *testing.T)
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	fileA := filepath.Join(string(filepath.Separator), "roms", "SNES", "Game A.sfc")
-	fileB := filepath.Join(string(filepath.Separator), "roms", "SNES", "Game B.sfc")
+	fileA := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game A.sfc"))
+	fileB := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game B.sfc"))
 	scantest.IndexMediaPaths(t, mediaDB, "SNES", fileA, fileB)
 
 	stats := scantest.IndexMediaPathsWithOpts(

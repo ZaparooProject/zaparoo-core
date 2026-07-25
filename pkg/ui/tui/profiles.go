@@ -271,10 +271,11 @@ func showProfileSwitchIDModal(
 	onReset func(),
 	onCancel func(),
 ) {
-	modal := tview.NewModal().
+	dialog := NewDialog().
 		SetText("Switch ID:\n" + switchID + "\n\nResetting invalidates existing switch cards.").
+		SetTitle("Switch ID").
 		AddButtons([]string{"Reset", "Cancel"}).
-		SetDoneFunc(func(buttonIndex int, _ string) {
+		SetDoneFunc(func(buttonIndex int) {
 			pages.HidePage(profileSwitchIDModalPage)
 			pages.RemovePage(profileSwitchIDModalPage)
 			if buttonIndex == 0 {
@@ -283,9 +284,8 @@ func showProfileSwitchIDModal(
 				onCancel()
 			}
 		})
-	SetBoxTitle(modal.Box, "Switch ID")
-	pages.AddPage(profileSwitchIDModalPage, modal, false, true)
-	app.SetFocus(modal)
+	pages.AddPage(profileSwitchIDModalPage, dialog, true, true)
+	app.SetFocus(dialog)
 }
 
 func hasAdminProfile(profiles []models.ProfileResponse) bool {

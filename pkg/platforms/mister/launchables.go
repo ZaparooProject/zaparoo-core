@@ -82,6 +82,13 @@ type misterOtherLaunchableDefinition struct {
 	ID       uuid.UUID
 }
 
+var (
+	misterMMS2CartridgeMGLPath = filepath.Join(misterconfig.SDRootDir, "Load GB-GBC Cartridge.mgl")
+	misterPapriumMGLPath       = filepath.Join(
+		misterconfig.SDRootDir, "_Custom Cores", "PapriumMD.mgl",
+	)
+)
+
 var misterOtherLaunchableDefinitions = []misterOtherLaunchableDefinition{
 	{
 		ConfigID: "MisterOtherChess", ID: launchables.MisterOtherChess,
@@ -115,9 +122,24 @@ var misterOtherLaunchableDefinitions = []misterOtherLaunchableDefinition{
 		Name: "GenMidi", Category: misterLaunchableCategoryOther, LoadPath: filepath.Join("_Other", "GenMidi"),
 	},
 	{
+		ConfigID: "MisterOtherQuake", ID: launchables.MisterOtherQuake,
+		Name: "MiSTer Quake", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "Quake"),
+	},
+	{
+		ConfigID: "MisterOtherSonicMania", ID: launchables.MisterOtherSonicMania,
+		Name: "Sonic Mania", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "Sonic_Mania"),
+	},
+	{
 		ConfigID: "MisterOtherSlugCross", ID: launchables.MisterOtherSlugCross,
 		Name: "Slug Cross", Category: misterLaunchableCategoryOther,
 		LoadPath: filepath.Join("_Other", "SlugCross"),
+	},
+	{
+		ConfigID: "MisterOtherTamagotchi", ID: launchables.MisterOtherTamagotchi,
+		Name: "Tamagotchi", Category: misterLaunchableCategoryOther,
+		LoadPath: filepath.Join("_Other", "Tamagotchi"),
 	},
 	{
 		ConfigID: "MisterOtherTomyScramble", ID: launchables.MisterOtherTomyScramble,
@@ -179,7 +201,11 @@ func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
 	}
 	otherDefs := mergeOtherLaunchableDefinitions(misterOtherLaunchableDefinitions, customVirtualSystems)
 
-	items := make([]launchables.Launchable, 0, len(otherDefs)+1+len(misterCoreLaunchableDefinitions))
+	items := make(
+		[]launchables.Launchable,
+		0,
+		len(otherDefs)+3+len(misterCoreLaunchableDefinitions),
+	)
 	for _, def := range otherDefs {
 		items = append(items, launchables.VirtualSystem{
 			ID:       def.ID,
@@ -190,16 +216,32 @@ func (p *Platform) Launchables(cfg *config.Instance) []launchables.Launchable {
 		})
 	}
 
-	// 3S-ARM is a native ARM port of Street Fighter III: 3rd Strike that
-	// ships as an _Other core but is a real arcade game, so it is exposed
-	// as virtual media under the Arcade system rather than an Other entry.
-	items = append(items, launchables.VirtualMedia{
-		ID:       launchables.MisterArcadeThirdStrike,
-		Name:     "Street Fighter III: 3rd Strike (3S-ARM)",
-		SystemID: systemdefs.SystemArcade,
-		Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
-		Test:     testOtherCore("3S-ARM"),
-	})
+	items = append(items,
+		launchables.VirtualSystem{
+			ID:       launchables.MisterConsoleMMS2Gameboy,
+			Name:     "Load GB/GBC Cartridge",
+			Category: misterLaunchableCategoryConsole,
+			Launch:   p.launchMGLFile(misterMMS2CartridgeMGLPath),
+			Test:     p.testFile(misterMMS2CartridgeMGLPath),
+		},
+		// 3S-ARM is a native ARM port of Street Fighter III: 3rd Strike that
+		// ships as an _Other core but is a real arcade game, so it is exposed
+		// as virtual media under the Arcade system rather than an Other entry.
+		launchables.VirtualMedia{
+			ID:       launchables.MisterArcadeThirdStrike,
+			Name:     "Street Fighter III: 3rd Strike (3S-ARM)",
+			SystemID: systemdefs.SystemArcade,
+			Launch:   p.launchOtherCore(filepath.Join("_Other", "3S-ARM")),
+			Test:     testOtherCore("3S-ARM"),
+		},
+		launchables.VirtualMedia{
+			ID:       launchables.MisterGenesisPaprium,
+			Name:     "Paprium",
+			SystemID: systemdefs.SystemGenesis,
+			Launch:   p.launchMGLFile(misterPapriumMGLPath),
+			Test:     p.testFile(misterPapriumMGLPath),
+		},
+	)
 
 	for _, def := range misterCoreLaunchableDefinitions {
 		items = append(items, launchables.VirtualSystem{
@@ -226,6 +268,13 @@ func testCore(corePath string) func(*config.Instance) bool {
 
 func otherCoreExists(rootDir, shortName string) bool {
 	return coreExists(rootDir, filepath.Join("_Other", shortName))
+}
+
+func (p *Platform) testFile(path string) func(*config.Instance) bool {
+	return func(*config.Instance) bool {
+		info, err := p.filesystem().Stat(path)
+		return err == nil && !info.IsDir()
+	}
 }
 
 func coreExists(rootDir, corePath string) bool {
@@ -271,6 +320,33 @@ func (p *Platform) launchOtherCore(
 	corePath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return p.launchCore(corePath)
+}
+
+func (p *Platform) launchBasicFilePath(path string) error {
+	if p.launchBasicFile != nil {
+		if err := p.launchBasicFile(path); err != nil {
+			return fmt.Errorf("launch MiSTer file: %w", err)
+		}
+		return nil
+	}
+	if err := mgls.LaunchBasicFile(path); err != nil {
+		return fmt.Errorf("launch MiSTer file: %w", err)
+	}
+	return nil
+}
+
+func (p *Platform) launchMGLFile(
+	path string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+		if err := p.closeLaunchConsole(); err != nil {
+			log.Warn().Err(err).Msg("failed to close console before MGL launch")
+		}
+		if err := p.launchBasicFilePath(path); err != nil {
+			return nil, fmt.Errorf("failed to launch MiSTer MGL %s: %w", path, err)
+		}
+		return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
+	}
 }
 
 func (p *Platform) launchCore(

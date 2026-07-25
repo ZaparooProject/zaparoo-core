@@ -362,7 +362,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, media, 1)
 			assert.Equal(t, titles[0].DBID, media[0].MediaTitleDBID, "Media should point to correct title")
-			assert.Equal(t, tt.path, media[0].Path, "Media path should match")
+			assert.Equal(t, filepath.ToSlash(tt.path), media[0].Path, "Media path should match")
 		})
 	}
 }

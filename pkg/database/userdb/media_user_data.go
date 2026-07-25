@@ -72,6 +72,17 @@ func (db *UserDB) SetMediaUserLauncherOverride(systemID, path, launcherID string
 	)
 }
 
+// SetMediaUserSnapshot records a successfully resolved scanner identity
+// snapshot on an existing user-data row. It never inserts: a snapshot without
+// user intent (favourite/override) is meaningless. Empty tags are significant
+// and replace stale tags; callers must skip this method when lookup fails.
+func (db *UserDB) SetMediaUserSnapshot(systemID, path, mediaName string, tags []string) error {
+	return sqlSetMediaUserSnapshot(
+		db.ctx, db.sql.Load(), systemID, pathutil.CanonicalMediaPath(path),
+		mediaName, database.EncodeTagStrings(tags),
+	)
+}
+
 // DeleteMediaUserData removes the user-data row for (SystemID, Path). Deleting a
 // row that does not exist is not an error.
 func (db *UserDB) DeleteMediaUserData(systemID, path string) error {
@@ -88,9 +99,10 @@ func sqlGetMediaUserData(
 	ctx context.Context, db *sql.DB, systemID, path string,
 ) (database.MediaUserData, bool, error) {
 	var row database.MediaUserData
+	var rawTags string
 	q, err := db.PrepareContext(ctx, `
 		select
-		DBID, SystemID, Path, IsFavorite, LauncherOverride, CreatedAt, UpdatedAt
+		DBID, SystemID, Path, IsFavorite, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
 		from MediaUserData
 		where SystemID = ? and Path = ?;
 	`)
@@ -108,6 +120,8 @@ func sqlGetMediaUserData(
 		&row.Path,
 		&row.IsFavorite,
 		&row.LauncherOverride,
+		&row.MediaName,
+		&rawTags,
 		&row.CreatedAt,
 		&row.UpdatedAt,
 	)
@@ -118,6 +132,7 @@ func sqlGetMediaUserData(
 		return row, false, fmt.Errorf("failed to scan media user data row: %w", err)
 	}
 	row.Path = pathutil.CanonicalMediaPath(row.Path)
+	row.Tags = database.DecodeTagStrings(rawTags)
 	return row, true, nil
 }
 
@@ -126,11 +141,13 @@ func sqlUpsertMediaUserData(
 ) error {
 	stmt, err := db.PrepareContext(ctx, `
 		insert into MediaUserData(
-			SystemID, Path, IsFavorite, LauncherOverride, CreatedAt, UpdatedAt
-		) values (?, ?, ?, ?, ?, ?)
+			SystemID, Path, IsFavorite, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
+		) values (?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(SystemID, Path) do update set
 			IsFavorite = excluded.IsFavorite,
 			LauncherOverride = excluded.LauncherOverride,
+			MediaName = case when excluded.MediaName != '' then excluded.MediaName else MediaUserData.MediaName end,
+			Tags = case when excluded.Tags != '' then excluded.Tags else MediaUserData.Tags end,
 			UpdatedAt = excluded.UpdatedAt;
 	`)
 	if err != nil {
@@ -146,6 +163,8 @@ func sqlUpsertMediaUserData(
 		data.Path,
 		data.IsFavorite,
 		data.LauncherOverride,
+		data.MediaName,
+		database.EncodeTagStrings(data.Tags),
 		now,
 		now,
 	)
@@ -179,6 +198,19 @@ func sqlSetMediaUserLauncherOverride(
 			LauncherOverride = excluded.LauncherOverride,
 			UpdatedAt = excluded.UpdatedAt;
 	`, systemID, path, launcherID, now)
+}
+
+func sqlSetMediaUserSnapshot(
+	ctx context.Context, db *sql.DB, systemID, path, mediaName, encodedTags string,
+) error {
+	_, err := db.ExecContext(ctx, `
+		update MediaUserData set MediaName = ?, Tags = ?
+		where SystemID = ? and Path = ?;
+	`, mediaName, encodedTags, systemID, path)
+	if err != nil {
+		return fmt.Errorf("failed to update media user data snapshot: %w", err)
+	}
+	return nil
 }
 
 // mediaUserDataColumnWrite applies a single-column upsert and then deletes the
@@ -227,7 +259,7 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 
 	q, err := db.PrepareContext(ctx, `
 		select
-		DBID, SystemID, Path, IsFavorite, LauncherOverride, CreatedAt, UpdatedAt
+		DBID, SystemID, Path, IsFavorite, LauncherOverride, MediaName, Tags, CreatedAt, UpdatedAt
 		from MediaUserData;
 	`)
 	if err != nil {
@@ -250,12 +282,15 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 	}()
 	for rows.Next() {
 		row := database.MediaUserData{}
+		var rawTags string
 		scanErr := rows.Scan(
 			&row.DBID,
 			&row.SystemID,
 			&row.Path,
 			&row.IsFavorite,
 			&row.LauncherOverride,
+			&row.MediaName,
+			&rawTags,
 			&row.CreatedAt,
 			&row.UpdatedAt,
 		)
@@ -263,6 +298,7 @@ func sqlListMediaUserData(ctx context.Context, db *sql.DB) ([]database.MediaUser
 			return list, fmt.Errorf("failed to scan media user data row: %w", scanErr)
 		}
 		row.Path = pathutil.CanonicalMediaPath(row.Path)
+		row.Tags = database.DecodeTagStrings(rawTags)
 		list = append(list, row)
 	}
 	if err = rows.Err(); err != nil {

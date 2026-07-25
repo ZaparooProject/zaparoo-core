@@ -58,7 +58,13 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 		mappingsDir,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return err
+				// One unreadable entry must not abort the walk and drop
+				// every other mapping file.
+				log.Warn().Err(err).Str("path", path).Msg("skipping unreadable path in mappings directory")
+				if info != nil && info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 
 			if info.IsDir() {

@@ -42,6 +42,9 @@ const (
 	PageSettingsMain          = "settings_main"
 	PageSettingsBasic         = "settings_basic"
 	PageSettingsAdvanced      = "settings_advanced"
+	PageSettingsBackup        = "settings_backup"
+	PageSettingsBackupList    = "settings_backup_list"
+	PageSettingsOnline        = "settings_online"
 	PageSettingsReaderList    = "settings_reader_list"
 	PageSettingsReaderEdit    = "settings_reader_edit"
 	PageSettingsIgnoreSystems = "settings_ignore_systems"
@@ -784,48 +787,73 @@ func BuildMain(
 	}
 	app.SetRoot(rootWidget, true)
 
-	if !tuiCfg.ErrorReportingPrompted && isRunning() {
-		// Check the service's actual error reporting state via API, not the
-		// local config. The service daemon may run as a separate process with
-		// different in-memory state than what's on disk.
+	if isRunning() {
 		apiClient := client.NewLocalAPIClient(cfg)
 		svc := NewSettingsService(apiClient)
-		ctx, cancel := tuiContext()
-		settings, err := svc.GetSettings(ctx)
-		cancel()
-
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to check error reporting state")
-		} else if !settings.ErrorReporting {
-			configDir := helpers.ConfigDir(pl)
-			markPrompted := func() {
-				updated := config.GetTUIConfig()
-				updated.ErrorReportingPrompted = true
-				config.SetTUIConfig(updated)
-				go func() {
-					if err := config.SaveTUIConfig(configDir); err != nil {
-						log.Error().Err(err).Msg("failed to save TUI config")
-					}
-				}()
+		configDir := helpers.ConfigDir(pl)
+		markTUIPrompted := func(update func(*config.TUIConfig)) {
+			updated := config.GetTUIConfig()
+			update(&updated)
+			config.SetTUIConfig(updated)
+			go func() {
+				if err := config.SaveTUIConfig(configDir); err != nil {
+					log.Error().Err(err).Msg("failed to save TUI config")
+				}
+			}()
+		}
+		// The secure-device prompt is chained after the error reporting
+		// prompt so the two never stack on the same launch.
+		showSecureDevicePrompt := func() {
+			if config.GetTUIConfig().EncryptionPrompted {
+				return
 			}
-			ShowErrorReportingPrompt(pages, app,
-				func() {
-					enabled := true
-					ctx, cancel := tuiContext()
-					defer cancel()
-					err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
-						ErrorReporting: &enabled,
-					})
-					if err != nil {
-						log.Warn().Err(err).Msg("error enabling error reporting")
-						ShowErrorModal(pages, app, "Failed to enable error reporting", nil)
-						return
-					}
-					markPrompted()
-				},
-				nil,
-				markPrompted,
-			)
+			maybeShowEncryptionPrompt(svc, pages, app, func() {
+				markTUIPrompted(func(c *config.TUIConfig) { c.EncryptionPrompted = true })
+			})
+		}
+
+		if !tuiCfg.ErrorReportingPrompted {
+			// Check the service's actual error reporting state via API, not
+			// the local config. The service daemon may run as a separate
+			// process with different in-memory state than what's on disk.
+			ctx, cancel := tuiContext()
+			settings, err := svc.GetSettings(ctx)
+			cancel()
+
+			switch {
+			case err != nil:
+				log.Warn().Err(err).Msg("failed to check error reporting state")
+			case !settings.ErrorReporting:
+				markPrompted := func() {
+					markTUIPrompted(func(c *config.TUIConfig) { c.ErrorReportingPrompted = true })
+				}
+				ShowErrorReportingPrompt(pages, app,
+					func() {
+						enabled := true
+						ctx, cancel := tuiContext()
+						defer cancel()
+						err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
+							ErrorReporting: &enabled,
+						})
+						if err != nil {
+							log.Warn().Err(err).Msg("error enabling error reporting")
+							ShowErrorModal(pages, app, "Failed to enable error reporting", showSecureDevicePrompt)
+							return
+						}
+						markPrompted()
+						showSecureDevicePrompt()
+					},
+					showSecureDevicePrompt,
+					func() {
+						markPrompted()
+						showSecureDevicePrompt()
+					},
+				)
+			default:
+				showSecureDevicePrompt()
+			}
+		} else {
+			showSecureDevicePrompt()
 		}
 	}
 

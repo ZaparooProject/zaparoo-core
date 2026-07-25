@@ -700,6 +700,59 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	assert.NotZero(t, result2.MediaID)
 }
 
+func TestMediaDB_RandomGameWithQuery_PathPrefixIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	err := mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+
+	matchingDir := filepath.Join("roms", "nes", "favorites")
+	matchingPath := filepath.Join(matchingDir, "target.nes")
+	outsidePath := filepath.Join("roms", "nes", "other", "outside.nes")
+	paths := []string{matchingPath, outsidePath}
+	var matchingMediaID int64
+	for i, path := range paths {
+		name := fmt.Sprintf("Game %d", i+1)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, name),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		insertedMedia, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSystem.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           path,
+		})
+		require.NoError(t, mediaErr)
+		if path == matchingPath {
+			matchingMediaID = insertedMedia.DBID
+		}
+	}
+
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+		PathPrefix: matchingDir + string(filepath.Separator),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, nesSystem.ID, result.SystemID)
+	assert.Equal(t, matchingPath, result.Path)
+	assert.Equal(t, matchingMediaID, result.MediaID)
+}
+
 func TestMediaDB_LookupsRespectCanceledContext(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -3293,7 +3346,7 @@ func TestMediaDB_BrowseRouteCountsDegradeOnSubTimeout_Integration(t *testing.T) 
 	// presence probe a real budget, so the route degrades to "present, unknown
 	// count" instead of erroring the whole browse.
 	origCount, origProbe := browseRouteCountSubTimeout, browseRouteProbeSubTimeout
-	browseRouteCountSubTimeout = time.Nanosecond
+	browseRouteCountSubTimeout = -time.Second
 	browseRouteProbeSubTimeout = 5 * time.Second
 	defer func() {
 		browseRouteCountSubTimeout = origCount

@@ -41,18 +41,29 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Profile data swapping on MiSTer works by bind-mounting a per-profile
-// directory over the live saves/savestates directories. Main hardcodes
-// SAVE_DIR/SAVESTATE_DIR relative to its storage root, so directory-level
-// redirection is the only mechanism — and bind mounts do it with zero
-// on-disk mutation: the SD card stays a completely standard exFAT layout,
-// nothing moves or copies, and a power cut mid-switch can't tear anything.
-// Mount state survives a service crash and clears on reboot; the boot
-// reconcile pass reapplies it.
+// Profile data swapping on MiSTer works by bind-mounting per-profile
+// directories or files over their live paths. Main hardcodes save paths
+// relative to its storage root, while odelot's custom RetroAchievements Main
+// hardcodes its config on the SD root. Bind mounts keep the standard on-disk
+// layout and avoid moving live data during a switch. Mount state survives a
+// service crash and clears on reboot; the boot reconcile pass reapplies it.
+type profileDataItemKind uint8
+
+type profileDataItemSpec struct {
+	id       string
+	label    string
+	filename string
+	kind     profileDataItemKind
+}
+
 const (
-	// profileDataItemSaves and ...Savestates are the swappable item IDs.
-	profileDataItemSaves      = "saves"
-	profileDataItemSavestates = "savestates"
+	profileDataItemKindDir profileDataItemKind = iota
+	profileDataItemKindFile
+
+	profileDataItemSaves             = "saves"
+	profileDataItemSavestates        = "savestates"
+	profileDataItemRetroAchievements = "retroachievements"
+	retroAchievementsConfigFile      = "retroachievements.cfg"
 
 	// nasPoolDirName is the pool directory created inside a foreign mount
 	// (e.g. a NAS share bind-mounted over saves/ by cifs_mount.sh). The
@@ -65,6 +76,15 @@ const (
 )
 
 var (
+	profileDataItems = [...]profileDataItemSpec{
+		{id: profileDataItemSaves, label: "Save files", kind: profileDataItemKindDir},
+		{id: profileDataItemSavestates, label: "Save states", kind: profileDataItemKindDir},
+		{
+			id: profileDataItemRetroAchievements, label: "RetroAchievements account",
+			filename: retroAchievementsConfigFile, kind: profileDataItemKindFile,
+		},
+	}
+
 	// mountLedgerPath records the binds we own. On tmpfs so it lives and
 	// dies with the kernel mount state it describes.
 	mountLedgerPath = filepath.Join(string(filepath.Separator), "run", "zaparoo", "mounts.json")
@@ -75,9 +95,20 @@ var (
 	mediaRootPath = filepath.Join(string(filepath.Separator), "media")
 )
 
-func profileItemDir(item string) string {
-	// Item IDs happen to equal main's directory names.
-	return item
+func findProfileDataItem(id string) (profileDataItemSpec, bool) {
+	for _, item := range profileDataItems {
+		if item.id == id {
+			return item, true
+		}
+	}
+	return profileDataItemSpec{}, false
+}
+
+func profileItemTarget(root string, item profileDataItemSpec) string {
+	if item.kind == profileDataItemKindFile {
+		return filepath.Join(misterconfig.SDRootDir, item.filename)
+	}
+	return filepath.Join(root, item.id)
 }
 
 // profileDataManager owns the mount decisions. All paths are derived per
@@ -100,10 +131,13 @@ func newProfileDataManager(fs afero.Fs) *profileDataManager {
 
 // ProfileItems implements platforms.ProfileDataSwapper.
 func (*Platform) ProfileItems() []platforms.ProfileItem {
-	return []platforms.ProfileItem{
-		{ID: profileDataItemSaves, Label: "Save files", Owner: platforms.ProfileItemOwnerProfile},
-		{ID: profileDataItemSavestates, Label: "Save states", Owner: platforms.ProfileItemOwnerProfile},
+	items := make([]platforms.ProfileItem, 0, len(profileDataItems))
+	for _, item := range profileDataItems {
+		items = append(items, platforms.ProfileItem{
+			ID: item.id, Label: item.label, Owner: platforms.ProfileItemOwnerProfile,
+		})
 	}
+	return items
 }
 
 // ApplyProfile implements platforms.ProfileDataSwapper.
@@ -114,14 +148,26 @@ func (p *Platform) ApplyProfile(ref platforms.ProfileRef, enabledItems []string)
 type profileItemPlan struct {
 	ref      platforms.ProfileRef
 	previous platforms.ProfileRef
-	item     string
 	target   string
 	pool     string
+	item     profileDataItemSpec
+	skip     bool
 }
 
-func (d *profileDataManager) apply(ref platforms.ProfileRef, items []string) error {
+func (d *profileDataManager) apply(ref platforms.ProfileRef, itemIDs []string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	items := make([]profileDataItemSpec, 0, len(itemIDs))
+	needsStorageRoot := false
+	for _, id := range itemIDs {
+		item, ok := findProfileDataItem(id)
+		if !ok {
+			return fmt.Errorf("unknown profile data item %q", id)
+		}
+		items = append(items, item)
+		needsStorageRoot = needsStorageRoot || item.kind == profileDataItemKindDir
+	}
 
 	mounts, err := d.m.Mounts()
 	if err != nil {
@@ -129,9 +175,12 @@ func (d *profileDataManager) apply(ref platforms.ProfileRef, items []string) err
 	}
 	d.ledger.prune(mounts)
 
-	root, err := d.resolveStorageRoot(mounts)
-	if err != nil {
-		return err
+	root := misterconfig.SDRootDir
+	if needsStorageRoot {
+		root, err = d.resolveStorageRoot(mounts)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Prepare every destination before changing any live mount. A missing or
@@ -140,7 +189,7 @@ func (d *profileDataManager) apply(ref platforms.ProfileRef, items []string) err
 	for _, item := range items {
 		plan, planErr := d.prepareItem(root, item, ref)
 		if planErr != nil {
-			return fmt.Errorf("%s: %w", item, planErr)
+			return fmt.Errorf("%s: %w", item.id, planErr)
 		}
 		plans = append(plans, plan)
 	}
@@ -149,7 +198,7 @@ func (d *profileDataManager) apply(ref platforms.ProfileRef, items []string) err
 		if applyErr := d.applyItem(&plans[i]); applyErr != nil {
 			rollbackErr := d.rollbackItems(root, plans[:i+1])
 			return errors.Join(
-				fmt.Errorf("%s: %w", plans[i].item, applyErr),
+				fmt.Errorf("%s: %w", plans[i].item.id, applyErr),
 				rollbackErr,
 			)
 		}
@@ -157,12 +206,10 @@ func (d *profileDataManager) apply(ref platforms.ProfileRef, items []string) err
 	return nil
 }
 
-func (d *profileDataManager) prepareItem(root, item string, ref platforms.ProfileRef) (profileItemPlan, error) {
-	plan := profileItemPlan{
-		ref:    ref,
-		item:   item,
-		target: filepath.Join(root, profileItemDir(item)),
-	}
+func (d *profileDataManager) prepareItem(
+	root string, item profileDataItemSpec, ref platforms.ProfileRef,
+) (profileItemPlan, error) {
+	plan := profileItemPlan{ref: ref, item: item, target: profileItemTarget(root, item)}
 
 	mounts, err := d.m.Mounts()
 	if err != nil {
@@ -184,6 +231,12 @@ func (d *profileDataManager) prepareItem(root, item string, ref platforms.Profil
 	if ref.ID == "" {
 		return plan, nil
 	}
+	if item.kind == profileDataItemKindFile {
+		if fileErr := d.prepareFileItem(&plan, ref); fileErr != nil {
+			return profileItemPlan{}, fileErr
+		}
+		return plan, nil
+	}
 
 	var profileDir string
 	if len(stack) > 0 {
@@ -194,7 +247,7 @@ func (d *profileDataManager) prepareItem(root, item string, ref platforms.Profil
 	} else {
 		profileDir = filepath.Join(root, "zaparoo", "profiles", ref.ID)
 	}
-	plan.pool = filepath.Join(profileDir, profileItemDir(item))
+	plan.pool = filepath.Join(profileDir, item.id)
 
 	if mkdirErr := d.fs.MkdirAll(plan.pool, 0o755); mkdirErr != nil {
 		if len(stack) > 0 {
@@ -208,6 +261,72 @@ func (d *profileDataManager) prepareItem(root, item string, ref platforms.Profil
 	return plan, nil
 }
 
+func (d *profileDataManager) prepareFileItem(
+	plan *profileItemPlan, ref platforms.ProfileRef,
+) error {
+	info, err := d.fs.Stat(plan.target)
+	if errors.Is(err, os.ErrNotExist) {
+		plan.skip = true
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to inspect live config: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("live config is not a regular file: %s", plan.target)
+	}
+
+	profileDir := filepath.Join(misterconfig.SDRootDir, "zaparoo", "profiles", ref.ID)
+	if err = d.fs.MkdirAll(profileDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create profile pool %s: %w", profileDir, err)
+	}
+	plan.pool = filepath.Join(profileDir, plan.item.filename)
+
+	poolInfo, statErr := d.fs.Stat(plan.pool)
+	switch {
+	case statErr == nil && !poolInfo.Mode().IsRegular():
+		return fmt.Errorf("profile config is not a regular file: %s", plan.pool)
+	case statErr == nil:
+	case errors.Is(statErr, os.ErrNotExist):
+		if copyErr := d.copyProfileFile(plan.target, plan.pool, info.Mode()); copyErr != nil {
+			return copyErr
+		}
+	default:
+		return fmt.Errorf("failed to inspect profile config: %w", statErr)
+	}
+
+	d.writeNameFile(profileDir, ref)
+	return nil
+}
+
+func (d *profileDataManager) copyProfileFile(source, target string, mode os.FileMode) error {
+	data, err := afero.ReadFile(d.fs, source)
+	if err != nil {
+		return fmt.Errorf("failed to read live config: %w", err)
+	}
+
+	temp, err := afero.TempFile(d.fs, filepath.Dir(target), "."+filepath.Base(target)+"-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary profile config: %w", err)
+	}
+	tempPath := temp.Name()
+	defer func() { _ = d.fs.Remove(tempPath) }()
+
+	if err = d.fs.Chmod(tempPath, mode.Perm()); err == nil {
+		_, err = temp.Write(data)
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("failed to write profile config: %w", err)
+	}
+	if err = d.fs.Rename(tempPath, target); err != nil {
+		return fmt.Errorf("failed to install profile config: %w", err)
+	}
+	return nil
+}
+
 func (d *profileDataManager) rollbackItems(root string, plans []profileItemPlan) error {
 	var errs []error
 	for i := len(plans) - 1; i >= 0; i-- {
@@ -216,7 +335,7 @@ func (d *profileDataManager) rollbackItems(root string, plans []profileItemPlan)
 			err = d.applyItem(&rollback)
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to restore %s: %w", plans[i].item, err))
+			errs = append(errs, fmt.Errorf("failed to restore %s: %w", plans[i].item.id, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -252,6 +371,10 @@ func (d *profileDataManager) resolveStorageRoot(mounts []mountEntry) (string, er
 }
 
 func (d *profileDataManager) applyItem(plan *profileItemPlan) error {
+	if plan.skip {
+		return nil
+	}
+
 	// Idempotency: if the topmost mount is already our bind for this
 	// profile, there is nothing to do. Reconciles run on every mount-table
 	// change and must not churn mounts.
@@ -262,7 +385,7 @@ func (d *profileDataManager) applyItem(plan *profileItemPlan) error {
 		}
 		if stack := mountsAt(mounts, plan.target); len(stack) > 0 {
 			top := stack[len(stack)-1]
-			if e := d.ledger.find(&top); e != nil && e.ProfileID == plan.ref.ID && e.Item == plan.item {
+			if e := d.ledger.find(&top); e != nil && e.ProfileID == plan.ref.ID && e.Item == plan.item.id {
 				return nil
 			}
 		}
@@ -292,8 +415,8 @@ func (d *profileDataManager) applyItem(plan *profileItemPlan) error {
 	}
 
 	if plan.ref.ID == "" {
-		// Shared profile: the un-mounted state (plain directory or the
-		// user's own NAS mount) is the shared data.
+		// Shared profile: the un-mounted state (plain path or the user's own
+		// NAS mount) is the shared data.
 		return nil
 	}
 
@@ -306,7 +429,7 @@ func (d *profileDataManager) applyItem(plan *profileItemPlan) error {
 		Root:      top.Root,
 		Source:    top.Source,
 		ProfileID: plan.ref.ID,
-		Item:      plan.item,
+		Item:      plan.item.id,
 	}
 	if ledgerErr := d.ledger.add(entry); ledgerErr != nil {
 		// Ownership must be durable before reporting success. Undo the bind;

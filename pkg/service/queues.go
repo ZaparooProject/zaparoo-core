@@ -195,7 +195,8 @@ func runTokenZapScript(
 			i,
 			svc.DB,
 			zapscript.RunCommandOptions{
-				LauncherManager: svc.State.LauncherManager(),
+				LauncherManager:    svc.State.LauncherManager(),
+				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
 				WaitForMediaReady: func(ctx context.Context) error {
 					return waitForMediaReady(ctx, svc, mediaReadyGen)
 				},

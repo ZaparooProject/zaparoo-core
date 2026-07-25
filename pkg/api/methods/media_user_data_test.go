@@ -47,6 +47,29 @@ func favouriteRow(path string) database.MediaFullRow {
 	}
 }
 
+func TestSnapshotMediaUserIdentityUsesRequestContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	path := filepath.Join("roms", "NES", "Game.nes")
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On(
+		"SearchMediaPathExact",
+		mock.MatchedBy(func(got context.Context) bool { return errors.Is(got.Err(), context.Canceled) }),
+		mock.Anything,
+		path,
+	).Return([]database.SearchResult(nil), context.Canceled).Once()
+	env := requests.RequestEnv{
+		Context:  ctx,
+		Database: &database.Database{MediaDB: mockDB},
+	}
+
+	snapshotMediaUserIdentity(&env, "NES", path)
+
+	mockDB.AssertExpectations(t)
+}
+
 // TestMediaTagsUpdate_PersistsUserDBTruthWhenProjectionFails proves the truth-first
 // ordering: the UserDB favourite is saved even though the media.db projection write
 // then fails, so the next reindex can re-materialize it.
@@ -59,6 +82,10 @@ func TestMediaTagsUpdate_PersistsUserDBTruthWhenProjectionFails(t *testing.T) {
 
 	path := filepath.Join("roms", "NES", "Game.nes")
 	mockDB := testhelpers.NewMockMediaDBI()
+	// The identity snapshot after a user-data write is best-effort; an empty
+	// search result means no snapshot and is not part of what these tests prove.
+	mockDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResult{}, nil).Maybe()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: favouriteRow(path)}, nil).Once()
 	mockDB.On("BeginTransaction", false).Return(errors.New("projection boom")).Once()
@@ -92,6 +119,10 @@ func TestMediaMetaUpdate_PersistsUserDBTruthWhenProjectionFails(t *testing.T) {
 
 	path := filepath.Join("roms", "NES", "Game.nes")
 	mockDB := testhelpers.NewMockMediaDBI()
+	// The identity snapshot after a user-data write is best-effort; an empty
+	// search result means no snapshot and is not part of what these tests prove.
+	mockDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResult{}, nil).Maybe()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: favouriteRow(path)}, nil).Once()
 	mockDB.On("FindOrInsertTagType", database.TagType{

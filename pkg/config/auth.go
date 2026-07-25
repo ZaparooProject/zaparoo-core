@@ -31,9 +31,14 @@ import (
 
 // CredentialEntry holds authentication credentials for a URL.
 type CredentialEntry struct {
-	Username string `toml:"username"`
-	Password string `toml:"password"` //nolint:gosec // G117: auth config struct field
-	Bearer   string `toml:"bearer"`
+	Username string `toml:"username,omitempty"`
+	Password string `toml:"password,omitempty"` //nolint:gosec // G117: auth config struct field
+	Bearer   string `toml:"bearer,omitempty"`
+	// LinkedVia records which auth root domain created this entry during a
+	// claim/link flow — the root tags itself and every trusted-domain copy
+	// it extends to. Unlink removes entries by this provenance. Empty for
+	// hand-written entries.
+	LinkedVia string `toml:"linked_via,omitempty"`
 }
 
 // schemeAliases maps protocol variants to their canonical form.

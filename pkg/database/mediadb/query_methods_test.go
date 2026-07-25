@@ -100,7 +100,9 @@ func TestMediaDB_SearchMediaPathGlob_MultiSystemVariants(t *testing.T) {
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	gamePath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Super Mario World.sfc")
+	gamePath := filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "roms", "SNES", "Super Mario World.sfc",
+	))
 	scantest.IndexMediaPaths(t, mediaDB, "SNES", gamePath)
 
 	snes, err := systemdefs.GetSystem("SNES")
@@ -121,7 +123,7 @@ func TestMediaDB_SearchMediaPathGlob_NoGlobPartsReturnsRandomGame(t *testing.T) 
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	gamePath := filepath.Join(string(filepath.Separator), "roms", "SNES", "Only Game.sfc")
+	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Only Game.sfc"))
 	scantest.IndexMediaPaths(t, mediaDB, "SNES", gamePath)
 
 	snes, err := systemdefs.GetSystem("SNES")
@@ -141,10 +143,11 @@ func TestMediaDB_BrowseDirCount_FromMediaFallback(t *testing.T) {
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	scantest.IndexMediaPaths(t, mediaDB, "SNES",
-		filepath.Join(string(filepath.Separator), "roms", "SNES", "USA", "Game.sfc"))
+	scantest.IndexMediaPaths(t, mediaDB, "SNES", filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "roms", "SNES", "USA", "Game.sfc",
+	)))
 
-	systemDir := filepath.Join(string(filepath.Separator), "roms", "SNES") + "/"
+	systemDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES")) + "/"
 	count, err := mediaDB.BrowseDirCount(context.Background(), database.BrowseDirCountOptions{
 		PathPrefix: systemDir,
 	})

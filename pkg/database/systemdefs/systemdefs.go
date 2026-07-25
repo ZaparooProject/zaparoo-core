@@ -66,14 +66,6 @@ type System struct {
 	Slugs     []string
 }
 
-// GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
-func (s *System) GetMediaType() MediaType {
-	if s.MediaType == "" {
-		return MediaTypeGame
-	}
-	return s.MediaType
-}
-
 // Lazy initialization for system lookup map
 // Maps lookup keys (lowercase IDs, slugs, etc.) to system IDs for resolution
 var (
@@ -81,6 +73,319 @@ var (
 	lookupMapOnce sync.Once
 	errLookupMap  error
 )
+
+// Consoles
+const (
+	System3DO                 = "3DO"
+	System3DS                 = "3DS"
+	SystemAdventureVision     = "AdventureVision"
+	SystemArcadia             = "Arcadia"
+	SystemAstrocade           = "Astrocade"
+	SystemAmigaCD32           = "AmigaCD32"
+	SystemAtari2600           = "Atari2600"
+	SystemAtari5200           = "Atari5200"
+	SystemAtari7800           = "Atari7800"
+	SystemAtariLynx           = "AtariLynx"
+	SystemAtariXEGS           = "AtariXEGS"
+	SystemCasioPV1000         = "CasioPV1000"
+	SystemCDI                 = "CDI"
+	SystemChannelF            = "ChannelF"
+	SystemColecoVision        = "ColecoVision"
+	SystemCreatiVision        = "CreatiVision"
+	SystemDreamcast           = "Dreamcast"
+	SystemFDS                 = "FDS"
+	SystemGamate              = "Gamate"
+	SystemGameboy             = "Gameboy"
+	SystemGameboyColor        = "GameboyColor"
+	SystemGameboy2P           = "Gameboy2P"
+	SystemGameCube            = "GameCube"
+	SystemGameGear            = "GameGear"
+	SystemGameGear2P          = "GameGear2P"
+	SystemGameNWatch          = "GameNWatch"
+	SystemGameCom             = "GameCom"
+	SystemGBA                 = "GBA"
+	SystemGBA2P               = "GBA2P"
+	SystemGenesis             = "Genesis"
+	SystemGenesisMSU          = "GenesisMSU"
+	SystemGenesisPlus         = "GenesisPlus"
+	SystemIntellivision       = "Intellivision"
+	SystemJaguar              = "Jaguar"
+	SystemJaguarCD            = "JaguarCD"
+	SystemMasterSystem        = "MasterSystem"
+	SystemMegaCD              = "MegaCD"
+	SystemMegaDuck            = "MegaDuck"
+	SystemNDS                 = "NDS"
+	SystemNeoGeo              = "NeoGeo"
+	SystemNeoGeoAES           = "NeoGeoAES"
+	SystemNeoGeoMVS           = "NeoGeoMVS"
+	SystemNeoGeoCD            = "NeoGeoCD"
+	SystemNeoGeoPocket        = "NeoGeoPocket"
+	SystemNeoGeoPocketColor   = "NeoGeoPocketColor"
+	SystemNES                 = "NES"
+	SystemNESMusic            = "NESMusic"
+	SystemNintendo64          = "Nintendo64"
+	SystemOdyssey2            = "Odyssey2"
+	SystemOuya                = "Ouya"
+	SystemPCFX                = "PCFX"
+	SystemPocketChallengeV2   = "PocketChallengeV2"
+	SystemPokemonMini         = "PokemonMini"
+	SystemPSX                 = "PSX"
+	SystemPS2                 = "PS2"
+	SystemPS3                 = "PS3"
+	SystemPS4                 = "PS4"
+	SystemPS5                 = "PS5"
+	SystemPSP                 = "PSP"
+	SystemSega32X             = "Sega32X"
+	SystemSeriesXS            = "SeriesXS"
+	SystemSG1000              = "SG1000"
+	SystemSuperGameboy        = "SuperGameboy"
+	SystemSuperVision         = "SuperVision"
+	SystemSaturn              = "Saturn"
+	SystemSNES                = "SNES"
+	SystemSNESMSU1            = "SNESMSU1"
+	SystemSGBMSU1             = "SGBMSU1"
+	SystemSNESMusic           = "SNESMusic"
+	SystemSuperGrafx          = "SuperGrafx"
+	SystemSwitch              = "Switch"
+	SystemTurboGrafx16        = "TurboGrafx16"
+	SystemTurboGrafx16CD      = "TurboGrafx16CD"
+	SystemVC4000              = "VC4000"
+	SystemVectrex             = "Vectrex"
+	SystemVirtualBoy          = "VirtualBoy"
+	SystemVita                = "Vita"
+	SystemWii                 = "Wii"
+	SystemWiiU                = "WiiU"
+	SystemWonderSwan          = "WonderSwan"
+	SystemWonderSwanColor     = "WonderSwanColor"
+	SystemXbox                = "Xbox"
+	SystemXbox360             = "Xbox360"
+	SystemXboxOne             = "XboxOne"
+	SystemMultivision         = "Multivision"
+	SystemVideopacPlus        = "VideopacPlus"
+	SystemNGage               = "NGage"
+	SystemSocrates            = "Socrates"
+	SystemSuperACan           = "SuperACan"
+	SystemSufami              = "Sufami"
+	SystemVSmile              = "VSmile"
+	System1292APVS            = "1292APVS"
+	SystemAdvancedPICOBeena   = "AdvancedPICOBeena"
+	SystemAmstradGX4000       = "AmstradGX4000"
+	SystemApplePippin         = "ApplePippin"
+	SystemCassetteVision      = "CassetteVision"
+	SystemCasioLoopy          = "CasioLoopy"
+	SystemCommodoreCDTV       = "CommodoreCDTV"
+	SystemDigiBlast           = "DigiBlast"
+	SystemEvercade            = "Evercade"
+	SystemGearVR              = "GearVR"
+	SystemHandheldLCD         = "HandheldElectronicLCD"
+	SystemHyperScan           = "HyperScan"
+	SystemIntellivisionAmico  = "IntellivisionAmico"
+	SystemLeapster            = "Leapster"
+	SystemLeapsterExplorer    = "LeapsterExplorer"
+	SystemLeapTV              = "LeapTV"
+	SystemMagnavoxOdyssey     = "MagnavoxOdyssey"
+	SystemMetaQuest2          = "MetaQuest2"
+	SystemMetaQuest3          = "MetaQuest3"
+	SystemMicrovision         = "Microvision"
+	SystemNintendoEReader     = "NintendoEReader"
+	SystemNintendoSwitch2     = "NintendoSwitch2"
+	SystemNuon                = "Nuon"
+	SystemOculusGo            = "OculusGo"
+	SystemOculusQuest         = "OculusQuest"
+	SystemOculusRift          = "OculusRift"
+	SystemPanasonicJungle     = "PanasonicJungle"
+	SystemPanasonicM2         = "PanasonicM2"
+	SystemPC50XFamily         = "PC50XFamily"
+	SystemPlaydate            = "Playdate"
+	SystemPlaydia             = "Playdia"
+	SystemPlayStationVR       = "PlayStationVR"
+	SystemPlayStationVR2      = "PlayStationVR2"
+	SystemPocketStation       = "PocketStation"
+	SystemPolymega            = "Polymega"
+	SystemRZone               = "RZone"
+	SystemSegaCD32X           = "SegaCD32X"
+	SystemSegaPico            = "SegaPico"
+	SystemSuperCassetteVision = "SuperCassetteVision"
+	SystemTapwaveZodiac       = "TapwaveZodiac"
+	SystemTerebikko           = "Terebikko"
+	SystemUzebox              = "Uzebox"
+	SystemVMU                 = "VMU"
+	SystemZeebo               = "Zeebo"
+)
+
+// Computers
+const (
+	SystemAcornAtom              = "AcornAtom"
+	SystemAcornElectron          = "AcornElectron"
+	SystemArchimedes             = "Archimedes"
+	SystemAliceMC10              = "AliceMC10"
+	SystemAmiga                  = "Amiga"
+	SystemAmiga500               = "Amiga500"
+	SystemAmiga1200              = "Amiga1200"
+	SystemAmstrad                = "Amstrad"
+	SystemAmstradPCW             = "AmstradPCW"
+	SystemApogee                 = "Apogee"
+	SystemAppleI                 = "AppleI"
+	SystemAppleII                = "AppleII"
+	SystemAppleIIGS              = "AppleIIGS"
+	SystemAppleLisa              = "AppleLisa"
+	SystemAquarius               = "Aquarius"
+	SystemAtari800               = "Atari800"
+	SystemBBCMicro               = "BBCMicro"
+	SystemBK0011M                = "BK0011M"
+	SystemC16                    = "C16"
+	SystemC64                    = "C64"
+	SystemCasioPV2000            = "CasioPV2000"
+	SystemCoCo2                  = "CoCo2"
+	SystemDOS                    = "DOS"
+	SystemEDSAC                  = "EDSAC"
+	SystemGalaksija              = "Galaksija"
+	SystemInteract               = "Interact"
+	SystemJupiter                = "Jupiter"
+	SystemLaser                  = "Laser"
+	SystemLynx48                 = "Lynx48"
+	SystemMacPlus                = "MacPlus"
+	SystemMacOS                  = "MacOS"
+	SystemMSX                    = "MSX"
+	SystemMSX1                   = "MSX1"
+	SystemMSX2                   = "MSX2"
+	SystemMSX2Plus               = "MSX2Plus"
+	SystemMultiComp              = "MultiComp"
+	SystemOrao                   = "Orao"
+	SystemOric                   = "Oric"
+	SystemPC                     = "PC"
+	SystemPCXT                   = "PCXT"
+	SystemPDP1                   = "PDP1"
+	SystemPET2001                = "PET2001"
+	SystemPMD85                  = "PMD85"
+	SystemQL                     = "QL"
+	SystemRX78                   = "RX78"
+	SystemSAMCoupe               = "SAMCoupe"
+	SystemScummVM                = "ScummVM"
+	SystemSordM5                 = "SordM5"
+	SystemSpecialist             = "Specialist"
+	SystemSVI328                 = "SVI328"
+	SystemTatungEinstein         = "TatungEinstein"
+	SystemTI994A                 = "TI994A"
+	SystemTomyTutor              = "TomyTutor"
+	SystemTRS80                  = "TRS80"
+	SystemTSConf                 = "TSConf"
+	SystemUK101                  = "UK101"
+	SystemVector06C              = "Vector06C"
+	SystemVIC20                  = "VIC20"
+	SystemWindows                = "Windows"
+	SystemX68000                 = "X68000"
+	SystemZX81                   = "ZX81"
+	SystemZXSpectrum             = "ZXSpectrum"
+	SystemZXNext                 = "ZXNext"
+	SystemAtariST                = "AtariST"
+	SystemColecoAdam             = "ColecoAdam"
+	SystemFM7                    = "FM7"
+	SystemFMTowns                = "FMTowns"
+	SystemGamePocket             = "GamePocket"
+	SystemGameMaster             = "GameMaster"
+	SystemGP32                   = "GP32"
+	SystemPC88                   = "PC88"
+	SystemPC98                   = "PC98"
+	SystemX1                     = "X1"
+	SystemCommanderX16           = "CommanderX16"
+	SystemSpectravideo           = "Spectravideo"
+	SystemThomson                = "Thomson"
+	SystemCommodorePlus4         = "CommodorePlus4"
+	SystemDragon32               = "Dragon32"
+	SystemElektorTVGamesComputer = "ElektorTVGamesComputer"
+	SystemLegacyComputer         = "LegacyComputer"
+	SystemLinux                  = "Linux"
+	SystemMZ2200                 = "MZ2200"
+	SystemPC6000                 = "PC6000"
+	SystemPDP10                  = "PDP10"
+	SystemPLATO                  = "PLATO"
+)
+
+// Other
+const (
+	SystemAndroid             = "Android"
+	SystemArcade              = "Arcade"
+	SystemAtomiswave          = "Atomiswave"
+	SystemArduboy             = "Arduboy"
+	SystemChip8               = "Chip8"
+	SystemCPS1                = "CPS1"
+	SystemCPS2                = "CPS2"
+	SystemCPS3                = "CPS3"
+	SystemIremM72             = "IremM72"
+	SystemIremM92             = "IremM92"
+	SystemJalecoMegaSystem1   = "JalecoMegaSystem1"
+	SystemNamcoSystem1        = "NamcoSystem1"
+	SystemPGM                 = "PGM"
+	SystemSegaSTV             = "SegaSTV"
+	SystemSegaSystem16        = "SegaSystem16"
+	SystemSegaSystem18        = "SegaSystem18"
+	SystemTaitoF2             = "TaitoF2"
+	SystemDAPHNE              = "DAPHNE"
+	SystemDICE                = "DICE"
+	SystemSinge               = "Singe"
+	SystemModel1              = "Model1"
+	SystemModel2              = "Model2"
+	SystemNamco2X6            = "Namco2X6"
+	SystemNamco22             = "Namco22"
+	SystemTriforce            = "Triforce"
+	SystemLindbergh           = "Lindbergh"
+	SystemChihiro             = "Chihiro"
+	SystemGaelco              = "Gaelco"
+	SystemHikaru              = "Hikaru"
+	SystemIOS                 = "iOS"
+	SystemModel3              = "Model3"
+	SystemNAOMI               = "NAOMI"
+	SystemNAOMI2              = "NAOMI2"
+	SystemOpenBOR             = "OpenBOR"
+	SystemPico8               = "Pico8"
+	SystemTIC80               = "TIC80"
+	SystemVideo               = "Video"
+	SystemAudio               = "Audio"
+	SystemApplication         = "Application"
+	SystemMovie               = "Movie"
+	SystemTVEpisode           = "TVEpisode"
+	SystemTVSeason            = "TVSeason"
+	SystemTVShow              = "TVShow"
+	SystemMusicTrack          = "MusicTrack"
+	SystemMusicArtist         = "MusicArtist"
+	SystemMusicAlbum          = "MusicAlbum"
+	SystemMusicVideo          = "MusicVideo"
+	SystemPodcastSeries       = "PodcastSeries"
+	SystemPodcastEpisode      = "PodcastEpisode"
+	SystemAudiobook           = "Audiobook"
+	SystemImage               = "Image"
+	SystemJ2ME                = "J2ME"
+	SystemGroovy              = "Groovy"
+	SystemPlugNPlay           = "PlugNPlay"
+	SystemDevErr              = "DevErr"
+	SystemAirConsole          = "AirConsole"
+	SystemBlackBerryOS        = "BlackBerryOS"
+	SystemBluRayPlayer        = "BluRayPlayer"
+	SystemDaydream            = "Daydream"
+	SystemDVDPlayer           = "DVDPlayer"
+	SystemFireTV              = "FireTV"
+	SystemGoogleStadia        = "GoogleStadia"
+	SystemHyperNeoGeo64       = "HyperNeoGeo64"
+	SystemLegacyMobile        = "LegacyMobileDevice"
+	SystemOculusVR            = "OculusVR"
+	SystemPalmOS              = "PalmOS"
+	SystemPinball             = "Pinball"
+	SystemSteamVR             = "SteamVR"
+	SystemVisionOS            = "visionOS"
+	SystemWebBrowser          = "WebBrowser"
+	SystemWindowsMixedReality = "WindowsMixedReality"
+	SystemWindowsMobile       = "WindowsMobile"
+	SystemWindowsPhone        = "WindowsPhone"
+)
+
+// GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
+func (s *System) GetMediaType() MediaType {
+	if s.MediaType == "" {
+		return MediaTypeGame
+	}
+	return s.MediaType
+}
 
 // MapKeys returns a list of all keys in a map.
 func MapKeys[K comparable, V any](m map[K]V) []K {
@@ -242,237 +547,6 @@ func SystemsWithFallbacks(systems []System) []System {
 
 	return result
 }
-
-// Consoles
-const (
-	System3DO               = "3DO"
-	System3DS               = "3DS"
-	SystemAdventureVision   = "AdventureVision"
-	SystemArcadia           = "Arcadia"
-	SystemAstrocade         = "Astrocade"
-	SystemAmigaCD32         = "AmigaCD32"
-	SystemAtari2600         = "Atari2600"
-	SystemAtari5200         = "Atari5200"
-	SystemAtari7800         = "Atari7800"
-	SystemAtariLynx         = "AtariLynx"
-	SystemAtariXEGS         = "AtariXEGS"
-	SystemCasioPV1000       = "CasioPV1000"
-	SystemCDI               = "CDI"
-	SystemChannelF          = "ChannelF"
-	SystemColecoVision      = "ColecoVision"
-	SystemCreatiVision      = "CreatiVision"
-	SystemDreamcast         = "Dreamcast"
-	SystemFDS               = "FDS"
-	SystemGamate            = "Gamate"
-	SystemGameboy           = "Gameboy"
-	SystemGameboyColor      = "GameboyColor"
-	SystemGameboy2P         = "Gameboy2P"
-	SystemGameCube          = "GameCube"
-	SystemGameGear          = "GameGear"
-	SystemGameGear2P        = "GameGear2P"
-	SystemGameNWatch        = "GameNWatch"
-	SystemGameCom           = "GameCom"
-	SystemGBA               = "GBA"
-	SystemGBA2P             = "GBA2P"
-	SystemGenesis           = "Genesis"
-	SystemGenesisMSU        = "GenesisMSU"
-	SystemGenesisPlus       = "GenesisPlus"
-	SystemIntellivision     = "Intellivision"
-	SystemJaguar            = "Jaguar"
-	SystemJaguarCD          = "JaguarCD"
-	SystemMasterSystem      = "MasterSystem"
-	SystemMegaCD            = "MegaCD"
-	SystemMegaDuck          = "MegaDuck"
-	SystemNDS               = "NDS"
-	SystemNeoGeo            = "NeoGeo"
-	SystemNeoGeoAES         = "NeoGeoAES"
-	SystemNeoGeoMVS         = "NeoGeoMVS"
-	SystemNeoGeoCD          = "NeoGeoCD"
-	SystemNeoGeoPocket      = "NeoGeoPocket"
-	SystemNeoGeoPocketColor = "NeoGeoPocketColor"
-	SystemNES               = "NES"
-	SystemNESMusic          = "NESMusic"
-	SystemNintendo64        = "Nintendo64"
-	SystemOdyssey2          = "Odyssey2"
-	SystemOuya              = "Ouya"
-	SystemPCFX              = "PCFX"
-	SystemPocketChallengeV2 = "PocketChallengeV2"
-	SystemPokemonMini       = "PokemonMini"
-	SystemPSX               = "PSX"
-	SystemPS2               = "PS2"
-	SystemPS3               = "PS3"
-	SystemPS4               = "PS4"
-	SystemPS5               = "PS5"
-	SystemPSP               = "PSP"
-	SystemSega32X           = "Sega32X"
-	SystemSeriesXS          = "SeriesXS"
-	SystemSG1000            = "SG1000"
-	SystemSuperGameboy      = "SuperGameboy"
-	SystemSuperVision       = "SuperVision"
-	SystemSaturn            = "Saturn"
-	SystemSNES              = "SNES"
-	SystemSNESMSU1          = "SNESMSU1"
-	SystemSGBMSU1           = "SGBMSU1"
-	SystemSNESMusic         = "SNESMusic"
-	SystemSuperGrafx        = "SuperGrafx"
-	SystemSwitch            = "Switch"
-	SystemTurboGrafx16      = "TurboGrafx16"
-	SystemTurboGrafx16CD    = "TurboGrafx16CD"
-	SystemVC4000            = "VC4000"
-	SystemVectrex           = "Vectrex"
-	SystemVirtualBoy        = "VirtualBoy"
-	SystemVita              = "Vita"
-	SystemWii               = "Wii"
-	SystemWiiU              = "WiiU"
-	SystemWonderSwan        = "WonderSwan"
-	SystemWonderSwanColor   = "WonderSwanColor"
-	SystemXbox              = "Xbox"
-	SystemXbox360           = "Xbox360"
-	SystemXboxOne           = "XboxOne"
-	SystemMultivision       = "Multivision"
-	SystemVideopacPlus      = "VideopacPlus"
-	SystemNGage             = "NGage"
-	SystemSocrates          = "Socrates"
-	SystemSuperACan         = "SuperACan"
-	SystemSufami            = "Sufami"
-	SystemVSmile            = "VSmile"
-)
-
-// Computers
-const (
-	SystemAcornAtom      = "AcornAtom"
-	SystemAcornElectron  = "AcornElectron"
-	SystemArchimedes     = "Archimedes"
-	SystemAliceMC10      = "AliceMC10"
-	SystemAmiga          = "Amiga"
-	SystemAmiga500       = "Amiga500"
-	SystemAmiga1200      = "Amiga1200"
-	SystemAmstrad        = "Amstrad"
-	SystemAmstradPCW     = "AmstradPCW"
-	SystemApogee         = "Apogee"
-	SystemAppleI         = "AppleI"
-	SystemAppleII        = "AppleII"
-	SystemAquarius       = "Aquarius"
-	SystemAtari800       = "Atari800"
-	SystemBBCMicro       = "BBCMicro"
-	SystemBK0011M        = "BK0011M"
-	SystemC16            = "C16"
-	SystemC64            = "C64"
-	SystemCasioPV2000    = "CasioPV2000"
-	SystemCoCo2          = "CoCo2"
-	SystemDOS            = "DOS"
-	SystemEDSAC          = "EDSAC"
-	SystemGalaksija      = "Galaksija"
-	SystemInteract       = "Interact"
-	SystemJupiter        = "Jupiter"
-	SystemLaser          = "Laser"
-	SystemLynx48         = "Lynx48"
-	SystemMacPlus        = "MacPlus"
-	SystemMacOS          = "MacOS"
-	SystemMSX            = "MSX"
-	SystemMSX1           = "MSX1"
-	SystemMSX2           = "MSX2"
-	SystemMSX2Plus       = "MSX2Plus"
-	SystemMultiComp      = "MultiComp"
-	SystemOrao           = "Orao"
-	SystemOric           = "Oric"
-	SystemPC             = "PC"
-	SystemPCXT           = "PCXT"
-	SystemPDP1           = "PDP1"
-	SystemPET2001        = "PET2001"
-	SystemPMD85          = "PMD85"
-	SystemQL             = "QL"
-	SystemRX78           = "RX78"
-	SystemSAMCoupe       = "SAMCoupe"
-	SystemScummVM        = "ScummVM"
-	SystemSordM5         = "SordM5"
-	SystemSpecialist     = "Specialist"
-	SystemSVI328         = "SVI328"
-	SystemTatungEinstein = "TatungEinstein"
-	SystemTI994A         = "TI994A"
-	SystemTomyTutor      = "TomyTutor"
-	SystemTRS80          = "TRS80"
-	SystemTSConf         = "TSConf"
-	SystemUK101          = "UK101"
-	SystemVector06C      = "Vector06C"
-	SystemVIC20          = "VIC20"
-	SystemWindows        = "Windows"
-	SystemX68000         = "X68000"
-	SystemZX81           = "ZX81"
-	SystemZXSpectrum     = "ZXSpectrum"
-	SystemZXNext         = "ZXNext"
-	SystemAtariST        = "AtariST"
-	SystemColecoAdam     = "ColecoAdam"
-	SystemFM7            = "FM7"
-	SystemFMTowns        = "FMTowns"
-	SystemGamePocket     = "GamePocket"
-	SystemGameMaster     = "GameMaster"
-	SystemGP32           = "GP32"
-	SystemPC88           = "PC88"
-	SystemPC98           = "PC98"
-	SystemX1             = "X1"
-	SystemCommanderX16   = "CommanderX16"
-	SystemSpectravideo   = "Spectravideo"
-	SystemThomson        = "Thomson"
-)
-
-// Other
-const (
-	SystemAndroid           = "Android"
-	SystemArcade            = "Arcade"
-	SystemAtomiswave        = "Atomiswave"
-	SystemArduboy           = "Arduboy"
-	SystemChip8             = "Chip8"
-	SystemCPS1              = "CPS1"
-	SystemCPS2              = "CPS2"
-	SystemCPS3              = "CPS3"
-	SystemIremM72           = "IremM72"
-	SystemIremM92           = "IremM92"
-	SystemJalecoMegaSystem1 = "JalecoMegaSystem1"
-	SystemNamcoSystem1      = "NamcoSystem1"
-	SystemPGM               = "PGM"
-	SystemSegaSTV           = "SegaSTV"
-	SystemSegaSystem16      = "SegaSystem16"
-	SystemSegaSystem18      = "SegaSystem18"
-	SystemTaitoF2           = "TaitoF2"
-	SystemDAPHNE            = "DAPHNE"
-	SystemDICE              = "DICE"
-	SystemSinge             = "Singe"
-	SystemModel1            = "Model1"
-	SystemModel2            = "Model2"
-	SystemNamco2X6          = "Namco2X6"
-	SystemNamco22           = "Namco22"
-	SystemTriforce          = "Triforce"
-	SystemLindbergh         = "Lindbergh"
-	SystemChihiro           = "Chihiro"
-	SystemGaelco            = "Gaelco"
-	SystemHikaru            = "Hikaru"
-	SystemIOS               = "iOS"
-	SystemModel3            = "Model3"
-	SystemNAOMI             = "NAOMI"
-	SystemNAOMI2            = "NAOMI2"
-	SystemPico8             = "Pico8"
-	SystemTIC80             = "TIC80"
-	SystemVideo             = "Video"
-	SystemAudio             = "Audio"
-	SystemApplication       = "Application"
-	SystemMovie             = "Movie"
-	SystemTVEpisode         = "TVEpisode"
-	SystemTVSeason          = "TVSeason"
-	SystemTVShow            = "TVShow"
-	SystemMusicTrack        = "MusicTrack"
-	SystemMusicArtist       = "MusicArtist"
-	SystemMusicAlbum        = "MusicAlbum"
-	SystemMusicVideo        = "MusicVideo"
-	SystemPodcastSeries     = "PodcastSeries"
-	SystemPodcastEpisode    = "PodcastEpisode"
-	SystemAudiobook         = "Audiobook"
-	SystemImage             = "Image"
-	SystemJ2ME              = "J2ME"
-	SystemGroovy            = "Groovy"
-	SystemPlugNPlay         = "PlugNPlay"
-	SystemDevErr            = "DevErr"
-)
 
 var Systems = map[string]System{
 	// Consoles
@@ -697,7 +771,7 @@ var Systems = map[string]System{
 	},
 	SystemOdyssey2: {
 		ID:    SystemOdyssey2,
-		Slugs: []string{"odyssey", "magnavoxodyssey2", "videopac", "o2"},
+		Slugs: []string{"magnavoxodyssey2", "videopac", "o2"},
 	},
 	SystemOuya: {
 		ID:    SystemOuya,
@@ -890,6 +964,176 @@ var Systems = map[string]System{
 		ID:    SystemVSmile,
 		Slugs: []string{"vtechvsmile"},
 	},
+	System1292APVS: {
+		ID:      System1292APVS,
+		Aliases: []string{"1292 Advanced Programmable Video System", "1292 APVS"},
+	},
+	SystemAdvancedPICOBeena: {
+		ID:      SystemAdvancedPICOBeena,
+		Aliases: []string{"Advanced PICO Beena", "Beena"},
+	},
+	SystemAmstradGX4000: {
+		ID:      SystemAmstradGX4000,
+		Aliases: []string{"Amstrad GX4000", "GX4000"},
+	},
+	SystemApplePippin: {
+		ID:      SystemApplePippin,
+		Aliases: []string{"Apple Pippin", "Pippin"},
+	},
+	SystemCassetteVision: {
+		ID:      SystemCassetteVision,
+		Aliases: []string{"Epoch Cassette Vision"},
+	},
+	SystemCasioLoopy: {
+		ID:      SystemCasioLoopy,
+		Aliases: []string{"Casio Loopy"},
+	},
+	SystemCommodoreCDTV: {
+		ID:      SystemCommodoreCDTV,
+		Aliases: []string{"Commodore CDTV", "Amiga CDTV", "CDTV"},
+	},
+	SystemDigiBlast: {
+		ID:      SystemDigiBlast,
+		Aliases: []string{"digiBLAST", "Digiblast"},
+	},
+	SystemEvercade: {
+		ID: SystemEvercade,
+	},
+	SystemGearVR: {
+		ID:      SystemGearVR,
+		Aliases: []string{"Gear VR", "Samsung Gear VR"},
+	},
+	SystemHandheldLCD: {
+		ID:      SystemHandheldLCD,
+		Aliases: []string{"Handheld Electronic LCD", "LCD Handheld"},
+	},
+	SystemHyperScan: {
+		ID:      SystemHyperScan,
+		Aliases: []string{"Mattel HyperScan"},
+	},
+	SystemIntellivisionAmico: {
+		ID:      SystemIntellivisionAmico,
+		Aliases: []string{"Intellivision Amico", "Amico"},
+	},
+	SystemLeapster: {
+		ID:      SystemLeapster,
+		Aliases: []string{"LeapFrog Leapster"},
+	},
+	SystemLeapsterExplorer: {
+		ID:      SystemLeapsterExplorer,
+		Aliases: []string{"Leapster Explorer", "LeapPad Explorer", "Leapster Explorer/LeapPad Explorer"},
+	},
+	SystemLeapTV: {
+		ID:      SystemLeapTV,
+		Aliases: []string{"LeapFrog LeapTV"},
+	},
+	SystemMagnavoxOdyssey: {
+		ID:      SystemMagnavoxOdyssey,
+		Aliases: []string{"Magnavox Odyssey", "Odyssey"},
+	},
+	SystemMetaQuest2: {
+		ID:      SystemMetaQuest2,
+		Aliases: []string{"Meta Quest 2", "Oculus Quest 2", "Quest 2"},
+	},
+	SystemMetaQuest3: {
+		ID:      SystemMetaQuest3,
+		Aliases: []string{"Meta Quest 3", "Quest 3"},
+	},
+	SystemMicrovision: {
+		ID:      SystemMicrovision,
+		Aliases: []string{"Milton Bradley Microvision"},
+	},
+	SystemNintendoEReader: {
+		ID:      SystemNintendoEReader,
+		Aliases: []string{"e-Reader / Card-e Reader", "Nintendo e-Reader", "Card-e Reader"},
+	},
+	SystemNintendoSwitch2: {
+		ID:      SystemNintendoSwitch2,
+		Aliases: []string{"Nintendo Switch 2", "Switch 2"},
+	},
+	SystemNuon: {
+		ID: SystemNuon,
+	},
+	SystemOculusGo: {
+		ID:      SystemOculusGo,
+		Aliases: []string{"Oculus Go"},
+	},
+	SystemOculusQuest: {
+		ID:      SystemOculusQuest,
+		Aliases: []string{"Oculus Quest", "Quest 1"},
+	},
+	SystemOculusRift: {
+		ID:      SystemOculusRift,
+		Aliases: []string{"Oculus Rift", "Rift CV1"},
+	},
+	SystemPanasonicJungle: {
+		ID:      SystemPanasonicJungle,
+		Aliases: []string{"Panasonic Jungle"},
+	},
+	SystemPanasonicM2: {
+		ID:      SystemPanasonicM2,
+		Aliases: []string{"Panasonic M2", "3DO M2", "M2"},
+	},
+	SystemPC50XFamily: {
+		ID:      SystemPC50XFamily,
+		Aliases: []string{"PC-50X Family", "PC-50X"},
+	},
+	SystemPlaydate: {
+		ID: SystemPlaydate,
+	},
+	SystemPlaydia: {
+		ID:      SystemPlaydia,
+		Aliases: []string{"Bandai Playdia"},
+	},
+	SystemPlayStationVR: {
+		ID:      SystemPlayStationVR,
+		Aliases: []string{"PlayStation VR", "PS VR", "PSVR"},
+	},
+	SystemPlayStationVR2: {
+		ID:      SystemPlayStationVR2,
+		Aliases: []string{"PlayStation VR2", "PS VR2", "PSVR2"},
+	},
+	SystemPocketStation: {
+		ID:      SystemPocketStation,
+		Aliases: []string{"Sony PocketStation"},
+	},
+	SystemPolymega: {
+		ID: SystemPolymega,
+	},
+	SystemRZone: {
+		ID:      SystemRZone,
+		Aliases: []string{"R-Zone", "Tiger R-Zone"},
+	},
+	SystemSegaCD32X: {
+		ID:      SystemSegaCD32X,
+		Aliases: []string{"Sega CD 32X", "Mega-CD 32X", "32X CD"},
+	},
+	SystemSegaPico: {
+		ID:      SystemSegaPico,
+		Aliases: []string{"SEGA PICO", "Sega Pico", "Pico"},
+	},
+	SystemSuperCassetteVision: {
+		ID:      SystemSuperCassetteVision,
+		Aliases: []string{"Epoch Super Cassette Vision", "SCV"},
+	},
+	SystemTapwaveZodiac: {
+		ID:      SystemTapwaveZodiac,
+		Aliases: []string{"Tapwave Zodiac", "Zodiac"},
+	},
+	SystemTerebikko: {
+		ID:      SystemTerebikko,
+		Aliases: []string{"Bandai Terebikko"},
+	},
+	SystemUzebox: {
+		ID: SystemUzebox,
+	},
+	SystemVMU: {
+		ID:      SystemVMU,
+		Aliases: []string{"Visual Memory Unit", "Visual Memory System", "VMS", "Dreamcast VMU"},
+	},
+	SystemZeebo: {
+		ID: SystemZeebo,
+	},
 	// Computers
 	SystemAcornAtom: {
 		ID: SystemAcornAtom,
@@ -948,6 +1192,15 @@ var Systems = map[string]System{
 		Aliases: []string{"Apple-II"},
 		Slugs:   []string{"appleiiplus", "appleiie", "appleiic"},
 	},
+	SystemAppleIIGS: {
+		ID:      SystemAppleIIGS,
+		Aliases: []string{"Apple-IIGS", "Apple IIGS"},
+		Slugs:   []string{"apple2gs"},
+	},
+	SystemAppleLisa: {
+		ID:      SystemAppleLisa,
+		Aliases: []string{"Apple-Lisa"},
+	},
 	SystemAquarius: {
 		ID:    SystemAquarius,
 		Slugs: []string{"mattelaquarius"},
@@ -969,7 +1222,7 @@ var Systems = map[string]System{
 	},
 	SystemC16: {
 		ID:    SystemC16,
-		Slugs: []string{"commodorecommodore16", "plus4"},
+		Slugs: []string{"commodorecommodore16"},
 	},
 	SystemC64: {
 		ID:    SystemC64,
@@ -1147,6 +1400,42 @@ var Systems = map[string]System{
 	SystemZXNext: {
 		ID:    SystemZXNext,
 		Slugs: []string{"zxspectrumnext", "spectrumnext"},
+	},
+	SystemCommodorePlus4: {
+		ID:      SystemCommodorePlus4,
+		Aliases: []string{"Commodore Plus/4", "Plus/4", "Plus4", "CPlus4", "C+4"},
+	},
+	SystemDragon32: {
+		ID:      SystemDragon32,
+		Aliases: []string{"Dragon 32/64", "Dragon 32", "Dragon 64"},
+	},
+	SystemElektorTVGamesComputer: {
+		ID:      SystemElektorTVGamesComputer,
+		Aliases: []string{"Elektor TV Games Computer", "TV Games Computer", "TVGC"},
+	},
+	SystemLegacyComputer: {
+		ID:      SystemLegacyComputer,
+		Aliases: []string{"Legacy Computer"},
+	},
+	SystemLinux: {
+		ID:      SystemLinux,
+		Aliases: []string{"GNU/Linux"},
+	},
+	SystemMZ2200: {
+		ID:      SystemMZ2200,
+		Aliases: []string{"Sharp MZ-2200", "MZ-2200"},
+	},
+	SystemPC6000: {
+		ID:      SystemPC6000,
+		Aliases: []string{"NEC PC-6000 Series", "PC-6000", "PC-6001"},
+	},
+	SystemPDP10: {
+		ID:      SystemPDP10,
+		Aliases: []string{"PDP-10", "DEC PDP-10", "DECsystem-10"},
+	},
+	SystemPLATO: {
+		ID:      SystemPLATO,
+		Aliases: []string{"Project PLATO"},
 	},
 	// Other
 	SystemAndroid: {
@@ -1374,6 +1663,9 @@ var Systems = map[string]System{
 		ID:    SystemGP32,
 		Slugs: []string{"gamepark", "gp32handheld"},
 	},
+	SystemOpenBOR: {
+		ID: SystemOpenBOR,
+	},
 	SystemPico8: {
 		ID:    SystemPico8,
 		Slugs: []string{"lexaloffle"},
@@ -1448,6 +1740,80 @@ var Systems = map[string]System{
 	SystemHikaru: {
 		ID:    SystemHikaru,
 		Slugs: []string{"segahikaru"},
+	},
+	SystemAirConsole: {
+		ID:      SystemAirConsole,
+		Aliases: []string{"Air Console"},
+	},
+	SystemBlackBerryOS: {
+		ID:      SystemBlackBerryOS,
+		Aliases: []string{"BlackBerry OS", "BBOS"},
+	},
+	SystemBluRayPlayer: {
+		ID:      SystemBluRayPlayer,
+		Aliases: []string{"Blu-ray Player", "Blu-ray", "BD Player"},
+	},
+	SystemDaydream: {
+		ID:      SystemDaydream,
+		Aliases: []string{"Google Daydream", "Daydream VR"},
+	},
+	SystemDVDPlayer: {
+		ID:      SystemDVDPlayer,
+		Aliases: []string{"DVD Player", "DVD-Video Player"},
+	},
+	SystemFireTV: {
+		ID:      SystemFireTV,
+		Aliases: []string{"Amazon Fire TV", "Fire TV"},
+	},
+	SystemGoogleStadia: {
+		ID:      SystemGoogleStadia,
+		Aliases: []string{"Google Stadia", "Stadia"},
+	},
+	SystemHyperNeoGeo64: {
+		ID:        SystemHyperNeoGeo64,
+		Aliases:   []string{"Hyper Neo Geo 64", "HNG64"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemLegacyMobile: {
+		ID:      SystemLegacyMobile,
+		Aliases: []string{"Legacy Mobile Device", "Feature Phone"},
+	},
+	SystemOculusVR: {
+		ID:      SystemOculusVR,
+		Aliases: []string{"Oculus VR"},
+	},
+	SystemPalmOS: {
+		ID:      SystemPalmOS,
+		Aliases: []string{"Palm OS"},
+	},
+	SystemPinball: {
+		ID:        SystemPinball,
+		Aliases:   []string{"Pinball Machine", "Virtual Pinball"},
+		Fallbacks: []string{SystemArcade},
+	},
+	SystemSteamVR: {
+		ID:      SystemSteamVR,
+		Aliases: []string{"Steam VR"},
+	},
+	SystemVisionOS: {
+		ID:      SystemVisionOS,
+		Aliases: []string{"Apple visionOS"},
+	},
+	SystemWebBrowser: {
+		ID:      SystemWebBrowser,
+		Aliases: []string{"Web browser", "Browser"},
+	},
+	SystemWindowsMixedReality: {
+		ID:      SystemWindowsMixedReality,
+		Aliases: []string{"Windows Mixed Reality", "Windows MR", "WMR"},
+	},
+	SystemWindowsMobile: {
+		ID:      SystemWindowsMobile,
+		Aliases: []string{"Windows Mobile", "WinMo"},
+	},
+	SystemWindowsPhone: {
+		ID:      SystemWindowsPhone,
+		Aliases: []string{"Windows Phone", "Windows Phone OS"},
 	},
 	SystemDevErr: {
 		ID: SystemDevErr,

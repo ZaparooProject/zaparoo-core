@@ -57,3 +57,13 @@ func requireProfileManagement(env *requests.RequestEnv) error {
 	}
 	return models.ClientErrf("%w", ErrForbidden)
 }
+
+// isLocalOrAdmin reports whether the request is a local connection or a
+// paired admin client. A ClientRole only exists on encrypted paired
+// sessions, so an admin role here means an authenticated encrypted
+// client — as privileged as a local connection. This deliberately does
+// not use Grant.EffectiveRole, whose unpaired-remote-is-admin fallback
+// must not open device-management methods to plaintext remote clients.
+func isLocalOrAdmin(env *requests.RequestEnv) bool {
+	return env.IsLocal || env.ClientRole == string(permissions.RoleAdmin)
+}

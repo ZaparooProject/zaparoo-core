@@ -20,12 +20,36 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLoadMappings_SkipsUnreadablePaths(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	fs := afero.NewOsFs()
+	mappingsDir := t.TempDir()
+	blocked := filepath.Join(mappingsDir, "blocked")
+	require.NoError(t, fs.MkdirAll(blocked, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(mappingsDir, "good.toml"), []byte(`
+[[mappings.entry]]
+match_pattern = "*.sfc"
+zapscript = "**launch:snes/{match}"
+`), 0o600))
+	require.NoError(t, os.Chmod(blocked, 0o000))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+	require.Len(t, cfg.Mappings(), 1)
+}
 
 func TestLoadMappings_LoadsFromAferoFS(t *testing.T) {
 	t.Parallel()

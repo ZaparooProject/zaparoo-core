@@ -40,6 +40,14 @@ func (db *UserDB) ListClients() ([]database.Client, error) {
 	return sqlListClients(db.ctx, db.sql.Load())
 }
 
+// ReplaceAllClients atomically replaces every paired client row. Device
+// backup restore uses this to carry the destination's paired clients across
+// a restored user database, since portable snapshots are created without
+// client rows.
+func (db *UserDB) ReplaceAllClients(clients []database.Client) error {
+	return sqlReplaceAllClients(db.ctx, db.sql.Load(), clients)
+}
+
 func (db *UserDB) DeleteClient(clientID string) error {
 	return sqlDeleteClient(db.ctx, db.sql.Load(), clientID)
 }

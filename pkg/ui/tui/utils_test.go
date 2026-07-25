@@ -20,6 +20,7 @@
 package tui
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -433,6 +434,18 @@ func TestTagReadContext(t *testing.T) {
 	tuiDeadline, _ := tuiCtx.Deadline()
 
 	assert.True(t, deadline.After(tuiDeadline), "Tag read timeout should be longer than TUI timeout")
+}
+
+func TestBackupContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := backupContext()
+	require.NotNil(t, ctx)
+	require.NotNil(t, cancel)
+	_, hasDeadline := ctx.Deadline()
+	assert.False(t, hasDeadline)
+	cancel()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
 }
 
 func TestShowInfoModal_Integration(t *testing.T) {
@@ -852,7 +865,7 @@ func TestTimeoutConstants(t *testing.T) {
 	assert.Equal(t, 5*time.Second, TUIRequestTimeout)
 	assert.Equal(t, 30*time.Second, TagReadTimeout)
 
-	// Tag read should be longer than TUI request (for user interaction)
+	// Physical tag interaction needs a longer request window than ordinary UI work.
 	assert.Greater(t, TagReadTimeout, TUIRequestTimeout)
 }
 

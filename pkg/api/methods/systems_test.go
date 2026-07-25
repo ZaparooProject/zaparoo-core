@@ -62,6 +62,27 @@ func TestHandleSystems_IncludesIndexedAndAvailableLauncherSystems(t *testing.T) 
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleSystems_IncludesUnindexedAvailable3DO(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("IndexedSystems").Return([]string{}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "3DO", SystemID: "3DO"}})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"3DO"}, systemResponseIDs(response))
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleSystems_AllIncludesUnavailableLauncherSystems(t *testing.T) {
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockMediaDB.On("IndexedSystems").Return([]string{"NES"}, nil)

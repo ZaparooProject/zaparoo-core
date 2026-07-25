@@ -49,10 +49,11 @@ import (
 
 // RunCommandOptions groups optional services used by specific command types.
 type RunCommandOptions struct {
-	WaitForMediaReady func(context.Context) error
-	PlaybackManager   audio.PlaybackManager
-	UI                *uievents.Service
-	LauncherManager   *state.LauncherManager
+	WaitForMediaReady  func(context.Context) error
+	AcquireMediaLaunch func() (func(), error)
+	PlaybackManager    audio.PlaybackManager
+	UI                 *uievents.Service
+	LauncherManager    *state.LauncherManager
 }
 
 var (
@@ -471,19 +472,20 @@ func RunCommand(
 	}
 
 	env := platforms.CmdEnv{
-		Cmd:               cmd,
-		Cfg:               cfg,
-		ServiceCtx:        serviceCtx,
-		WaitForMediaReady: opts.WaitForMediaReady,
-		PlaybackManager:   opts.PlaybackManager,
-		UI:                opts.UI,
-		Playlist:          plsc,
-		Source:            token.Source,
-		TotalCommands:     totalCmds,
-		CurrentIndex:      currentIndex,
-		Unsafe:            unsafe,
-		Database:          db,
-		ExprEnv:           exprEnv,
+		Cmd:                cmd,
+		Cfg:                cfg,
+		ServiceCtx:         serviceCtx,
+		WaitForMediaReady:  opts.WaitForMediaReady,
+		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		PlaybackManager:    opts.PlaybackManager,
+		UI:                 opts.UI,
+		Playlist:           plsc,
+		Source:             token.Source,
+		TotalCommands:      totalCmds,
+		CurrentIndex:       currentIndex,
+		Unsafe:             unsafe,
+		Database:           db,
+		ExprEnv:            exprEnv,
 	}
 
 	if opts.LauncherManager != nil {

@@ -20,11 +20,51 @@
 package api
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestRequestTimeoutForAPIMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		want   time.Duration
+	}{
+		{"backup create", models.MethodSettingsBackup, 0},
+		{"backup restore", models.MethodSettingsBackupRestore, 0},
+		{"remote backup", models.MethodSettingsBackupRemoteRun, 0},
+		{"remote restore", models.MethodSettingsBackupRemoteRestore, 0},
+		{"case insensitive", "SETTINGS.BACKUP", 0},
+		{"backup list", models.MethodSettingsBackupList, config.APIRequestTimeout},
+		{"unknown", "custom.method", config.APIRequestTimeout},
+		{"empty", "", config.APIRequestTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, requestTimeoutForAPIMethod(tt.method))
+		})
+	}
+}
+
+func TestRequestContextForBackupHasNoDeadlineAndPreservesCancellation(t *testing.T) {
+	t.Parallel()
+	parent, parentCancel := context.WithCancel(context.Background())
+	ctx, cancel := requestContextForAPIMethod(parent, models.MethodSettingsBackup)
+	defer cancel()
+	_, hasDeadline := ctx.Deadline()
+	assert.False(t, hasDeadline)
+	parentCancel()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+}
 
 func TestClassifyAPIMethod(t *testing.T) {
 	t.Parallel()
