@@ -8,7 +8,7 @@ require (
 	github.com/KarpelesLab/gowebp v0.1.1
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-gameid v0.2.0
-	github.com/ZaparooProject/go-pn532 v0.22.1
+	github.com/ZaparooProject/go-pn532 v0.23.0
 	github.com/ZaparooProject/go-zapscript v0.16.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
@@ -58,7 +58,7 @@ require (
 	golang.design/x/clipboard v0.8.0
 	golang.org/x/image v0.43.0
 	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.40.0
 	golang.org/x/time v0.15.0
 	gopkg.in/ini.v1 v1.67.3
@@ -145,5 +145,3 @@ require (
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
-
-replace github.com/ZaparooProject/go-pn532 => ../go-pn532
