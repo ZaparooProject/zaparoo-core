@@ -393,8 +393,8 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
-		fallbackToFilesystem := errors.Is(searchErr, sql.ErrNoRows) ||
-			(len(tagFilters) == 0 && errors.Is(searchErr, context.DeadlineExceeded))
+		fallbackToFilesystem := len(tagFilters) == 0 &&
+			(errors.Is(searchErr, sql.ErrNoRows) || errors.Is(searchErr, context.DeadlineExceeded))
 		if fallbackToFilesystem {
 			// Slow indexed lookups should not block direct directory launches.
 			entries, readErr := afero.ReadDir(fs, cleanedPath)

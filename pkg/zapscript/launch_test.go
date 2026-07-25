@@ -1916,35 +1916,49 @@ func TestCmdRandom_AbsolutePathTimeoutFallsBackToFilesystem(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
-func TestCmdRandom_AbsolutePathTimeoutWithTagsDoesNotFallback(t *testing.T) {
+func TestCmdRandom_AbsolutePathDatabaseMissWithTagsDoesNotFallback(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	mockPlatform := mocks.NewMockPlatform()
-	cfg := &config.Instance{}
-	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
-
-	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
-		Return(database.SearchResult{}, context.DeadlineExceeded)
-
-	env := platforms.CmdEnv{
-		Cmd: zapscript.Command{
-			Name: "launch.random",
-			Args: []string{dir},
-			AdvArgs: zapscript.NewAdvArgs(map[string]string{
-				string(zapscript.KeyTags): "genre:shmup",
-			}),
-		},
-		Cfg:      cfg,
-		Database: &database.Database{MediaDB: mockMediaDB},
+	tests := []struct {
+		searchErr error
+		name      string
+	}{
+		{name: "no rows", searchErr: sql.ErrNoRows},
+		{name: "timeout", searchErr: context.DeadlineExceeded},
 	}
 
-	_, err := cmdRandom(mockPlatform, env)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	mockMediaDB.AssertExpectations(t)
-	mockPlatform.AssertExpectations(t)
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+				Return(database.SearchResult{}, tt.searchErr)
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{
+					Name: "launch.random",
+					Args: []string{launchTestAbsPath("games")},
+					AdvArgs: zapscript.NewAdvArgs(map[string]string{
+						string(zapscript.KeyTags): "genre:shmup",
+					}),
+				},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			}
+
+			_, err := cmdRandom(mockPlatform, env)
+
+			require.ErrorIs(t, err, tt.searchErr)
+			mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything, mock.Anything)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }
 
 func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
