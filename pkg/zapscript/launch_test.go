@@ -1878,6 +1878,89 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdRandom_AbsolutePathTimeoutFallsBackToFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	dir := launchTestAbsPath("games")
+	require.NoError(t, fs.Fs.MkdirAll(dir, 0o750))
+	romPath := filepath.Join(dir, "game.mra")
+	require.NoError(t, afero.WriteFile(fs.Fs, romPath, []byte("x"), 0o600))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{}, context.DeadlineExceeded)
+	mockPlatform.On(
+		"LaunchMedia", cfg, romPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandomWithFS(fs.Fs, mockPlatform, &env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathDatabaseMissWithTagsDoesNotFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		searchErr error
+		name      string
+	}{
+		{name: "no rows", searchErr: sql.ErrNoRows},
+		{name: "timeout", searchErr: context.DeadlineExceeded},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+				Return(database.SearchResult{}, tt.searchErr)
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{
+					Name: "launch.random",
+					Args: []string{launchTestAbsPath("games")},
+					AdvArgs: zapscript.NewAdvArgs(map[string]string{
+						string(zapscript.KeyTags): "genre:shmup",
+					}),
+				},
+				Cfg:      cfg,
+				Database: &database.Database{MediaDB: mockMediaDB},
+			}
+
+			_, err := cmdRandom(mockPlatform, env)
+
+			require.ErrorIs(t, err, tt.searchErr)
+			mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything, mock.Anything)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	t.Parallel()
 
