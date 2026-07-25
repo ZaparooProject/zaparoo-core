@@ -87,7 +87,7 @@ type Platform struct {
 	launchBoxPipeLock       syncutil.Mutex
 }
 
-const windowsErrorInvalidParameter syscall.Errno = 87
+const errWindowsInvalidParameter syscall.Errno = 87
 
 var retroBatLaunchSettleDelay = 2 * time.Second
 
@@ -234,7 +234,7 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 }
 
 func isProcessFinishedError(err error) bool {
-	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, windowsErrorInvalidParameter)
+	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, errWindowsInvalidParameter)
 }
 
 // WaitTrackedProcess waits for proc and removes its stale process handle when it exits.

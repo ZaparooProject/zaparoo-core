@@ -69,6 +69,7 @@ func findWindowForPIDs(pids map[uint32]struct{}) (uintptr, bool) {
 		}
 
 		var windowPID uint32
+		//nolint:gosec // Win32 API requires a pointer to receive the owning process ID.
 		_, _, _ = procGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
 		if _, ok := pids[windowPID]; !ok {
 			return 1
