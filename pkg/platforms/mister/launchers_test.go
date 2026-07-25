@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1077,6 +1078,7 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 			require.NotNil(t, found, "%s launcher should exist", tc.id)
 			assert.Equal(t, tc.systemID, found.SystemID,
 				"%s must inherit slots from %s", tc.id, tc.systemID)
+			assert.Contains(t, found.Groups, platformshared.LauncherGroupRetroAchievements)
 		})
 	}
 }

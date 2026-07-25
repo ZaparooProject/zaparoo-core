@@ -464,6 +464,15 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 	}
 }
 
+func applyRetroAchievementsLauncherGroup(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		if _, ok := retroAchievementsSetName(launchers[i].ID); ok {
+			launchers[i].Groups = append(launchers[i].Groups, shared.LauncherGroupRetroAchievements)
+		}
+	}
+	return launchers
+}
+
 func launchRetroAchievementsCore(
 	launcherID string,
 	systemID string,
@@ -2356,5 +2365,5 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 	}
 
-	return applyDefaultScanExcludes(enableMGLIndexing(launchers))
+	return applyDefaultScanExcludes(enableMGLIndexing(applyRetroAchievementsLauncherGroup(launchers)))
 }
