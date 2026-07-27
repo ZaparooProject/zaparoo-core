@@ -336,6 +336,7 @@ func pollDeviceLink(
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	consecutiveFailures := 0
 
 	for {
 		select {
@@ -343,6 +344,10 @@ func pollDeviceLink(
 			errMsg := "device linking stopped, start over to link this device"
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				errMsg = "link request expired, start over to link this device"
+				log.Warn().Err(ctx.Err()).Int("poll_failures", consecutiveFailures).
+					Msg("device link polling expired")
+			} else {
+				log.Debug().Err(ctx.Err()).Msg("device link polling stopped")
 			}
 			finishAuthLink(session, deps, models.AuthLinkStatusFailed, errMsg)
 			return
@@ -353,12 +358,19 @@ func pollDeviceLink(
 		if err != nil {
 			var terminal *authLinkTerminalError
 			if errors.As(err, &terminal) {
+				log.Warn().Err(err).Msg("device link polling failed permanently")
 				finishAuthLink(session, deps, models.AuthLinkStatusFailed, terminal.reason)
 				return
 			}
-			// Transient (network) errors: keep polling until expiry.
-			log.Debug().Err(err).Msg("device link poll failed, retrying")
+			// Transient errors remain retryable, but the first failure in each
+			// outage must be visible in normal support logs.
+			consecutiveFailures++
+			logDeviceLinkPollFailure(err, consecutiveFailures)
 			continue
+		}
+		if consecutiveFailures > 0 {
+			log.Info().Int("failures", consecutiveFailures).Msg("device link polling recovered")
+			consecutiveFailures = 0
 		}
 		if poll.Status != "approved" {
 			continue
@@ -377,6 +389,15 @@ func pollDeviceLink(
 		finishAuthLink(session, deps, models.AuthLinkStatusApproved, "")
 		return
 	}
+}
+
+func logDeviceLinkPollFailure(err error, consecutiveFailures int) {
+	if consecutiveFailures == 1 {
+		log.Warn().Err(err).Msg("device link poll failed, retrying")
+		return
+	}
+	log.Debug().Err(err).Int("consecutive_failures", consecutiveFailures).
+		Msg("device link poll still failing")
 }
 
 func pollDeviceLinkOnce(ctx context.Context, baseURL, deviceCode string) (*deviceLinkPollResponse, error) {

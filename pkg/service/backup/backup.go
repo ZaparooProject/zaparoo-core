@@ -264,22 +264,28 @@ func (m *Manager) Create(ctx context.Context) (Info, error) {
 		return Info{}, fmt.Errorf("creating backup: %w", err)
 	}
 	started := time.Now().UTC()
-	_ = m.writeLocalStatus(&statusEntry{LastRunAt: formatTime(started), LastStatus: StatusRunning})
+	if statusErr := m.writeLocalStatus(&statusEntry{
+		LastRunAt: formatTime(started), LastStatus: StatusRunning,
+	}); statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to persist running local backup status")
+	}
 
 	info, err := m.createBackup(ctx, false)
 	if err != nil {
-		_ = m.writeLocalStatus(&statusEntry{
+		if statusErr := m.writeLocalStatus(&statusEntry{
 			LastRunAt:  formatTime(started),
 			LastStatus: StatusFailed,
 			LastError:  safeStatusError(err),
-		})
+		}); statusErr != nil {
+			log.Warn().Err(statusErr).Msg("failed to persist failed local backup status")
+		}
 		return Info{}, err
 	}
 	lastStatus := StatusSuccess
 	if len(info.Warnings) > 0 {
 		lastStatus = StatusPartial
 	}
-	_ = m.writeLocalStatus(&statusEntry{
+	if statusErr := m.writeLocalStatus(&statusEntry{
 		LastRunAt:      formatTime(started),
 		LastSuccessAt:  formatTime(info.CreatedAt),
 		LastStatus:     lastStatus,
@@ -287,7 +293,9 @@ func (m *Manager) Create(ctx context.Context) (Info, error) {
 		Categories:     info.Categories,
 		Warnings:       info.Warnings,
 		SkippedFiles:   len(info.Warnings),
-	})
+	}); statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to persist successful local backup status")
+	}
 	return info, nil
 }
 
@@ -408,7 +416,7 @@ func (m *Manager) List() ([]ListInfo, error) {
 		}
 		info, infoErr := fastInfoFromDirEntry(m.backupDir(), entry)
 		if infoErr != nil {
-			log.Debug().Err(infoErr).Str("name", entry.Name()).Msg("failed to read backup ZIP metadata")
+			log.Warn().Err(infoErr).Str("name", entry.Name()).Msg("failed to read backup ZIP metadata")
 			continue
 		}
 		infos = append(infos, info)
@@ -1229,7 +1237,7 @@ func writeZipFile(ctx context.Context, zw *zip.Writer, file *FileRef) error {
 	}
 	defer func() {
 		if closeErr := in.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Str("path", file.RestorePath).Msg("failed to close backup source")
+			log.Warn().Err(closeErr).Str("path", file.RestorePath).Msg("failed to close backup source")
 		}
 	}()
 
@@ -1349,7 +1357,7 @@ func inspectZipManifest(zipPath string) (Info, error) {
 	}
 	defer func() {
 		if closeErr := zr.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
+			log.Warn().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
 		}
 	}()
 	entries, err := validateZipHeaders(zr.File)
@@ -1421,7 +1429,7 @@ func stageLocalArchive(
 	}
 	defer func() {
 		if closeErr := zr.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
+			log.Warn().Err(closeErr).Str("path", zipPath).Msg("failed to close backup ZIP")
 		}
 	}()
 	entries, err := validateZipHeaders(zr.File)
@@ -1455,7 +1463,7 @@ func stageLocalArchive(
 	staging := &restoreStaging{dir: dir}
 	cleanup := func() {
 		if removeErr := os.RemoveAll(dir); removeErr != nil {
-			log.Debug().Err(removeErr).Str("dir", dir).Msg("failed to remove local restore staging directory")
+			log.Warn().Err(removeErr).Str("dir", dir).Msg("failed to remove local restore staging directory")
 		}
 	}
 
@@ -1660,7 +1668,7 @@ func readZipEntryLimited(f *zip.File, limit int64) ([]byte, error) {
 	}
 	defer func() {
 		if closeErr := r.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Str("name", f.Name).Msg("failed to close ZIP entry")
+			log.Warn().Err(closeErr).Str("name", f.Name).Msg("failed to close ZIP entry")
 		}
 	}()
 	body, err := io.ReadAll(io.LimitReader(r, limit+1))

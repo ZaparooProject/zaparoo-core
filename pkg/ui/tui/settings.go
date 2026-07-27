@@ -778,7 +778,7 @@ func startAuthLinkFlow(svc SettingsService, pages *tview.Pages, app *tview.Appli
 			cancelCtx, cancelCancel := tuiContext()
 			defer cancelCancel()
 			if cancelErr := svc.CancelAuthLink(cancelCtx); cancelErr != nil {
-				log.Debug().Err(cancelErr).Msg("error cancelling device link")
+				log.Warn().Err(cancelErr).Msg("error cancelling device link")
 			}
 			closeModal()
 			onDone()
@@ -816,6 +816,7 @@ func pollAuthLinkStatus(
 ) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	consecutiveFailures := 0
 	for {
 		select {
 		case <-done:
@@ -827,8 +828,18 @@ func pollAuthLinkStatus(
 		status, err := svc.GetAuthLinkStatus(ctx)
 		cancel()
 		if err != nil {
-			log.Debug().Err(err).Msg("error polling device link status")
+			consecutiveFailures++
+			if consecutiveFailures == 1 {
+				log.Warn().Err(err).Msg("error polling device link status")
+			} else {
+				log.Debug().Err(err).Int("consecutive_failures", consecutiveFailures).
+					Msg("device link status polling still failing")
+			}
 			continue
+		}
+		if consecutiveFailures > 0 {
+			log.Info().Int("failures", consecutiveFailures).Msg("device link status polling recovered")
+			consecutiveFailures = 0
 		}
 		switch status.Status {
 		case models.AuthLinkStatusPending:

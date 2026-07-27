@@ -24,6 +24,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -121,6 +122,31 @@ func TestRemoteBackupDueRetriesSoonerAfterFailure(t *testing.T) {
 		"success resets to the normal schedule interval")
 }
 
+func TestOnlineFailureRequiresWarning(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("remote request failed")
+	tests := []struct {
+		err      error
+		name     string
+		expected bool
+		want     bool
+	}{
+		{name: "nil", want: false},
+		{name: "expected inactivity", err: failure, expected: true, want: false},
+		{name: "shutdown cancellation", err: context.Canceled, want: false},
+		{name: "wrapped shutdown cancellation", err: errors.Join(failure, context.Canceled), want: false},
+		{name: "actionable failure", err: failure, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, onlineFailureRequiresWarning(tt.err, tt.expected))
+		})
+	}
+}
+
 func TestRemoteHeartbeatStateBacksOffFailuresAndRecordsOnlySuccess(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
@@ -139,6 +165,20 @@ func TestRemoteHeartbeatStateBacksOffFailuresAndRecordsOnlySuccess(t *testing.T)
 	assert.False(t, state.due(succeededAt.Add(time.Hour)))
 	assert.True(t, state.due(succeededAt.Add(remoteHeartbeatInterval)))
 	assert.Equal(t, remoteHeartbeatInitialBackoff, state.backoff)
+}
+
+func TestPlaySyncDuePendingBypassesIntervalButHonorsBackoff(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	s := remoteHeartbeatState{lastSuccess: now.Add(-time.Minute)}
+
+	assert.False(t, playSyncDue(&s, now, false), "periodic sync must honor the success interval")
+	assert.True(t, playSyncDue(&s, now, true), "completed session must request an immediate sync")
+
+	s.nextAttempt = now.Add(time.Minute)
+	assert.False(t, playSyncDue(&s, now, true), "completed session must not bypass failure backoff")
+	assert.True(t, playSyncDue(&s, now.Add(time.Minute), true))
 }
 
 func TestRemoteBackupScheduleInterval(t *testing.T) {

@@ -46,6 +46,13 @@ const (
 
 var errPlaySyncDisabled = errors.New("play history sync is disabled")
 
+// IsPlaySyncDisabledError reports an expected opt-out or mid-sync disable.
+// Background schedulers use this to keep intentional inactivity quiet while
+// surfacing real upload failures at warning level.
+func IsPlaySyncDisabledError(err error) bool {
+	return errors.Is(err, errPlaySyncDisabled)
+}
+
 // PlaySyncInfo summarizes one play-history sync pass.
 type PlaySyncInfo struct {
 	Uploaded int

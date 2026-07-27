@@ -161,9 +161,12 @@ func TestLoadAuthFromData_EmptyData(t *testing.T) {
 func TestLoadAuthFromData_InvalidTOML(t *testing.T) {
 	t.Parallel()
 
-	// Invalid TOML should not panic, just return empty
-	result := LoadAuthFromData([]byte("this is not valid toml [[["))
+	data := []byte("this is not valid toml [[[")
+	// Low-level compatibility parser remains non-panicking; file-management
+	// callers validate first so malformed credentials are never discarded.
+	result := LoadAuthFromData(data)
 	assert.Empty(t, result)
+	require.Error(t, validateAuthFileData(data))
 }
 
 func TestNormalizeScheme(t *testing.T) {
@@ -734,6 +737,21 @@ func TestSaveAuthEntry_CreateNewFile(t *testing.T) {
 	assert.Equal(t, "test-token", creds["https://api.zaparoo.com"].Bearer)
 }
 
+func TestSaveAuthEntry_RejectsMalformedExistingFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+	malformed := []byte("not valid toml [[[")
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, malformed, 0o600))
+
+	err := cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{Bearer: "new-token"})
+	require.Error(t, err)
+
+	preserved, readErr := afero.ReadFile(cfg.getFs(), cfg.authPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, malformed, preserved)
+}
+
 func TestSaveAuthEntry_UpdateExisting(t *testing.T) {
 	t.Parallel()
 
@@ -816,6 +834,21 @@ func TestDeleteAuthEntries_RemovesOnlyTargetedDomains(t *testing.T) {
 	creds := readAuthFromInstance(t, cfg)
 	require.Len(t, creds, 1)
 	assert.Equal(t, "token3", creds["https://other.example.com"].Bearer)
+}
+
+func TestDeleteAuthEntries_RejectsMalformedExistingFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+	malformed := []byte("not valid toml [[[")
+	require.NoError(t, afero.WriteFile(cfg.getFs(), cfg.authPath, malformed, 0o600))
+
+	err := cfg.DeleteAuthEntries([]string{"https://api.zaparoo.com"})
+	require.Error(t, err)
+
+	preserved, readErr := afero.ReadFile(cfg.getFs(), cfg.authPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, malformed, preserved)
 }
 
 func TestDeleteAuthEntries_MatchesCaseInsensitively(t *testing.T) {

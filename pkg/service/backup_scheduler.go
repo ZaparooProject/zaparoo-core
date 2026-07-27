@@ -23,6 +23,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,6 +114,12 @@ func (s *remoteHeartbeatState) recordSuccess(now time.Time) {
 	s.backoff = remoteHeartbeatInitialBackoff
 }
 
+// onlineFailureRequiresWarning separates expected inactivity (disabled,
+// unlinked, or shutdown) from failures support logs must retain.
+func onlineFailureRequiresWarning(err error, expected bool) bool {
+	return err != nil && !expected && !errors.Is(err, context.Canceled)
+}
+
 func startRemoteBackupScheduler(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -121,12 +128,13 @@ func startRemoteBackupScheduler(
 	st *state.State,
 	idleSched *idle.Scheduler,
 	pauser *syncutil.Pauser,
+	playSyncRequests <-chan struct{},
 	wg *sync.WaitGroup,
 ) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		remoteBackupSchedulerLoop(ctx, cfg, pl, db, st, idleSched, pauser, time.NewTicker)
+		remoteBackupSchedulerLoop(ctx, cfg, pl, db, st, idleSched, pauser, playSyncRequests, time.NewTicker)
 	}()
 }
 
@@ -138,6 +146,7 @@ func remoteBackupSchedulerLoop(
 	st *state.State,
 	idleSched *idle.Scheduler,
 	pauser *syncutil.Pauser,
+	playSyncRequests <-chan struct{},
 	newTicker func(time.Duration) *time.Ticker,
 ) {
 	// A run interrupted by power loss or a hard shutdown left "running" in
@@ -181,9 +190,15 @@ func remoteBackupSchedulerLoop(
 		}
 		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		if err := mgr.SendHeartbeat(ctx); err != nil {
-			// Not linked or unreachable: fine, heartbeats are best-effort.
 			heartbeatState.recordFailure(now)
-			log.Debug().Err(err).Msg("remote heartbeat not sent")
+			expected := backupsvc.IsRemoteUnlinkedError(err)
+			if onlineFailureRequiresWarning(err, expected) {
+				log.Warn().Err(err).
+					Dur("retry_in", heartbeatState.nextAttempt.Sub(now)).
+					Msg("remote heartbeat not sent")
+			} else {
+				log.Debug().Err(err).Msg("remote heartbeat not sent")
+			}
 			return
 		}
 		heartbeatState.recordSuccess(now)
@@ -201,25 +216,34 @@ func remoteBackupSchedulerLoop(
 	}
 
 	// Play-history sync reuses the heartbeat pacing state: interval on
-	// success, exponential backoff on failure. The first pass after linking
-	// is the bulk import of the whole local history.
+	// success, exponential backoff on failure. A completed session requests
+	// an immediate pass through this same serialized path. Requests coalesce,
+	// remain pending across failures, and never bypass retry backoff.
 	playSyncState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
+	playSyncPending := false
 	tryPlaySync := func() {
 		now := time.Now()
-		if !playSyncDue(&playSyncState, now) {
+		if !playSyncDue(&playSyncState, now, playSyncPending) {
 			return
 		}
 		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		info, err := mgr.SyncPlayHistory(ctx)
 		if err != nil {
-			// Unlinked, disabled, or unreachable: sync is best-effort.
 			playSyncState.recordFailure(now)
-			log.Debug().Err(err).Msg("play history sync not run")
+			expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
+			if onlineFailureRequiresWarning(err, expected) {
+				log.Warn().Err(err).
+					Dur("retry_in", playSyncState.nextAttempt.Sub(now)).
+					Msg("play history sync failed")
+			} else {
+				log.Debug().Err(err).Msg("play history sync not run")
+			}
 			return
 		}
 		playSyncState.recordSuccess(now)
+		playSyncPending = false
 		if info.Uploaded > 0 {
-			log.Info().Int("sessions", info.Uploaded).Msg("scheduled play history sync completed")
+			log.Info().Int("sessions", info.Uploaded).Msg("play history sync completed")
 		}
 	}
 
@@ -236,16 +260,20 @@ func remoteBackupSchedulerLoop(
 			trySchedule()
 			tryStaleNotice()
 			tryPlaySync()
+		case <-playSyncRequests:
+			playSyncPending = true
+			tryPlaySync()
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-// playSyncDue reports whether a play-history sync pass should run now,
-// honoring the success interval and failure backoff.
-func playSyncDue(s *remoteHeartbeatState, now time.Time) bool {
-	if !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < playSyncInterval {
+// playSyncDue reports whether a play-history sync pass should run now.
+// A completed session bypasses the normal success interval, but never the
+// failure backoff.
+func playSyncDue(s *remoteHeartbeatState, now time.Time, pending bool) bool {
+	if !pending && !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < playSyncInterval {
 		return false
 	}
 	return s.nextAttempt.IsZero() || !now.Before(s.nextAttempt)
@@ -294,7 +322,11 @@ func runScheduledRemoteBackup(
 	}
 	availability, refreshErr := mgr.RefreshRemoteAvailability(ctx)
 	if refreshErr != nil {
-		log.Debug().Err(refreshErr).Msg("scheduled remote backup eligibility refresh failed")
+		if onlineFailureRequiresWarning(refreshErr, false) {
+			log.Warn().Err(refreshErr).Msg("scheduled remote backup eligibility refresh failed")
+		} else {
+			log.Debug().Err(refreshErr).Msg("scheduled remote backup eligibility refresh stopped")
+		}
 		return
 	}
 	if availability != backupsvc.RemoteAvailabilityAvailable {

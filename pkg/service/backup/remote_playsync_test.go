@@ -22,6 +22,7 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,6 +34,18 @@ import (
 	testifymock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOnlineErrorClassifiers(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, IsRemoteUnlinkedError(errRemoteUnlinked))
+	assert.True(t, IsRemoteUnlinkedError(errors.Join(errors.New("wrapped"), errRemoteUnlinked)))
+	assert.False(t, IsRemoteUnlinkedError(errors.New("network failure")))
+
+	assert.True(t, IsPlaySyncDisabledError(errPlaySyncDisabled))
+	assert.True(t, IsPlaySyncDisabledError(errors.Join(errors.New("wrapped"), errPlaySyncDisabled)))
+	assert.False(t, IsPlaySyncDisabledError(errors.New("upload failure")))
+}
 
 // playSyncTestEntry builds one closed, syncable MediaHistory row.
 func playSyncTestEntry(dbid int64, id, mediaName string, updatedAt time.Time) database.MediaHistoryEntry {

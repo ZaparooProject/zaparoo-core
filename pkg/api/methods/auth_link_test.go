@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -36,10 +37,27 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLogDeviceLinkPollFailure(t *testing.T) {
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	logDeviceLinkPollFailure(assert.AnError, 1)
+	assert.Contains(t, buf.String(), `"level":"warn"`)
+	assert.Contains(t, buf.String(), `"message":"device link poll failed, retrying"`)
+
+	buf.Reset()
+	logDeviceLinkPollFailure(assert.AnError, 2)
+	assert.Empty(t, buf.String(), "repeated poll errors stay debug-level to avoid log flooding")
+}
 
 // resetAuthLinkState clears the package-level link session between tests.
 func resetAuthLinkState(t *testing.T) {

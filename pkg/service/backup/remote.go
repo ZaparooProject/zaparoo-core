@@ -105,6 +105,13 @@ var (
 	errRemoteNewerSchema    = errors.New("backup requires a newer Core version")
 )
 
+// IsRemoteUnlinkedError reports expected inactivity when no usable online
+// credential exists. Background schedulers use this to avoid warning on
+// devices that have intentionally never linked or have since unlinked.
+func IsRemoteUnlinkedError(err error) bool {
+	return errors.Is(err, errRemoteUnlinked)
+}
+
 // RemoteRunInfo describes one completed remote backup run.
 //
 //nolint:govet // JSON response shape is grouped for API readability.
@@ -363,7 +370,11 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 	ctx = lease.Context()
 
 	started := time.Now().UTC()
-	_ = m.writeRemoteStatus(&statusEntry{LastRunAt: formatTime(started), LastStatus: StatusRunning})
+	if statusErr := m.writeRemoteStatus(&statusEntry{
+		LastRunAt: formatTime(started), LastStatus: StatusRunning,
+	}); statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to persist running remote backup status")
+	}
 
 	info, err := m.createRemoteSnapshot(ctx, backupType)
 	if errors.Is(err, errRemoteIntegrityRetry) {
@@ -382,7 +393,9 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 		if errors.Is(err, errRemoteUnlinked) {
 			failed.Unlinked = true
 		}
-		_ = m.writeRemoteStatus(failed)
+		if statusErr := m.writeRemoteStatus(failed); statusErr != nil {
+			log.Warn().Err(statusErr).Msg("failed to persist failed remote backup status")
+		}
 		m.notifyRemoteFailure(err)
 		return RemoteRunInfo{}, err
 	}
@@ -395,7 +408,7 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 	// with its original timestamp, and stamping that here would make a
 	// healthy daily schedule look like it stopped on the last content
 	// change (and eventually trip the false stale-backup notice).
-	_ = m.writeRemoteStatus(&statusEntry{
+	if statusErr := m.writeRemoteStatus(&statusEntry{
 		LastRunAt:             formatTime(started),
 		LastSuccessAt:         formatTime(time.Now().UTC()),
 		LastSnapshotCreatedAt: formatTime(info.Backup.CreatedAt),
@@ -405,7 +418,9 @@ func (m *Manager) RunRemote(ctx context.Context, backupType string) (RemoteRunIn
 		Categories:            remoteCategoriesToStatus(info.Categories),
 		Warnings:              info.Warnings,
 		SkippedFiles:          len(info.Warnings) + info.SkippedFiles,
-	})
+	}); statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to persist successful remote backup status")
+	}
 	return info, nil
 }
 
@@ -638,7 +653,7 @@ func (m *Manager) stageRemotePayloads(
 	staging := &restoreStaging{dir: dir}
 	cleanup := func() {
 		if removeErr := os.RemoveAll(dir); removeErr != nil {
-			log.Debug().Err(removeErr).Str("dir", dir).Msg("failed to remove restore staging directory")
+			log.Warn().Err(removeErr).Str("dir", dir).Msg("failed to remove restore staging directory")
 		}
 	}
 
@@ -768,7 +783,7 @@ func (c *remoteClient) stagePackObjects(
 	}
 	defer func() {
 		if removeErr := os.Remove(packPath); removeErr != nil {
-			log.Debug().Err(removeErr).Str("path", packPath).Msg("failed to remove staged pack file")
+			log.Warn().Err(removeErr).Str("path", packPath).Msg("failed to remove staged pack file")
 		}
 	}()
 	return extractPackObjects(packPath, pack, staging)
@@ -843,7 +858,7 @@ func (c *remoteClient) downloadPackAttempt(
 	}
 	if rawErr != nil {
 		if removeErr := os.Remove(path); removeErr != nil {
-			log.Debug().Err(removeErr).Str("path", path).Msg("failed to remove failed pack download")
+			log.Warn().Err(removeErr).Str("path", path).Msg("failed to remove failed pack download")
 		}
 		return "", rawErr
 	}
@@ -861,7 +876,7 @@ func extractPackObjects(packPath string, pack *remotePackObjects, staging *resto
 	}
 	defer func() {
 		if closeErr := packFile.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Str("path", packPath).Msg("failed to close staged pack file")
+			log.Warn().Err(closeErr).Str("path", packPath).Msg("failed to close staged pack file")
 		}
 	}()
 	for i := range pack.Objects {
@@ -1025,7 +1040,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	}
 	list, listErr := m.ListRemote(ctx)
 	if listErr != nil {
-		log.Debug().Err(listErr).Msg("failed to refresh remote backup quota after upload")
+		log.Warn().Err(listErr).Msg("failed to refresh remote backup quota after upload")
 	}
 	m.notifyRemoteWarnings(collection.Warnings)
 	uploadedFiles := 0
@@ -1335,7 +1350,11 @@ func (m *Manager) RefreshRemoteAvailabilityIfStaleAsync() {
 		ctx, cancel := context.WithTimeout(context.Background(), remoteRequestTimeout)
 		defer cancel()
 		if _, err := m.RefreshRemoteAvailability(ctx); err != nil {
-			log.Debug().Err(err).Msg("background remote availability refresh failed")
+			if errors.Is(err, context.Canceled) {
+				log.Debug().Err(err).Msg("background remote availability refresh stopped")
+			} else {
+				log.Warn().Err(err).Msg("background remote availability refresh failed")
+			}
 		}
 	}()
 }

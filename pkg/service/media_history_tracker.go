@@ -44,6 +44,7 @@ type mediaHistoryTracker struct {
 	currentMediaStartTimeMono time.Time
 	st                        *state.State
 	db                        *database.Database
+	requestPlaySync           func()
 	currentHistoryDBID        int64
 	closingHistoryDBID        int64
 	mu                        syncutil.RWMutex
@@ -76,6 +77,8 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 				if closeErr := t.db.UserDB.CloseMediaHistory(prevDBID, endTime, playTime); closeErr != nil {
 					log.Error().Err(closeErr).Int64("dbid", prevDBID).
 						Msg("media history: failed to close orphaned entry")
+				} else if t.requestPlaySync != nil {
+					t.requestPlaySync()
 				}
 				t.mu.Lock()
 				if t.currentHistoryDBID == prevDBID {
@@ -197,6 +200,9 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					}
 					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("closed media history entry")
+					if t.requestPlaySync != nil {
+						t.requestPlaySync()
+					}
 				}
 			}
 		}
