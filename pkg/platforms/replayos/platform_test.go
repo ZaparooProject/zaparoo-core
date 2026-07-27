@@ -286,6 +286,7 @@ func TestSettings(t *testing.T) {
 	assert.Equal(t, installDir, s.ConfigDir)
 	assert.Equal(t, installDir+"/logs", s.LogDir)
 	assert.NotEmpty(t, s.TempDir)
+	assert.False(t, s.DisableZapScriptInTUI)
 }
 
 func TestWriteAutostart(t *testing.T) {

@@ -21,14 +21,87 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestShouldDisableZapScriptInTUI(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+
+	t.Run("nil config", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		assert.False(t, shouldDisableZapScriptInTUI(nil, pl))
+	})
+
+	t.Run("nil platform", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, shouldDisableZapScriptInTUI(cfg, nil))
+	})
+
+	t.Run("concurrent TUI", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{})
+		assert.False(t, shouldDisableZapScriptInTUI(cfg, pl))
+	})
+
+	t.Run("exclusive TUI", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true})
+		assert.True(t, shouldDisableZapScriptInTUI(cfg, pl))
+	})
+}
+
+func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	buildErr := errors.New("build failed")
+	for _, shouldDisable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disable=%t", shouldDisable), func(t *testing.T) {
+			cfg := &config.Instance{}
+			pl := testingmocks.NewMockPlatform()
+			pl.On("Settings").Return(platforms.Settings{
+				DisableZapScriptInTUI: shouldDisable,
+			}).Once()
+
+			disabled := false
+			restored := false
+			disableZapScript = func(gotCfg *config.Instance) func() {
+				assert.Same(t, cfg, gotCfg)
+				disabled = true
+				return func() {
+					restored = true
+				}
+			}
+
+			err := BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+				assert.Equal(t, shouldDisable, disabled)
+				return nil, buildErr
+			})
+			require.ErrorIs(t, err, buildErr)
+			assert.Equal(t, shouldDisable, disabled)
+			assert.Equal(t, shouldDisable, restored)
+			pl.AssertExpectations(t)
+		})
+	}
+}
 
 func TestCenterWidget(t *testing.T) {
 	t.Parallel()

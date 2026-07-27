@@ -2300,9 +2300,9 @@ None.
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
 | backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and paired admin clients. |
-| playtimeSyncEnabled       | boolean                                   | No       | Whether play history sync is enabled. Defaults to false. Only returned to localhost and paired admin clients. |
+| playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and paired admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and paired admin clients. |
-| backupRemoteBaseUrl       | string                                    | No       | Configured backup remote server base URL (read-only). Only returned to localhost and paired admin clients. |
+| backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and paired admin clients. |
 
 ##### Reader connection object
 
@@ -2386,7 +2386,7 @@ An object containing any of the following optional keys:
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires a localhost or paired admin client. |
-| playtimeSyncEnabled       | boolean                                   | No       | Enable play history sync. Requires a localhost or paired admin client. |
+| playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires a localhost or paired admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires a localhost or paired admin client. |
 
 #### Result
@@ -2508,7 +2508,7 @@ An object:
 
 Report whether Core holds a stored bearer credential for an auth server URL. The check is local only: the token is never validated against the server and no token material is returned.
 
-Status probes are only answered for official Zaparoo API hosts over HTTPS and for the configured backup remote base URL. Any other URL returns `linked: false` without revealing whether a credential exists.
+Status probes are only answered for official Zaparoo API hosts over HTTPS and for the configured remote backup base URL. Any other URL returns `linked: false` without revealing whether a credential exists.
 
 #### Parameters
 
@@ -2553,7 +2553,7 @@ An object:
 
 ### settings.auth.unlink
 
-Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured backup remote server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups. Removal is local only: the server has no revoke endpoint and invalidates the old token when the device links again.
+Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured remote backup server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup state is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups.
 
 Requires a localhost client or a paired admin client.
 
@@ -2764,23 +2764,23 @@ None.
 
 ### Device backup methods
 
-Backup methods operate on portable full-device ZIP snapshots. Authentication credentials are excluded from local and cloud snapshots. Restoring a snapshot restarts Core and requires clients to pair again. Mutating, listing, inspecting, and restoring methods require a localhost client or a paired admin client. Restore is refused while media is active.
+Backup methods operate on portable full-device ZIP snapshots. Authentication credentials are excluded from local and remote backups. Restoring a backup restarts Core while preserving the destination device's identity, encryption setting, paired clients, and stored authentication credentials. Mutating, listing, inspecting, and restoring methods require a localhost client or a paired admin client. Restore is refused while media is active.
 
 | Method | Parameters | Result |
 | :----- | :--------- | :----- |
-| `settings.backup` | None | Creates a bounded local ZIP and returns backup metadata. `integrity` is `valid` after creation. |
+| `settings.backup` | None | Creates a local ZIP and returns backup metadata. `integrity` is `valid` after creation. |
 | `settings.backup.list` | None | Lists local ZIP metadata without reading manifests. |
 | `settings.backup.inspect` | `{ "name": string }` | Reads manifest metadata. Payload `integrity` is `unchecked`; restore verifies every payload before mutation. |
 | `settings.backup.delete` | `{ "name": string }` | Deletes local ZIP and returns `null`. |
 | `settings.backup.restore` | `{ "name": string }` | Transactionally restores local ZIP, returns restore metadata, then restarts Core after response is written. |
-| `settings.backup.status` | None | Returns local/remote status, partial warnings, active operation, link state, linked device identity (`deviceName`, `linkedAt`), and Warp availability. A stale availability value triggers a background refresh; the response never blocks on the cloud API. |
-| `settings.backup.remote.run` | None | Creates manual cloud snapshot and returns upload/dedup metadata. |
-| `settings.backup.remote.list` | None | Lists cloud snapshots. Backup and device IDs are opaque strings. |
-| `settings.backup.remote.restore` | `{ "id": string }` | Transactionally restores cloud snapshot, reports completion, then restarts Core. |
+| `settings.backup.status` | None | Returns local and remote status, partial warnings, active operation, link state, linked device identity (`deviceName`, `linkedAt`), and Warp availability. Remote status distinguishes the latest successful run (`lastSuccessAt`) from the last stored content change (`lastSnapshotCreatedAt`); `lastRunNoChanges` identifies a successful unchanged run. A stale availability value triggers a background refresh, and the response never blocks on the remote API. |
+| `settings.backup.remote.run` | None | Creates a manual remote backup and returns uploaded/deduplicated file and pack counts, bytes, quota usage, warnings, skipped-file count, and `noChanges` when the server already holds an identical backup. |
+| `settings.backup.remote.list` | None | Lists remote backups. Backup and device IDs are opaque strings. |
+| `settings.backup.remote.restore` | `{ "id": string }` | Transactionally restores a remote backup, reports completion, then restarts Core. |
 
-`backup.remote.enabled` enables automatic scheduling only. Linked devices may manually upload, list, and restore while scheduling is disabled. Warp availability gates upload and scheduling; listing and restoring existing snapshots remain available. A cloud API `401` immediately marks device unlinked until a fresh link succeeds.
+`backup.remote.enabled` enables automatic scheduling only. Linked devices may manually upload, list, and restore while scheduling is disabled. Warp availability gates upload and scheduling; listing and restoring existing backups remain available. A remote API `401` immediately marks the device unlinked until a fresh link succeeds.
 
-Archives use known categories (`zaparoo`, `settings`, `inputs`, `saves`, and `savestates`), exact platform matching, SHA-256 payload verification, and configured size limits. `partial` status means snapshot completed but one or more unsafe or unavailable source paths were skipped; inspect/status responses include structured `warnings`. Archives that fail ZIP header, manifest, or platform-policy validation return an RPC error without backup metadata. Successful inspection reports `unchecked` because payload hashes are verified during restore.
+Archives use known categories (`zaparoo`, `settings`, `inputs`, `saves`, and `savestates`), exact platform matching, SHA-256 payload verification, and fixed entry, path, and manifest limits. Local and remote restores stage and verify every payload before device mutation. Remote files that cannot fit in a 64 MiB transfer pack are skipped and reported; server quota is checked before upload. `partial` status means a backup completed but one or more unsafe, unavailable, or oversized source files were skipped. Structured `warnings` describe unsafe or unavailable paths, while `skippedFiles` also counts oversized remote files. Archives that fail ZIP header, manifest, or platform-policy validation return an RPC error without backup metadata. Successful inspection reports `unchecked` because payload hashes are verified during restore.
 
 ## Playtime
 

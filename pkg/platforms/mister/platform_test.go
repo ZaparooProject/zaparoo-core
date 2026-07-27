@@ -44,6 +44,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
+	t.Parallel()
+	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
 // mockLauncherManager is a minimal mock for testing
 type mockLauncherManager struct{}
 

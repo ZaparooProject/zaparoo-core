@@ -152,7 +152,7 @@ func runTUI(pl *replayos.Platform, cfg *config.Instance) error {
 	}
 	defer stopDaemon()
 
-	err = tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
+	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
 		logDestPath := filepath.Join(helpers.DataDir(pl), config.LogFile)
 		return tui.BuildMain(
 			cfg, pl,
