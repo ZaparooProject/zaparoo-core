@@ -24,7 +24,9 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -506,37 +508,141 @@ func TestSqlBrowseRouteCountsFromCache_UsesChildDirCounts(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Not parallel: the route-context case mutates the package-level count timeout.
 func TestSqlBrowseRouteCountsFromMedia_ReusesPresenceProbeAcrossTimeouts(t *testing.T) {
+	tests := []struct {
+		probeErr            error
+		name                string
+		probeHasMedia       bool
+		routeContextTimeout bool
+		wantUnknownCounts   bool
+	}{
+		{
+			name:              "media present",
+			probeHasMedia:     true,
+			wantUnknownCounts: true,
+		},
+		{
+			name: "no rows",
+		},
+		{
+			name:     "probe timeout",
+			probeErr: context.DeadlineExceeded,
+		},
+		{
+			name:     "probe error",
+			probeErr: errors.New("probe failed"),
+		},
+		{
+			name:                "route context timeout",
+			probeHasMedia:       true,
+			routeContextTimeout: true,
+			wantUnknownCounts:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			probeQueries := 0
+			matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+				if strings.Contains(actualSQL, "SELECT 1") {
+					probeQueries++
+				}
+				return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+			})
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			if tc.routeContextTimeout {
+				originalTimeout := browseRouteCountSubTimeout
+				browseRouteCountSubTimeout = 100 * time.Millisecond
+				t.Cleanup(func() { browseRouteCountSubTimeout = originalTimeout })
+			}
+
+			routeA := browseTestPath("roms", "a")
+			routeB := browseTestPath("roms", "b")
+			expectCountTimeout := func(route string) {
+				t.Helper()
+				expectation := mock.ExpectQuery("SELECT COUNT").
+					WithArgs(browseRouteCacheKey(route), "SNES")
+				if tc.routeContextTimeout {
+					expectation.WillDelayFor(time.Second).WillReturnError(errors.New("interrupted"))
+				} else {
+					expectation.WillReturnError(context.DeadlineExceeded)
+				}
+			}
+			expectCountTimeout(routeA)
+			probeExpectation := mock.ExpectQuery("SELECT 1").WithArgs("SNES")
+			if tc.probeErr != nil {
+				probeExpectation.WillReturnError(tc.probeErr)
+			} else {
+				probeRows := sqlmock.NewRows([]string{"one"})
+				if tc.probeHasMedia {
+					probeRows.AddRow(1)
+				}
+				probeExpectation.WillReturnRows(probeRows)
+			}
+			expectCountTimeout(routeB)
+			// Keep one query pending so the matcher sees an unexpected second probe.
+			mock.ExpectQuery("SELECT sentinel").
+				WillReturnRows(sqlmock.NewRows([]string{"one"}).AddRow(1))
+
+			counts, err := sqlBrowseRouteCountsFromMedia(context.Background(), db, database.BrowseRouteCountsOptions{
+				Routes:  []string{routeA, routeB},
+				Systems: []systemdefs.System{{ID: "SNES"}},
+			})
+			require.NoError(t, err)
+			if tc.wantUnknownCounts {
+				require.Len(t, counts, 2)
+				for _, route := range []string{routeA, routeB} {
+					assert.Equal(t, database.BrowseRouteCount{
+						Path:         route,
+						SystemIDs:    []string{"SNES"},
+						CountUnknown: true,
+					}, counts[route])
+				}
+			} else {
+				assert.Empty(t, counts)
+			}
+
+			var sentinel int
+			require.NoError(t, db.QueryRowContext(context.Background(), "SELECT sentinel").Scan(&sentinel))
+			assert.Equal(t, 1, probeQueries)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestSqlBrowseRouteCountsFromMedia_PropagatesCancellationDuringProbe(t *testing.T) {
 	t.Parallel()
-	db, mock, err := sqlmock.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if strings.Contains(actualSQL, "SELECT 1") {
+			cancel()
+		}
+		return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	routeA := browseTestPath("roms", "a")
-	routeB := browseTestPath("roms", "b")
+	route := browseTestPath("roms", "a")
 	mock.ExpectQuery("SELECT COUNT").
-		WithArgs(browseRouteCacheKey(routeA), "SNES").
+		WithArgs(browseRouteCacheKey(route), "SNES").
 		WillReturnError(context.DeadlineExceeded)
 	mock.ExpectQuery("SELECT 1").
 		WithArgs("SNES").
-		WillReturnRows(sqlmock.NewRows([]string{"one"}).AddRow(1))
-	mock.ExpectQuery("SELECT COUNT").
-		WithArgs(browseRouteCacheKey(routeB), "SNES").
-		WillReturnError(context.DeadlineExceeded)
+		WillReturnError(context.Canceled)
 
-	counts, err := sqlBrowseRouteCountsFromMedia(context.Background(), db, database.BrowseRouteCountsOptions{
-		Routes:  []string{routeA, routeB},
+	counts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
+		Routes:  []string{route},
 		Systems: []systemdefs.System{{ID: "SNES"}},
 	})
-	require.NoError(t, err)
-	require.Len(t, counts, 2)
-	for _, route := range []string{routeA, routeB} {
-		assert.Equal(t, database.BrowseRouteCount{
-			Path:         route,
-			SystemIDs:    []string{"SNES"},
-			CountUnknown: true,
-		}, counts[route])
-	}
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, counts)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

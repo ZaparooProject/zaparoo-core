@@ -1717,6 +1717,9 @@ func sqlBrowseRouteCountsFromMedia(
 			probeHasMedia, probeErr = sqlBrowseRouteHasMedia(ctx, db, systemClause, systemArgs)
 			probeAttempted = true
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("browse route counts media scan: %w", ctxErr)
+		}
 		if probeErr != nil {
 			log.Warn().Err(probeErr).Str("route", route).
 				Msg("browse route count timed out and presence probe failed; skipping route")
