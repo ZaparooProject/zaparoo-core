@@ -21,6 +21,8 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -62,6 +64,43 @@ func TestShouldDisableZapScriptInTUI(t *testing.T) {
 		pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true})
 		assert.True(t, shouldDisableZapScriptInTUI(cfg, pl))
 	})
+}
+
+func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	buildErr := errors.New("build failed")
+	for _, shouldDisable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disable=%t", shouldDisable), func(t *testing.T) {
+			cfg := &config.Instance{}
+			pl := testingmocks.NewMockPlatform()
+			pl.On("Settings").Return(platforms.Settings{
+				DisableZapScriptInTUI: shouldDisable,
+			}).Once()
+
+			disabled := false
+			restored := false
+			disableZapScript = func(gotCfg *config.Instance) func() {
+				assert.Same(t, cfg, gotCfg)
+				disabled = true
+				return func() {
+					restored = true
+				}
+			}
+
+			err := BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+				assert.Equal(t, shouldDisable, disabled)
+				return nil, buildErr
+			})
+			require.ErrorIs(t, err, buildErr)
+			assert.Equal(t, shouldDisable, disabled)
+			assert.Equal(t, shouldDisable, restored)
+			pl.AssertExpectations(t)
+		})
+	}
 }
 
 func TestCenterWidget(t *testing.T) {

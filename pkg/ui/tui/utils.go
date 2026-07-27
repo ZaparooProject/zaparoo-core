@@ -39,6 +39,8 @@ const TUIRequestTimeout = 5 * time.Second
 // This is longer than TUIRequestTimeout to give users time to physically tap a tag.
 const TagReadTimeout = 30 * time.Second
 
+var disableZapScript = client.DisableZapScript
+
 // tuiContext creates a context with the TUI request timeout.
 // Use this for API calls from the TUI to avoid long hangs.
 func tuiContext() (context.Context, context.CancelFunc) {
@@ -496,7 +498,7 @@ func BuildAndRetry(
 	builder func() (*tview.Application, error),
 ) error {
 	if shouldDisableZapScriptInTUI(cfg, pl) {
-		enableZapScript := client.DisableZapScript(cfg)
+		enableZapScript := disableZapScript(cfg)
 		defer enableZapScript()
 	}
 
