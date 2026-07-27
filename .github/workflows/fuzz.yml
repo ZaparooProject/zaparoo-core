@@ -52,35 +52,78 @@ jobs:
         run: go mod download
 
       - name: Run fuzz tests
-        run: task fuzz
+        id: fuzz
+        run: |
+          set -o pipefail
+          task fuzz 2>&1 | tee fuzz.log
         env:
           FUZZ_TIME: ${{ inputs.fuzz-time || '2m' }}
 
-      - name: Upload crash corpus
-        if: failure()
+      - name: Classify fuzz failure
+        if: failure() && steps.fuzz.outcome == 'failure'
+        id: fuzz-failure
+        run: |
+          kind=failure
+          artifact_dir=fuzz-failure-artifact
+          mkdir -p "$artifact_dir"
+          cp fuzz.log "$artifact_dir/fuzz.log"
+
+          while IFS= read -r corpus; do
+            kind=crash
+            destination="$artifact_dir/$corpus"
+            mkdir -p "$(dirname "$destination")"
+            cp "$corpus" "$destination"
+          done < <(git ls-files --others --exclude-standard -- '**/testdata/fuzz/**')
+
+          failed_targets="$(grep -c 'FAIL: Fuzz.* in \./pkg/' fuzz.log || true)"
+          timeouts="$(grep -c 'context deadline exceeded' fuzz.log || true)"
+          if [[ "$kind" != "crash" && "$timeouts" -gt 0 && "$failed_targets" -eq "$timeouts" ]]; then
+            kind=timeout
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+
+      - name: Upload fuzz failure evidence
+        if: failure() && steps.fuzz.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fuzz-crashes
-          path: "**/testdata/fuzz/**"
-          if-no-files-found: ignore
+          name: fuzz-${{ steps.fuzz-failure.outputs.kind }}
+          path: fuzz-failure-artifact
+          if-no-files-found: error
 
       - name: Create issue on failure
-        if: failure()
+        if: failure() && steps.fuzz.outcome == 'failure'
         env:
+          FAILURE_KIND: ${{ steps.fuzz-failure.outputs.kind }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          case "$FAILURE_KIND" in
+            crash)
+              title="Nightly fuzz: crash found ($(date -u +%Y-%m-%d))"
+              summary="The fuzz run produced a new failing corpus entry."
+              next_step="Download the artifact, place the corpus file in its matching testdata/fuzz/FuzzName directory, and run the target with go test -run FuzzName/corpus_filename ./pkg/path/to/package."
+              ;;
+            timeout)
+              title="Nightly fuzz: timeout ($(date -u +%Y-%m-%d))"
+              summary="The fuzz run ended with context deadline exceeded and produced no new corpus entry. This is a timeout, not a confirmed crash."
+              next_step="Review fuzz.log for the stalled target and rerun it before changing production code."
+              ;;
+            *)
+              title="Nightly fuzz: failure ($(date -u +%Y-%m-%d))"
+              summary="The fuzz command failed without a timeout signature or new corpus entry."
+              next_step="Review fuzz.log to identify the failing target."
+              ;;
+          esac
+
           gh issue create \
-            --title "Nightly fuzz: crash found ($(date -u +%Y-%m-%d))" \
+            --title "$title" \
             --label "bug" \
-            --body "$(cat <<'EOF'
-          The nightly fuzz run found a crash. The failing corpus entry is attached as an artifact on the workflow run.
+            --body "$(cat <<EOF
+          $summary
 
           **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Failure type:** $FAILURE_KIND
+          **Artifact:** fuzz-$FAILURE_KIND
 
-          Download the `fuzz-crashes` artifact from that run and place the corpus file into the appropriate `testdata/fuzz/FuzzName/` directory to reproduce locally:
-
-          ```
-          go test -run FuzzName/corpus_filename ./pkg/path/to/package
-          ```
+          $next_step
           EOF
           )"

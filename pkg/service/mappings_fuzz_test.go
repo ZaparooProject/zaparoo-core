@@ -24,8 +24,15 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
+
+func resetRegexCacheAfterFuzzCase(t *testing.T) {
+	t.Helper()
+	// Keep random one-off patterns from accumulating in the process-wide cache.
+	t.Cleanup(helpers.GlobalRegexCache.Clear)
+}
 
 // FuzzCheckMappingUID tests UID mapping matching with arbitrary patterns and
 // data, covering exact, partial, and regex match types.
@@ -47,6 +54,7 @@ func FuzzCheckMappingUID(f *testing.F) {
 		default:
 			return
 		}
+		resetRegexCacheAfterFuzzCase(t)
 
 		m := &database.Mapping{
 			Pattern: pattern,
@@ -90,6 +98,7 @@ func FuzzCheckMappingText(f *testing.F) {
 		default:
 			return
 		}
+		resetRegexCacheAfterFuzzCase(t)
 
 		m := &database.Mapping{
 			Pattern: pattern,
@@ -129,6 +138,7 @@ func FuzzCheckMappingData(f *testing.F) {
 		default:
 			return
 		}
+		resetRegexCacheAfterFuzzCase(t)
 
 		m := &database.Mapping{
 			Pattern: pattern,
