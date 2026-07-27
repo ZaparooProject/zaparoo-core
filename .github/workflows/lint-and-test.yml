@@ -345,12 +345,14 @@ jobs:
         run: |
           go test -v -race \
             ./pkg/api \
+            ./pkg/database/mediascanner \
             ./pkg/helpers \
             ./pkg/helpers/command \
             ./pkg/readers/externaldrive \
             ./pkg/platforms/shared/steam \
             ./pkg/platforms/shared/steam/steamtracker \
             ./pkg/service \
+            ./pkg/service/backup \
             ./pkg/service/restart \
             ./pkg/ui/systray
 
@@ -359,12 +361,14 @@ jobs:
         run: |
           go test -v -race \
             ./pkg/api \
+            ./pkg/database/mediascanner \
             ./pkg/helpers \
             ./pkg/helpers/command \
             ./pkg/readers/externaldrive \
             ./pkg/platforms/shared/steam \
             ./pkg/platforms/shared/steam/steamtracker \
             ./pkg/service \
+            ./pkg/service/backup \
             ./pkg/service/daemon \
             ./pkg/service/restart \
             ./pkg/ui/systray

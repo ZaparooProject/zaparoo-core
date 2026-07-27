@@ -94,7 +94,7 @@ func TestReconcile_NewSystemInsertsTitlesMediaAndTags(t *testing.T) {
 	row := byPath[gamePath]
 	require.NotZero(t, row.DBID)
 	assert.False(t, row.IsMissing)
-	assert.Equal(t, mediadb.ParentDirForMediaPath(gamePath), row.ParentDir)
+	assert.Equal(t, mediadb.ParentDirForMediaPath(filepath.ToSlash(gamePath)), row.ParentDir)
 	assert.Equal(t, "Super Game", row.SortName)
 
 	got := mediaTagStrings(t, mediaDB, row.DBID)
@@ -437,7 +437,7 @@ func TestReconcile_RepairsParentDirAndSortName(t *testing.T) {
 	assert.Equal(t, int64(1), stats.MediaUpserted)
 
 	repaired := mediaBySystem(t, mediaDB, "SNES")[gamePath]
-	assert.Equal(t, mediadb.ParentDirForMediaPath(gamePath), repaired.ParentDir)
+	assert.Equal(t, mediadb.ParentDirForMediaPath(filepath.ToSlash(gamePath)), repaired.ParentDir)
 	assert.Equal(t, "Epsilon", repaired.SortName)
 }
 

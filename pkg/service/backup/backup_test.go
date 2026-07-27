@@ -2264,7 +2264,9 @@ func TestManagerWritesStatusAtomically(t *testing.T) {
 	assert.True(t, stored.Remote.Unlinked)
 	info, err := os.Stat(env.Manager.statusPath())
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 	entries, err := os.ReadDir(filepath.Dir(env.Manager.statusPath()))
 	require.NoError(t, err)
 	for _, entry := range entries {
@@ -3753,12 +3755,17 @@ func TestRemoteClientManifestResponsesExceedDefaultLimit(t *testing.T) {
 	manifest = append(manifest, []byte(`{"pad":"end"}]`)...)
 	require.Greater(t, len(manifest), int(helpers.MaxResponseBodySize))
 
+	response, err := json.Marshal(remoteBackupResponse{
+		ID: "backup-3", SchemaVersion: remoteSchemaVersion, Manifest: json.RawMessage(manifest),
+		CreatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups/3" {
-			writeJSON(t, w, remoteBackupResponse{
-				ID: "backup-3", SchemaVersion: remoteSchemaVersion, Manifest: json.RawMessage(manifest),
-				CreatedAt: time.Now().UTC(),
-			})
+			w.Header().Set("Content-Type", "application/json")
+			// The size-limited request intentionally closes before reading the full response.
+			_, _ = w.Write(response)
 			return
 		}
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -3768,7 +3775,7 @@ func TestRemoteClientManifestResponsesExceedDefaultLimit(t *testing.T) {
 	client := &remoteClient{httpClient: server.Client(), baseURL: server.URL, bearer: "t", platform: "test"}
 
 	var small remoteBackupResponse
-	err := client.doJSON(context.Background(), http.MethodGet, "/v1/device/backups/3", nil, &small)
+	err = client.doJSON(context.Background(), http.MethodGet, "/v1/device/backups/3", nil, &small)
 	require.Error(t, err, "the default limit truncates manifest-bearing responses")
 
 	var full remoteBackupResponse
