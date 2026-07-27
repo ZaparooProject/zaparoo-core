@@ -478,11 +478,12 @@ func (p *Platform) filesystem() afero.Fs {
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    misterconfig.DataDir,
-		ConfigDir:  misterconfig.DataDir,
-		TempDir:    misterconfig.TempDir,
-		LogDir:     misterconfig.TempDir,
-		ZipsAsDirs: true,
+		DataDir:               misterconfig.DataDir,
+		ConfigDir:             misterconfig.DataDir,
+		TempDir:               misterconfig.TempDir,
+		LogDir:                misterconfig.TempDir,
+		ZipsAsDirs:            true,
+		DisableZapScriptInTUI: true,
 	}
 }
 

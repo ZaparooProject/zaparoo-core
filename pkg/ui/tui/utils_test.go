@@ -24,11 +24,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestShouldDisableZapScriptInTUI(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+
+	t.Run("nil config", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		assert.False(t, shouldDisableZapScriptInTUI(nil, pl))
+	})
+
+	t.Run("nil platform", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, shouldDisableZapScriptInTUI(cfg, nil))
+	})
+
+	t.Run("concurrent TUI", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{})
+		assert.False(t, shouldDisableZapScriptInTUI(cfg, pl))
+	})
+
+	t.Run("exclusive TUI", func(t *testing.T) {
+		t.Parallel()
+		pl := testingmocks.NewMockPlatform()
+		pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true})
+		assert.True(t, shouldDisableZapScriptInTUI(cfg, pl))
+	})
+}
 
 func TestCenterWidget(t *testing.T) {
 	t.Parallel()

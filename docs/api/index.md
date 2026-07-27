@@ -228,7 +228,15 @@ An example request: `GET http://10.0.0.123:7497/run/**launch.system:snes`
 
 This would act as though a token with the text `**launch.system:snes` had been scanned.
 
-Requests from the local device are allowed without restriction. Remote requests must be explicitly allowed using the `allow_launch` config file setting.
+URL-encode media paths used in the endpoint. Core decodes the path once before running it, including encoded spaces and parentheses:
+
+```http
+GET http://10.0.0.123:7497/run/_Arcade/Youjyuden%20%28JP%29.mra
+```
+
+This runs `_Arcade/Youjyuden (JP).mra`.
+
+Requests from the local device are allowed without restriction. Remote requests must be explicitly allowed using the `allow_run` config setting.
 
 ## Methods
 

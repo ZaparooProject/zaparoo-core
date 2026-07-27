@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -480,16 +481,21 @@ type PrimitiveWithSetBorder interface {
 	SetBorder(arg bool) *tview.Box
 }
 
+func shouldDisableZapScriptInTUI(cfg *config.Instance, pl platforms.Platform) bool {
+	return cfg != nil && pl != nil && pl.Settings().DisableZapScriptInTUI
+}
+
 // BuildAndRetry attempts to build and display a TUI dialog, retrying with
 // alternate settings on error.
 // It's used to work around issues on MiSTer, which has an unusual setup for
-// showing TUI applications.
-// When cfg is non-nil, ZapScript execution is disabled while the TUI is open.
+// showing TUI applications. ZapScript is disabled only on platforms whose TUI
+// occupies the primary display and cannot run alongside launched media.
 func BuildAndRetry(
 	cfg *config.Instance,
+	pl platforms.Platform,
 	builder func() (*tview.Application, error),
 ) error {
-	if cfg != nil {
+	if shouldDisableZapScriptInTUI(cfg, pl) {
 		enableZapScript := client.DisableZapScript(cfg)
 		defer enableZapScript()
 	}

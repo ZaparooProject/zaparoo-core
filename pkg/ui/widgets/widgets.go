@@ -367,7 +367,7 @@ func NoticeUI(cfg *config.Instance, pl platforms.Platform, argsPath string, load
 		}()
 	}
 
-	err := tui.BuildAndRetry(nil, func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(nil, nil, func() (*tview.Application, error) {
 		return NoticeUIBuilder(cfg, pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
@@ -604,7 +604,7 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		}()
 	}
 
-	err := tui.BuildAndRetry(nil, func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(nil, nil, func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")

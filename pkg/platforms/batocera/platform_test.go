@@ -24,6 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
+	t.Parallel()
+	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
 func TestPresentUIForwardsPassiveEvents(t *testing.T) {
 	// MockESAPIServer binds to hardcoded port 1234.
 	mockESAPI := helpers.NewMockESAPIServer(t)

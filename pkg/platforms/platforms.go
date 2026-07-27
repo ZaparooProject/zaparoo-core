@@ -374,6 +374,10 @@ type Settings struct {
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool
+	// DisableZapScriptInTUI prevents token scans from launching media while
+	// the TUI occupies the platform's primary display. Leave false when the
+	// TUI and launched media can run alongside each other.
+	DisableZapScriptInTUI bool
 }
 
 // ScraperCustomOption is a single user-configurable option for a scraper.

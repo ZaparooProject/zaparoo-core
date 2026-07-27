@@ -296,11 +296,12 @@ func (p *Platform) getESConfig() *ESSystemConfig {
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    DataDir,
-		ConfigDir:  ConfigDir,
-		TempDir:    filepath.Join(os.TempDir(), config.AppName),
-		LogDir:     LogDir,
-		ZipsAsDirs: false,
+		DataDir:               DataDir,
+		ConfigDir:             ConfigDir,
+		TempDir:               filepath.Join(os.TempDir(), config.AppName),
+		LogDir:                LogDir,
+		ZipsAsDirs:            false,
+		DisableZapScriptInTUI: true,
 	}
 }
 

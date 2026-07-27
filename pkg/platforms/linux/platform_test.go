@@ -12,6 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSettings_AllowsZapScriptAlongsideTUI(t *testing.T) {
+	t.Parallel()
+	assert.False(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
 func TestLinuxHasKodiLocalLauncher(t *testing.T) {
 	t.Parallel()
 
