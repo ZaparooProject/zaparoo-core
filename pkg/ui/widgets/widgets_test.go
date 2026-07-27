@@ -30,7 +30,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -76,6 +78,59 @@ func waitForWidgetExit(t *testing.T, done <-chan error) {
 		require.NoError(t, err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("widget did not stop")
+	}
+}
+
+func TestWidgetUIPassesPlatformPolicyToBuildAndRetry(t *testing.T) {
+	t.Setenv("ZAPAROO_RUN_SCRIPT", "")
+
+	cfg := &config.Instance{}
+	widgets := []struct {
+		run  func(*config.Instance, platforms.Platform, buildAndRetryFunc) error
+		name string
+	}{
+		{
+			name: "notice",
+			run: func(cfg *config.Instance, pl platforms.Platform, buildAndRetry buildAndRetryFunc) error {
+				return runNoticeUI(cfg, pl, "unused", false, buildAndRetry)
+			},
+		},
+		{
+			name: "picker",
+			run: func(cfg *config.Instance, pl platforms.Platform, buildAndRetry buildAndRetryFunc) error {
+				return runPickerUI(cfg, pl, "unused", buildAndRetry)
+			},
+		},
+	}
+
+	for _, widget := range widgets {
+		for _, disableZapScript := range []bool{false, true} {
+			name := fmt.Sprintf("%s/disable=%t", widget.name, disableZapScript)
+			t.Run(name, func(t *testing.T) {
+				pl := testingmocks.NewMockPlatform()
+				pl.On("Settings").Return(platforms.Settings{
+					DisableZapScriptInTUI: disableZapScript,
+				}).Once()
+
+				called := false
+				buildAndRetry := func(
+					gotCfg *config.Instance,
+					gotPl platforms.Platform,
+					builder func() (*tview.Application, error),
+				) error {
+					called = true
+					assert.Same(t, cfg, gotCfg)
+					assert.Same(t, pl, gotPl)
+					assert.Equal(t, disableZapScript, gotPl.Settings().DisableZapScriptInTUI)
+					assert.NotNil(t, builder)
+					return nil
+				}
+
+				require.NoError(t, widget.run(cfg, pl, buildAndRetry))
+				assert.True(t, called)
+				pl.AssertExpectations(t)
+			})
+		}
 	}
 }
 

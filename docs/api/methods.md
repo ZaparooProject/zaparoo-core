@@ -2553,7 +2553,7 @@ An object:
 
 ### settings.auth.unlink
 
-Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured remote backup server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup state is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups. Removal is local only: the server has no revoke endpoint and invalidates the old token when the device links again.
+Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured remote backup server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup state is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups.
 
 Requires a localhost client or a paired admin client.
 
