@@ -1659,6 +1659,13 @@ func sqlBrowseRouteCountsFromMedia(
 		return counts, nil
 	}
 	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	// The presence probe depends only on the system filter, so reuse its
+	// outcome across every route count that times out during this call.
+	var (
+		probeAttempted bool
+		probeHasMedia  bool
+		probeErr       error
+	)
 	for _, route := range opts.Routes {
 		prefix := browseRouteCacheKey(route)
 		args := append([]any{prefix}, systemArgs...)
@@ -1706,13 +1713,16 @@ func sqlBrowseRouteCountsFromMedia(
 		// result keeps the route browsable without another path-prefix scan. If
 		// the probe finds nothing (or itself times out), drop the route and keep
 		// browsing the rest.
-		hasMedia, probeErr := sqlBrowseRouteHasMedia(ctx, db, systemClause, systemArgs)
+		if !probeAttempted {
+			probeHasMedia, probeErr = sqlBrowseRouteHasMedia(ctx, db, systemClause, systemArgs)
+			probeAttempted = true
+		}
 		if probeErr != nil {
 			log.Warn().Err(probeErr).Str("route", route).
 				Msg("browse route count timed out and presence probe failed; skipping route")
 			continue
 		}
-		if !hasMedia {
+		if !probeHasMedia {
 			continue
 		}
 		log.Warn().Str("route", route).

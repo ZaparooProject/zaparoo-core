@@ -506,6 +506,40 @@ func TestSqlBrowseRouteCountsFromCache_UsesChildDirCounts(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseRouteCountsFromMedia_ReusesPresenceProbeAcrossTimeouts(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	routeA := browseTestPath("roms", "a")
+	routeB := browseTestPath("roms", "b")
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(routeA), "SNES").
+		WillReturnError(context.DeadlineExceeded)
+	mock.ExpectQuery("SELECT 1").
+		WithArgs("SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"one"}).AddRow(1))
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(routeB), "SNES").
+		WillReturnError(context.DeadlineExceeded)
+
+	counts, err := sqlBrowseRouteCountsFromMedia(context.Background(), db, database.BrowseRouteCountsOptions{
+		Routes:  []string{routeA, routeB},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, counts, 2)
+	for _, route := range []string{routeA, routeB} {
+		assert.Equal(t, database.BrowseRouteCount{
+			Path:         route,
+			SystemIDs:    []string{"SNES"},
+			CountUnknown: true,
+		}, counts[route])
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestBrowseCacheBuilder_NormalizesRelativeFilesystemDirs(t *testing.T) {
 	t.Parallel()
 
