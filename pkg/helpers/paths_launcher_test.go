@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -35,6 +36,70 @@ import (
 
 // testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
 var testLauncherCacheMutex syncutil.Mutex
+
+func TestGuessLauncherForPath(t *testing.T) {
+	t.Parallel()
+
+	launchers := []platforms.Launcher{
+		{ID: "GameboyColor", SystemID: systemdefs.SystemGameboyColor, Extensions: []string{".gbc"}},
+		{ID: "SNES", SystemID: systemdefs.SystemSNES, Extensions: []string{".sfc"}},
+		{ID: "PSX", SystemID: systemdefs.SystemPSX, Extensions: []string{".bin"}},
+		{ID: "MegaCD", SystemID: systemdefs.SystemMegaCD, Extensions: []string{".bin"}},
+	}
+	root := string(filepath.Separator)
+
+	tests := []struct {
+		name       string
+		path       string
+		wantSystem string
+		want       bool
+	}{
+		{
+			name:       "folder and extension agree",
+			path:       filepath.Join(root, "media", "fat", "hacks", "GBC", "Game.gbc"),
+			wantSystem: systemdefs.SystemGameboyColor,
+			want:       true,
+		},
+		{
+			name:       "unique extension without alias",
+			path:       filepath.Join(root, "media", "fat", "hacks", "Game.gbc"),
+			wantSystem: systemdefs.SystemGameboyColor,
+			want:       true,
+		},
+		{
+			name:       "folder disambiguates shared extension",
+			path:       filepath.Join(root, "media", "fat", "hacks", "PSX", "Game.bin"),
+			wantSystem: systemdefs.SystemPSX,
+			want:       true,
+		},
+		{
+			name: "shared extension without alias is ambiguous",
+			path: filepath.Join(root, "media", "fat", "hacks", "Game.bin"),
+			want: false,
+		},
+		{
+			name: "conflicting folder and extension",
+			path: filepath.Join(root, "media", "fat", "hacks", "SNES", "Game.gbc"),
+			want: false,
+		},
+		{
+			name: "unsupported extension",
+			path: filepath.Join(root, "media", "fat", "hacks", "GBC", "notes.txt"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			launcher, ok := guessLauncherFromCandidates(tt.path, launchers)
+			assert.Equal(t, tt.want, ok)
+			if tt.want {
+				assert.Equal(t, tt.wantSystem, launcher.SystemID)
+			}
+		})
+	}
+}
 
 func TestPathIsLauncher_AbsoluteFolderNoRootDirs(t *testing.T) {
 	t.Parallel()

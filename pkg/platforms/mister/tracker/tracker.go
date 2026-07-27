@@ -338,20 +338,28 @@ func (tr *Tracker) loadGame() {
 	}
 
 	launchers := helpers.PathToLaunchers(tr.cfg, tr.pl, path)
-	if len(launchers) == 0 {
-		log.Warn().Msgf("no launchers found for %s", path)
-		return
+	var launcher platforms.Launcher
+	switch {
+	case len(launchers) > 0:
+		launcher = launchers[0]
+	default:
+		var guessed bool
+		launcher, guessed = helpers.GuessLauncherForPath(path)
+		if !guessed {
+			log.Warn().Msgf("no launchers found for %s", path)
+			return
+		}
 	}
-	log.Debug().Msgf("tracker detected launchers: %v", launchers)
+	log.Debug().Msgf("tracker detected launcher: %v", launcher)
 
-	if launchers[0].SystemID == "" {
+	if launcher.SystemID == "" {
 		log.Warn().Str("path", path).Msg("launcher has empty system ID")
 		return
 	}
 
-	system, err := systemdefs.GetSystem(launchers[0].SystemID)
+	system, err := systemdefs.GetSystem(launcher.SystemID)
 	if err != nil {
-		log.Error().Err(err).Str("systemID", launchers[0].SystemID).Msg("error getting system")
+		log.Error().Err(err).Str("systemID", launcher.SystemID).Msg("error getting system")
 		return
 	}
 	log.Debug().Msgf("tracker detected system: %v", system)
