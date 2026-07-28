@@ -40,22 +40,28 @@ import (
 
 const TokenType = "file"
 
+// ReaderOptions customizes a file-backed reader for a specific bridge.
+type ReaderOptions struct {
+	IsAvailable    func() bool
+	AutoDetectPath string
+	Metadata       readers.DriverMetadata
+	IDs            []string
+}
+
 type Reader struct {
-	cfg     *config.Instance
-	device  config.ReadersConnect
-	path    string
-	polling bool
-	mu      syncutil.RWMutex // protects polling
-	wg      sync.WaitGroup
+	cfg            *config.Instance
+	isAvailable    func() bool
+	device         config.ReadersConnect
+	path           string
+	autoDetectPath string
+	metadata       readers.DriverMetadata
+	ids            []string
+	wg             sync.WaitGroup
+	mu             syncutil.RWMutex
+	polling        bool
 }
 
-func NewReader(cfg *config.Instance) *Reader {
-	return &Reader{
-		cfg: cfg,
-	}
-}
-
-func (*Reader) Metadata() readers.DriverMetadata {
+func defaultMetadata() readers.DriverMetadata {
 	return readers.DriverMetadata{
 		ID:                "file",
 		DefaultEnabled:    true,
@@ -64,8 +70,36 @@ func (*Reader) Metadata() readers.DriverMetadata {
 	}
 }
 
-func (*Reader) IDs() []string {
-	return []string{"file"}
+func NewReader(cfg *config.Instance) *Reader {
+	return NewReaderWithOptions(cfg, &ReaderOptions{
+		Metadata: defaultMetadata(),
+		IDs:      []string{"file"},
+	})
+}
+
+// NewReaderWithOptions creates a file-backed reader with custom driver metadata and detection.
+func NewReaderWithOptions(cfg *config.Instance, options *ReaderOptions) *Reader {
+	return &Reader{
+		cfg:            cfg,
+		metadata:       options.Metadata,
+		ids:            append([]string(nil), options.IDs...),
+		autoDetectPath: options.AutoDetectPath,
+		isAvailable:    options.IsAvailable,
+	}
+}
+
+func (r *Reader) Metadata() readers.DriverMetadata {
+	if r.metadata.ID == "" {
+		return defaultMetadata()
+	}
+	return r.metadata
+}
+
+func (r *Reader) IDs() []string {
+	if len(r.ids) == 0 {
+		return []string{r.Metadata().ID}
+	}
+	return append([]string(nil), r.ids...)
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
@@ -198,8 +232,28 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-func (*Reader) Detect(_ []string) string {
-	return ""
+func (r *Reader) Detect(excluded []string) string {
+	if r.autoDetectPath == "" || !r.available() || isPathExcluded(r.autoDetectPath, excluded) {
+		return ""
+	}
+	return r.Metadata().ID + ":" + r.autoDetectPath
+}
+
+func (r *Reader) available() bool {
+	return r.isAvailable == nil || r.isAvailable()
+}
+
+func isPathExcluded(path string, excluded []string) bool {
+	for _, connection := range excluded {
+		if connection == path {
+			return true
+		}
+		_, connectedPath, found := strings.Cut(connection, ":")
+		if found && connectedPath == path {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Reader) Path() string {
@@ -212,8 +266,9 @@ func (r *Reader) ReaderID() string {
 
 func (r *Reader) Connected() bool {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.polling
+	polling := r.polling
+	r.mu.RUnlock()
+	return polling && r.available()
 }
 
 func (r *Reader) Info() string {

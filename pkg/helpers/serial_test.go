@@ -173,27 +173,21 @@ func TestSerialDevicePathValidation(t *testing.T) {
 func TestSerialDeviceIgnoreList(t *testing.T) {
 	t.Parallel()
 
-	// Test that the ignore list contains expected Sinden Lightgun entries
-	expectedIgnoreCount := 18 // Count from the actual ignoreDevices slice
-	assert.Len(t, ignoreDevices, expectedIgnoreCount, "Ignore list should contain expected number of devices")
+	assert.Len(t, ignoreDevices, 21, "ignore list should contain expected number of devices")
 
-	// Test specific known ignore entries
-	foundSinden16c0 := false
-	foundSinden16d0 := false
+	expectedDevices := []serialDevice{
+		{Vid: "16c0", Pid: "0f38"}, // Sinden Lightgun
+		{Vid: "16d0", Pid: "1094"}, // Sinden Lightgun
+		{Vid: "16d0", Pid: "123d"}, // GB Operator
+		{Vid: "16d0", Pid: "123e"}, // SN Operator
+		{Vid: "16d0", Pid: "134d"}, // 64 Operator
+	}
+	for _, device := range expectedDevices {
+		assert.Contains(t, ignoreDevices, device)
+	}
 
 	for _, device := range ignoreDevices {
-		if device.Vid == "16c0" && device.Pid == "0f38" {
-			foundSinden16c0 = true
-		}
-		if device.Vid == "16d0" && device.Pid == "1094" {
-			foundSinden16d0 = true
-		}
-
-		// All VID/PID pairs should be non-empty
 		assert.NotEmpty(t, device.Vid, "VID should not be empty")
 		assert.NotEmpty(t, device.Pid, "PID should not be empty")
 	}
-
-	assert.True(t, foundSinden16c0, "Should contain Sinden Lightgun 16c0:0f38 entry")
-	assert.True(t, foundSinden16d0, "Should contain Sinden Lightgun 16d0:1094 entry")
 }
