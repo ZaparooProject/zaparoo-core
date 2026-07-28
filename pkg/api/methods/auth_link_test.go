@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -36,10 +37,109 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLogDeviceLinkPollFailure(t *testing.T) {
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	logDeviceLinkPollFailure(assert.AnError, 1)
+	assert.Contains(t, buf.String(), `"level":"warn"`)
+	assert.Contains(t, buf.String(), `"message":"device link poll failed, retrying"`)
+
+	buf.Reset()
+	logDeviceLinkPollFailure(assert.AnError, 2)
+	assert.Contains(t, buf.String(), `"level":"debug"`)
+	assert.Contains(t, buf.String(), `"consecutive_failures":2`)
+	assert.Contains(t, buf.String(), `"message":"device link poll still failing"`)
+}
+
+func TestPollDeviceLink_ContextDeadlineExpiresPendingSession(t *testing.T) {
+	// Not parallel: swaps package-level logger and link session state.
+	resetAuthLinkState(t)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	session := &authLinkSession{
+		cancel: cancel,
+		status: models.AuthLinkStatusResponse{Status: models.AuthLinkStatusPending},
+	}
+	authLinkMu.Lock()
+	activeAuthLink = session
+	authLinkMu.Unlock()
+
+	pollDeviceLink(ctx, session, &authLinkDeps{}, "", "", time.Hour)
+
+	assert.Equal(t, models.AuthLinkStatusFailed, session.status.Status)
+	assert.Equal(t, "link request expired, start over to link this device", session.status.Error)
+	assert.Contains(t, buf.String(), `"level":"warn"`)
+	assert.Contains(t, buf.String(), `"poll_failures":0`)
+	assert.Contains(t, buf.String(), `"message":"device link polling expired"`)
+}
+
+func TestPollDeviceLink_TransientFailuresRecoverAndReset(t *testing.T) {
+	// Not parallel: swaps package-level claimClient, logger, and link session state.
+	resetAuthLinkState(t)
+
+	var polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch polls.Add(1) {
+		case 1:
+			w.WriteHeader(http.StatusInternalServerError)
+		case 2:
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 3:
+			_ = json.NewEncoder(w).Encode(deviceLinkPollResponse{Status: "pending"})
+		case 4:
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+
+	originalClient := claimClient
+	claimClient = server.Client()
+	t.Cleanup(func() { claimClient = originalClient })
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	session := &authLinkSession{status: models.AuthLinkStatusResponse{Status: models.AuthLinkStatusPending}}
+	authLinkMu.Lock()
+	activeAuthLink = session
+	authLinkMu.Unlock()
+
+	pollDeviceLink(context.Background(), session, &authLinkDeps{}, server.URL, "device-code", time.Millisecond)
+
+	assert.Equal(t, int32(5), polls.Load())
+	assert.Equal(t, models.AuthLinkStatusFailed, session.status.Status)
+	assert.Contains(t, session.status.Error, "expired")
+	logs := buf.Bytes()
+	assert.Equal(t, 2, bytes.Count(logs, []byte(`"message":"device link poll failed, retrying"`)),
+		"first failure after recovery must warn again")
+	assert.Contains(t, string(logs), `"level":"debug"`)
+	assert.Contains(t, string(logs), `"consecutive_failures":2`)
+	assert.Contains(t, string(logs), `"level":"info"`)
+	assert.Contains(t, string(logs), `"failures":2`)
+	assert.Contains(t, string(logs), `"message":"device link polling recovered"`)
+	assert.Contains(t, string(logs), `"message":"device link polling failed permanently"`)
+}
 
 // resetAuthLinkState clears the package-level link session between tests.
 func resetAuthLinkState(t *testing.T) {

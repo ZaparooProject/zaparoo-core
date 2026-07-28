@@ -30,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -819,6 +820,86 @@ func launcherSpecificity(l *platforms.Launcher) int {
 	return score
 }
 
+func folderTrailSystem(path string) (string, bool) {
+	segments := strings.Split(filepath.ToSlash(filepath.Clean(filepath.Dir(path))), "/")
+	for i := len(segments) - 1; i >= 0; i-- {
+		segment := strings.TrimSpace(segments[i])
+		if segment == "" || segment == "." {
+			continue
+		}
+		system, err := systemdefs.LookupSystem(segment)
+		if err == nil {
+			return system.ID, true
+		}
+	}
+	return "", false
+}
+
+func launcherHasExtension(launcher *platforms.Launcher, ext string) bool {
+	for _, supported := range launcher.Extensions {
+		if strings.EqualFold(ext, supported) {
+			return true
+		}
+	}
+	return false
+}
+
+func guessLauncherFromCandidates(
+	path string, launchers []platforms.Launcher,
+) (platforms.Launcher, bool) {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return platforms.Launcher{}, false
+	}
+
+	candidates := make([]platforms.Launcher, 0, len(launchers))
+	for i := range launchers {
+		if launchers[i].SystemID != "" && launcherHasExtension(&launchers[i], ext) {
+			candidates = append(candidates, launchers[i])
+		}
+	}
+	if len(candidates) == 0 {
+		return platforms.Launcher{}, false
+	}
+
+	if folderSystem, ok := folderTrailSystem(path); ok {
+		match := -1
+		for i := range candidates {
+			if !strings.EqualFold(candidates[i].SystemID, folderSystem) {
+				continue
+			}
+			if match != -1 {
+				return platforms.Launcher{}, false
+			}
+			match = i
+		}
+		if match != -1 {
+			return candidates[match], true
+		}
+		return platforms.Launcher{}, false
+	}
+
+	if len(candidates) != 1 {
+		return platforms.Launcher{}, false
+	}
+	return candidates[0], true
+}
+
+// GuessLauncherForPath conservatively infers a launcher when normal folder
+// matching fails. A recognized folder alias must identify exactly one matching
+// launcher; without one, the extension must match exactly one launcher.
+func GuessLauncherForPath(path string) (platforms.Launcher, bool) {
+	launcher, ok := guessLauncherFromCandidates(path, GlobalLauncherCache.GetAllLaunchers())
+	if ok {
+		log.Info().
+			Str("path", path).
+			Str("launcher", launcher.ID).
+			Str("system", launcher.SystemID).
+			Msg("guessed launcher from folder trail and file extension")
+	}
+	return launcher, ok
+}
+
 // FindLauncher takes a path and tries to find the best possible match for a
 // launcher, taking into account specificity and allowlist restrictions.
 func FindLauncher(
@@ -827,30 +908,34 @@ func FindLauncher(
 	path string,
 ) (platforms.Launcher, error) {
 	launchers := PathToLaunchers(cfg, pl, path)
+	var launcher platforms.Launcher
 	if len(launchers) == 0 {
-		log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
-			Msg("no launcher matched path")
-		return platforms.Launcher{}, errors.New("no launcher found for: " + path)
-	}
-
-	best := 0
-	bestScore := launcherSpecificity(&launchers[0])
-	for i := 1; i < len(launchers); i++ {
-		score := launcherSpecificity(&launchers[i])
-		if score > bestScore {
-			best = i
-			bestScore = score
+		var guessed bool
+		launcher, guessed = GuessLauncherForPath(path)
+		if !guessed {
+			log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
+				Msg("no launcher matched path")
+			return platforms.Launcher{}, errors.New("no launcher found for: " + path)
 		}
+	} else {
+		best := 0
+		bestScore := launcherSpecificity(&launchers[0])
+		for i := 1; i < len(launchers); i++ {
+			score := launcherSpecificity(&launchers[i])
+			if score > bestScore {
+				best = i
+				bestScore = score
+			}
+		}
+
+		launcher = launchers[best]
+		log.Debug().
+			Str("path", path).
+			Str("launcher", launcher.ID).
+			Int("specificity", bestScore).
+			Int("candidates", len(launchers)).
+			Msg("selected launcher by specificity")
 	}
-
-	launcher := launchers[best]
-
-	log.Debug().
-		Str("path", path).
-		Str("launcher", launcher.ID).
-		Int("specificity", bestScore).
-		Int("candidates", len(launchers)).
-		Msg("selected launcher by specificity")
 
 	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
 		return platforms.Launcher{}, errors.New("file not allowed: " + path)

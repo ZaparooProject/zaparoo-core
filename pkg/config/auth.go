@@ -79,6 +79,17 @@ func isValidAuthKey(key string) bool {
 	return key != "creds" && key != "auth" && key != "api_keys"
 }
 
+// validateAuthFileData rejects malformed TOML before callers replace the
+// active credential set or rewrite the file. Format-specific decoding remains
+// permissive so legacy and mixed layouts continue to work.
+func validateAuthFileData(data []byte) error {
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("failed to parse auth file: %w", err)
+	}
+	return nil
+}
+
 // LoadAuthFromData parses auth.toml data supporting all three formats.
 // Formats are merged, allowing users to mix formats in the same file.
 //

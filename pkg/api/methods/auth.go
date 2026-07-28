@@ -287,7 +287,7 @@ func performClaim(
 		_, refreshErr := backupManager.RefreshRemoteAvailability(refreshCtx)
 		cancelRefresh()
 		if refreshErr != nil {
-			log.Debug().Err(refreshErr).Msg("remote backup availability not refreshed after link")
+			log.Warn().Err(refreshErr).Msg("remote backup availability not refreshed after link")
 		}
 		break
 	}

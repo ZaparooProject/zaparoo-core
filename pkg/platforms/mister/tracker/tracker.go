@@ -4,6 +4,7 @@ package tracker
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -31,8 +32,10 @@ import (
 )
 
 const (
-	ArcadeSystem       = "Arcade"
-	mediaLookupTimeout = 2 * time.Second
+	ArcadeSystem           = "Arcade"
+	mediaLookupTimeout     = 2 * time.Second
+	trackerFileSettleDelay = 50 * time.Millisecond
+	misterUSBRootCount     = 4
 )
 
 // platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
@@ -334,20 +337,28 @@ func (tr *Tracker) loadGame() {
 	}
 
 	launchers := helpers.PathToLaunchers(tr.cfg, tr.pl, path)
-	if len(launchers) == 0 {
-		log.Warn().Msgf("no launchers found for %s", path)
-		return
+	var launcher platforms.Launcher
+	switch {
+	case len(launchers) > 0:
+		launcher = launchers[0]
+	default:
+		var guessed bool
+		launcher, guessed = helpers.GuessLauncherForPath(path)
+		if !guessed {
+			log.Warn().Msgf("no launchers found for %s", path)
+			return
+		}
 	}
-	log.Debug().Msgf("tracker detected launchers: %v", launchers)
+	log.Debug().Msgf("tracker detected launcher: %v", launcher)
 
-	if launchers[0].SystemID == "" {
+	if launcher.SystemID == "" {
 		log.Warn().Str("path", path).Msg("launcher has empty system ID")
 		return
 	}
 
-	system, err := systemdefs.GetSystem(launchers[0].SystemID)
+	system, err := systemdefs.GetSystem(launcher.SystemID)
 	if err != nil {
-		log.Error().Err(err).Str("systemID", launchers[0].SystemID).Msg("error getting system")
+		log.Error().Err(err).Str("systemID", launcher.SystemID).Msg("error getting system")
 		return
 	}
 	log.Debug().Msgf("tracker detected system: %v", system)
@@ -401,56 +412,131 @@ func (tr *Tracker) StopAll() {
 	tr.stopGame()
 }
 
-// Read a core's recent file and attempt to write the newest entry's
-// launch-able path to ACTIVEGAME.
-func loadRecent(filename string) error {
-	if !strings.Contains(filename, "_recent") {
-		return nil
+// resolveRecentGamePath mirrors MiSTer's relative-path root selection. Main
+// stores 0 for SD and nonzero for USB in config/device.bin; USB uses the first
+// available /media/usb0-3 root containing the recent file.
+func resolveRecentGamePath(path string, storageSelection []byte, exists func(string) bool) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
 	}
-
-	file, err := os.Open(filename) //nolint:gosec // Internal game file path
-	if err != nil {
-		return fmt.Errorf("error opening game file: %w", err)
-	}
-	defer func(file *os.File) {
-		closeErr := file.Close()
-		if closeErr != nil {
-			log.Error().Msgf("error closing file: %s", closeErr)
+	if len(storageSelection) >= 4 && binary.LittleEndian.Uint32(storageSelection[:4]) != 0 {
+		mediaRoot := filepath.Dir(misterconfig.SDRootDir)
+		for i := range misterUSBRootCount {
+			root := filepath.Join(mediaRoot, fmt.Sprintf("usb%d", i))
+			candidate := filepath.Join(root, path)
+			if exists(candidate) {
+				return candidate
+			}
 		}
-	}(file)
+	}
+	return filepath.Join(misterconfig.SDRootDir, path)
+}
+
+// recentGamePath reads the newest launchable path from a MiSTer recent file.
+func recentGamePath(filename string, storageSelection []byte) (string, error) {
+	if !strings.Contains(filename, "_recent") {
+		return "", nil
+	}
 
 	recents, err := mistermain.ReadRecent(filename)
 	if err != nil {
-		return fmt.Errorf("error reading recent file: %w", err)
-	} else if len(recents) == 0 {
-		return nil
+		return "", fmt.Errorf("error reading recent file: %w", err)
+	}
+	if len(recents) == 0 {
+		return "", nil
 	}
 
 	newest := recents[0]
-
-	if strings.HasSuffix(filename, "cores_recent.cfg") {
-		// main menu's recent file, written when launching mgls
-		if strings.HasSuffix(strings.ToLower(newest.Name), ".mgl") {
-			mglPath := ResolvePath(filepath.Join(newest.Directory, newest.Name))
-			mgl, mglErr := mgls.ReadMgl(mglPath)
-			if mglErr != nil {
-				return fmt.Errorf("error reading mgl file: %w", mglErr)
-			}
-
-			err = activegame.SetActiveGame(mgl.File.Path)
-			if err != nil {
-				return fmt.Errorf("error setting active game: %w", err)
-			}
-		}
-	} else {
-		// individual core's recent file
-		err = activegame.SetActiveGame(filepath.Join(newest.Directory, newest.Name))
-		if err != nil {
-			return fmt.Errorf("error setting active game: %w", err)
-		}
+	if !strings.HasSuffix(filename, "cores_recent.cfg") {
+		path := filepath.Join(newest.Directory, newest.Name)
+		return resolveRecentGamePath(path, storageSelection, func(candidate string) bool {
+			_, statErr := os.Stat(candidate)
+			return statErr == nil
+		}), nil
 	}
 
+	// Main menu recents contain cores and MGLs; only MGLs identify a game.
+	if !strings.HasSuffix(strings.ToLower(newest.Name), ".mgl") {
+		return "", nil
+	}
+	mglPath := ResolvePath(filepath.Join(newest.Directory, newest.Name))
+	mgl, err := mgls.ReadMgl(mglPath)
+	if err != nil {
+		return "", fmt.Errorf("error reading mgl file: %w", err)
+	}
+	return mgl.File.Path, nil
+}
+
+// loadRecent writes a recent file's newest launchable path to ACTIVEGAME.
+func loadRecent(filename string) error {
+	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))
+	path, err := recentGamePath(filename, storageSelection)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return nil
+	}
+	if err = activegame.SetActiveGame(path); err != nil {
+		return fmt.Errorf("error setting active game: %w", err)
+	}
 	return nil
+}
+
+// selectedFullPath returns the selected file only after MiSTer publishes
+// FILESELECT=selected. FULLPATH also changes while the user browses, so it is
+// not a launch signal by itself.
+func selectedFullPath(statusData, pathData []byte) (string, error) {
+	if strings.TrimSpace(string(statusData)) != "selected" {
+		return "", nil
+	}
+	path := strings.TrimSpace(string(pathData))
+	if path == "" {
+		return "", errors.New("selected full path is empty")
+	}
+	return path, nil
+}
+
+func loadFileSelection() {
+	statusData, err := os.ReadFile(misterconfig.FileSelectFile)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read MiSTer file selection status")
+		return
+	}
+	if strings.TrimSpace(string(statusData)) != "selected" {
+		return
+	}
+	pathData, err := os.ReadFile(misterconfig.FullPathFile)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read selected MiSTer full path")
+		return
+	}
+	path, err := selectedFullPath(statusData, pathData)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to process MiSTer file selection")
+		return
+	}
+
+	log.Info().Str("path", path).Msg("manual MiSTer file launch detected")
+	if err = activegame.SetActiveGame(path); err != nil {
+		log.Error().Err(err).Str("path", path).Msg("failed to set selected active game")
+	}
+}
+
+func trackerFileChanged(op fsnotify.Op) bool {
+	return op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0
+}
+
+func trackerRecentFileChanged(filename string) bool {
+	return filepath.Dir(filename) == filepath.Clean(misterconfig.CoreConfigFolder) &&
+		strings.Contains(filepath.Base(filename), "_recent")
+}
+
+func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
+	go func() {
+		<-settled
+		load()
+	}()
 }
 
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
@@ -470,22 +556,34 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 				if !ok {
 					return
 				}
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					switch {
-					case event.Name == misterconfig.CoreNameFile:
-						tr.LoadCore()
-					case event.Name == misterconfig.ActiveGameFile:
-						tr.loadGame()
-					case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
-						err = loadRecent(event.Name)
-						if err != nil {
-							if errors.Is(err, os.ErrNotExist) {
-								log.Warn().Msgf("recent mgl file not found: %s", err)
+				if !trackerFileChanged(event.Op) {
+					continue
+				}
+				switch {
+				case event.Name == misterconfig.CoreNameFile:
+					tr.LoadCore()
+				case event.Name == misterconfig.ActiveGameFile:
+					tr.loadGame()
+				case event.Name == misterconfig.FileSelectFile:
+					// MakeFile truncates before writing the new status. Wait for
+					// FILESELECT and FULLPATH to contain the same selection without
+					// blocking delivery of later watcher events.
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), loadFileSelection)
+				case trackerRecentFileChanged(event.Name):
+					// MiSTer truncates and rewrites binary recent files. Let the
+					// write settle before reading the first complete record without
+					// blocking delivery of later watcher events.
+					filename := event.Name
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), func() {
+						recentErr := loadRecent(filename)
+						if recentErr != nil {
+							if errors.Is(recentErr, os.ErrNotExist) {
+								log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
 							} else {
-								log.Error().Msgf("error loading recent file: %s", err)
+								log.Error().Msgf("error loading recent file: %s", recentErr)
 							}
 						}
-					}
+					})
 				}
 			case watchErr, ok := <-watcher.Errors:
 				if !ok {
@@ -541,19 +639,21 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, fmt.Errorf("failed to watch active game file (%s): %w", misterconfig.ActiveGameFile, err)
 	}
 
-	if _, statPathErr := os.Stat(misterconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
+	if _, statSelectErr := os.Stat(misterconfig.FileSelectFile); os.IsNotExist(statSelectErr) {
 		//nolint:gosec // MiSTer system file, needs to be readable by other apps
-		writePathErr := os.WriteFile(misterconfig.CurrentPathFile, []byte(""), 0o644)
-		if writePathErr != nil {
-			return nil, fmt.Errorf("failed to write current path file: %w", writePathErr)
+		writeSelectErr := os.WriteFile(misterconfig.FileSelectFile, []byte(""), 0o644)
+		if writeSelectErr != nil {
+			return nil, fmt.Errorf("failed to write file selection status: %w", writeSelectErr)
 		}
-		log.Info().Msgf("created current path file: %s", misterconfig.CurrentPathFile)
+		log.Info().Msgf("created file selection status: %s", misterconfig.FileSelectFile)
 	}
 
-	log.Debug().Msgf("adding watcher for current path file: %s", misterconfig.CurrentPathFile)
-	err = watcher.Add(misterconfig.CurrentPathFile)
+	// Watch the status file, not FULLPATH. MiSTer rewrites FULLPATH while the
+	// user browses and only FILESELECT=selected confirms a launch.
+	log.Debug().Msgf("adding watcher for file selection status: %s", misterconfig.FileSelectFile)
+	err = watcher.Add(misterconfig.FileSelectFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch current path file (%s): %w", misterconfig.CurrentPathFile, err)
+		return nil, fmt.Errorf("failed to watch file selection status (%s): %w", misterconfig.FileSelectFile, err)
 	}
 
 	elapsed := time.Since(startTime)

@@ -460,6 +460,9 @@ func (c *Instance) Save() error {
 func (c *Instance) reloadAuth() {
 	fs := c.getFs()
 	if _, err := fs.Stat(c.authPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Error().Err(err).Msg("failed to stat auth file")
+		}
 		return
 	}
 
@@ -467,6 +470,10 @@ func (c *Instance) reloadAuth() {
 	authData, err := afero.ReadFile(fs, c.authPath)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to read auth file")
+		return
+	}
+	if validateErr := validateAuthFileData(authData); validateErr != nil {
+		log.Error().Err(validateErr).Msg("auth file is invalid; keeping existing credentials")
 		return
 	}
 
@@ -488,12 +495,23 @@ func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
 
 	fs := c.getFs()
 
-	// Read existing auth file once, parse both credentials and API keys
+	// Read existing auth file once, parse both credentials and API keys.
+	// Never overwrite unreadable or malformed credentials as though the file
+	// were empty.
 	existing := make(map[string]CredentialEntry)
 	var existingKeys []string
-	if data, err := afero.ReadFile(fs, c.authPath); err == nil {
+	data, readErr := afero.ReadFile(fs, c.authPath)
+	switch {
+	case readErr == nil:
+		if validateErr := validateAuthFileData(data); validateErr != nil {
+			return validateErr
+		}
 		existing = LoadAuthFromData(data)
 		existingKeys = LoadAPIKeysFromData(data)
+	case errors.Is(readErr, os.ErrNotExist):
+		// First credential creates the file.
+	default:
+		return fmt.Errorf("failed to read auth file: %w", readErr)
 	}
 
 	// Upsert the entry
@@ -524,9 +542,15 @@ func (c *Instance) DeleteAuthEntries(domains []string) error {
 	fs := c.getFs()
 
 	data, err := afero.ReadFile(fs, c.authPath)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		// No auth file means there is nothing to delete.
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read auth file: %w", err)
+	}
+	if validateErr := validateAuthFileData(data); validateErr != nil {
+		return validateErr
 	}
 	existing := LoadAuthFromData(data)
 	existingKeys := LoadAPIKeysFromData(data)

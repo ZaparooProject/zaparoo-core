@@ -544,7 +544,16 @@ func Start(
 			pruneExpiredZapLinkHosts(db)
 		},
 	)
-	startRemoteBackupScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, backgroundWG)
+	playSyncRequests := make(chan struct{}, 1)
+	requestPlaySync := func() {
+		select {
+		case playSyncRequests <- struct{}{}:
+		default:
+		}
+	}
+	startRemoteBackupScheduler(
+		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
+	)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
@@ -557,9 +566,10 @@ func Start(
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")
 	historyTracker := &mediaHistoryTracker{
-		st:    st,
-		db:    db,
-		clock: clockwork.NewRealClock(),
+		st:              st,
+		db:              db,
+		clock:           clockwork.NewRealClock(),
+		requestPlaySync: requestPlaySync,
 	}
 	historyNotifications, _ := notifBroker.Subscribe(100, models.NotificationStarted, models.NotificationStopped)
 	historyListenDone := make(chan struct{})

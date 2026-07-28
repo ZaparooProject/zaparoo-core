@@ -270,10 +270,12 @@ func TestMediaHistoryTracker_Listen_Stopped(t *testing.T) {
 	}
 
 	startTime := fakeClock.Now()
+	syncRequests := 0
 	tracker := &mediaHistoryTracker{
 		st:                    st,
 		db:                    db,
 		clock:                 fakeClock,
+		requestPlaySync:       func() { syncRequests++ },
 		currentHistoryDBID:    42,
 		currentMediaStartTime: startTime,
 	}
@@ -301,6 +303,7 @@ func TestMediaHistoryTracker_Listen_Stopped(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 	assert.Equal(t, int64(0), tracker.currentHistoryDBID)
 	assert.True(t, tracker.currentMediaStartTime.IsZero())
+	assert.Equal(t, 1, syncRequests)
 }
 
 func TestMediaHistoryTracker_Listen_Stopped_NoActiveHistory(t *testing.T) {
@@ -349,10 +352,12 @@ func TestMediaHistoryTracker_Listen_Stopped_DatabaseError(t *testing.T) {
 	}
 
 	startTime := fakeClock.Now()
+	syncRequests := 0
 	tracker := &mediaHistoryTracker{
 		st:                    st,
 		db:                    db,
 		clock:                 fakeClock,
+		requestPlaySync:       func() { syncRequests++ },
 		currentHistoryDBID:    42,
 		currentMediaStartTime: startTime,
 	}
@@ -378,6 +383,7 @@ func TestMediaHistoryTracker_Listen_Stopped_DatabaseError(t *testing.T) {
 	assert.Equal(t, int64(42), tracker.currentHistoryDBID)
 	assert.Equal(t, startTime, tracker.currentMediaStartTime)
 	assert.Equal(t, int64(0), tracker.closingHistoryDBID)
+	assert.Equal(t, 0, syncRequests)
 }
 
 func TestMediaHistoryTracker_Listen_MultipleNotifications(t *testing.T) {
@@ -734,10 +740,12 @@ func TestMediaHistoryTracker_Listen_OrphanedEntry(t *testing.T) {
 	orphanStart := fakeClock.Now()
 
 	// Pre-set tracker state as if a game is currently tracked (orphaned open entry).
+	syncRequests := 0
 	tracker := &mediaHistoryTracker{
 		st:                    st,
 		db:                    db,
 		clock:                 fakeClock,
+		requestPlaySync:       func() { syncRequests++ },
 		currentHistoryDBID:    orphanedDBID,
 		currentMediaStartTime: orphanStart,
 	}
@@ -778,4 +786,5 @@ func TestMediaHistoryTracker_Listen_OrphanedEntry(t *testing.T) {
 
 	mockUserDB.AssertExpectations(t)
 	assert.Equal(t, newDBID, tracker.currentHistoryDBID, "new DBID should be set after orphan close")
+	assert.Equal(t, 1, syncRequests)
 }
