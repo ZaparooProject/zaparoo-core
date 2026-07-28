@@ -297,6 +297,43 @@ func launcherInferenceScore(l *platforms.Launcher) int {
 	return score
 }
 
+func inferLauncherForSystemPath(
+	pl platforms.Platform,
+	env *platforms.CmdEnv,
+	path string,
+	systemID string,
+) (platforms.Launcher, bool) {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return platforms.Launcher{}, false
+	}
+
+	launchers := pl.Launchers(env.Cfg)
+	match := -1
+	for i := range launchers {
+		if !strings.EqualFold(launchers[i].SystemID, systemID) {
+			continue
+		}
+		if launchers[i].Availability != nil && launchers[i].Availability(env.Cfg) != nil {
+			continue
+		}
+		for _, supported := range launchers[i].Extensions {
+			if !strings.EqualFold(ext, supported) {
+				continue
+			}
+			if match != -1 {
+				return platforms.Launcher{}, false
+			}
+			match = i
+			break
+		}
+	}
+	if match == -1 {
+		return platforms.Launcher{}, false
+	}
+	return launchers[match], true
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) != 1 {
@@ -607,10 +644,11 @@ func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID strin
 }
 
 type launchTarget struct {
-	path               string
-	systemID           string
-	mediaID            int64
-	resolveMediaByPath bool
+	path                  string
+	systemID              string
+	mediaID               int64
+	resolveMediaByPath    bool
+	guideLauncherBySystem bool
 }
 
 func getLaunchClosure(
@@ -658,6 +696,18 @@ func getLaunchClosure(
 				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
 			log.Info().Msgf("launching with launcher: %s", launcherID)
+		} else if target.guideLauncherBySystem {
+			inferred, found := inferLauncherForSystemPath(pl, env, target.path, target.systemID)
+			if found {
+				if inferred.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
+					return errors.New("file not allowed: " + target.path)
+				}
+				launcher = &inferred
+				log.Info().
+					Str("system", target.systemID).
+					Str("launcher", inferred.ID).
+					Msg("selected launcher from system argument")
+			}
 		}
 
 		releaseLaunch := func() {}
@@ -741,13 +791,21 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 	}
 
 	launch := getLaunchClosure(pl, &env, explicitLauncher)
+	requestedPathTarget := func(resolvedPath string) launchTarget {
+		return launchTarget{
+			path:                  resolvedPath,
+			systemID:              requestedSystemID,
+			resolveMediaByPath:    true,
+			guideLauncherBySystem: requestedSystemID != "",
+		}
+	}
 
 	// if it's an absolute path, just try launch it
 	if filepath.IsAbs(path) {
 		log.Debug().Msgf("launching absolute path: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(launchTarget{path: path, systemID: requestedSystemID, resolveMediaByPath: true})
+		}, launch(requestedPathTarget(path))
 	}
 
 	// match for uri style launch syntax
@@ -755,7 +813,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		log.Debug().Msgf("launching uri: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(launchTarget{path: path, systemID: requestedSystemID, resolveMediaByPath: true})
+		}, launch(requestedPathTarget(path))
 	}
 
 	// for relative paths, perform a basic check if the file exists in a games folder
@@ -766,7 +824,7 @@ func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(launchTarget{path: p, systemID: requestedSystemID, resolveMediaByPath: true})
+		}, launch(requestedPathTarget(p))
 	}
 	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
