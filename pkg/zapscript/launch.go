@@ -699,15 +699,15 @@ func getLaunchClosure(
 		} else if target.guideLauncherBySystem {
 			inferred, found := inferLauncherForSystemPath(pl, env, target.path, target.systemID)
 			if found {
-				if inferred.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
-					return errors.New("file not allowed: " + target.path)
-				}
 				launcher = &inferred
 				log.Info().
 					Str("system", target.systemID).
 					Str("launcher", inferred.ID).
 					Msg("selected launcher from system argument")
 			}
+		}
+		if launcher != nil && launcher.AllowListOnly && !env.Cfg.IsLauncherFileAllowed(target.path) {
+			return errors.New("file not allowed: " + target.path)
 		}
 
 		releaseLaunch := func() {}

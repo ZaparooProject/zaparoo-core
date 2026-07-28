@@ -1078,6 +1078,50 @@ func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_SystemDefaultDoesNotBypassLauncherAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-restricted"
+`))
+	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	launcher := platforms.Launcher{
+		ID:            "genesis-restricted",
+		SystemID:      systemdefs.SystemGenesis,
+		Extensions:    []string{".bin"},
+		AllowListOnly: true,
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: zapscript.ZapScriptCmdLaunch,
+			Args: []string{path},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"system": systemdefs.SystemGenesis,
+			}),
+		},
+		Cfg: cfg,
+	}
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorContains(t, err, "file not allowed")
+	mockPlatform.AssertNotCalled(
+		t,
+		"LaunchMedia",
+		cfg,
+		path,
+		mock.Anything,
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_SystemArgDoesNotBypassLauncherAllowlist(t *testing.T) {
 	t.Parallel()
 
