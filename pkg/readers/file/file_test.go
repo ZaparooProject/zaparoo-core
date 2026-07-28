@@ -67,6 +67,7 @@ func TestNewReaderWithOptions(t *testing.T) {
 	assert.Equal(t, "operator", reader.Metadata().ID)
 	assert.Equal(t, []string{"operator"}, reader.IDs())
 	assert.Equal(t, "operator:"+tokenPath, reader.Detect(nil))
+	assert.Empty(t, reader.Detect([]string{tokenPath}))
 	assert.Empty(t, reader.Detect([]string{"file:" + tokenPath}))
 
 	reader.polling = true
