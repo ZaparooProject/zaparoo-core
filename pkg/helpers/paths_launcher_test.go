@@ -85,6 +85,11 @@ func TestGuessLauncherForPath(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "folder alias does not resolve duplicate launchers",
+			path: filepath.Join(root, "media", "fat", "hacks", "PS2", "Game.iso"),
+			want: false,
+		},
+		{
 			name: "conflicting folder and extension",
 			path: filepath.Join(root, "media", "fat", "hacks", "SNES", "Game.gbc"),
 			want: false,
@@ -92,6 +97,11 @@ func TestGuessLauncherForPath(t *testing.T) {
 		{
 			name: "unsupported extension",
 			path: filepath.Join(root, "media", "fat", "hacks", "GBC", "notes.txt"),
+			want: false,
+		},
+		{
+			name: "missing extension",
+			path: filepath.Join(root, "media", "fat", "hacks", "GBC", "README"),
 			want: false,
 		},
 	}
