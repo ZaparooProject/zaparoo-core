@@ -99,12 +99,15 @@ func TestCmdLaunchLast_RelativePathUsesPathRoot(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := helpers.NewMockUserDBI()
+	fs := helpers.NewMemoryFS()
 	cfg := &config.Instance{}
-	pathRoot := t.TempDir()
-	normalRoot := t.TempDir()
+	pathRoot := launchTestAbsPath("path-root")
+	normalRoot := launchTestAbsPath("normal-root")
 	relativePath := filepath.Join("SNES", "Mario.sfc")
-	drivePath := createTestFile(t, pathRoot, relativePath)
-	_ = createTestFile(t, normalRoot, relativePath)
+	drivePath := filepath.Join(pathRoot, relativePath)
+	normalPath := filepath.Join(normalRoot, relativePath)
+	require.NoError(t, fs.WriteFile(drivePath, []byte("test"), 0o600))
+	require.NoError(t, fs.WriteFile(normalPath, []byte("test"), 0o600))
 
 	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 10).
 		Return([]database.MediaHistoryEntry{
@@ -128,7 +131,7 @@ func TestCmdLaunchLast_RelativePathUsesPathRoot(t *testing.T) {
 		PathRoot: pathRoot,
 	}
 
-	result, err := cmdLaunchLast(mockPlatform, env)
+	result, err := cmdLaunchLastWithFS(fs.Fs, mockPlatform, env)
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)

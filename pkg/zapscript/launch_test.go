@@ -954,16 +954,15 @@ func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			pathRoot := t.TempDir()
+			fs := helpers.NewMemoryFS()
+			pathRoot := launchTestAbsPath("path-root")
 			directPath := filepath.Join(pathRoot, "snes", "game.sfc")
 			launcherPath := filepath.Join(pathRoot, "Console", "SNES", "game.sfc")
-			require.NoError(t, os.MkdirAll(filepath.Dir(launcherPath), 0o750))
-			require.NoError(t, os.WriteFile(launcherPath, []byte("launcher"), 0o600))
+			require.NoError(t, fs.WriteFile(launcherPath, []byte("launcher"), 0o600))
 
 			wantPath := launcherPath
 			if tt.createDirectPath {
-				require.NoError(t, os.MkdirAll(filepath.Dir(directPath), 0o750))
-				require.NoError(t, os.WriteFile(directPath, []byte("direct"), 0o600))
+				require.NoError(t, fs.WriteFile(directPath, []byte("direct"), 0o600))
 				wantPath = directPath
 			}
 
@@ -977,7 +976,7 @@ func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 			mockPlatform := mocks.NewMockPlatform()
 			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
 			mockPlatform.On("RootDirs", cfg).Return([]string{})
-			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
 			mockPlatform.On(
 				"LaunchMedia",
 				cfg,
@@ -990,13 +989,13 @@ func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 			env := platforms.CmdEnv{
 				Cmd: zapscript.Command{
 					Name: "launch",
-					Args: []string{"snes" + "/" + "game.sfc"},
+					Args: []string{filepath.ToSlash(filepath.Join("snes", "game.sfc"))},
 				},
 				Cfg:      cfg,
 				PathRoot: pathRoot,
 			}
 
-			result, err := cmdLaunch(mockPlatform, env)
+			result, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
 
 			require.NoError(t, err)
 			assert.True(t, result.MediaChanged)

@@ -693,6 +693,11 @@ func isValidRemoteFileURL(s string) (func(installer.DownloaderArgs) error, bool)
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return cmdLaunchWithFS(afero.NewOsFs(), pl, env)
+}
+
+//nolint:gocritic // single-use parameter in command handler
+func cmdLaunchWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -757,7 +762,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// this always takes precedence over the system/path format (but is not totally cross platform)
 	var findErr error
 	var p string
-	if p, findErr = findFile(afero.NewOsFs(), pl, env.Cfg, path, env.PathRoot); findErr == nil {
+	if p, findErr = findFile(fs, pl, env.Cfg, path, env.PathRoot); findErr == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -818,7 +823,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		log.Debug().Msgf("checking system path: %s", systemPath)
 		var systemFindErr error
 		var fp string
-		if fp, systemFindErr = findFile(afero.NewOsFs(), pl, env.Cfg, systemPath, env.PathRoot); systemFindErr == nil {
+		if fp, systemFindErr = findFile(fs, pl, env.Cfg, systemPath, env.PathRoot); systemFindErr == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
 			return platforms.CmdResult{
 				MediaChanged: true,
@@ -999,6 +1004,11 @@ func getUniqueRecentMedia(
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return cmdLaunchLastWithFS(afero.NewOsFs(), pl, env)
+}
+
+//nolint:gocritic // single-use parameter in command handler
+func cmdLaunchLastWithFS(fs afero.Fs, pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	offset := 1
 	if len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != "" {
 		n, err := strconv.Atoi(env.Cmd.Args[0])
@@ -1021,7 +1031,7 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, err
 	}
 
-	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, entry.MediaPath, env.PathRoot)
+	path, err := findFile(fs, pl, env.Cfg, entry.MediaPath, env.PathRoot)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
