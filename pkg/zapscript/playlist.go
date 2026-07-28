@@ -430,7 +430,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return pls, nil
 	}
 
-	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, env.Cmd.Args[0])
+	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, env.Cmd.Args[0], env.PathRoot)
 	if err != nil {
 		return nil, err
 	}

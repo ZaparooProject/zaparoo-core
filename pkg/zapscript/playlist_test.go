@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
 	"github.com/jonboulle/clockwork"
@@ -461,6 +462,49 @@ func TestRunPickerResult_DismissExecutesNothing(t *testing.T) {
 		t.Fatal("dismissed picker executed an action")
 	default:
 	}
+}
+
+func TestRunCommandLoadsPlaylistFromPathRoot(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := t.TempDir()
+	normalRoot := t.TempDir()
+	gamePath := filepath.Join(pathRoot, "Game.mgl")
+	playlistPath := filepath.Join(pathRoot, "portable.pls")
+	require.NoError(t, os.WriteFile(gamePath, []byte("game"), 0o600))
+	require.NoError(t, os.WriteFile(playlistPath, []byte(`[playlist]
+File1=Game.mgl
+Title1=Portable Game`), 0o600))
+
+	cfg := &config.Instance{}
+	mockPlatform := newPlaylistTestPlatform()
+	mockPlatform.On("RootDirs", cfg).Return([]string{normalRoot}).Once()
+	queue := make(chan *playlists.Playlist, 1)
+
+	result, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		cfg,
+		playlists.PlaylistController{Queue: queue},
+		tokens.Token{PathRoot: pathRoot},
+		zapscript.Command{
+			Name: zapscript.ZapScriptCmdPlaylistLoad,
+			Args: []string{"portable.pls"},
+		},
+		1,
+		0,
+		nil,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	require.Len(t, result.Playlist.Items, 1)
+	assert.Equal(t, gamePath, result.Playlist.Items[0].ZapScript)
+	assert.Same(t, result.Playlist, <-queue)
+	mockPlatform.AssertExpectations(t)
 }
 
 // TestCmdPlaylistOpen_PreservesPosition tests that position is preserved when reopening active playlist

@@ -22,6 +22,7 @@ package helpers
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -132,6 +133,34 @@ func TestTokensEqual(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "same_path_root",
+			a: &tokens.Token{
+				UID:      "123456",
+				Text:     "Mario Bros",
+				PathRoot: filepath.Join("media", "usb-a"),
+			},
+			b: &tokens.Token{
+				UID:      "123456",
+				Text:     "Mario Bros",
+				PathRoot: filepath.Join("media", "usb-a"),
+			},
+			expected: true,
+		},
+		{
+			name: "different_path_root",
+			a: &tokens.Token{
+				UID:      "123456",
+				Text:     "Mario Bros",
+				PathRoot: filepath.Join("media", "usb-a"),
+			},
+			b: &tokens.Token{
+				UID:      "123456",
+				Text:     "Mario Bros",
+				PathRoot: filepath.Join("media", "usb-b"),
+			},
+			expected: false,
+		},
+		{
 			name: "empty_uid_and_text",
 			a: &tokens.Token{
 				UID:  "",
@@ -165,7 +194,7 @@ func TestTokensEqual(t *testing.T) {
 				ReaderID: "pn532-abc123",          // Different ReaderID
 				Unsafe:   true,                    // Different Unsafe
 			},
-			expected: true, // Only UID and Text matter
+			expected: true, // Only UID, Text, and PathRoot matter
 		},
 		{
 			name: "empty_vs_space_text",

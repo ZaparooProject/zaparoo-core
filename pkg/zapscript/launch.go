@@ -757,7 +757,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// this always takes precedence over the system/path format (but is not totally cross platform)
 	var findErr error
 	var p string
-	if p, findErr = findFile(afero.NewOsFs(), pl, env.Cfg, path); findErr == nil {
+	if p, findErr = findFile(afero.NewOsFs(), pl, env.Cfg, path, env.PathRoot); findErr == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -818,7 +818,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		log.Debug().Msgf("checking system path: %s", systemPath)
 		var systemFindErr error
 		var fp string
-		if fp, systemFindErr = findFile(afero.NewOsFs(), pl, env.Cfg, systemPath); systemFindErr == nil {
+		if fp, systemFindErr = findFile(afero.NewOsFs(), pl, env.Cfg, systemPath, env.PathRoot); systemFindErr == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
 			return platforms.CmdResult{
 				MediaChanged: true,
@@ -1021,7 +1021,7 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, err
 	}
 
-	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, entry.MediaPath)
+	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, entry.MediaPath, env.PathRoot)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
