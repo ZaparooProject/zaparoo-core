@@ -305,11 +305,10 @@ func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
 		if requireAbsolute && !filepath.IsAbs(cleanRoot) {
 			return
 		}
-		normalized := helpers.NormalizePathForComparison(cleanRoot)
-		if _, ok := seen[normalized]; ok {
+		if _, ok := seen[cleanRoot]; ok {
 			return
 		}
-		seen[normalized] = struct{}{}
+		seen[cleanRoot] = struct{}{}
 		roots = append(roots, cleanRoot)
 	}
 

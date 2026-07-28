@@ -625,12 +625,20 @@ func TestPathLookupRootsPrependsAndDeduplicatesRoot(t *testing.T) {
 
 	pathRoot := t.TempDir()
 	normalRoot := t.TempDir()
-	platformRoots := []string{normalRoot, filepath.Join(pathRoot, ".")}
+	caseParent := t.TempDir()
+	upperRoot := filepath.Join(caseParent, "USB")
+	lowerRoot := filepath.Join(caseParent, "usb")
+	platformRoots := []string{normalRoot, filepath.Join(pathRoot, "."), upperRoot, lowerRoot}
 
 	roots := pathLookupRoots(platformRoots, filepath.Join("relative", "root"), pathRoot)
 
-	assert.Equal(t, []string{filepath.Clean(pathRoot), filepath.Clean(normalRoot)}, roots)
-	assert.Equal(t, []string{normalRoot, filepath.Join(pathRoot, ".")}, platformRoots)
+	assert.Equal(t, []string{
+		filepath.Clean(pathRoot),
+		filepath.Clean(normalRoot),
+		upperRoot,
+		lowerRoot,
+	}, roots)
+	assert.Equal(t, []string{normalRoot, filepath.Join(pathRoot, "."), upperRoot, lowerRoot}, platformRoots)
 }
 
 func TestRunCommandResolvesPathRootBeforePlatformRoots(t *testing.T) {

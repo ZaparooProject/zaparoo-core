@@ -94,6 +94,48 @@ func TestCmdLaunchLast_DefaultOffset(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestCmdLaunchLast_RelativePathUsesPathRoot(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := helpers.NewMockUserDBI()
+	cfg := &config.Instance{}
+	pathRoot := t.TempDir()
+	normalRoot := t.TempDir()
+	relativePath := filepath.Join("SNES", "Mario.sfc")
+	drivePath := createTestFile(t, pathRoot, relativePath)
+	_ = createTestFile(t, normalRoot, relativePath)
+
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 10).
+		Return([]database.MediaHistoryEntry{
+			makeHistoryEntry(relativePath, "Mario", "snes"),
+		}, nil)
+
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", cfg).Return([]string{normalRoot})
+	mockPlatform.On("LaunchMedia", cfg, drivePath,
+		(*platforms.Launcher)(nil),
+		mock.AnythingOfType("*database.Database"),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch.last",
+			AdvArgs: zapscript.NewAdvArgs(nil),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{UserDB: mockUserDB},
+		PathRoot: pathRoot,
+	}
+
+	result, err := cmdLaunchLast(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestCmdLaunchLast_Offset3(t *testing.T) {
 	t.Parallel()
 
