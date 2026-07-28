@@ -45,6 +45,8 @@ func TestGuessLauncherForPath(t *testing.T) {
 		{ID: "SNES", SystemID: systemdefs.SystemSNES, Extensions: []string{".sfc"}},
 		{ID: "PSX", SystemID: systemdefs.SystemPSX, Extensions: []string{".bin"}},
 		{ID: "MegaCD", SystemID: systemdefs.SystemMegaCD, Extensions: []string{".bin"}},
+		{ID: "PCSX2", SystemID: systemdefs.SystemPS2, Extensions: []string{".iso"}},
+		{ID: "Play", SystemID: systemdefs.SystemPS2, Extensions: []string{".iso"}},
 	}
 	root := string(filepath.Separator)
 
@@ -75,6 +77,11 @@ func TestGuessLauncherForPath(t *testing.T) {
 		{
 			name: "shared extension without alias is ambiguous",
 			path: filepath.Join(root, "media", "fat", "hacks", "Game.bin"),
+			want: false,
+		},
+		{
+			name: "duplicate launchers for one system are ambiguous",
+			path: filepath.Join(root, "media", "fat", "hacks", "Game.iso"),
 			want: false,
 		},
 		{

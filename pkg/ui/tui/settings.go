@@ -827,19 +827,9 @@ func pollAuthLinkStatus(
 		ctx, cancel := tuiContext()
 		status, err := svc.GetAuthLinkStatus(ctx)
 		cancel()
+		consecutiveFailures = logAuthLinkStatusPollResult(err, consecutiveFailures)
 		if err != nil {
-			consecutiveFailures++
-			if consecutiveFailures == 1 {
-				log.Warn().Err(err).Msg("error polling device link status")
-			} else {
-				log.Debug().Err(err).Int("consecutive_failures", consecutiveFailures).
-					Msg("device link status polling still failing")
-			}
 			continue
-		}
-		if consecutiveFailures > 0 {
-			log.Info().Int("failures", consecutiveFailures).Msg("device link status polling recovered")
-			consecutiveFailures = 0
 		}
 		switch status.Status {
 		case models.AuthLinkStatusPending:
@@ -865,6 +855,23 @@ func pollAuthLinkStatus(
 			return
 		}
 	}
+}
+
+func logAuthLinkStatusPollResult(err error, consecutiveFailures int) int {
+	if err != nil {
+		consecutiveFailures++
+		if consecutiveFailures == 1 {
+			log.Warn().Err(err).Msg("error polling device link status")
+		} else {
+			log.Debug().Err(err).Int("consecutive_failures", consecutiveFailures).
+				Msg("device link status polling still failing")
+		}
+		return consecutiveFailures
+	}
+	if consecutiveFailures > 0 {
+		log.Info().Int("failures", consecutiveFailures).Msg("device link status polling recovered")
+	}
+	return 0
 }
 
 func buildBackupListPage(svc SettingsService, pages *tview.Pages, app *tview.Application, goBack func()) {

@@ -32,11 +32,10 @@ import (
 )
 
 const (
-	ArcadeSystem            = "Arcade"
-	mediaLookupTimeout      = 2 * time.Second
-	trackerFileSettleDelay  = 50 * time.Millisecond
-	misterStorageDeviceFile = misterconfig.CoreConfigFolder + "/device.bin"
-	misterUSBRootCount      = 4
+	ArcadeSystem           = "Arcade"
+	mediaLookupTimeout     = 2 * time.Second
+	trackerFileSettleDelay = 50 * time.Millisecond
+	misterUSBRootCount     = 4
 )
 
 // platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
@@ -434,7 +433,7 @@ func resolveRecentGamePath(path string, storageSelection []byte, exists func(str
 }
 
 // recentGamePath reads the newest launchable path from a MiSTer recent file.
-func recentGamePath(filename string) (string, error) {
+func recentGamePath(filename string, storageSelection []byte) (string, error) {
 	if !strings.Contains(filename, "_recent") {
 		return "", nil
 	}
@@ -450,7 +449,6 @@ func recentGamePath(filename string) (string, error) {
 	newest := recents[0]
 	if !strings.HasSuffix(filename, "cores_recent.cfg") {
 		path := filepath.Join(newest.Directory, newest.Name)
-		storageSelection, _ := os.ReadFile(misterStorageDeviceFile)
 		return resolveRecentGamePath(path, storageSelection, func(candidate string) bool {
 			_, statErr := os.Stat(candidate)
 			return statErr == nil
@@ -471,7 +469,8 @@ func recentGamePath(filename string) (string, error) {
 
 // loadRecent writes a recent file's newest launchable path to ACTIVEGAME.
 func loadRecent(filename string) error {
-	path, err := recentGamePath(filename)
+	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))
+	path, err := recentGamePath(filename, storageSelection)
 	if err != nil {
 		return err
 	}
@@ -528,6 +527,18 @@ func trackerFileChanged(op fsnotify.Op) bool {
 	return op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0
 }
 
+func trackerRecentFileChanged(filename string) bool {
+	return filepath.Dir(filename) == filepath.Clean(misterconfig.CoreConfigFolder) &&
+		strings.Contains(filepath.Base(filename), "_recent")
+}
+
+func dispatchTrackerFileLoad(settled <-chan time.Time, load func()) {
+	go func() {
+		<-settled
+		load()
+	}()
+}
+
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
@@ -555,21 +566,24 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					tr.loadGame()
 				case event.Name == misterconfig.FileSelectFile:
 					// MakeFile truncates before writing the new status. Wait for
-					// FILESELECT and FULLPATH to contain the same selection.
-					time.Sleep(trackerFileSettleDelay)
-					loadFileSelection()
-				case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
+					// FILESELECT and FULLPATH to contain the same selection without
+					// blocking delivery of later watcher events.
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), loadFileSelection)
+				case trackerRecentFileChanged(event.Name):
 					// MiSTer truncates and rewrites binary recent files. Let the
-					// write settle before reading the first complete record.
-					time.Sleep(trackerFileSettleDelay)
-					recentErr := loadRecent(event.Name)
-					if recentErr != nil {
-						if errors.Is(recentErr, os.ErrNotExist) {
-							log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
-						} else {
-							log.Error().Msgf("error loading recent file: %s", recentErr)
+					// write settle before reading the first complete record without
+					// blocking delivery of later watcher events.
+					filename := event.Name
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), func() {
+						recentErr := loadRecent(filename)
+						if recentErr != nil {
+							if errors.Is(recentErr, os.ErrNotExist) {
+								log.Debug().Err(recentErr).Msg("recent file was replaced before it could be read")
+							} else {
+								log.Error().Msgf("error loading recent file: %s", recentErr)
+							}
 						}
-					}
+					})
 				}
 			case watchErr, ok := <-watcher.Errors:
 				if !ok {

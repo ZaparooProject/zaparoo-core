@@ -863,26 +863,31 @@ func guessLauncherFromCandidates(
 	}
 
 	if folderSystem, ok := folderTrailSystem(path); ok {
+		match := -1
 		for i := range candidates {
-			if strings.EqualFold(candidates[i].SystemID, folderSystem) {
-				return candidates[i], true
+			if !strings.EqualFold(candidates[i].SystemID, folderSystem) {
+				continue
 			}
+			if match != -1 {
+				return platforms.Launcher{}, false
+			}
+			match = i
+		}
+		if match != -1 {
+			return candidates[match], true
 		}
 		return platforms.Launcher{}, false
 	}
 
-	systemID := candidates[0].SystemID
-	for i := 1; i < len(candidates); i++ {
-		if !strings.EqualFold(candidates[i].SystemID, systemID) {
-			return platforms.Launcher{}, false
-		}
+	if len(candidates) != 1 {
+		return platforms.Launcher{}, false
 	}
 	return candidates[0], true
 }
 
 // GuessLauncherForPath conservatively infers a launcher when normal folder
-// matching fails. A recognized folder alias must agree with the extension;
-// without one, the extension must belong to exactly one system.
+// matching fails. A recognized folder alias must identify exactly one matching
+// launcher; without one, the extension must match exactly one launcher.
 func GuessLauncherForPath(path string) (platforms.Launcher, bool) {
 	launcher, ok := guessLauncherFromCandidates(path, GlobalLauncherCache.GetAllLaunchers())
 	if ok {

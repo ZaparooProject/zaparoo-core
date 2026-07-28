@@ -20,6 +20,7 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1638,6 +1641,33 @@ func TestRemoteBackupRestoreConfirm_WordingAndRestore_Integration(t *testing.T) 
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("Cloud backup restored", 2*time.Second))
 	mockSvc.AssertCalled(t, "RestoreRemoteBackup", mock.Anything, "backup-7")
+}
+
+func TestLogAuthLinkStatusPollResult(t *testing.T) {
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	consecutiveFailures := logAuthLinkStatusPollResult(assert.AnError, 0)
+	assert.Equal(t, 1, consecutiveFailures)
+	consecutiveFailures = logAuthLinkStatusPollResult(assert.AnError, consecutiveFailures)
+	assert.Equal(t, 2, consecutiveFailures)
+	consecutiveFailures = logAuthLinkStatusPollResult(nil, consecutiveFailures)
+	assert.Zero(t, consecutiveFailures)
+	consecutiveFailures = logAuthLinkStatusPollResult(assert.AnError, consecutiveFailures)
+	assert.Equal(t, 1, consecutiveFailures)
+
+	logs := buf.Bytes()
+	assert.Equal(t, 2, bytes.Count(logs, []byte(`"message":"error polling device link status"`)),
+		"first failure after recovery must warn again")
+	assert.Contains(t, string(logs), `"level":"warn"`)
+	assert.Contains(t, string(logs), `"level":"debug"`)
+	assert.Contains(t, string(logs), `"consecutive_failures":2`)
+	assert.Contains(t, string(logs), `"message":"device link status polling still failing"`)
+	assert.Contains(t, string(logs), `"level":"info"`)
+	assert.Contains(t, string(logs), `"failures":2`)
+	assert.Contains(t, string(logs), `"message":"device link status polling recovered"`)
 }
 
 func TestStartAuthLinkFlow_SuccessMentionsCloudBackups_Integration(t *testing.T) {
