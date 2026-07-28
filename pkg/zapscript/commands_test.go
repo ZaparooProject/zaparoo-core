@@ -20,6 +20,8 @@
 package zapscript
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -618,6 +620,105 @@ func TestGetExprEnv_NoActiveMedia(t *testing.T) {
 	assert.Empty(t, env.ActiveMedia.Path)
 }
 
+func TestPathLookupRootsPrependsAndDeduplicatesRoot(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := t.TempDir()
+	normalRoot := t.TempDir()
+	caseParent := t.TempDir()
+	upperRoot := filepath.Join(caseParent, "USB")
+	lowerRoot := filepath.Join(caseParent, "usb")
+	platformRoots := []string{normalRoot, filepath.Join(pathRoot, "."), upperRoot, lowerRoot}
+
+	roots := pathLookupRoots(platformRoots, filepath.Join("relative", "root"), pathRoot)
+
+	assert.Equal(t, []string{
+		filepath.Clean(pathRoot),
+		filepath.Clean(normalRoot),
+		upperRoot,
+		lowerRoot,
+	}, roots)
+	assert.Equal(t, []string{normalRoot, filepath.Join(pathRoot, "."), upperRoot, lowerRoot}, platformRoots)
+}
+
+func TestRunCommandResolvesPathRootBeforePlatformRoots(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		scriptText      string
+		createDriveFile bool
+		wantDriveFile   bool
+	}{
+		{
+			name:            "plain path prefers external root",
+			scriptText:      "Game.mgl",
+			createDriveFile: true,
+			wantDriveFile:   true,
+		},
+		{
+			name:          "explicit launch falls back to platform root",
+			scriptText:    "**launch:Game.mgl",
+			wantDriveFile: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pathRoot := t.TempDir()
+			normalRoot := t.TempDir()
+			drivePath := filepath.Join(pathRoot, "Game.mgl")
+			normalPath := filepath.Join(normalRoot, "Game.mgl")
+			require.NoError(t, os.WriteFile(normalPath, []byte("normal"), 0o600))
+			if tt.createDriveFile {
+				require.NoError(t, os.WriteFile(drivePath, []byte("drive"), 0o600))
+			}
+
+			wantPath := normalPath
+			if tt.wantDriveFile {
+				wantPath = drivePath
+			}
+
+			cfg := &config.Instance{}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("RootDirs", cfg).Return([]string{normalRoot}).Once()
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{}).Twice()
+			mockPlatform.On(
+				"LaunchMedia",
+				cfg,
+				wantPath,
+				(*platforms.Launcher)(nil),
+				(*database.Database)(nil),
+				(*platforms.LaunchOptions)(nil),
+			).Return(nil).Once()
+
+			script, err := zapscript.NewParser(tt.scriptText).ParseScript()
+			require.NoError(t, err)
+			require.Len(t, script.Cmds, 1)
+
+			result, err := RunCommand(
+				t.Context(),
+				mockPlatform,
+				cfg,
+				playlists.PlaylistController{},
+				tokens.Token{PathRoot: pathRoot},
+				script.Cmds[0],
+				1,
+				0,
+				nil,
+				RunCommandOptions{LauncherManager: state.NewLauncherManager()},
+				&zapscript.ArgExprEnv{},
+			)
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestRunCommandInjectsUIService(t *testing.T) {
 	t.Parallel()
 
@@ -644,6 +745,33 @@ func TestRunCommandInjectsUIService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Same(t, ui, receivedUI)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestRunCommandInjectsTokenPathRoot(t *testing.T) {
+	t.Parallel()
+
+	pathRoot := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ForwardCmd", mock.MatchedBy(func(env *platforms.CmdEnv) bool {
+		return env.PathRoot == pathRoot
+	})).Return(platforms.CmdResult{}, nil).Once()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{PathRoot: pathRoot},
+		zapscript.Command{Name: zapscript.ZapScriptCmdMisterINI},
+		1,
+		0,
+		nil,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.NoError(t, err)
 	mockPlatform.AssertExpectations(t)
 }
 

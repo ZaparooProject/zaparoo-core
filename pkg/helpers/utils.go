@@ -57,7 +57,7 @@ func TokensEqual(a, b *tokens.Token) bool {
 		return false
 	}
 
-	return a.UID == b.UID && a.Text == b.Text
+	return a.UID == b.UID && a.Text == b.Text && a.PathRoot == b.PathRoot
 }
 
 func GetMd5Hash(filePath string) (string, error) {

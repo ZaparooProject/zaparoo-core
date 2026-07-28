@@ -934,6 +934,76 @@ launcher = "snes-retroarch"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		createDirectPath bool
+	}{
+		{
+			name:             "direct relative path keeps precedence",
+			createDirectPath: true,
+		},
+		{
+			name: "launcher folder resolves from path root",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := helpers.NewMemoryFS()
+			pathRoot := launchTestAbsPath("path-root")
+			directPath := filepath.Join(pathRoot, "snes", "game.sfc")
+			launcherPath := filepath.Join(pathRoot, "Console", "SNES", "game.sfc")
+			require.NoError(t, fs.WriteFile(launcherPath, []byte("launcher"), 0o600))
+
+			wantPath := launcherPath
+			if tt.createDirectPath {
+				require.NoError(t, fs.WriteFile(directPath, []byte("direct"), 0o600))
+				wantPath = directPath
+			}
+
+			cfg := &config.Instance{}
+			launcher := platforms.Launcher{
+				ID:         "snes",
+				SystemID:   "SNES",
+				Folders:    []string{filepath.Join("Console", "SNES")},
+				Extensions: []string{".sfc"},
+			}
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+			mockPlatform.On("RootDirs", cfg).Return([]string{})
+			mockPlatform.On("Settings").Return(platforms.Settings{DataDir: launchTestAbsPath("data")}).Maybe()
+			mockPlatform.On(
+				"LaunchMedia",
+				cfg,
+				wantPath,
+				(*platforms.Launcher)(nil),
+				(*database.Database)(nil),
+				(*platforms.LaunchOptions)(nil),
+			).Return(nil).Once()
+
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{
+					Name: "launch",
+					Args: []string{filepath.ToSlash(filepath.Join("snes", "game.sfc"))},
+				},
+				Cfg:      cfg,
+				PathRoot: pathRoot,
+			}
+
+			result, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+			require.NoError(t, err)
+			assert.True(t, result.MediaChanged)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	t.Parallel()
 

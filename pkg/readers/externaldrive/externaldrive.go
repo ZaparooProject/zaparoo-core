@@ -494,6 +494,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
 		ReaderID: r.ReaderID(),
+		PathRoot: filepath.Clean(foundMount),
 	}
 
 	// Before adding token, verify device is still mounted (race condition protection)

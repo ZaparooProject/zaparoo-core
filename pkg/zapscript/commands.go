@@ -293,8 +293,42 @@ func virtualStatPath(lookupPath string, parts []string, end int) string {
 	return filepath.Join(parts[:end]...)
 }
 
+func pathLookupRoots(platformRoots []string, pathRoots ...string) []string {
+	roots := make([]string, 0, len(platformRoots)+len(pathRoots))
+	seen := make(map[string]struct{}, len(platformRoots)+len(pathRoots))
+
+	addRoot := func(root string, requireAbsolute bool) {
+		if root == "" {
+			return
+		}
+		cleanRoot := filepath.Clean(root)
+		if requireAbsolute && !filepath.IsAbs(cleanRoot) {
+			return
+		}
+		if _, ok := seen[cleanRoot]; ok {
+			return
+		}
+		seen[cleanRoot] = struct{}{}
+		roots = append(roots, cleanRoot)
+	}
+
+	for _, root := range pathRoots {
+		addRoot(root, true)
+	}
+	for _, root := range platformRoots {
+		addRoot(root, false)
+	}
+	return roots
+}
+
 // Check all games folders for a relative path to a file
-func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
+func findFile(
+	fs afero.Fs,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	path string,
+	pathRoots ...string,
+) (string, error) {
 	lookupPath := normalizeVirtualLookupPath(path)
 	ps := strings.Split(lookupPath, string(filepath.Separator))
 	statPath := lookupPath
@@ -316,7 +350,7 @@ func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path str
 
 	candidates := []string{statPath}
 	if !filepath.IsAbs(statPath) {
-		rootDirs := pl.RootDirs(cfg)
+		rootDirs := pathLookupRoots(pl.RootDirs(cfg), pathRoots...)
 		candidates = make([]string, 0, len(rootDirs))
 		for _, gf := range rootDirs {
 			candidates = append(candidates, filepath.Join(gf, statPath))
@@ -481,6 +515,7 @@ func RunCommand(
 		UI:                 opts.UI,
 		Playlist:           plsc,
 		Source:             token.Source,
+		PathRoot:           token.PathRoot,
 		TotalCommands:      totalCmds,
 		CurrentIndex:       currentIndex,
 		Unsafe:             unsafe,

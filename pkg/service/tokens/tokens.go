@@ -51,5 +51,8 @@ type Token struct {
 	Data     string
 	Source   string
 	ReaderID string // Deterministic ID of the source reader
+	// PathRoot is an optional filesystem root used to resolve relative paths
+	// originating from source-backed tokens such as external drives.
+	PathRoot string
 	Unsafe   bool
 }

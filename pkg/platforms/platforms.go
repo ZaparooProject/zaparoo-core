@@ -159,10 +159,12 @@ type CmdEnv struct {
 	Database           *database.Database
 	ExprEnv            *zapscript.ArgExprEnv
 	Source             string
-	Cmd                zapscript.Command
-	TotalCommands      int
-	CurrentIndex       int
-	Unsafe             bool
+	// PathRoot is an optional per-token root for resolving relative filesystem paths.
+	PathRoot      string
+	Cmd           zapscript.Command
+	TotalCommands int
+	CurrentIndex  int
+	Unsafe        bool
 }
 
 // ProfileSwitchRequest asks the script runner to change the device's

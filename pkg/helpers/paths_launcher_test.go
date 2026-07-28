@@ -589,6 +589,55 @@ func TestFindLauncher_FolderSystemOverSystemOnly(t *testing.T) {
 	assert.Equal(t, "FolderAndSystem", launcher.ID, "folder+system launcher should beat system-only")
 }
 
+func TestFindLauncher_GenericOutsideRootsBeatsFallbackCandidates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	root := t.TempDir()
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+
+	genericLauncher := platforms.Launcher{
+		ID:         "Generic",
+		Extensions: []string{".mgl"},
+	}
+	snesLauncher := platforms.Launcher{
+		ID:         "SNES",
+		SystemID:   systemdefs.SystemSNES,
+		Folders:    []string{"SNES"},
+		Extensions: []string{".mgl"},
+	}
+	psxLauncher := platforms.Launcher{
+		ID:         "PSX",
+		SystemID:   systemdefs.SystemPSX,
+		Folders:    []string{"PSX"},
+		Extensions: []string{".mgl"},
+	}
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{genericLauncher, snesLauncher, psxLauncher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	externalPath := filepath.Join(t.TempDir(), "Game.mgl")
+	launcher, err := FindLauncher(cfg, mockPlatform, externalPath)
+	require.NoError(t, err)
+	assert.Equal(t, "Generic", launcher.ID)
+
+	systemPath := filepath.Join(root, "SNES", "Game.mgl")
+	launcher, err = FindLauncher(cfg, mockPlatform, systemPath)
+	require.NoError(t, err)
+	assert.Equal(t, "SNES", launcher.ID)
+}
+
 func TestFindLauncher_GenericAloneStillWorks(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
