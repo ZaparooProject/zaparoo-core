@@ -185,6 +185,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyUARTReader(cfg),
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
+		newOperatorReader(cfg, p.fs),
 		simpleserial.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),

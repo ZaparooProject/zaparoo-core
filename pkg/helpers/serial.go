@@ -58,6 +58,10 @@ var ignoreDevices = []serialDevice{
 	{Vid: "16d0", Pid: "109b"},
 	{Vid: "16d0", Pid: "109c"},
 	{Vid: "16d0", Pid: "109d"},
+	// Epilogue Operator
+	{Vid: "16d0", Pid: "123d"}, // GB Operator
+	{Vid: "16d0", Pid: "123e"}, // SN Operator
+	{Vid: "16d0", Pid: "134d"}, // 64 Operator
 }
 
 func ignoreSerialDevice(path string) bool {

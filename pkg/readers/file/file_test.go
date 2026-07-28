@@ -43,6 +43,40 @@ func TestNewReader(t *testing.T) {
 	assert.Equal(t, cfg, reader.cfg)
 }
 
+func TestNewReaderWithOptions(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	tokenPath := filepath.Join(string(filepath.Separator), "tmp", "operator.token")
+	available := true
+	reader := NewReaderWithOptions(cfg, &ReaderOptions{
+		Metadata: readers.DriverMetadata{
+			ID:                "operator",
+			DefaultEnabled:    true,
+			DefaultAutoDetect: true,
+			Description:       "Operator bridge",
+		},
+		IDs:            []string{"operator"},
+		AutoDetectPath: tokenPath,
+		IsAvailable: func() bool {
+			return available
+		},
+	})
+
+	assert.Equal(t, cfg, reader.cfg)
+	assert.Equal(t, "operator", reader.Metadata().ID)
+	assert.Equal(t, []string{"operator"}, reader.IDs())
+	assert.Equal(t, "operator:"+tokenPath, reader.Detect(nil))
+	assert.Empty(t, reader.Detect([]string{tokenPath}))
+	assert.Empty(t, reader.Detect([]string{"file:" + tokenPath}))
+
+	reader.polling = true
+	assert.True(t, reader.Connected())
+	available = false
+	assert.Empty(t, reader.Detect(nil))
+	assert.False(t, reader.Connected())
+}
+
 func TestMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -262,6 +296,32 @@ func TestOpen_InitialFileContent_TokenDetected(t *testing.T) {
 	assert.Equal(t, TokenType, scan.Token.Type)
 	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan.ReaderError)
+}
+
+func TestOpen_CustomDriverUsesCustomReaderID(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReaderWithOptions(cfg, &ReaderOptions{
+		Metadata: readers.DriverMetadata{ID: "operator"},
+		IDs:      []string{"operator"},
+	})
+	scanQueue := testutils.CreateTestScanChannel(t)
+	tokenFile := filepath.Join(t.TempDir(), "operator.token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("test-token"), 0o600))
+
+	err := reader.Open(config.ReadersConnect{
+		Driver: "operator",
+		Path:   tokenFile,
+	}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, reader.Close())
+	}()
+
+	scan := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
+	require.NotNil(t, scan.Token)
+	assert.Equal(t, readers.GenerateReaderID("operator", tokenFile), scan.Token.ReaderID)
 }
 
 func TestOpen_FileContentChange_NewToken(t *testing.T) {
