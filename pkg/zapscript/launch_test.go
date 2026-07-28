@@ -1004,6 +1004,154 @@ func TestCmdLaunch_SystemPathUsesPathRoot(t *testing.T) {
 	}
 }
 
+func TestCmdLaunch_SystemArgGuidesExternalRelativePath(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	pathRoot := launchTestAbsPath("external-drive")
+	resolvedPath := filepath.Join(pathRoot, "SomeGame.bin")
+	require.NoError(t, fs.WriteFile(resolvedPath, []byte("game"), 0o600))
+
+	cfg := &config.Instance{}
+	genesisLauncher := platforms.Launcher{
+		ID:         systemdefs.SystemGenesis,
+		SystemID:   systemdefs.SystemGenesis,
+		Folders:    []string{"Genesis"},
+		Extensions: []string{".bin"},
+	}
+	psxLauncher := platforms.Launcher{
+		ID:         systemdefs.SystemPSX,
+		SystemID:   systemdefs.SystemPSX,
+		Folders:    []string{"PSX"},
+		Extensions: []string{".bin"},
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{genesisLauncher, psxLauncher})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+	mockPlatform.On(
+		"LaunchMedia",
+		cfg,
+		resolvedPath,
+		mock.MatchedBy(func(launcher *platforms.Launcher) bool {
+			return launcher != nil && launcher.ID == systemdefs.SystemGenesis
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	reader := zapscript.NewParser("SomeGame.bin?system=Genesis")
+	script, err := reader.ParseScript()
+	require.NoError(t, err)
+	require.Len(t, script.Cmds, 1)
+
+	env := platforms.CmdEnv{
+		Cmd:      script.Cmds[0],
+		Cfg:      cfg,
+		PathRoot: pathRoot,
+	}
+	result, err := cmdLaunchWithFS(fs.Fs, mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestInferLauncherForSystemPath_RejectsSameSystemAmbiguity(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "GenesisOne", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}},
+		{ID: "GenesisTwo", SystemID: systemdefs.SystemGenesis, Extensions: []string{".bin"}},
+	})
+
+	launcher, found := inferLauncherForSystemPath(
+		mockPlatform,
+		&platforms.CmdEnv{Cfg: cfg},
+		filepath.Join("games", "SomeGame.bin"),
+		systemdefs.SystemGenesis,
+	)
+
+	assert.False(t, found)
+	assert.Empty(t, launcher.ID)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_SystemDefaultDoesNotBypassLauncherAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-restricted"
+`))
+	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	launcher := platforms.Launcher{
+		ID:            "genesis-restricted",
+		SystemID:      systemdefs.SystemGenesis,
+		Extensions:    []string{".bin"},
+		AllowListOnly: true,
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: zapscript.ZapScriptCmdLaunch,
+			Args: []string{path},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"system": systemdefs.SystemGenesis,
+			}),
+		},
+		Cfg: cfg,
+	}
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorContains(t, err, "file not allowed")
+	mockPlatform.AssertNotCalled(
+		t,
+		"LaunchMedia",
+		cfg,
+		path,
+		mock.Anything,
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil),
+	)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_SystemArgDoesNotBypassLauncherAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	path := launchTestAbsPath("external-drive", "SomeGame.bin")
+	launcher := platforms.Launcher{
+		ID:            systemdefs.SystemGenesis,
+		SystemID:      systemdefs.SystemGenesis,
+		Extensions:    []string{".bin"},
+		AllowListOnly: true,
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{launcher})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: zapscript.ZapScriptCmdLaunch,
+			Args: []string{path},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"system": systemdefs.SystemGenesis,
+			}),
+		},
+		Cfg: cfg,
+	}
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.ErrorContains(t, err, "file not allowed")
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	t.Parallel()
 
