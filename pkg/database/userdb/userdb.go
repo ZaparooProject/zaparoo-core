@@ -54,13 +54,23 @@ const (
 var ErrConnDrainTimeout = errors.New("timed out waiting for user database queries to finish")
 
 type UserDB struct {
-	pl     platforms.Platform
-	ctx    context.Context
+	pl  platforms.Platform
+	ctx context.Context
+	// fs overrides the filesystem used to recover an interrupted restore; nil
+	// uses the OS filesystem. Set only by tests to inject failures.
+	fs     afero.Fs
 	sql    database.Conn
 	dbPath string
 	// drainTimeout overrides how long closeAndDrain waits; zero uses
 	// connDrainTimeout. Set only by tests to avoid multi-second waits.
 	drainTimeout time.Duration
+}
+
+func (db *UserDB) recoveryFs() afero.Fs {
+	if db.fs != nil {
+		return db.fs
+	}
+	return afero.NewOsFs()
 }
 
 func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
@@ -74,8 +84,13 @@ func (db *UserDB) Open() error {
 	dbPath := db.GetDBPath()
 	db.dbPath = dbPath
 	// Must run before the existence check below, which decides whether to
-	// allocate a fresh schema over the top of a recoverable database.
-	recoverInterruptedRestore(afero.NewOsFs(), dbPath)
+	// allocate a fresh schema over the top of a recoverable database. Refusing
+	// to open is the safe outcome when recovery fails: the rollback file still
+	// holds the only copy of the data, and a fresh database beside it would
+	// look like a completed restore to the next open, which discards it.
+	if err := recoverInterruptedRestore(db.recoveryFs(), dbPath); err != nil {
+		return err
+	}
 	log.Debug().Str("path", dbPath).Msg("checking if database file exists")
 
 	_, err := os.Stat(dbPath)

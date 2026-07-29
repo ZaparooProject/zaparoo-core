@@ -482,33 +482,37 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 // the rollback simply outlived its purpose; the pre-restore backup covers that
 // data, so it is dropped. A rollback file with no database means the restore
 // never completed, so the original goes back.
-func recoverInterruptedRestore(fs afero.Fs, dbPath string) {
+//
+// An error is returned only when that last case fails, because the rollback is
+// then the sole copy of the data and the caller must not carry on as if the
+// database were merely absent. Cleanup failures are logged instead: they cost
+// disk space, not data.
+func recoverInterruptedRestore(fs afero.Fs, dbPath string) error {
 	dbDir := filepath.Dir(dbPath)
 	defer removeStagedRestoreFiles(fs, dbDir)
 
 	rollbackPath := dbPath + restoreRollbackSuffix
 	if _, err := fs.Stat(rollbackPath); err != nil {
-		return
+		return nil
 	}
 	if _, err := fs.Stat(dbPath); err == nil {
 		if removeErr := fs.Remove(rollbackPath); removeErr != nil {
 			log.Warn().Err(removeErr).Str("path", rollbackPath).
 				Msg("failed to remove stale user database rollback")
 		}
-		return
+		return nil
 	}
 
 	// The rollback still holds the live database from before the restore, and
 	// its sidecars were removed with it checkpointed, so it stands alone.
 	if err := renameDatabaseFile(fs, rollbackPath, dbPath); err != nil {
-		log.Error().Err(err).Str("path", rollbackPath).
-			Msg("failed to recover user database from interrupted restore")
-		return
+		return fmt.Errorf("failed to recover user database from interrupted restore: %w", err)
 	}
 	if err := syncAferoDirectory(fs, dbDir); err != nil {
 		log.Warn().Err(err).Msg("failed to sync recovered user database")
 	}
 	log.Warn().Str("path", dbPath).Msg("recovered user database from interrupted restore")
+	return nil
 }
 
 // removeStagedRestoreFiles clears staging files an interrupted restore left
@@ -588,6 +592,13 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 		// database rather than losing it to a restore that never started.
 		if openErr := db.Open(); openErr != nil {
 			log.Error().Err(openErr).Msg("failed to reopen user database after abandoned restore")
+			// Joined rather than dropped: a refused restore leaves the database
+			// working, but one that also failed to reopen does not, and the
+			// caller has to be able to tell those apart.
+			return database.RestoreInfo{}, errors.Join(
+				closeErr,
+				fmt.Errorf("failed to reopen user database after abandoned restore: %w", openErr),
+			)
 		}
 		return database.RestoreInfo{}, closeErr
 	}
