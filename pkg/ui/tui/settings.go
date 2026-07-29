@@ -1385,6 +1385,8 @@ func showRemoteBackupRestoreConfirm(
 		"safety backup is created first.\n\n" +
 		"Core restarts after restore."
 	backupID := backup.ID
+	restoredLabel := "Restored backup from " + sourceName + ".\n" +
+		"Snapshot: " + formatBackupTime(backup.CreatedAt)
 	ShowConfirmModal(
 		pages, app,
 		message,
@@ -1399,10 +1401,10 @@ func showRemoteBackupRestoreConfirm(
 					if err := svc.RestoreRemoteBackup(ctx, backupID); err != nil {
 						return "", fmt.Errorf("restore cloud backup: %w", err)
 					}
-					return backupID, nil
+					return restoredLabel, nil
 				},
-				func(restoredLabel string) {
-					ShowInfoModal(pages, app, "Cloud backup restored", restoredLabel, func() {
+				func(label string) {
+					ShowInfoModal(pages, app, "Cloud backup restored", label, func() {
 						waitForCoreRestart(svc, pages, app, onRestored)
 					})
 				},

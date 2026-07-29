@@ -1640,6 +1640,9 @@ func TestRemoteBackupRestoreConfirm_WordingAndRestore_Integration(t *testing.T) 
 	// Confirm ("Yes" is focused first).
 	runner.SimulateEnter()
 	require.True(t, runner.WaitForText("Cloud backup restored", 2*time.Second))
+	assert.True(t, runner.ContainsText("Restored backup from Old MiSTer (unlinked)."))
+	assert.True(t, runner.ContainsText("Snapshot: 2026-07-10 12:00:00 UTC"))
+	assert.False(t, runner.ContainsText("backup-7"))
 	mockSvc.AssertCalled(t, "RestoreRemoteBackup", mock.Anything, "backup-7")
 }
 

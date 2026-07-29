@@ -968,7 +968,7 @@ func TestOpenSourceRejectsSensitiveFileIdentity(t *testing.T) {
 	info, err := os.Stat(authPath)
 	require.NoError(t, err)
 	file := FileRef{
-		sourceIdentity: &sourceIdentity{info: info, excludedIdentities: []os.FileInfo{info}},
+		sourceIdentity: newSourceIdentity(info, []os.FileInfo{info}),
 		SourceRoot:     root, SourceRel: config.AuthFile, RestorePath: "mappings/leak.toml",
 	}
 
@@ -1203,6 +1203,151 @@ func TestValidateFilesRejectsUnsafeAndDuplicatePaths(t *testing.T) {
 	}))
 }
 
+func remotePackFixtureFile(tb testing.TB, size int) FileRef {
+	tb.Helper()
+	root := tb.TempDir()
+	data := bytes.Repeat([]byte{0x5a}, size)
+	filePath := filepath.Join(root, "save.dat")
+	require.NoError(tb, os.WriteFile(filePath, data, 0o600))
+	info, err := os.Stat(filePath)
+	require.NoError(tb, err)
+	sum := sha256.Sum256(data)
+	return FileRef{
+		sourceIdentity: newSourceIdentity(info, nil),
+		SourceRoot:     root,
+		SourceRel:      "save.dat",
+		ArchivePath:    filepath.ToSlash(filepath.Join(filesRoot, CategorySaves, "save.dat")),
+		RestorePath:    filepath.ToSlash(filepath.Join(CategorySaves, "save.dat")),
+		Size:           int64(size),
+		SHA256:         hex.EncodeToString(sum[:]),
+	}
+}
+
+func TestBuildRemotePackStreamsIntoFinalBuffer(t *testing.T) {
+	t.Parallel()
+	file := remotePackFixtureFile(t, 2<<20)
+
+	body, packHash, err := buildRemotePack(context.Background(), []FileRef{file, file}, nil)
+	require.NoError(t, err)
+	expectedSize, err := remotePackEncodedSize([]FileRef{file})
+	require.NoError(t, err)
+	assert.Len(t, body, int(expectedSize))
+	assert.Equal(t, sha256Hex(body), packHash)
+
+	footerLength := int(binary.BigEndian.Uint32(body[len(body)-remotePackFooterTrailerSize:]))
+	footerStart := len(body) - remotePackFooterTrailerSize - footerLength
+	var footer []packFooterEntry
+	require.NoError(t, json.Unmarshal(body[footerStart:len(body)-remotePackFooterTrailerSize], &footer))
+	require.Len(t, footer, 1)
+	assert.Equal(t, packFooterEntry{Hash: file.SHA256, Offset: 0, Length: file.Size}, footer[0])
+}
+
+func TestBuildRemotePackRejectsChangedSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mutate func(testing.TB, string, int)
+		name   string
+	}{
+		{
+			name: "same size with different content",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				require.NoError(tb, os.WriteFile(filePath, bytes.Repeat([]byte{0x42}, size), 0o600))
+			},
+		},
+		{
+			name: "grew after hashing",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				data := append(bytes.Repeat([]byte{0x5a}, size), 0x01)
+				require.NoError(tb, os.WriteFile(filePath, data, 0o600))
+			},
+		},
+		{
+			name: "shrank after hashing",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				require.NoError(tb, os.WriteFile(filePath, bytes.Repeat([]byte{0x5a}, size-1), 0o600))
+			},
+		},
+		{
+			name: "replaced after hashing",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				// Rename a second file over the source rather than deleting and
+				// rewriting in place: the replacement is allocated while the
+				// original still exists, so it is guaranteed a distinct
+				// identity. Deleting first lets the filesystem hand the freed
+				// inode straight back, leaving the two indistinguishable.
+				replacement := filePath + ".replacement"
+				require.NoError(tb, os.WriteFile(replacement, bytes.Repeat([]byte{0x5a}, size), 0o600))
+				require.NoError(tb, os.Rename(replacement, filePath))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			const size = 1024
+			file := remotePackFixtureFile(t, size)
+			tt.mutate(t, filepath.Join(file.SourceRoot, file.SourceRel), size)
+
+			_, _, err := buildRemotePack(context.Background(), []FileRef{file}, nil)
+			require.ErrorIs(t, err, errRemoteIntegrityRetry)
+		})
+	}
+}
+
+func TestBuildRemotePackRejectsInvalidEncodedSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		wantErr string
+		size    int64
+	}{
+		{name: "negative", size: -1, wantErr: "size overflow"},
+		{name: "over maximum", size: remoteMaxPackBytes, wantErr: "exceeds maximum size"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			file := FileRef{SHA256: strings.Repeat("a", 64), Size: tt.size}
+
+			_, _, err := buildRemotePack(context.Background(), []FileRef{file}, nil)
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func BenchmarkRemoteBackup_BuildPack_8MiB(b *testing.B) {
+	benchmarkRemoteBackupBuildPack(b, 8<<20)
+}
+
+func BenchmarkRemoteBackup_BuildPack_32MiB(b *testing.B) {
+	benchmarkRemoteBackupBuildPack(b, 32<<20)
+}
+
+func benchmarkRemoteBackupBuildPack(b *testing.B, size int) {
+	b.Run(fmt.Sprintf("%dMiB", size>>20), func(b *testing.B) {
+		file := remotePackFixtureFile(b, size)
+		expectedSize, err := remotePackEncodedSize([]FileRef{file})
+		require.NoError(b, err)
+		b.ReportAllocs()
+		b.SetBytes(int64(size))
+		b.ResetTimer()
+		for b.Loop() {
+			body, _, buildErr := buildRemotePack(context.Background(), []FileRef{file}, nil)
+			if buildErr != nil {
+				b.Fatal(buildErr)
+			}
+			if int64(len(body)) != expectedSize {
+				b.Fatalf("unexpected pack size: got %d, want %d", len(body), expectedSize)
+			}
+			runtime.KeepAlive(body)
+		}
+	})
+}
+
 func TestRemoteSourceProcessingHonorsCancellation(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -1211,7 +1356,7 @@ func TestRemoteSourceProcessingHonorsCancellation(t *testing.T) {
 	info, err := os.Stat(filePath)
 	require.NoError(t, err)
 	file := FileRef{
-		sourceIdentity: &sourceIdentity{info: info},
+		sourceIdentity: newSourceIdentity(info, nil),
 		SourceRoot:     root, SourceRel: "save.dat", Size: info.Size(), SHA256: strings.Repeat("0", 64),
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -256,7 +256,7 @@ func sourceIdentities(paths map[string]struct{}) ([]os.FileInfo, error) {
 			return nil, fmt.Errorf("stating sensitive backup source: %w", err)
 		}
 		if info.Mode().IsRegular() {
-			identities = append(identities, info)
+			identities = append(identities, pinSourceIdentity(info))
 		}
 	}
 	return identities, nil
@@ -455,6 +455,22 @@ func trustedSource(target string, roots []string) (root, rel string, ok bool) {
 	return "", "", false
 }
 
+// pinSourceIdentity resolves the identity of a stat result so it stays bound to
+// the file that was stat'd. On Windows os.Stat records only the path and defers
+// the volume/file-index lookup to the first os.SameFile call, which re-opens
+// that path — so an unpinned identity silently follows whatever file later
+// occupies the path, and a swapped source compares equal. Comparing the info
+// against itself performs the lookup now. It is a no-op on other platforms,
+// where the device and inode are already captured.
+func pinSourceIdentity(info os.FileInfo) os.FileInfo {
+	_ = os.SameFile(info, info)
+	return info
+}
+
+func newSourceIdentity(info os.FileInfo, excluded []os.FileInfo) *sourceIdentity {
+	return &sourceIdentity{info: pinSourceIdentity(info), excludedIdentities: excluded}
+}
+
 func matchesSourceIdentity(info os.FileInfo, identities []os.FileInfo) bool {
 	for _, identity := range identities {
 		if os.SameFile(info, identity) {
@@ -501,7 +517,7 @@ func (c *sourceCollector) add(
 		return
 	}
 	c.appendFile(&FileRef{
-		sourceIdentity: &sourceIdentity{info: info, excludedIdentities: c.excludedIdentities},
+		sourceIdentity: newSourceIdentity(info, c.excludedIdentities),
 		SourceRoot:     sourceRoot,
 		SourceRel:      sourceRel,
 		ArchivePath:    filepath.ToSlash(spec.archive(restorePath)),
@@ -531,7 +547,7 @@ func (c *sourceCollector) addTrustedFile(
 	}
 	root := filepath.Dir(resolved)
 	c.appendFile(&FileRef{
-		sourceIdentity: &sourceIdentity{info: info},
+		sourceIdentity: newSourceIdentity(info, nil),
 		SourceRoot:     root,
 		SourceRel:      filepath.Base(resolved),
 		ArchivePath:    filepath.ToSlash(archivePath),

@@ -2093,17 +2093,31 @@ func buildRemotePack(
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, "", fmt.Errorf("building remote backup pack: %w", ctxErr)
 	}
-	var buf bytes.Buffer
-	footer := make([]packFooterEntry, 0, len(files))
+	uniqueFiles := make([]FileRef, 0, len(files))
 	seen := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		if waitErr := pauser.Wait(ctx); waitErr != nil {
-			return nil, "", fmt.Errorf("building remote backup pack: %w", waitErr)
-		}
 		if _, ok := seen[file.SHA256]; ok {
 			continue
 		}
 		seen[file.SHA256] = struct{}{}
+		uniqueFiles = append(uniqueFiles, file)
+	}
+	encodedSize, sizeErr := remotePackEncodedSize(uniqueFiles)
+	if sizeErr != nil {
+		return nil, "", sizeErr
+	}
+	if encodedSize > remoteMaxPackBytes {
+		return nil, "", fmt.Errorf("remote backup pack exceeds maximum size: %d bytes", encodedSize)
+	}
+	// Preallocate the final pack and stream sources into it so a large
+	// pack-of-one never creates a second full-file copy in memory.
+	var buf bytes.Buffer
+	buf.Grow(int(encodedSize))
+	footer := make([]packFooterEntry, 0, len(uniqueFiles))
+	for _, file := range uniqueFiles {
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			return nil, "", fmt.Errorf("building remote backup pack: %w", waitErr)
+		}
 		opened, openErr := openSourceContext(ctx, &file)
 		if openErr != nil {
 			if errors.Is(openErr, errSourceIdentityChanged) {
@@ -2111,24 +2125,34 @@ func buildRemotePack(
 			}
 			return nil, "", openErr
 		}
-		payload, readErr := io.ReadAll(io.LimitReader(
-			&contextReader{ctx: ctx, reader: opened}, file.Size+1,
-		))
+
+		offset := int64(buf.Len())
+		hasher := sha256.New()
+		reader := &contextReader{ctx: ctx, reader: opened}
+		limited := &io.LimitedReader{R: reader, N: file.Size}
+		written, copyErr := io.Copy(io.MultiWriter(&buf, hasher), limited)
+		var extra [1]byte
+		var extraSize int
+		var extraErr error
+		if copyErr == nil && written == file.Size {
+			extraSize, extraErr = reader.Read(extra[:])
+		}
 		closeErr := opened.Close()
-		if readErr != nil {
-			return nil, "", fmt.Errorf("reading %s: %w", file.RestorePath, readErr)
+		if copyErr != nil {
+			return nil, "", fmt.Errorf("reading %s: %w", file.RestorePath, copyErr)
+		}
+		if extraErr != nil && !errors.Is(extraErr, io.EOF) {
+			return nil, "", fmt.Errorf("checking %s size: %w", file.RestorePath, extraErr)
 		}
 		if closeErr != nil {
 			return nil, "", fmt.Errorf("closing %s: %w", file.RestorePath, closeErr)
 		}
-		payloadHash := sha256.Sum256(payload)
-		if int64(len(payload)) != file.Size || hex.EncodeToString(payloadHash[:]) != file.SHA256 {
+		if written != file.Size || extraSize != 0 || hex.EncodeToString(hasher.Sum(nil)) != file.SHA256 {
 			return nil, "", fmt.Errorf("%w: source changed for %s", errRemoteIntegrityRetry, file.RestorePath)
 		}
 		footer = append(footer, packFooterEntry{
-			Hash: file.SHA256, Offset: int64(buf.Len()), Length: int64(len(payload)),
+			Hash: file.SHA256, Offset: offset, Length: written,
 		})
-		_, _ = buf.Write(payload)
 	}
 	footerData, err := json.Marshal(footer)
 	if err != nil {
@@ -2143,6 +2167,9 @@ func buildRemotePack(
 	binary.BigEndian.PutUint32(trailer[:], uint32(len(footerData)))
 	_, _ = buf.Write(trailer[:])
 	body = buf.Bytes()
+	if int64(len(body)) != encodedSize {
+		return nil, "", errors.New("remote backup pack size changed while building")
+	}
 	sum := sha256.Sum256(body)
 	return body, hex.EncodeToString(sum[:]), nil
 }
