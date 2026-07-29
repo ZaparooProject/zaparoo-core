@@ -250,8 +250,8 @@ func (t *mediaHistoryTracker) requestActivePlaySyncIfDue(dbid int64, now time.Ti
 		t.mu.Unlock()
 		return
 	}
-	elapsed := now.Sub(t.lastPlaySyncRequestAt)
-	if !force && !t.lastPlaySyncRequestAt.IsZero() && elapsed >= 0 && elapsed < activePlaySyncInterval {
+	if !force && !t.lastPlaySyncRequestAt.IsZero() &&
+		now.Before(t.lastPlaySyncRequestAt.Add(activePlaySyncInterval)) {
 		t.mu.Unlock()
 		return
 	}
