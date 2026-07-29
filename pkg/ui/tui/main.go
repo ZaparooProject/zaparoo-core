@@ -37,6 +37,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const mainAppFooterText = "Connect with the Zaparoo App (iOS/Android): " +
+	"[::bu:https://zaparoo.app/]https://zaparoo.app/[::BU:-]"
+
 const (
 	PageMain                  = "main"
 	PageSettingsMain          = "settings_main"
@@ -519,7 +522,7 @@ func BuildMainPage(
 	t := CurrentTheme()
 
 	introText := tview.NewTextView().
-		SetText("Visit [::bu:https://zaparoo.org]zaparoo.org[::-:-] for guides and support.\n").
+		SetText("Visit [::bu:https://zaparoo.org]zaparoo.org[::BU:-] for guides and support.\n").
 		SetDynamicColors(true).
 		SetWordWrap(true)
 
@@ -747,9 +750,15 @@ func BuildMainPage(
 	focusRow, focusCol := session.GetMainMenuFocus()
 	buttonGrid.SetFocus(focusRow, focusCol)
 
+	appFooterText := tview.NewTextView().
+		SetText(mainAppFooterText).
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+
 	main.AddItem(contentFlex, 0, 1, false)
 	main.AddItem(helpText, 1, 0, false)
 	main.AddItem(buttonGrid, 2, 0, true)
+	main.AddItem(appFooterText, 1, 0, false)
 
 	wrappedMain := NewMainFrame(main)
 	pageDefaults(PageMain, pages, wrappedMain)

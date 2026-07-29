@@ -20,15 +20,64 @@
 package tui
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildMainPage_ShowsAppFooter(t *testing.T) {
+	mainPageNotifyState.Cancel()
+	t.Cleanup(mainPageNotifyState.Cancel)
+
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	platform := testingmocks.NewMockPlatform()
+	platform.On("ID").Return("test")
+	pages := tview.NewPages()
+	BuildMainPage(
+		&config.Instance{}, pages, runner.App(), platform,
+		func() bool { return false }, "", "", nil,
+	)
+
+	runner.Start(pages)
+
+	require.True(t, runner.WaitForText(
+		"Connect with the Zaparoo App (iOS/Android): https://zaparoo.app/",
+		100*time.Millisecond,
+	))
+
+	var introY, visitX, supportX int
+	foundIntro := false
+	for y, line := range strings.Split(runner.GetScreenText(), "\n") {
+		visitX = strings.Index(line, "Visit")
+		supportX = strings.Index(line, "for guides")
+		if visitX >= 0 && supportX >= 0 {
+			introY = y
+			foundIntro = true
+			break
+		}
+	}
+	require.True(t, foundIntro)
+	visitStyle := runner.Screen().GetCellStyle(visitX, introY)
+	supportStyle := runner.Screen().GetCellStyle(supportX, introY)
+	visitForeground, visitBackground, visitAttributes := visitStyle.Decompose()
+	supportForeground, supportBackground, supportAttributes := supportStyle.Decompose()
+	assert.Equal(t, visitForeground, supportForeground)
+	assert.Equal(t, visitBackground, supportBackground)
+	assert.Equal(t, visitAttributes, supportAttributes)
+	assert.Equal(t, visitStyle.GetUnderlineStyle(), supportStyle.GetUnderlineStyle())
+
+	platform.AssertExpectations(t)
+}
 
 func TestMainPageState_SetCancel(t *testing.T) {
 	t.Parallel()
