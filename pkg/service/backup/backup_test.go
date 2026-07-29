@@ -968,7 +968,7 @@ func TestOpenSourceRejectsSensitiveFileIdentity(t *testing.T) {
 	info, err := os.Stat(authPath)
 	require.NoError(t, err)
 	file := FileRef{
-		sourceIdentity: &sourceIdentity{info: info, excludedIdentities: []os.FileInfo{info}},
+		sourceIdentity: newSourceIdentity(info, []os.FileInfo{info}),
 		SourceRoot:     root, SourceRel: config.AuthFile, RestorePath: "mappings/leak.toml",
 	}
 
@@ -1213,7 +1213,7 @@ func remotePackFixtureFile(tb testing.TB, size int) FileRef {
 	require.NoError(tb, err)
 	sum := sha256.Sum256(data)
 	return FileRef{
-		sourceIdentity: &sourceIdentity{info: info},
+		sourceIdentity: newSourceIdentity(info, nil),
 		SourceRoot:     root,
 		SourceRel:      "save.dat",
 		ArchivePath:    filepath.ToSlash(filepath.Join(filesRoot, CategorySaves, "save.dat")),
@@ -1271,8 +1271,14 @@ func TestBuildRemotePackRejectsChangedSource(t *testing.T) {
 		{
 			name: "replaced after hashing",
 			mutate: func(tb testing.TB, filePath string, size int) {
-				require.NoError(tb, os.Remove(filePath))
-				require.NoError(tb, os.WriteFile(filePath, bytes.Repeat([]byte{0x5a}, size), 0o600))
+				// Rename a second file over the source rather than deleting and
+				// rewriting in place: the replacement is allocated while the
+				// original still exists, so it is guaranteed a distinct
+				// identity. Deleting first lets the filesystem hand the freed
+				// inode straight back, leaving the two indistinguishable.
+				replacement := filePath + ".replacement"
+				require.NoError(tb, os.WriteFile(replacement, bytes.Repeat([]byte{0x5a}, size), 0o600))
+				require.NoError(tb, os.Rename(replacement, filePath))
 			},
 		},
 	}
@@ -1350,7 +1356,7 @@ func TestRemoteSourceProcessingHonorsCancellation(t *testing.T) {
 	info, err := os.Stat(filePath)
 	require.NoError(t, err)
 	file := FileRef{
-		sourceIdentity: &sourceIdentity{info: info},
+		sourceIdentity: newSourceIdentity(info, nil),
 		SourceRoot:     root, SourceRel: "save.dat", Size: info.Size(), SHA256: strings.Repeat("0", 64),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
