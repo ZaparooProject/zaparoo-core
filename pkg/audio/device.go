@@ -211,7 +211,13 @@ func (d *sharedDevice) open() {
 	}
 	d.devMu.Unlock()
 
-	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	// Realtime priority puts the audio callback thread on SCHED_FIFO (Linux),
+	// so playback keeps running when the rest of the process is busy (e.g.
+	// heavy API queries on a CPU-constrained device). The default "highest"
+	// priority is a no-op under SCHED_OTHER, which has no priority levels.
+	// miniaudio falls back to a normal thread if realtime is not permitted.
+	ctxConfig := malgo.ContextConfig{ThreadPriority: malgo.ThreadPriorityRealtime}
+	malgoCtx, err := malgo.InitContext(nil, ctxConfig, nil)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize audio context")
 		d.failAllSources()

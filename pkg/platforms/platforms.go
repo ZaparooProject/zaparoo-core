@@ -380,6 +380,10 @@ type Settings struct {
 	// the TUI occupies the platform's primary display. Leave false when the
 	// TUI and launched media can run alongside each other.
 	DisableZapScriptInTUI bool
+	// LowPowerAudio indicates the platform has very limited CPU available for
+	// audio decoding, so streaming playback trades resampler quality for
+	// decode speed.
+	LowPowerAudio bool
 }
 
 // ScraperCustomOption is a single user-configurable option for a scraper.

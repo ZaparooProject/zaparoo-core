@@ -230,7 +230,7 @@ func Start(
 
 	player := audio.NewMalgoPlayer()
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
-	playbackManager := audio.NewLongformPlaybackManager()
+	playbackManager := audio.NewLongformPlaybackManager(pl.Settings().LowPowerAudio)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)

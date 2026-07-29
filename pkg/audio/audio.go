@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -41,8 +42,12 @@ import (
 )
 
 const (
-	targetSampleRate         = 48000
-	resampleQuality          = 4
+	targetSampleRate = 48000
+	resampleQuality  = 4
+	// lowPowerResampleQuality is used for streaming playback on platforms with
+	// very limited CPU (e.g. MiSTer, where the service shares one 800 MHz core
+	// with other processes), trading resampler quality for decode speed.
+	lowPowerResampleQuality  = 1
 	periodSizeInMilliseconds = 50
 	periodCount              = 4
 )
@@ -96,9 +101,11 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 }
 
 // PlayBytes plays audio from a byte slice asynchronously, detecting format from
-// magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC.
+// magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC. Decoded+resampled PCM
+// is cached by content hash so repeated plays (e.g. the embedded default scan
+// feedback sounds) skip the decode work.
 func (p *MalgoPlayer) PlayBytes(data []byte) error {
-	samples, err := decodeBytesByMagic(data)
+	samples, err := p.loadPCMFromBytes(data)
 	if err != nil {
 		return err
 	}
@@ -148,6 +155,34 @@ func (p *MalgoPlayer) loadPCMFromFile(path string) ([][2]float64, error) {
 
 	p.pcmCacheMu.Lock()
 	p.pcmCache[path] = samples
+	p.pcmCacheMu.Unlock()
+
+	return samples, nil
+}
+
+// loadPCMFromBytes returns decoded+resampled stereo samples for the given
+// encoded audio buffer, cached by content hash. Without this, every play of an
+// embedded sound re-decodes and re-resamples it, which is a per-scan CPU spike
+// large enough to stall streaming playback on low-power devices.
+func (p *MalgoPlayer) loadPCMFromBytes(data []byte) ([][2]float64, error) {
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	key := fmt.Sprintf("bytes:%d:%x", len(data), h.Sum64())
+
+	p.pcmCacheMu.RLock()
+	if cached, ok := p.pcmCache[key]; ok {
+		p.pcmCacheMu.RUnlock()
+		return cached, nil
+	}
+	p.pcmCacheMu.RUnlock()
+
+	samples, err := decodeBytesByMagic(data)
+	if err != nil {
+		return nil, err
+	}
+
+	p.pcmCacheMu.Lock()
+	p.pcmCache[key] = samples
 	p.pcmCacheMu.Unlock()
 
 	return samples, nil

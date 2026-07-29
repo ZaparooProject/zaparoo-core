@@ -485,6 +485,7 @@ func (*Platform) Settings() platforms.Settings {
 		LogDir:                misterconfig.TempDir,
 		ZipsAsDirs:            true,
 		DisableZapScriptInTUI: true,
+		LowPowerAudio:         true,
 	}
 }
 

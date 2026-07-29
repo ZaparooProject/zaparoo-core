@@ -399,6 +399,42 @@ func TestPCMCache_HitAndMiss(t *testing.T) {
 	}
 }
 
+func TestPCMCache_BytesCachedByContent(t *testing.T) {
+	t.Parallel()
+
+	p := NewMalgoPlayer()
+
+	// First decode populates the cache; second returns the cached samples.
+	samples1, err := p.loadPCMFromBytes(validWAVHeader())
+	require.NoError(t, err)
+	samples2, err := p.loadPCMFromBytes(validWAVHeader())
+	require.NoError(t, err)
+	assert.Equal(t, samples1, samples2)
+
+	p.pcmCacheMu.RLock()
+	entries := len(p.pcmCache)
+	p.pcmCacheMu.RUnlock()
+	assert.Equal(t, 1, entries, "identical bytes must share one cache entry")
+
+	// Different content gets its own entry.
+	_, err = p.loadPCMFromBytes(wavWithSamples(100))
+	require.NoError(t, err)
+
+	p.pcmCacheMu.RLock()
+	entries = len(p.pcmCache)
+	p.pcmCacheMu.RUnlock()
+	assert.Equal(t, 2, entries)
+
+	// Decode errors are not cached.
+	_, err = p.loadPCMFromBytes([]byte("not audio"))
+	require.Error(t, err)
+
+	p.pcmCacheMu.RLock()
+	entries = len(p.pcmCache)
+	p.pcmCacheMu.RUnlock()
+	assert.Equal(t, 2, entries)
+}
+
 func TestPCMCache_Clear(t *testing.T) {
 	t.Parallel()
 
