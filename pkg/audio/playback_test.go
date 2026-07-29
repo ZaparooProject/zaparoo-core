@@ -250,14 +250,14 @@ func TestNewStreamingSource_UnsupportedExtension(t *testing.T) {
 	// The file must exist — the extension check happens after os.Open succeeds.
 	path := filepath.Join(t.TempDir(), "audio.xyz")
 	require.NoError(t, os.WriteFile(path, []byte("fake"), 0o600))
-	_, err := newStreamingSource(path, 1.0)
+	_, err := newStreamingSource(path, 1.0, resampleQuality)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported audio format")
 }
 
 func TestNewStreamingSource_FileNotFound(t *testing.T) {
 	t.Parallel()
-	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0)
+	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0, resampleQuality)
 	require.Error(t, err)
 }
 
@@ -267,7 +267,7 @@ func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audio.wav")
 	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
 
-	s, err := newStreamingSource(path, 0.75)
+	s, err := newStreamingSource(path, 0.75, resampleQuality)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, s.decoder.Close())
@@ -283,8 +283,8 @@ func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
 }
 
 // wavWithSamples builds a minimal mono 16-bit 44.1 kHz WAV containing n silent samples.
-func wavWithSamples(n uint16) []byte {
-	dataSize := uint32(n) * 2
+func wavWithSamples(n uint32) []byte {
+	dataSize := n * 2
 	header := validWAVHeader()
 	// Patch RIFF size and data chunk size for the sample payload.
 	binary.LittleEndian.PutUint32(header[4:8], 36+dataSize)
@@ -295,42 +295,91 @@ func wavWithSamples(n uint16) []byte {
 func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "audio.wav")
-	require.NoError(t, os.WriteFile(path, wavWithSamples(4410), 0o600)) // 0.1 s of audio
+	// Both qualities: the seek path rebuilds the resampler from the source's
+	// stored quality, which must work for low-power platforms too.
+	for _, tc := range []struct {
+		name    string
+		quality int
+	}{
+		{name: "default quality", quality: resampleQuality},
+		{name: "low power quality", quality: lowPowerResampleQuality},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	s, err := newStreamingSource(path, 1.0)
+			path := filepath.Join(t.TempDir(), "audio.wav")
+			require.NoError(t, os.WriteFile(path, wavWithSamples(4410), 0o600)) // 0.1 s of audio
+
+			s, err := newStreamingSource(path, 1.0, tc.quality)
+			require.NoError(t, err)
+			s.startPrefetch()
+			t.Cleanup(s.stopAndDeregister)
+
+			// Wait for the prefetch goroutine to fully decode the file.
+			require.Eventually(t, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.eof
+			}, 5*time.Second, 5*time.Millisecond, "prefetch should reach EOF")
+
+			// Simulate the tail playing out, then seek back to the start. Before the
+			// parked-prefetch fix the goroutine had already exited and the flushed ring
+			// stayed empty forever, wedging the slot in silence.
+			buf := make([][2]float64, 64)
+			s.mixAdd(buf, len(buf))
+			s.seek(-time.Second)
+
+			require.Eventually(t, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.filled > 0
+			}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
+
+			s.mu.Lock()
+			assert.Equal(t, tc.quality, s.quality, "seek must preserve the source's resample quality")
+			s.mu.Unlock()
+		})
+	}
+}
+
+// TestStreamingSource_PrefetchFillsRingWithoutTickerPacing verifies the prefetch
+// goroutine fills the entire ring in a burst rather than one chunk per 100 ms
+// tick. Per-tick pacing capped decode at 1x realtime, so the ring never built a
+// cushion and CPU contention produced period-sized dropouts (crackle) on slow
+// ARM devices. Filling the 4 s ring takes 40 chunks: burst-filling completes in
+// well under 2 s, while per-tick pacing needs at least 4 s.
+func TestStreamingSource_PrefetchFillsRingWithoutTickerPacing(t *testing.T) {
+	t.Parallel()
+
+	// 6 s of source audio at 44.1 kHz resamples to more than the 4 s ring holds.
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, wavWithSamples(6*44100), 0o600))
+
+	s, err := newStreamingSource(path, 1.0, resampleQuality)
 	require.NoError(t, err)
 	s.startPrefetch()
 	t.Cleanup(s.stopAndDeregister)
 
-	// Wait for the prefetch goroutine to fully decode the file.
 	require.Eventually(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.eof
-	}, 5*time.Second, 5*time.Millisecond, "prefetch should reach EOF")
-
-	// Simulate the tail playing out, then seek back to the start. Before the
-	// parked-prefetch fix the goroutine had already exited and the flushed ring
-	// stayed empty forever, wedging the slot in silence.
-	buf := make([][2]float64, 64)
-	s.mixAdd(buf, len(buf))
-	s.seek(-time.Second)
-
-	require.Eventually(t, func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.filled > 0
-	}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
+		return s.filled == len(s.ring)
+	}, 2*time.Second, 5*time.Millisecond, "prefetch should burst-fill the full ring")
 }
 
 func TestNewLongformPlaybackManager(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 	require.NotNil(t, m)
 	assert.NotNil(t, m.drainCallbacks)
 	assert.Nil(t, m.primary)
 	assert.Nil(t, m.background)
+}
+
+func TestNewLongformPlaybackManager_ResampleQuality(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, resampleQuality, NewLongformPlaybackManager(false).resampleQuality)
+	assert.Equal(t, lowPowerResampleQuality, NewLongformPlaybackManager(true).resampleQuality)
 }
 
 func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testing.T) {
@@ -345,7 +394,7 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 	require.NoError(t, os.WriteFile(firstPath, validWAVHeader(), 0o600))
 	require.NoError(t, os.WriteFile(secondPath, validWAVHeader(), 0o600))
 
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 	drainCalls := 0
 	m.SetDrainCallback(mediaslot.Primary, func(_ bool) { drainCalls++ })
 
@@ -378,7 +427,7 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 // an error when given a slot name that is neither primary nor background.
 func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 
 	require.Error(t,
 		m.Play("badslot", filepath.Join("Music", "track.mp3"), PlaybackOptions{}),
@@ -395,7 +444,7 @@ func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {
 // are all safe no-ops when no source has been registered for a slot.
 func TestLongformPlaybackManager_NoSourceOps(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 
 	slots := []string{"", mediaslot.Primary, mediaslot.Background}
 	for _, slot := range slots {
@@ -412,7 +461,7 @@ func TestLongformPlaybackManager_NoSourceOps(t *testing.T) {
 // on the primary slot when a source has been directly injected (no audio hardware needed).
 func TestLongformPlaybackManager_WithSourcePrimary(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 	s := newTestSource()
 	s.played = int64(targetSampleRate / 2) // 0.5 s in
 	m.mu.Lock()
@@ -457,7 +506,7 @@ func TestLongformPlaybackManager_WithSourcePrimary(t *testing.T) {
 // on the background slot.
 func TestLongformPlaybackManager_WithSourceBackground(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 	s := newTestSource()
 	m.mu.Lock()
 	m.background = s
@@ -493,7 +542,7 @@ func TestLongformPlaybackManager_WithSourceBackground(t *testing.T) {
 // the canonical name.
 func TestLongformPlaybackManager_SlotAliasesResolve(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 	s := newTestSource()
 	m.mu.Lock()
 	m.background = s
@@ -517,7 +566,7 @@ func TestLongformPlaybackManager_SlotAliasesResolve(t *testing.T) {
 // TestLongformPlaybackManager_SetDrainCallback verifies callbacks can be registered and invoked.
 func TestLongformPlaybackManager_SetDrainCallback(t *testing.T) {
 	t.Parallel()
-	m := NewLongformPlaybackManager()
+	m := NewLongformPlaybackManager(false)
 
 	var primaryCalled, backgroundCalled bool
 	m.SetDrainCallback(mediaslot.Primary, func(_ bool) { primaryCalled = true })

@@ -40,6 +40,12 @@ import (
 const (
 	// ringBufferFrames is the streaming ring buffer size (4 s × 48 kHz = 192 000 frames,
 	// ~3 MB per slot). This bounds memory use regardless of track length.
+	//
+	// If streaming still stutters under heavy load on low-power devices, the
+	// remaining untried options are: raising this to 8 s (~6 MB per slot),
+	// boosting the prefetch goroutine's thread priority (runtime.LockOSThread
+	// plus per-thread setpriority), and prioritizing decode file reads over
+	// database queries with ioprio_set.
 	ringBufferFrames = 4 * targetSampleRate
 	// decodeChunkFrames is the number of frames decoded per prefetch iteration (100 ms).
 	decodeChunkFrames = 100 * targetSampleRate / 1000
@@ -75,16 +81,23 @@ type PlaybackManager interface {
 // Each slot streams audio through the shared global output device via a ring-buffer
 // prefetch goroutine — no full-file decode into RAM.
 type LongformPlaybackManager struct {
-	primary        *streamingSource
-	background     *streamingSource
-	drainCallbacks map[string]func(natural bool)
-	mu             syncutil.Mutex
+	primary         *streamingSource
+	background      *streamingSource
+	drainCallbacks  map[string]func(natural bool)
+	resampleQuality int
+	mu              syncutil.Mutex
 }
 
-// NewLongformPlaybackManager creates a new LongformPlaybackManager.
-func NewLongformPlaybackManager() *LongformPlaybackManager {
+// NewLongformPlaybackManager creates a new LongformPlaybackManager. lowPowerAudio
+// selects a cheaper resampler for streaming decode on CPU-constrained platforms.
+func NewLongformPlaybackManager(lowPowerAudio bool) *LongformPlaybackManager {
+	quality := resampleQuality
+	if lowPowerAudio {
+		quality = lowPowerResampleQuality
+	}
 	return &LongformPlaybackManager{
-		drainCallbacks: make(map[string]func(natural bool)),
+		drainCallbacks:  make(map[string]func(natural bool)),
+		resampleQuality: quality,
 	}
 }
 
@@ -112,7 +125,7 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		volume = 1.0
 	}
 
-	src, err := newStreamingSource(path, volume)
+	src, err := newStreamingSource(path, volume, m.resampleQuality)
 	if err != nil {
 		return fmt.Errorf("open streaming source: %w", err)
 	}
@@ -282,6 +295,7 @@ type streamingSource struct {
 	volume       float64
 	totalFrames  int64
 	sourceRate   int
+	quality      int
 	seekSrcFrame int64
 	played       int64
 	filled       int
@@ -297,7 +311,7 @@ type streamingSource struct {
 // newStreamingSource opens path for streaming decode and returns a ready source.
 // The prefetch goroutine is NOT started yet — call startPrefetch after registering
 // with the device.
-func newStreamingSource(path string, volume float64) (*streamingSource, error) {
+func newStreamingSource(path string, volume float64, quality int) (*streamingSource, error) {
 	//nolint:gosec // G304: callers validate media paths before launching.
 	f, err := os.Open(path)
 	if err != nil {
@@ -332,7 +346,7 @@ func newStreamingSource(path string, volume float64) (*streamingSource, error) {
 		totalFrames = int64(float64(n) * float64(targetSampleRate) / float64(format.SampleRate))
 	}
 
-	resampler := beep.Resample(resampleQuality, format.SampleRate, beep.SampleRate(targetSampleRate), decoder)
+	resampler := beep.Resample(quality, format.SampleRate, beep.SampleRate(targetSampleRate), decoder)
 
 	return &streamingSource{
 		ring:        make([][2]float64, ringBufferFrames),
@@ -340,6 +354,7 @@ func newStreamingSource(path string, volume float64) (*streamingSource, error) {
 		volume:      volume,
 		totalFrames: totalFrames,
 		sourceRate:  int(format.SampleRate),
+		quality:     quality,
 		wakeCh:      make(chan struct{}, 1),
 		decoder:     decoder,
 		file:        f,
@@ -387,10 +402,7 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 			s.filled = 0
 			s.eof = false
 		}
-		paused := s.paused
 		stopped := s.stopped
-		eof := s.eof
-		space := len(s.ring) - s.filled
 		s.mu.Unlock()
 
 		if stopped {
@@ -400,11 +412,25 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 			if err := s.decoder.Seek(int(seekFrame)); err != nil {
 				log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
 			}
-			s.resampler = beep.Resample(resampleQuality, beep.SampleRate(s.sourceRate),
+			s.resampler = beep.Resample(s.quality, beep.SampleRate(s.sourceRate),
 				beep.SampleRate(targetSampleRate), s.decoder)
 		}
 
-		if !paused && !eof && space > 0 {
+		// Fill all available ring space before sleeping. Decoding a single chunk
+		// per wake caps sustained decode at 1x realtime, leaving no headroom to
+		// rebuild the cushion when the CPU is contended (audible dropouts on
+		// slow ARM devices); filling to capacity lets the ring absorb stalls.
+		for {
+			s.mu.Lock()
+			space := 0
+			if !s.paused && !s.eof && !s.stopped && !s.seekPending {
+				space = len(s.ring) - s.filled
+			}
+			s.mu.Unlock()
+			if space == 0 {
+				break
+			}
+
 			n := min(space, len(s.chunk))
 			written, ok := s.resampler.Stream(s.chunk[:n])
 			if written > 0 {
@@ -427,6 +453,7 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 				s.mu.Lock()
 				s.eof = true
 				s.mu.Unlock()
+				break
 			}
 		}
 

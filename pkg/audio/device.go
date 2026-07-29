@@ -48,17 +48,19 @@ type mixSource interface {
 //
 // Lock order: devMu → individual source locks.
 type sharedDevice struct {
-	malgoCtx *malgo.AllocatedContext
-	device   *malgo.Device
-	cancelFn context.CancelFunc
-	devDone  chan struct{}
-	prevDone <-chan struct{}
-	manageCh chan struct{}
-	sources  []mixSource
-	toRemove []mixSource
-	mixBuf   [][2]float64
-	devMu    syncutil.Mutex
-	opening  bool
+	// initContext overrides malgo.InitContext in tests; nil means the real one.
+	initContext func([]malgo.Backend, malgo.ContextConfig, malgo.LogProc) (*malgo.AllocatedContext, error)
+	malgoCtx    *malgo.AllocatedContext
+	device      *malgo.Device
+	cancelFn    context.CancelFunc
+	devDone     chan struct{}
+	prevDone    <-chan struct{}
+	manageCh    chan struct{}
+	sources     []mixSource
+	toRemove    []mixSource
+	mixBuf      [][2]float64
+	devMu       syncutil.Mutex
+	opening     bool
 }
 
 // globalDevice is the process-wide audio output device shared by all players.
@@ -211,7 +213,17 @@ func (d *sharedDevice) open() {
 	}
 	d.devMu.Unlock()
 
-	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	// Realtime priority puts the audio callback thread on SCHED_FIFO (Linux),
+	// so playback keeps running when the rest of the process is busy (e.g.
+	// heavy API queries on a CPU-constrained device). The default "highest"
+	// priority is a no-op under SCHED_OTHER, which has no priority levels.
+	// miniaudio falls back to a normal thread if realtime is not permitted.
+	ctxConfig := malgo.ContextConfig{ThreadPriority: malgo.ThreadPriorityRealtime}
+	initContext := d.initContext
+	if initContext == nil {
+		initContext = malgo.InitContext
+	}
+	malgoCtx, err := initContext(nil, ctxConfig, nil)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize audio context")
 		d.failAllSources()
