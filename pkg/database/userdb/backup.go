@@ -44,6 +44,12 @@ const (
 	autoBackupKeep           = 3
 	databaseRenameAttempts   = 100
 	databaseRenameRetryDelay = 50 * time.Millisecond
+	// restoreRollbackSuffix names the copy of the live database kept while a
+	// replacement is installed, so an interrupted restore can be undone.
+	restoreRollbackSuffix = ".restore-rollback"
+	// restoreStagePattern matches the temporary files a restore stages the
+	// replacement into before installing it.
+	restoreStagePattern = ".userdb-restore-*"
 )
 
 func (db *UserDB) backupDir() string {
@@ -401,7 +407,7 @@ func renameDatabaseFileWithRetry(
 
 func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err error) {
 	dbDir := filepath.Dir(dbPath)
-	tmp, err := afero.TempFile(fs, dbDir, ".userdb-restore-*")
+	tmp, err := afero.TempFile(fs, dbDir, restoreStagePattern)
 	if err != nil {
 		return fmt.Errorf("failed to create staged restore file: %w", err)
 	}
@@ -416,7 +422,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 		return fmt.Errorf("failed to stage user database backup: %w", err)
 	}
 
-	rollbackPath := dbPath + ".restore-rollback"
+	rollbackPath := dbPath + restoreRollbackSuffix
 	_ = fs.Remove(rollbackPath)
 	if err = renameDatabaseFile(fs, dbPath, rollbackPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to preserve user database before restore: %w", err)
@@ -462,6 +468,64 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 		}
 	}
 	return nil
+}
+
+// recoverInterruptedRestore repairs the on-disk state left behind when the
+// process dies partway through replaceDatabaseFromBackup. That function renames
+// the live database aside before installing the replacement, and its error paths
+// are the only thing that ever puts it back — a crash in between leaves no
+// database at all, with the real data sitting under a name nothing else looks
+// for. Run this before opening, or a fresh empty database gets allocated over
+// the top and the user's mappings and history look lost.
+//
+// A rollback file alongside a database means the replacement was installed and
+// the rollback simply outlived its purpose; the pre-restore backup covers that
+// data, so it is dropped. A rollback file with no database means the restore
+// never completed, so the original goes back.
+func recoverInterruptedRestore(fs afero.Fs, dbPath string) {
+	dbDir := filepath.Dir(dbPath)
+	defer removeStagedRestoreFiles(fs, dbDir)
+
+	rollbackPath := dbPath + restoreRollbackSuffix
+	if _, err := fs.Stat(rollbackPath); err != nil {
+		return
+	}
+	if _, err := fs.Stat(dbPath); err == nil {
+		if removeErr := fs.Remove(rollbackPath); removeErr != nil {
+			log.Warn().Err(removeErr).Str("path", rollbackPath).
+				Msg("failed to remove stale user database rollback")
+		}
+		return
+	}
+
+	// The rollback still holds the live database from before the restore, and
+	// its sidecars were removed with it checkpointed, so it stands alone.
+	if err := renameDatabaseFile(fs, rollbackPath, dbPath); err != nil {
+		log.Error().Err(err).Str("path", rollbackPath).
+			Msg("failed to recover user database from interrupted restore")
+		return
+	}
+	if err := syncAferoDirectory(fs, dbDir); err != nil {
+		log.Warn().Err(err).Msg("failed to sync recovered user database")
+	}
+	log.Warn().Str("path", dbPath).Msg("recovered user database from interrupted restore")
+}
+
+// removeStagedRestoreFiles clears staging files an interrupted restore left
+// behind. They are complete copies of a backup, so they waste as much space as
+// the database itself until something removes them.
+func removeStagedRestoreFiles(fs afero.Fs, dbDir string) {
+	staged, err := afero.Glob(fs, filepath.Join(dbDir, restoreStagePattern))
+	if err != nil {
+		log.Warn().Err(err).Str("dir", dbDir).Msg("failed to list staged user database restores")
+		return
+	}
+	for _, path := range staged {
+		if removeErr := fs.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			log.Warn().Err(removeErr).Str("path", path).
+				Msg("failed to remove staged user database restore")
+		}
+	}
 }
 
 func restoreDatabaseRollback(fs afero.Fs, rollbackPath, dbPath string) error {
@@ -518,7 +582,13 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 		}
 	}
 
-	if closeErr := db.Close(); closeErr != nil {
+	if closeErr := db.closeAndDrain(); closeErr != nil {
+		// Nothing on disk has been touched yet, so the restore can be refused
+		// outright. Put the connection back so the caller keeps a usable
+		// database rather than losing it to a restore that never started.
+		if openErr := db.Open(); openErr != nil {
+			log.Error().Err(openErr).Msg("failed to reopen user database after abandoned restore")
+		}
 		return database.RestoreInfo{}, closeErr
 	}
 	if err = replaceDatabaseFromBackup(afero.NewOsFs(), backupPath, db.GetDBPath()); err != nil {
@@ -566,7 +636,10 @@ func preserveCorruptFile(path string) {
 }
 
 func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
-	if err := db.Close(); err != nil {
+	// Recovery renames the database and its sidecars aside, so in-flight
+	// queries have to finish first. A drain failure is only logged: the
+	// database is already known bad and leaving it in place helps no one.
+	if err := db.closeAndDrain(); err != nil {
 		log.Warn().Err(err).Msg("error closing corrupt user database before recovery")
 	}
 	for _, path := range []string{db.GetDBPath(), db.GetDBPath() + "-wal", db.GetDBPath() + "-shm"} {

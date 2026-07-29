@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 var ErrNullSQL = errors.New("UserDB is not connected")
@@ -41,11 +42,25 @@ var ErrNullSQL = errors.New("UserDB is not connected")
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
 	"&_cache_size=-512&_mmap_size=0"
 
+const (
+	// connDrainTimeout bounds the wait for in-flight queries before an
+	// operation that replaces the database files gives up.
+	connDrainTimeout = 10 * time.Second
+	connDrainPoll    = 2 * time.Millisecond
+)
+
+// ErrConnDrainTimeout is returned when queries are still running after the
+// connection pool has been closed and the drain deadline has passed.
+var ErrConnDrainTimeout = errors.New("timed out waiting for user database queries to finish")
+
 type UserDB struct {
 	pl     platforms.Platform
 	ctx    context.Context
 	sql    database.Conn
 	dbPath string
+	// drainTimeout overrides how long closeAndDrain waits; zero uses
+	// connDrainTimeout. Set only by tests to avoid multi-second waits.
+	drainTimeout time.Duration
 }
 
 func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
@@ -58,6 +73,9 @@ func (db *UserDB) Open() error {
 	exists := true
 	dbPath := db.GetDBPath()
 	db.dbPath = dbPath
+	// Must run before the existence check below, which decides whether to
+	// allocate a fresh schema over the top of a recoverable database.
+	recoverInterruptedRestore(afero.NewOsFs(), dbPath)
 	log.Debug().Str("path", dbPath).Msg("checking if database file exists")
 
 	_, err := os.Stat(dbPath)
@@ -158,6 +176,44 @@ func (db *UserDB) Close() error {
 		return fmt.Errorf("failed to close database: %w", err)
 	}
 	return nil
+}
+
+// closeAndDrain closes the connection pool and waits for queries that had
+// already started to finish.
+//
+// sql.DB.Close only closes the connections sitting idle in the pool: one
+// checked out by a running query is closed when it is returned, and Close does
+// not wait for that. Anything that then replaces or unlinks the database files
+// would be pulling them out from under a live sqlite3_step. SQLite memory-maps
+// the WAL index regardless of _mmap_size, and faulting on a mapping that is no
+// longer backed raises SIGBUS, killing the process instead of failing the
+// query — so this must complete before any file is touched.
+//
+// The pool is closed first so no further queries can start. On timeout the
+// caller is expected to reopen; the database is left closed.
+func (db *UserDB) closeAndDrain() error {
+	sqlInstance := db.sql.Load()
+	if sqlInstance == nil {
+		return nil
+	}
+	if err := sqlInstance.Close(); err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
+	}
+	timeout := db.drainTimeout
+	if timeout <= 0 {
+		timeout = connDrainTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		inUse := sqlInstance.Stats().InUse
+		if inUse == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%w: %d still running", ErrConnDrainTimeout, inUse)
+		}
+		time.Sleep(connDrainPoll)
+	}
 }
 
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.

@@ -593,3 +593,168 @@ func TestUserDBRestoreConcurrentReaders(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mappings, 1)
 }
+
+// TestUserDBRestoreRefusesWhileQueriesInFlight covers the crash that motivated
+// closeAndDrain: sql.DB.Close leaves a checked-out connection running, and
+// replacing the database files under it faults the process rather than failing
+// the query. The restore must refuse instead, leaving disk and connection intact.
+func TestUserDBRestoreRefusesWhileQueriesInFlight(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+	userDB.drainTimeout = 50 * time.Millisecond
+
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "Original",
+		Enabled:  true,
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "original-token",
+		Override: "**launch.system:n64",
+	}))
+	backup, err := userDB.Backup("test", true)
+	require.NoError(t, err)
+
+	// An open transaction holds a connection checked out, which is what an
+	// in-flight query looks like to the pool.
+	tx, err := userDB.sql.Load().BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, restoreErr := userDB.RestoreBackup(backup.Name)
+	require.ErrorIs(t, restoreErr, ErrConnDrainTimeout)
+
+	require.NoError(t, tx.Rollback())
+
+	// No file was touched, so nothing needs rolling back.
+	dbPath := userDB.GetDBPath()
+	assert.NoFileExists(t, dbPath+restoreRollbackSuffix)
+	assert.FileExists(t, dbPath)
+
+	// The connection was put back, so the database is still usable.
+	mappings, err := userDB.GetAllMappings()
+	require.NoError(t, err)
+	require.Len(t, mappings, 1)
+	assert.Equal(t, "Original", mappings[0].Label)
+}
+
+func TestUserDBCloseAndDrainSucceedsWhenIdle(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	_, err := userDB.GetAllMappings()
+	require.NoError(t, err)
+	require.NoError(t, userDB.closeAndDrain())
+	require.NoError(t, userDB.Open())
+}
+
+func TestRecoverInterruptedRestore(t *testing.T) {
+	t.Parallel()
+
+	const (
+		originalData  = "original-database"
+		installedData = "installed-database"
+	)
+
+	tests := []struct {
+		name          string
+		dbContent     string
+		rollback      string
+		wantDBContent string
+		wantRollback  bool
+	}{
+		{
+			name:          "rollback without database restores original",
+			rollback:      originalData,
+			wantDBContent: originalData,
+		},
+		{
+			name:          "rollback beside database is discarded",
+			dbContent:     installedData,
+			rollback:      originalData,
+			wantDBContent: installedData,
+		},
+		{
+			name:          "database without rollback is left alone",
+			dbContent:     installedData,
+			wantDBContent: installedData,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs := afero.NewMemMapFs()
+			dbDir := filepath.Join("data", "zaparoo")
+			require.NoError(t, fs.MkdirAll(dbDir, 0o750))
+			dbPath := filepath.Join(dbDir, "user.db")
+			if tt.dbContent != "" {
+				require.NoError(t, afero.WriteFile(fs, dbPath, []byte(tt.dbContent), 0o600))
+			}
+			if tt.rollback != "" {
+				require.NoError(t, afero.WriteFile(
+					fs, dbPath+restoreRollbackSuffix, []byte(tt.rollback), 0o600,
+				))
+			}
+
+			recoverInterruptedRestore(fs, dbPath)
+
+			got, err := afero.ReadFile(fs, dbPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantDBContent, string(got))
+			exists, err := afero.Exists(fs, dbPath+restoreRollbackSuffix)
+			require.NoError(t, err)
+			assert.False(t, exists, "rollback file should not survive recovery")
+		})
+	}
+}
+
+func TestRecoverInterruptedRestoreRemovesStagedFiles(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	dbDir := filepath.Join("data", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dbDir, 0o750))
+	dbPath := filepath.Join(dbDir, "user.db")
+	require.NoError(t, afero.WriteFile(fs, dbPath, []byte("db"), 0o600))
+	staged := filepath.Join(dbDir, ".userdb-restore-123456")
+	require.NoError(t, afero.WriteFile(fs, staged, []byte("staged"), 0o600))
+
+	recoverInterruptedRestore(fs, dbPath)
+
+	exists, err := afero.Exists(fs, staged)
+	require.NoError(t, err)
+	assert.False(t, exists, "staged restore file should be removed")
+	dbExists, err := afero.Exists(fs, dbPath)
+	require.NoError(t, err)
+	assert.True(t, dbExists, "database must survive staged cleanup")
+}
+
+// TestUserDBOpenRecoversInterruptedRestore is the failure this protects against:
+// without recovery, Open sees no database file and allocates an empty one, so a
+// crash mid-restore reads to the user as a wiped database.
+func TestUserDBOpenRecoversInterruptedRestore(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "Survivor",
+		Enabled:  true,
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "survivor-token",
+		Override: "**launch.system:n64",
+	}))
+
+	dbPath := userDB.GetDBPath()
+	require.NoError(t, userDB.closeAndDrain())
+	// The state a crash between preserving the original and installing the
+	// replacement leaves behind.
+	require.NoError(t, os.Rename(dbPath, dbPath+restoreRollbackSuffix))
+	require.NoFileExists(t, dbPath)
+
+	require.NoError(t, userDB.Open())
+
+	mappings, err := userDB.GetAllMappings()
+	require.NoError(t, err)
+	require.Len(t, mappings, 1)
+	assert.Equal(t, "Survivor", mappings[0].Label)
+	assert.NoFileExists(t, dbPath+restoreRollbackSuffix)
+}
