@@ -1216,8 +1216,8 @@ func remotePackFixtureFile(tb testing.TB, size int) FileRef {
 		sourceIdentity: &sourceIdentity{info: info},
 		SourceRoot:     root,
 		SourceRel:      "save.dat",
-		ArchivePath:    path.Join(filesRoot, CategorySaves, "save.dat"),
-		RestorePath:    "saves/save.dat",
+		ArchivePath:    filepath.ToSlash(filepath.Join(filesRoot, CategorySaves, "save.dat")),
+		RestorePath:    filepath.ToSlash(filepath.Join(CategorySaves, "save.dat")),
 		Size:           int64(size),
 		SHA256:         hex.EncodeToString(sum[:]),
 	}
@@ -1242,27 +1242,104 @@ func TestBuildRemotePackStreamsIntoFinalBuffer(t *testing.T) {
 	assert.Equal(t, packFooterEntry{Hash: file.SHA256, Offset: 0, Length: file.Size}, footer[0])
 }
 
-func BenchmarkRemoteBackup_BuildPack(b *testing.B) {
-	for _, size := range []int{8 << 20, 32 << 20} {
-		b.Run(fmt.Sprintf("%dMiB", size>>20), func(b *testing.B) {
-			file := remotePackFixtureFile(b, size)
-			expectedSize, err := remotePackEncodedSize([]FileRef{file})
-			require.NoError(b, err)
-			b.ReportAllocs()
-			b.SetBytes(int64(size))
-			b.ResetTimer()
-			for b.Loop() {
-				body, _, buildErr := buildRemotePack(context.Background(), []FileRef{file}, nil)
-				if buildErr != nil {
-					b.Fatal(buildErr)
-				}
-				if int64(len(body)) != expectedSize {
-					b.Fatalf("unexpected pack size: got %d, want %d", len(body), expectedSize)
-				}
-				runtime.KeepAlive(body)
-			}
+func TestBuildRemotePackRejectsChangedSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mutate func(testing.TB, string, int)
+		name   string
+	}{
+		{
+			name: "same size with different content",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				require.NoError(tb, os.WriteFile(filePath, bytes.Repeat([]byte{0x42}, size), 0o600))
+			},
+		},
+		{
+			name: "grew after hashing",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				data := append(bytes.Repeat([]byte{0x5a}, size), 0x01)
+				require.NoError(tb, os.WriteFile(filePath, data, 0o600))
+			},
+		},
+		{
+			name: "shrank after hashing",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				require.NoError(tb, os.WriteFile(filePath, bytes.Repeat([]byte{0x5a}, size-1), 0o600))
+			},
+		},
+		{
+			name: "replaced after hashing",
+			mutate: func(tb testing.TB, filePath string, size int) {
+				require.NoError(tb, os.Remove(filePath))
+				require.NoError(tb, os.WriteFile(filePath, bytes.Repeat([]byte{0x5a}, size), 0o600))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			const size = 1024
+			file := remotePackFixtureFile(t, size)
+			tt.mutate(t, filepath.Join(file.SourceRoot, file.SourceRel), size)
+
+			_, _, err := buildRemotePack(context.Background(), []FileRef{file}, nil)
+			require.ErrorIs(t, err, errRemoteIntegrityRetry)
 		})
 	}
+}
+
+func TestBuildRemotePackRejectsInvalidEncodedSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		wantErr string
+		size    int64
+	}{
+		{name: "negative", size: -1, wantErr: "size overflow"},
+		{name: "over maximum", size: remoteMaxPackBytes, wantErr: "exceeds maximum size"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			file := FileRef{SHA256: strings.Repeat("a", 64), Size: tt.size}
+
+			_, _, err := buildRemotePack(context.Background(), []FileRef{file}, nil)
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func BenchmarkRemoteBackup_BuildPack_8MiB(b *testing.B) {
+	benchmarkRemoteBackupBuildPack(b, 8<<20)
+}
+
+func BenchmarkRemoteBackup_BuildPack_32MiB(b *testing.B) {
+	benchmarkRemoteBackupBuildPack(b, 32<<20)
+}
+
+func benchmarkRemoteBackupBuildPack(b *testing.B, size int) {
+	b.Run(fmt.Sprintf("%dMiB", size>>20), func(b *testing.B) {
+		file := remotePackFixtureFile(b, size)
+		expectedSize, err := remotePackEncodedSize([]FileRef{file})
+		require.NoError(b, err)
+		b.ReportAllocs()
+		b.SetBytes(int64(size))
+		b.ResetTimer()
+		for b.Loop() {
+			body, _, buildErr := buildRemotePack(context.Background(), []FileRef{file}, nil)
+			if buildErr != nil {
+				b.Fatal(buildErr)
+			}
+			if int64(len(body)) != expectedSize {
+				b.Fatalf("unexpected pack size: got %d, want %d", len(body), expectedSize)
+			}
+			runtime.KeepAlive(body)
+		}
+	})
 }
 
 func TestRemoteSourceProcessingHonorsCancellation(t *testing.T) {
