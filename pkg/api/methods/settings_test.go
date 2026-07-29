@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -969,6 +970,43 @@ func TestHandleSettingsReload_DoesNotRefreshLaunchers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, NoContent{}, result)
 	assert.Zero(t, refreshable.refreshCalls)
+
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestHandleSettingsReload_DoesNotDuplicateMappings(t *testing.T) {
+	t.Parallel()
+
+	memFS := helpers.NewMemoryFS()
+	dataDir := "data"
+	configDir := "config"
+	mappingsDir := filepath.Join(dataDir, config.MappingsDir)
+	require.NoError(t, memFS.WriteFile(filepath.Join(mappingsDir, "test.toml"), []byte(`
+[[mappings.entry]]
+match_pattern = "file-pattern"
+zapscript = "**launch:file"
+`), 0o600))
+
+	cfg, err := helpers.NewTestConfig(memFS, configDir)
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+	}
+
+	for range 2 {
+		result, reloadErr := HandleSettingsReload(env)
+		require.NoError(t, reloadErr)
+		assert.Equal(t, NoContent{}, result)
+		require.Len(t, cfg.Mappings(), 1)
+	}
 
 	mockPlatform.AssertExpectations(t)
 }
