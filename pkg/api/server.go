@@ -333,8 +333,9 @@ func NewMethodMap() *MethodMap {
 		models.MethodInboxDelete: methods.HandleInboxDelete,
 		models.MethodInboxClear:  methods.HandleInboxClear,
 		// clients (paired API clients)
-		models.MethodClients:       methods.HandleClients,
-		models.MethodClientsDelete: methods.HandleClientsDelete,
+		models.MethodClients:        methods.HandleClients,
+		models.MethodClientsCurrent: methods.HandleClientsCurrent,
+		models.MethodClientsDelete:  methods.HandleClientsDelete,
 
 		models.MethodProfiles:       methods.HandleProfiles,
 		models.MethodProfilesNew:    methods.HandleProfilesNew,

@@ -70,6 +70,56 @@ func TestGrant_Has(t *testing.T) {
 	assert.False(t, member.Has(CapSettingsWrite))
 }
 
+func TestGrant_Capabilities(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		grant Grant
+		want  []Capability
+	}{
+		{
+			name:  "paired admin is sorted",
+			grant: Grant{Role: RoleAdmin},
+			want:  []Capability{CapProfilesManage, CapSettingsWrite},
+		},
+		{
+			name:  "paired member is empty",
+			grant: Grant{Role: RoleMember},
+			want:  []Capability{},
+		},
+		{
+			name:  "unpaired remote keeps legacy capabilities",
+			grant: Grant{},
+			want:  []Capability{CapProfilesManage, CapSettingsWrite},
+		},
+		{
+			name:  "local member gets local capabilities",
+			grant: Grant{Role: RoleMember, IsLocal: true},
+			want:  []Capability{CapProfilesManage, CapSettingsWrite},
+		},
+		{
+			name:  "unknown role degrades to member",
+			grant: Grant{Role: "superuser"},
+			want:  []Capability{},
+		},
+		{
+			name:  "session downgrade removes capabilities",
+			grant: Grant{Role: RoleAdmin, SessionRole: RoleMember},
+			want:  []Capability{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.grant.Capabilities()
+			assert.NotNil(t, got)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestValidRole(t *testing.T) {
 	t.Parallel()
 

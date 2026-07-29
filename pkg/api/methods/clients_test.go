@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -111,6 +112,85 @@ func TestHandleClients_RemoteRejected(t *testing.T) {
 	_, err := HandleClients(env)
 	require.ErrorIs(t, err, ErrLocalhostOnly)
 	mockUserDB.AssertNotCalled(t, "ListClients")
+}
+
+func TestHandleClientsCurrent(t *testing.T) {
+	t.Parallel()
+
+	adminCapabilities := []string{
+		string(permissions.CapProfilesManage),
+		string(permissions.CapSettingsWrite),
+	}
+	tests := []struct {
+		name             string
+		clientRole       string
+		wantRole         string
+		wantCapabilities []string
+		isLocal          bool
+		wantPaired       bool
+	}{
+		{
+			name:             "remote paired member",
+			clientRole:       string(permissions.RoleMember),
+			wantRole:         string(permissions.RoleMember),
+			wantCapabilities: []string{},
+			wantPaired:       true,
+		},
+		{
+			name:             "remote paired admin",
+			clientRole:       string(permissions.RoleAdmin),
+			wantRole:         string(permissions.RoleAdmin),
+			wantCapabilities: adminCapabilities,
+			wantPaired:       true,
+		},
+		{
+			name:             "remote unpaired keeps legacy grant",
+			wantCapabilities: adminCapabilities,
+		},
+		{
+			name:             "local unpaired gets local grant",
+			wantCapabilities: adminCapabilities,
+			isLocal:          true,
+		},
+		{
+			name:             "local paired member gets local grant",
+			clientRole:       string(permissions.RoleMember),
+			wantRole:         string(permissions.RoleMember),
+			wantCapabilities: adminCapabilities,
+			isLocal:          true,
+			wantPaired:       true,
+		},
+		{
+			name:             "unknown paired role degrades to member",
+			clientRole:       "superuser",
+			wantRole:         string(permissions.RoleMember),
+			wantCapabilities: []string{},
+			wantPaired:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := HandleClientsCurrent(requests.RequestEnv{
+				ClientRole: tt.clientRole,
+				IsLocal:    tt.isLocal,
+			})
+			require.NoError(t, err)
+			resp, ok := result.(models.ClientsCurrentResponse)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantPaired, resp.Paired)
+			assert.Equal(t, tt.wantCapabilities, resp.Capabilities)
+			assert.NotNil(t, resp.Capabilities)
+			if tt.wantPaired {
+				require.NotNil(t, resp.Role)
+				assert.Equal(t, tt.wantRole, *resp.Role)
+			} else {
+				assert.Nil(t, resp.Role)
+			}
+		})
+	}
 }
 
 // Note on revocation semantics: HandleClientsDelete is forward-only —

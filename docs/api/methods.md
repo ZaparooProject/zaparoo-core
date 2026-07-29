@@ -3842,6 +3842,52 @@ Returns `null` on success.
 }
 ```
 
+## Clients
+
+### clients.current
+
+Return pairing status, authenticated role, and effective capabilities for the current connection. This method is available to every connection accepted by the API transport.
+
+`role` is `admin` or `member` for paired connections and `null` otherwise. Unpaired plaintext connections retain their legacy effective capabilities. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage` and `settings.write`; the array does not enumerate every callable RPC method.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key          | Type               | Description                                                    |
+| :----------- | :----------------- | :------------------------------------------------------------- |
+| paired       | boolean            | Whether connection carries an authenticated paired identity.   |
+| role         | string or `null`   | Paired client role, or `null` for an unpaired connection.       |
+| capabilities | array of strings   | Effective named capabilities granted to current connection.     |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1f9a258e-2f86-4bc9-a31b-ec842eb79a42",
+  "method": "clients.current"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1f9a258e-2f86-4bc9-a31b-ec842eb79a42",
+  "result": {
+    "paired": true,
+    "role": "member",
+    "capabilities": []
+  }
+}
+```
+
 ## Input
 
 Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely: no hooks, history, or sound effects are triggered.

@@ -42,6 +42,8 @@
 // paired, which is what makes member restrictions enforceable.
 package permissions
 
+import "slices"
+
 // Role is a paired client's permission level.
 type Role string
 
@@ -120,4 +122,18 @@ func (g Grant) EffectiveRole() Role {
 // Has reports whether the request may perform the given capability.
 func (g Grant) Has(capability Capability) bool {
 	return roleCapabilities[g.EffectiveRole()][capability]
+}
+
+// Capabilities returns the effective grant's enabled capabilities in stable
+// lexical order. The returned slice is always non-nil.
+func (g Grant) Capabilities() []Capability {
+	roleGrants := roleCapabilities[g.EffectiveRole()]
+	capabilities := make([]Capability, 0, len(roleGrants))
+	for capability, enabled := range roleGrants {
+		if enabled {
+			capabilities = append(capabilities, capability)
+		}
+	}
+	slices.Sort(capabilities)
+	return capabilities
 }

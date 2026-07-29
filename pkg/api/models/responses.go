@@ -653,6 +653,15 @@ type ClientsResponse struct {
 	Clients []PairedClient `json:"clients"`
 }
 
+// ClientsCurrentResponse describes the current connection's paired identity
+// and effective role capabilities. Role is null when the connection has no
+// paired identity; capabilities remain populated from its legacy grant.
+type ClientsCurrentResponse struct {
+	Role         *string  `json:"role"`
+	Capabilities []string `json:"capabilities"`
+	Paired       bool     `json:"paired"`
+}
+
 // ClientsDeleteParams is the parameters object for the clients.delete RPC method.
 type ClientsDeleteParams struct {
 	ClientID string `json:"clientId"`
