@@ -295,33 +295,51 @@ func wavWithSamples(n uint32) []byte {
 func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "audio.wav")
-	require.NoError(t, os.WriteFile(path, wavWithSamples(4410), 0o600)) // 0.1 s of audio
+	// Both qualities: the seek path rebuilds the resampler from the source's
+	// stored quality, which must work for low-power platforms too.
+	for _, tc := range []struct {
+		name    string
+		quality int
+	}{
+		{name: "default quality", quality: resampleQuality},
+		{name: "low power quality", quality: lowPowerResampleQuality},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	s, err := newStreamingSource(path, 1.0, resampleQuality)
-	require.NoError(t, err)
-	s.startPrefetch()
-	t.Cleanup(s.stopAndDeregister)
+			path := filepath.Join(t.TempDir(), "audio.wav")
+			require.NoError(t, os.WriteFile(path, wavWithSamples(4410), 0o600)) // 0.1 s of audio
 
-	// Wait for the prefetch goroutine to fully decode the file.
-	require.Eventually(t, func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.eof
-	}, 5*time.Second, 5*time.Millisecond, "prefetch should reach EOF")
+			s, err := newStreamingSource(path, 1.0, tc.quality)
+			require.NoError(t, err)
+			s.startPrefetch()
+			t.Cleanup(s.stopAndDeregister)
 
-	// Simulate the tail playing out, then seek back to the start. Before the
-	// parked-prefetch fix the goroutine had already exited and the flushed ring
-	// stayed empty forever, wedging the slot in silence.
-	buf := make([][2]float64, 64)
-	s.mixAdd(buf, len(buf))
-	s.seek(-time.Second)
+			// Wait for the prefetch goroutine to fully decode the file.
+			require.Eventually(t, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.eof
+			}, 5*time.Second, 5*time.Millisecond, "prefetch should reach EOF")
 
-	require.Eventually(t, func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.filled > 0
-	}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
+			// Simulate the tail playing out, then seek back to the start. Before the
+			// parked-prefetch fix the goroutine had already exited and the flushed ring
+			// stayed empty forever, wedging the slot in silence.
+			buf := make([][2]float64, 64)
+			s.mixAdd(buf, len(buf))
+			s.seek(-time.Second)
+
+			require.Eventually(t, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.filled > 0
+			}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
+
+			s.mu.Lock()
+			assert.Equal(t, tc.quality, s.quality, "seek must preserve the source's resample quality")
+			s.mu.Unlock()
+		})
+	}
 }
 
 // TestStreamingSource_PrefetchFillsRingWithoutTickerPacing verifies the prefetch

@@ -22,10 +22,12 @@ package audio
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/gen2brain/malgo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -147,6 +149,29 @@ func TestSharedDeviceManageRemovesDrainedSourceAndNotifies(t *testing.T) {
 	require.Len(t, d.sources, 1)
 	assert.Same(t, keepSrc, d.sources[0])
 	assert.Empty(t, d.toRemove)
+}
+
+// TestSharedDeviceOpenRequestsRealtimeThreadPriority verifies open passes
+// realtime thread priority to the malgo context, so the audio callback runs
+// under SCHED_FIFO on Linux instead of competing with normal process threads.
+func TestSharedDeviceOpenRequestsRealtimeThreadPriority(t *testing.T) {
+	t.Parallel()
+
+	var got malgo.ContextConfig
+	stubInit := func(_ []malgo.Backend, cfg malgo.ContextConfig, _ malgo.LogProc) (*malgo.AllocatedContext, error) {
+		got = cfg
+		return nil, errors.New("stub: no real audio context in tests")
+	}
+	d := &sharedDevice{
+		manageCh:    make(chan struct{}, 1),
+		initContext: stubInit,
+	}
+	d.sources = append(d.sources, &testMixSource{active: true})
+
+	d.open()
+
+	assert.Equal(t, malgo.ThreadPriorityRealtime, got.ThreadPriority)
+	assert.Empty(t, d.sources, "init failure must clear all sources")
 }
 
 func TestClampF64(t *testing.T) {
