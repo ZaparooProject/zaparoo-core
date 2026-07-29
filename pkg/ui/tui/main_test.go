@@ -24,6 +24,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -50,14 +51,27 @@ func TestBuildMainPage_ShowsAppFooter(t *testing.T) {
 
 	runner.Start(pages)
 
+	const expectedFooterText = "Connect with the Zaparoo App (iOS/Android): https://zaparoo.app/"
 	require.True(t, runner.WaitForText(
-		"Connect with the Zaparoo App (iOS/Android): https://zaparoo.app/",
-		100*time.Millisecond,
+		expectedFooterText,
+		500*time.Millisecond,
 	))
+
+	screenLines := strings.Split(runner.GetScreenText(), "\n")
+	footerX := -1
+	for _, line := range screenLines {
+		if byteIndex := strings.Index(line, expectedFooterText); byteIndex >= 0 {
+			footerX = utf8.RuneCountInString(line[:byteIndex])
+			break
+		}
+	}
+	require.GreaterOrEqual(t, footerX, 0)
+	_, screenWidth, _ := runner.Screen().GetContents()
+	assert.Equal(t, (screenWidth-utf8.RuneCountInString(expectedFooterText))/2, footerX)
 
 	var introY, visitX, supportX int
 	foundIntro := false
-	for y, line := range strings.Split(runner.GetScreenText(), "\n") {
+	for y, line := range screenLines {
 		visitX = strings.Index(line, "Visit")
 		supportX = strings.Index(line, "for guides")
 		if visitX >= 0 && supportX >= 0 {
