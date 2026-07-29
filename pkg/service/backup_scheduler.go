@@ -216,9 +216,10 @@ func remoteBackupSchedulerLoop(
 	}
 
 	// Play-history sync reuses the heartbeat pacing state: interval on
-	// success, exponential backoff on failure. A completed session requests
-	// an immediate pass through this same serialized path. Requests coalesce,
-	// remain pending across failures, and never bypass retry backoff.
+	// success, exponential backoff on failure. Session starts, active-session
+	// heartbeats, and completed sessions request immediate passes through this
+	// same serialized path. Requests coalesce, remain pending across failures,
+	// and never bypass retry backoff.
 	playSyncState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
 	playSyncPending := false
 	tryPlaySync := func() {
@@ -270,8 +271,8 @@ func remoteBackupSchedulerLoop(
 }
 
 // playSyncDue reports whether a play-history sync pass should run now.
-// A completed session bypasses the normal success interval, but never the
-// failure backoff.
+// A session lifecycle or active-heartbeat request bypasses the normal success
+// interval, but never the failure backoff.
 func playSyncDue(s *remoteHeartbeatState, now time.Time, pending bool) bool {
 	if !pending && !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < playSyncInterval {
 		return false

@@ -36,12 +36,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	mediaHistoryUpdateInterval = 15 * time.Second
+	activePlaySyncInterval     = 5 * time.Minute
+)
+
 // mediaHistoryTracker encapsulates the state and logic for tracking media history.
 // It coordinates between the notification listener and the periodic PlayTime updater.
 type mediaHistoryTracker struct {
 	clock                     clockwork.Clock
 	currentMediaStartTime     time.Time
 	currentMediaStartTimeMono time.Time
+	lastPlaySyncRequestAt     time.Time
 	st                        *state.State
 	db                        *database.Database
 	requestPlaySync           func()
@@ -85,6 +91,7 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					t.currentHistoryDBID = 0
 					t.currentMediaStartTime = time.Time{}
 					t.currentMediaStartTimeMono = time.Time{}
+					t.lastPlaySyncRequestAt = time.Time{}
 				}
 				t.mu.Unlock()
 			}
@@ -147,6 +154,7 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					t.currentMediaStartTimeMono = nowMono
 					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Msg("created media history entry")
+					t.requestActivePlaySyncIfDue(dbid, now, true)
 
 					// MediaDB lookup may block behind indexing. Capture lookup keys now,
 					// then enrich the durable history row off the notification path.
@@ -194,6 +202,7 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 						t.currentHistoryDBID = 0
 						t.currentMediaStartTime = time.Time{}
 						t.currentMediaStartTimeMono = time.Time{}
+						t.lastPlaySyncRequestAt = time.Time{}
 					}
 					if t.closingHistoryDBID == dbid {
 						t.closingHistoryDBID = 0
@@ -228,9 +237,34 @@ func (t *mediaHistoryTracker) snapshotMediaHistoryIdentity(dbid int64, systemID,
 	}
 }
 
+// requestActivePlaySyncIfDue requests an immediate now-playing upload at
+// session start, then no more than once per activePlaySyncInterval. The DBID
+// check prevents a late updater tick from requesting a session already closing.
+func (t *mediaHistoryTracker) requestActivePlaySyncIfDue(dbid int64, now time.Time, force bool) {
+	if t.requestPlaySync == nil {
+		return
+	}
+
+	t.mu.Lock()
+	if t.currentHistoryDBID != dbid || t.closingHistoryDBID == dbid {
+		t.mu.Unlock()
+		return
+	}
+	if !force && !t.lastPlaySyncRequestAt.IsZero() &&
+		now.Before(t.lastPlaySyncRequestAt.Add(activePlaySyncInterval)) {
+		t.mu.Unlock()
+		return
+	}
+	t.lastPlaySyncRequestAt = now
+	requestPlaySync := t.requestPlaySync
+	t.mu.Unlock()
+
+	requestPlaySync()
+}
+
 // updatePlayTime periodically updates the current entry, limiting crash-loss to 15 seconds.
 func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
-	ticker := t.clock.NewTicker(15 * time.Second)
+	ticker := t.clock.NewTicker(mediaHistoryUpdateInterval)
 	defer ticker.Stop()
 
 	for {
@@ -264,6 +298,7 @@ func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 					log.Warn().Err(updateErr).Msg("failed to update media history play time")
 				} else {
 					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("updated media history play time")
+					t.requestActivePlaySyncIfDue(dbid, t.clock.Now(), false)
 				}
 			}
 		case <-ctx.Done():

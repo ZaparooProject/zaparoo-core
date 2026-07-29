@@ -147,6 +147,36 @@ func TestSyncPlayHistory_BulkImport(t *testing.T) {
 		"disambiguating tags travel with the session")
 }
 
+func TestSyncPlayHistory_UploadsActiveSession(t *testing.T) {
+	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
+	env := newBackupTestEnv(t, "mister")
+	env.Manager.cfg.SetPlaytimeSync(true)
+	updatedAt := time.Now().UTC().Truncate(time.Second)
+
+	server, batches := playSyncTestServer(t, nil)
+	configurePlaytimeTestAuth(t, env.Manager, server.URL)
+
+	active := playSyncTestEntry(
+		1, "11111111-1111-4111-8111-111111111111", "Now Playing", updatedAt,
+	)
+	active.EndTime = nil
+	active.PlayTime = 0
+	env.UserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+	env.UserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), playSyncBatchSize).
+		Return([]database.MediaHistoryEntry{active}, nil).Once()
+	env.UserDB.On("MarkMediaHistorySynced", []database.MediaHistorySyncRef{
+		{DBID: active.DBID, UpdatedAt: active.UpdatedAt},
+	}, testifymock.AnythingOfType("time.Time")).Return(nil).Once()
+
+	info, err := env.Manager.SyncPlayHistory(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, info.Uploaded)
+	require.Len(t, *batches, 1)
+	require.Len(t, (*batches)[0], 1)
+	assert.Nil(t, (*batches)[0][0].EndedAt)
+	assert.Zero(t, (*batches)[0][0].PlayTimeSecs)
+}
+
 func TestSyncPlayHistory_ResumesFromServerWatermark(t *testing.T) {
 	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
 	env := newBackupTestEnv(t, "mister")
