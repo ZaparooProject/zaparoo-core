@@ -20,6 +20,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +86,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 	}
 
 	filesCounts := 0
-	mappingsCount := 0
+	loadedMappings := make([]MappingsEntry, 0)
 
 	for _, mapPath := range mapFiles {
 		log.Debug().Msgf("loading mapping file: %s", mapPath)
@@ -103,13 +104,17 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 			continue
 		}
 
-		c.vals.Mappings.Entry = append(c.vals.Mappings.Entry, newVals.Mappings.Entry...)
-
+		loadedMappings = append(loadedMappings, newVals.Mappings.Entry...)
 		filesCounts++
-		mappingsCount += len(newVals.Mappings.Entry)
 	}
 
-	log.Info().Int("files", filesCounts).Int("mappings", mappingsCount).Msg("loaded mapping files")
+	if len(mapFiles) > 0 && filesCounts == 0 {
+		return errors.New("failed to parse any mapping files")
+	}
+
+	c.mappingsExternal = append([]MappingsEntry(nil), loadedMappings...)
+
+	log.Info().Int("files", filesCounts).Int("mappings", len(loadedMappings)).Msg("loaded mapping files")
 
 	return nil
 }
@@ -117,5 +122,9 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 func (c *Instance) Mappings() []MappingsEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Mappings.Entry
+
+	entries := make([]MappingsEntry, 0, len(c.vals.Mappings.Entry)+len(c.mappingsExternal))
+	entries = append(entries, c.vals.Mappings.Entry...)
+	entries = append(entries, c.mappingsExternal...)
+	return entries
 }

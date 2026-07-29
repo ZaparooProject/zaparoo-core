@@ -81,6 +81,74 @@ zapscript = "**launch:nes/{match}"
 	assert.Equal(t, "*.nes", mappings[1].MatchPattern)
 }
 
+func TestLoadMappings_ReplacesExternalSnapshot(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	mappingsDir := filepath.Join("data", "mappings")
+	mappingPath := filepath.Join(mappingsDir, "test.toml")
+	require.NoError(t, fs.MkdirAll(mappingsDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, mappingPath, []byte(`
+[[mappings.entry]]
+match_pattern = "external-original"
+zapscript = "**launch:original"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadTOML(`
+[[mappings.entry]]
+match_pattern = "inline"
+zapscript = "**launch:inline"
+`))
+
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+	assert.Equal(t, []MappingsEntry{
+		{MatchPattern: "inline", ZapScript: "**launch:inline"},
+		{MatchPattern: "external-original", ZapScript: "**launch:original"},
+	}, cfg.Mappings(), "unchanged reload must not append duplicate mappings")
+
+	require.NoError(t, afero.WriteFile(fs, mappingPath, []byte(`
+[[mappings.entry]]
+match_pattern = "external-edited"
+zapscript = "**launch:edited"
+`), 0o600))
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+	assert.Equal(t, []MappingsEntry{
+		{MatchPattern: "inline", ZapScript: "**launch:inline"},
+		{MatchPattern: "external-edited", ZapScript: "**launch:edited"},
+	}, cfg.Mappings(), "edited mapping must replace previous external snapshot")
+
+	require.NoError(t, fs.Remove(mappingPath))
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+	assert.Equal(t, []MappingsEntry{
+		{MatchPattern: "inline", ZapScript: "**launch:inline"},
+	}, cfg.Mappings(), "deleted external mappings must be removed without clearing inline mappings")
+}
+
+func TestLoadMappings_RetainsSnapshotWhenAllFilesFail(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	mappingsDir := filepath.Join("data", "mappings")
+	mappingPath := filepath.Join(mappingsDir, "test.toml")
+	require.NoError(t, fs.MkdirAll(mappingsDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, mappingPath, []byte(`
+[[mappings.entry]]
+match_pattern = "working"
+zapscript = "**launch:working"
+`), 0o600))
+
+	cfg := &Instance{fs: fs}
+	require.NoError(t, cfg.LoadMappings(mappingsDir))
+
+	require.NoError(t, afero.WriteFile(fs, mappingPath, []byte(`invalid {{{`), 0o600))
+	require.Error(t, cfg.LoadMappings(mappingsDir))
+	assert.Equal(t, []MappingsEntry{
+		{MatchPattern: "working", ZapScript: "**launch:working"},
+	}, cfg.Mappings())
+}
+
 func TestLoadMappings_MultipleFiles(t *testing.T) {
 	t.Parallel()
 

@@ -174,6 +174,7 @@ type Instance struct {
 	cfgPath                 string
 	authPath                string
 	customLaunchersExternal []LaunchersCustom
+	mappingsExternal        []MappingsEntry
 	vals                    Values
 	defaults                Values
 	mu                      syncutil.RWMutex
