@@ -1203,6 +1203,68 @@ func TestValidateFilesRejectsUnsafeAndDuplicatePaths(t *testing.T) {
 	}))
 }
 
+func remotePackFixtureFile(tb testing.TB, size int) FileRef {
+	tb.Helper()
+	root := tb.TempDir()
+	data := bytes.Repeat([]byte{0x5a}, size)
+	filePath := filepath.Join(root, "save.dat")
+	require.NoError(tb, os.WriteFile(filePath, data, 0o600))
+	info, err := os.Stat(filePath)
+	require.NoError(tb, err)
+	sum := sha256.Sum256(data)
+	return FileRef{
+		sourceIdentity: &sourceIdentity{info: info},
+		SourceRoot:     root,
+		SourceRel:      "save.dat",
+		ArchivePath:    path.Join(filesRoot, CategorySaves, "save.dat"),
+		RestorePath:    "saves/save.dat",
+		Size:           int64(size),
+		SHA256:         hex.EncodeToString(sum[:]),
+	}
+}
+
+func TestBuildRemotePackStreamsIntoFinalBuffer(t *testing.T) {
+	t.Parallel()
+	file := remotePackFixtureFile(t, 2<<20)
+
+	body, packHash, err := buildRemotePack(context.Background(), []FileRef{file, file}, nil)
+	require.NoError(t, err)
+	expectedSize, err := remotePackEncodedSize([]FileRef{file})
+	require.NoError(t, err)
+	assert.Len(t, body, int(expectedSize))
+	assert.Equal(t, sha256Hex(body), packHash)
+
+	footerLength := int(binary.BigEndian.Uint32(body[len(body)-remotePackFooterTrailerSize:]))
+	footerStart := len(body) - remotePackFooterTrailerSize - footerLength
+	var footer []packFooterEntry
+	require.NoError(t, json.Unmarshal(body[footerStart:len(body)-remotePackFooterTrailerSize], &footer))
+	require.Len(t, footer, 1)
+	assert.Equal(t, packFooterEntry{Hash: file.SHA256, Offset: 0, Length: file.Size}, footer[0])
+}
+
+func BenchmarkRemoteBackup_BuildPack(b *testing.B) {
+	for _, size := range []int{8 << 20, 32 << 20} {
+		b.Run(fmt.Sprintf("%dMiB", size>>20), func(b *testing.B) {
+			file := remotePackFixtureFile(b, size)
+			expectedSize, err := remotePackEncodedSize([]FileRef{file})
+			require.NoError(b, err)
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for b.Loop() {
+				body, _, buildErr := buildRemotePack(context.Background(), []FileRef{file}, nil)
+				if buildErr != nil {
+					b.Fatal(buildErr)
+				}
+				if int64(len(body)) != expectedSize {
+					b.Fatalf("unexpected pack size: got %d, want %d", len(body), expectedSize)
+				}
+				runtime.KeepAlive(body)
+			}
+		})
+	}
+}
+
 func TestRemoteSourceProcessingHonorsCancellation(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
