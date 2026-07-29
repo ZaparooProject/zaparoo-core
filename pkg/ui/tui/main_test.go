@@ -20,15 +20,78 @@
 package tui
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildMainPage_ShowsAppFooter(t *testing.T) {
+	mainPageNotifyState.Cancel()
+	t.Cleanup(mainPageNotifyState.Cancel)
+
+	runner := NewTestAppRunner(t, 75, 15)
+	defer runner.Stop()
+
+	platform := testingmocks.NewMockPlatform()
+	platform.On("ID").Return("test")
+	pages := tview.NewPages()
+	BuildMainPage(
+		&config.Instance{}, pages, runner.App(), platform,
+		func() bool { return false }, "", "", nil,
+	)
+
+	runner.Start(pages)
+
+	const expectedFooterText = "Connect with the Zaparoo App (iOS/Android): https://zaparoo.app/"
+	require.True(t, runner.WaitForText(
+		expectedFooterText,
+		500*time.Millisecond,
+	))
+
+	screenLines := strings.Split(runner.GetScreenText(), "\n")
+	footerX := -1
+	for _, line := range screenLines {
+		if byteIndex := strings.Index(line, expectedFooterText); byteIndex >= 0 {
+			footerX = utf8.RuneCountInString(line[:byteIndex])
+			break
+		}
+	}
+	require.GreaterOrEqual(t, footerX, 0)
+	_, screenWidth, _ := runner.Screen().GetContents()
+	assert.Equal(t, (screenWidth-utf8.RuneCountInString(expectedFooterText))/2, footerX)
+
+	var introY, visitX, supportX int
+	foundIntro := false
+	for y, line := range screenLines {
+		visitX = strings.Index(line, "Visit")
+		supportX = strings.Index(line, "for guides")
+		if visitX >= 0 && supportX >= 0 {
+			introY = y
+			foundIntro = true
+			break
+		}
+	}
+	require.True(t, foundIntro)
+	visitStyle := runner.Screen().GetCellStyle(visitX, introY)
+	supportStyle := runner.Screen().GetCellStyle(supportX, introY)
+	visitForeground, visitBackground, visitAttributes := visitStyle.Decompose()
+	supportForeground, supportBackground, supportAttributes := supportStyle.Decompose()
+	assert.Equal(t, visitForeground, supportForeground)
+	assert.Equal(t, visitBackground, supportBackground)
+	assert.Equal(t, visitAttributes, supportAttributes)
+	assert.Equal(t, visitStyle.GetUnderlineStyle(), supportStyle.GetUnderlineStyle())
+
+	platform.AssertExpectations(t)
+}
 
 func TestMainPageState_SetCancel(t *testing.T) {
 	t.Parallel()

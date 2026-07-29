@@ -141,6 +141,7 @@ const (
 	MethodPlaytimeLimitsUpdate        = "settings.playtime.limits.update"
 	MethodPlaytime                    = "playtime"
 	MethodClients                     = "clients"
+	MethodClientsCurrent              = "clients.current"
 	MethodClientsDelete               = "clients.delete"
 	MethodClientsPairStart            = "clients.pair.start"
 	MethodClientsPairCancel           = "clients.pair.cancel"

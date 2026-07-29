@@ -239,6 +239,31 @@ func TestHandlePostRequest_ValidRequest(t *testing.T) {
 		"RequestStarted and RequestEnded must balance")
 }
 
+func TestHandlePostRequest_ClientsCurrentUnpairedRemote(t *testing.T) {
+	t.Parallel()
+
+	handler, _, _ := createTestPostHandler(t)
+	reqBody := `{"jsonrpc":"2.0","id":"current-client","method":"clients.current"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.1:1234"
+	recorder := httptest.NewRecorder()
+
+	handler(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.JSONEq(t, `{
+		"jsonrpc":"2.0",
+		"id":"current-client",
+		"result":{
+			"paired":false,
+			"role":null,
+			"capabilities":["profiles.manage","settings.write"]
+		}
+	}`, recorder.Body.String())
+}
+
 // TestHandlePostRequest_InvalidJSON tests that malformed JSON returns HTTP 200 with JSON-RPC parse error.
 func TestHandlePostRequest_InvalidJSON(t *testing.T) {
 	t.Parallel()

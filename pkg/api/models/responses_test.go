@@ -311,6 +311,38 @@ func TestClientsResponse_JSONShape(t *testing.T) {
 	assert.Len(t, clients, 2)
 }
 
+func TestClientsCurrentResponse_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paired", func(t *testing.T) {
+		t.Parallel()
+
+		role := "member"
+		resp := ClientsCurrentResponse{
+			Role:         &role,
+			Capabilities: []string{},
+			Paired:       true,
+		}
+		raw, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"role":"member","capabilities":[],"paired":true}`, string(raw))
+	})
+
+	t.Run("unpaired", func(t *testing.T) {
+		t.Parallel()
+
+		resp := ClientsCurrentResponse{
+			Capabilities: []string{"profiles.manage", "settings.write"},
+		}
+		raw, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.JSONEq(t,
+			`{"role":null,"capabilities":["profiles.manage","settings.write"],"paired":false}`,
+			string(raw),
+		)
+	})
+}
+
 // TestClientsDeleteParams_JSONShape pins the wire shape of the
 // `clients.delete` RPC parameters object.
 func TestClientsDeleteParams_JSONShape(t *testing.T) {

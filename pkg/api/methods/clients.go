@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/rs/zerolog/log"
 )
@@ -59,6 +60,32 @@ func HandleClients(env requests.RequestEnv) (any, error) {
 			CreatedAt:  c.CreatedAt,
 			LastSeenAt: c.LastSeenAt,
 		}
+	}
+	return resp, nil
+}
+
+// HandleClientsCurrent returns the current connection's paired role and
+// effective capabilities. It is available to every accepted API connection.
+//
+//nolint:gocritic // API dispatch requires RequestEnv by value.
+func HandleClientsCurrent(env requests.RequestEnv) (any, error) {
+	grant := requestGrant(&env)
+	granted := grant.Capabilities()
+	capabilities := make([]string, len(granted))
+	for i, capability := range granted {
+		capabilities[i] = string(capability)
+	}
+
+	resp := models.ClientsCurrentResponse{
+		Capabilities: capabilities,
+		Paired:       env.ClientRole != "",
+	}
+	if resp.Paired {
+		role := env.ClientRole
+		if !permissions.ValidRole(role) {
+			role = string(permissions.RoleMember)
+		}
+		resp.Role = &role
 	}
 	return resp, nil
 }
