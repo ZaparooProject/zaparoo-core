@@ -98,6 +98,37 @@ func TestMediaHistoryTracker_Listen_Started(t *testing.T) {
 	assert.Equal(t, startTime, tracker.currentMediaStartTime)
 }
 
+func TestMediaHistoryTracker_Listen_StartedRequestsImmediatePlaySync(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := &testhelpers.MockUserDBI{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	fakeClock := clockwork.NewFakeClock()
+	syncRequests := 0
+	tracker := &mediaHistoryTracker{
+		st:              st,
+		db:              &database.Database{UserDB: mockUserDB},
+		clock:           fakeClock,
+		requestPlaySync: func() { syncRequests++ },
+	}
+	activeMedia := &models.ActiveMedia{
+		Started: fakeClock.Now(), SystemID: "nes", SystemName: "Nintendo Entertainment System",
+		Path: filepath.Join("games", "mario.nes"), Name: "Super Mario Bros.", LauncherID: "retroarch",
+	}
+	st.SetActiveMedia(activeMedia)
+	mockUserDB.On("AddMediaHistory", mock.Anything).Return(int64(42), nil).Once()
+
+	notifChan := make(chan models.Notification, 1)
+	notifChan <- models.Notification{Method: models.NotificationStarted}
+	close(notifChan)
+	tracker.listen(notifChan)
+
+	mockUserDB.AssertExpectations(t)
+	assert.Equal(t, 1, syncRequests)
+	assert.Equal(t, fakeClock.Now(), tracker.lastPlaySyncRequestAt)
+}
+
 func TestMediaHistoryTracker_Listen_StartedResolvesIdentityAsynchronously(t *testing.T) {
 	t.Parallel()
 
@@ -509,6 +540,70 @@ func TestMediaHistoryTracker_UpdatePlayTime(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestMediaHistoryTracker_UpdatePlayTimeRequestsActiveSyncEveryFiveMinutes(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := &testhelpers.MockUserDBI{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	fakeClock := clockwork.NewFakeClock()
+	startTime := fakeClock.Now()
+	syncRequested := make(chan struct{}, 1)
+	tracker := &mediaHistoryTracker{
+		st:                    st,
+		db:                    &database.Database{UserDB: mockUserDB},
+		clock:                 fakeClock,
+		requestPlaySync:       func() { syncRequested <- struct{}{} },
+		currentHistoryDBID:    42,
+		currentMediaStartTime: startTime,
+		lastPlaySyncRequestAt: startTime,
+	}
+	mockUserDB.On("UpdateMediaHistoryTime", int64(42), 300).Return(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		tracker.updatePlayTime(ctx)
+		close(done)
+	}()
+
+	require.NoError(t, fakeClock.BlockUntilContext(ctx, 1))
+	fakeClock.Advance(activePlaySyncInterval)
+	select {
+	case <-syncRequested:
+	case <-time.After(time.Second):
+		t.Fatal("active play sync was not requested after five minutes")
+	}
+	cancel()
+	<-done
+
+	mockUserDB.AssertExpectations(t)
+	assert.Equal(t, fakeClock.Now(), tracker.lastPlaySyncRequestAt)
+}
+
+func TestMediaHistoryTracker_RequestActivePlaySyncHonorsIntervalAndDBID(t *testing.T) {
+	t.Parallel()
+
+	startTime := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	syncRequests := 0
+	tracker := &mediaHistoryTracker{
+		requestPlaySync:       func() { syncRequests++ },
+		currentHistoryDBID:    42,
+		lastPlaySyncRequestAt: startTime,
+	}
+
+	tracker.requestActivePlaySyncIfDue(42, startTime.Add(activePlaySyncInterval-time.Second), false)
+	assert.Zero(t, syncRequests)
+
+	nextSync := startTime.Add(activePlaySyncInterval)
+	tracker.requestActivePlaySyncIfDue(42, nextSync, false)
+	assert.Equal(t, 1, syncRequests)
+	assert.Equal(t, nextSync, tracker.lastPlaySyncRequestAt)
+
+	tracker.requestActivePlaySyncIfDue(7, nextSync.Add(activePlaySyncInterval), true)
+	assert.Equal(t, 1, syncRequests, "a stale DBID must not request sync")
+}
+
 func TestMediaHistoryTracker_UpdatePlayTime_NoActiveMedia(t *testing.T) {
 	t.Parallel()
 
@@ -786,5 +881,5 @@ func TestMediaHistoryTracker_Listen_OrphanedEntry(t *testing.T) {
 
 	mockUserDB.AssertExpectations(t)
 	assert.Equal(t, newDBID, tracker.currentHistoryDBID, "new DBID should be set after orphan close")
-	assert.Equal(t, 1, syncRequests)
+	assert.Equal(t, 2, syncRequests, "orphan close and new now-playing session both request sync")
 }
