@@ -113,6 +113,35 @@ func TestUpdateMediaTagsUpdatesOnlyAffectedCaches(t *testing.T) {
 	assertMediaHasTag(t, mediaDB, mediaDBID, customGenreRef, false)
 }
 
+func TestUpdateMediaTagsReplacesExclusiveType(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertNESGameWithTag(t, mediaDB)
+
+	ctx := context.Background()
+	mediaRows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, mediaRows, 1)
+	mediaDBID := mediaRows[0].DBID
+	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
+
+	const exclusiveType = "custom-exclusive"
+	rawDB := mediaDB.UnsafeGetSQLDb()
+	_, err = rawDB.ExecContext(ctx,
+		"INSERT INTO TagTypes (Type, IsExclusive) VALUES (?, 1)", exclusiveType,
+	)
+	require.NoError(t, err)
+	firstRef := database.MediaTagRef{Type: exclusiveType, Tag: "first"}
+	secondRef := database.MediaTagRef{Type: exclusiveType, Tag: "second"}
+
+	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{firstRef}))
+	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{secondRef}))
+	assertMediaHasTag(t, mediaDB, mediaDBID, firstRef, false)
+	assertMediaHasTag(t, mediaDB, mediaDBID, secondRef, true)
+	assert.Zero(t, cachedTagCount(t, rawDB, "NES", firstRef.Type, firstRef.Tag))
+	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "NES", secondRef.Type, secondRef.Tag))
+}
+
 func TestUpdateMediaTagsDoesNotCreatePartialSystemCache(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()

@@ -30,6 +30,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type resolvedMediaTag struct {
+	tagDBID     int64
+	tagTypeDBID int64
+	isExclusive bool
+}
+
 const refreshMediaTagCacheSQL = `
 	WITH tag_count AS (
 		SELECT
@@ -172,7 +178,7 @@ func removeMediaTags(
 	affectedTagDBIDs map[int64]struct{},
 ) error {
 	for _, ref := range refs {
-		tagDBID, found, err := findOrCreateMediaTag(ctx, tx, ref, false)
+		resolved, found, err := findOrCreateMediaTag(ctx, tx, ref, false)
 		if err != nil {
 			return fmt.Errorf("resolve media tag %s:%s for removal: %w", ref.Type, ref.Tag, err)
 		}
@@ -180,11 +186,11 @@ func removeMediaTags(
 			continue
 		}
 		if _, err = tx.ExecContext(ctx,
-			"DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID = ?", mediaDBID, tagDBID,
+			"DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID = ?", mediaDBID, resolved.tagDBID,
 		); err != nil {
 			return fmt.Errorf("remove media tag %s:%s: %w", ref.Type, ref.Tag, err)
 		}
-		affectedTagDBIDs[tagDBID] = struct{}{}
+		affectedTagDBIDs[resolved.tagDBID] = struct{}{}
 	}
 	return nil
 }
@@ -197,14 +203,51 @@ func addMediaTags(
 	affectedTagDBIDs map[int64]struct{},
 ) error {
 	for _, ref := range refs {
-		tagDBID, _, err := findOrCreateMediaTag(ctx, tx, ref, true)
+		resolved, _, err := findOrCreateMediaTag(ctx, tx, ref, true)
 		if err != nil {
 			return fmt.Errorf("resolve media tag %s:%s for addition: %w", ref.Type, ref.Tag, err)
 		}
-		if _, err = tx.ExecContext(ctx, insertMediaTagSQL, mediaDBID, tagDBID); err != nil {
+		if resolved.isExclusive {
+			if err = removeExclusiveMediaTags(
+				ctx, tx, mediaDBID, resolved.tagTypeDBID, affectedTagDBIDs,
+			); err != nil {
+				return fmt.Errorf("replace media tag type %s: %w", ref.Type, err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, insertMediaTagSQL, mediaDBID, resolved.tagDBID); err != nil {
 			return fmt.Errorf("add media tag %s:%s: %w", ref.Type, ref.Tag, err)
 		}
+		affectedTagDBIDs[resolved.tagDBID] = struct{}{}
+	}
+	return nil
+}
+
+func removeExclusiveMediaTags(
+	ctx context.Context,
+	tx *sql.Tx,
+	mediaDBID int64,
+	tagTypeDBID int64,
+	affectedTagDBIDs map[int64]struct{},
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		DELETE FROM MediaTags
+		WHERE MediaDBID = ?
+		  AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)
+		RETURNING TagDBID`, mediaDBID, tagTypeDBID)
+	if err != nil {
+		return fmt.Errorf("delete existing exclusive media tags: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var tagDBID int64
+		if err = rows.Scan(&tagDBID); err != nil {
+			return fmt.Errorf("scan replaced exclusive media tag: %w", err)
+		}
 		affectedTagDBIDs[tagDBID] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("iterate replaced exclusive media tags: %w", err)
 	}
 	return nil
 }
@@ -214,28 +257,31 @@ func findOrCreateMediaTag(
 	tx *sql.Tx,
 	ref database.MediaTagRef,
 	create bool,
-) (tagDBID int64, found bool, err error) {
+) (resolvedMediaTag, bool, error) {
 	if ref.Type == "" || ref.Tag == "" {
-		return 0, false, errors.New("media tag type and value are required")
+		return resolvedMediaTag{}, false, errors.New("media tag type and value are required")
 	}
 
-	var tagTypeDBID int64
-	err = tx.QueryRowContext(ctx, "SELECT DBID FROM TagTypes WHERE Type = ?", ref.Type).Scan(&tagTypeDBID)
+	var resolved resolvedMediaTag
+	err := tx.QueryRowContext(ctx,
+		"SELECT DBID, IsExclusive FROM TagTypes WHERE Type = ?", ref.Type,
+	).Scan(&resolved.tagTypeDBID, &resolved.isExclusive)
 	if errors.Is(err, sql.ErrNoRows) {
 		if !create {
-			return 0, false, nil
+			return resolvedMediaTag{}, false, nil
 		}
+		resolved.isExclusive = tags.IsExclusiveType(tags.TagType(ref.Type))
 		result, insertErr := tx.ExecContext(ctx,
 			"INSERT INTO TagTypes (Type, IsExclusive) VALUES (?, ?)",
-			ref.Type, tags.IsExclusiveType(tags.TagType(ref.Type)),
+			ref.Type, resolved.isExclusive,
 		)
 		if insertErr != nil {
-			return 0, false, fmt.Errorf("insert tag type %q: %w", ref.Type, insertErr)
+			return resolvedMediaTag{}, false, fmt.Errorf("insert tag type %q: %w", ref.Type, insertErr)
 		}
-		tagTypeDBID, err = result.LastInsertId()
+		resolved.tagTypeDBID, err = result.LastInsertId()
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("find tag type %q: %w", ref.Type, err)
+		return resolvedMediaTag{}, false, fmt.Errorf("find tag type %q: %w", ref.Type, err)
 	}
 
 	paddedTag := tags.PadTagValue(ref.Tag)
@@ -244,24 +290,24 @@ func findOrCreateMediaTag(
 		FROM Tags
 		WHERE TypeDBID = ? AND (Tag = ? OR Tag = ?)
 		ORDER BY DBID
-		LIMIT 1`, tagTypeDBID, ref.Tag, paddedTag).Scan(&tagDBID)
+		LIMIT 1`, resolved.tagTypeDBID, ref.Tag, paddedTag).Scan(&resolved.tagDBID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if !create {
-			return 0, false, nil
+			return resolvedMediaTag{}, false, nil
 		}
 		result, insertErr := tx.ExecContext(ctx,
 			"INSERT INTO Tags (TypeDBID, Tag, DisplayName) VALUES (?, ?, '')",
-			tagTypeDBID, paddedTag,
+			resolved.tagTypeDBID, paddedTag,
 		)
 		if insertErr != nil {
-			return 0, false, fmt.Errorf("insert tag %q: %w", ref.Tag, insertErr)
+			return resolvedMediaTag{}, false, fmt.Errorf("insert tag %q: %w", ref.Tag, insertErr)
 		}
-		tagDBID, err = result.LastInsertId()
+		resolved.tagDBID, err = result.LastInsertId()
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("find tag %q: %w", ref.Tag, err)
+		return resolvedMediaTag{}, false, fmt.Errorf("find tag %q: %w", ref.Tag, err)
 	}
-	return tagDBID, true, nil
+	return resolved, true, nil
 }
 
 func systemTagCacheReady(ctx context.Context, tx *sql.Tx, systemDBID int64) (bool, error) {
