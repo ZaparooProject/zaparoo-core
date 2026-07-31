@@ -850,7 +850,7 @@ func sqlSearchMediaWithFilters(
 	}
 
 	limitClause := " LIMIT ?"
-	if limit == 0 {
+	if limit <= 0 {
 		limitClause = ""
 	}
 
@@ -878,7 +878,7 @@ func sqlSearchMediaWithFilters(
 	mediaArgs := append([]any(nil), args...)        // System IDs
 	mediaArgs = append(mediaArgs, variantArgs...)   // Variant args (includes cursor, letter if present)
 	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
-	if limit != 0 {
+	if limit > 0 {
 		mediaArgs = append(mediaArgs, limit)
 	}
 
@@ -980,7 +980,7 @@ func sqlSearchMediaByTitleDBIDs(
 	}
 
 	limitClause := "\n\t\tLIMIT ?"
-	if limit == 0 {
+	if limit <= 0 {
 		limitClause = ""
 	}
 
