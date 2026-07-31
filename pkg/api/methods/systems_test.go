@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -138,9 +139,9 @@ func TestHandleSystemFavorites_ReturnsFavoritedSystemsUnique(t *testing.T) {
 	// Return duplicate results for NES and one for SNES; handler should
 	// deduplicate and return each system once.
 	results := []database.SearchResultWithCursor{
-		{SystemID: "NES", Name: "Game A", Path: "/games/a.nes", MediaID: 1},
-		{SystemID: "NES", Name: "Game B", Path: "/games/b.nes", MediaID: 2},
-		{SystemID: "SNES", Name: "Game C", Path: "/games/c.sfc", MediaID: 3},
+		{SystemID: "NES", Name: "Game A", Path: filepath.Join("games", "a.nes"), MediaID: 1},
+		{SystemID: "NES", Name: "Game B", Path: filepath.Join("games", "b.nes"), MediaID: 2},
+		{SystemID: "SNES", Name: "Game C", Path: filepath.Join("games", "c.sfc"), MediaID: 3},
 	}
 
 	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.MatchedBy(func(filters *database.SearchFilters) bool {
