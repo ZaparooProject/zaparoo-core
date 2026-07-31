@@ -300,6 +300,12 @@ type MediaTagLink struct {
 	TagDBID   int64
 }
 
+// MediaTagRef identifies a tag by its stable type and value.
+type MediaTagRef struct {
+	Type string
+	Tag  string
+}
+
 type SearchResult struct {
 	SystemID string
 	Name     string
@@ -1035,6 +1041,12 @@ type MediaDBI interface {
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
+	UpdateMediaTags(
+		ctx context.Context,
+		mediaDBID int64,
+		remove []MediaTagRef,
+		add []MediaTagRef,
+	) error
 	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)

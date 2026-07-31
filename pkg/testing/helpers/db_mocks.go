@@ -1609,6 +1609,19 @@ func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 	return nil
 }
 
+func (m *MockMediaDBI) UpdateMediaTags(
+	ctx context.Context,
+	mediaDBID int64,
+	remove []database.MediaTagRef,
+	add []database.MediaTagRef,
+) error {
+	args := m.Called(ctx, mediaDBID, remove, add)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // TagType CRUD methods
 func (m *MockMediaDBI) FindTagType(row database.TagType) (database.TagType, error) {
 	args := m.Called(row)
