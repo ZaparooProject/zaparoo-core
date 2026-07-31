@@ -88,7 +88,13 @@ func TestMediaTagsUpdate_PersistsUserDBTruthWhenProjectionFails(t *testing.T) {
 		Return([]database.SearchResult{}, nil).Maybe()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: favouriteRow(path)}, nil).Once()
-	mockDB.On("BeginTransaction", false).Return(errors.New("projection boom")).Once()
+	mockDB.On(
+		"UpdateMediaTags",
+		mock.Anything,
+		int64(1),
+		[]database.MediaTagRef(nil),
+		[]database.MediaTagRef{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}},
+	).Return(errors.New("projection boom")).Once()
 
 	env := requests.RequestEnv{
 		Context:  ctx,
