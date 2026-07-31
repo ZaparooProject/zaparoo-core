@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -146,7 +147,13 @@ func TestHandleSystemFavorites_ReturnsFavoritedSystemsUnique(t *testing.T) {
 		if len(filters.Tags) != 1 {
 			return false
 		}
-		return filters.Tags[0].Type == "user" && filters.Tags[0].Value == "favorite"
+		if filters.Tags[0].Type != "user" || filters.Tags[0].Value != "favorite" {
+			return false
+		}
+		if filters.Limit != 0 {
+			return false
+		}
+		return assert.Equal(t, systemdefs.AllSystems(), filters.Systems)
 	})).Return(results, nil)
 
 	env := requests.RequestEnv{
