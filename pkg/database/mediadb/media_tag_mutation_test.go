@@ -142,6 +142,74 @@ func TestUpdateMediaTagsReplacesExclusiveType(t *testing.T) {
 	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "NES", secondRef.Type, secondRef.Tag))
 }
 
+func TestUpdateMediaTagsRollsBackExclusiveReplacementFailure(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertNESGameWithTag(t, mediaDB)
+
+	ctx := context.Background()
+	mediaRows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, mediaRows, 1)
+	mediaDBID := mediaRows[0].DBID
+	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
+
+	const exclusiveType = "failing-exclusive"
+	rawDB := mediaDB.UnsafeGetSQLDb()
+	_, err = rawDB.ExecContext(ctx,
+		"INSERT INTO TagTypes (Type, IsExclusive) VALUES (?, 1)", exclusiveType,
+	)
+	require.NoError(t, err)
+	firstRef := database.MediaTagRef{Type: exclusiveType, Tag: "first"}
+	secondRef := database.MediaTagRef{Type: exclusiveType, Tag: "second"}
+	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{firstRef}))
+	_, err = rawDB.ExecContext(ctx, `
+		CREATE TRIGGER fail_exclusive_media_tag_delete
+		BEFORE DELETE ON MediaTags
+		BEGIN
+			SELECT RAISE(ABORT, 'injected exclusive replacement failure');
+		END`)
+	require.NoError(t, err)
+
+	err = mediaDB.UpdateMediaTags(ctx, mediaDBID, nil, []database.MediaTagRef{secondRef})
+	require.ErrorContains(t, err, "injected exclusive replacement failure")
+	assertMediaHasTag(t, mediaDB, mediaDBID, firstRef, true)
+	assertMediaHasTag(t, mediaDB, mediaDBID, secondRef, false)
+	assert.Equal(t, int64(1), cachedTagCount(t, rawDB, "NES", firstRef.Type, firstRef.Tag))
+	assert.Zero(t, cachedTagCount(t, rawDB, "NES", secondRef.Type, secondRef.Tag))
+}
+
+func TestUpdateMediaTagsMissingRemovalDoesNotInvalidateCaches(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertNESGameWithTag(t, mediaDB)
+
+	ctx := context.Background()
+	mediaRows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, mediaRows, 1)
+	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
+	require.NoError(t, mediaDB.RebuildTagCache())
+	initialCache := mediaDB.inMemoryTagCache.Load()
+	require.NotNil(t, initialCache)
+
+	rawDB := mediaDB.UnsafeGetSQLDb()
+	_, err = rawDB.ExecContext(ctx, `
+		INSERT INTO MediaCountCache (QueryHash, QueryParams, Count, MinDBID, MaxDBID, LastUpdated)
+		VALUES ('keep', '{}', 1, 1, 1, 1)`)
+	require.NoError(t, err)
+	remove := []database.MediaTagRef{
+		{Type: "missing-type", Tag: "missing"},
+		{Type: string(tags.TagTypeGenre), Tag: "missing"},
+	}
+
+	require.NoError(t, mediaDB.UpdateMediaTags(ctx, mediaRows[0].DBID, remove, nil))
+	assert.Same(t, initialCache, mediaDB.inMemoryTagCache.Load())
+	var countCacheRows int
+	require.NoError(t, rawDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaCountCache").Scan(&countCacheRows))
+	assert.Equal(t, 1, countCacheRows)
+}
+
 func TestUpdateMediaTagsDoesNotCreatePartialSystemCache(t *testing.T) {
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -190,6 +258,43 @@ func TestUpdateMediaTagsRollsBackWhenCacheRefreshFails(t *testing.T) {
 	err = mediaDB.UpdateMediaTags(ctx, mediaRows[0].DBID, nil, []database.MediaTagRef{favoriteRef})
 	require.ErrorContains(t, err, "injected cache refresh failure")
 	assertMediaHasTag(t, mediaDB, mediaRows[0].DBID, favoriteRef, false)
+}
+
+func TestUpdateMediaTagsRejectsInvalidTag(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertNESGameWithTag(t, mediaDB)
+
+	mediaRows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, mediaRows, 1)
+	invalidRef := database.MediaTagRef{Type: string(tags.TagTypeUser)}
+
+	err = mediaDB.UpdateMediaTags(
+		context.Background(), mediaRows[0].DBID, nil, []database.MediaTagRef{invalidRef},
+	)
+	require.ErrorContains(t, err, "media tag type and value are required")
+}
+
+func TestUpdateMediaTagsRejectsActiveTransaction(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	insertNESGameWithTag(t, mediaDB)
+
+	mediaRows, err := mediaDB.GetMediaBySystemID("NES")
+	require.NoError(t, err)
+	require.Len(t, mediaRows, 1)
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	favoriteRef := database.MediaTagRef{
+		Type: string(tags.TagTypeUser),
+		Tag:  string(tags.TagUserFavorite),
+	}
+
+	err = mediaDB.UpdateMediaTags(
+		context.Background(), mediaRows[0].DBID, nil, []database.MediaTagRef{favoriteRef},
+	)
+	require.ErrorIs(t, err, ErrTransactionActive)
+	require.NoError(t, mediaDB.RollbackTransaction())
 }
 
 func TestUpdateMediaTagsHonorsCanceledContext(t *testing.T) {
