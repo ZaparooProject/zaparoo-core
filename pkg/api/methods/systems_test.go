@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -31,7 +32,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,4 +127,86 @@ func systemResponseIDs(response models.SystemsResponse) []string {
 		ids[i] = response.Systems[i].ID
 	}
 	return ids
+}
+
+func TestHandleSystemFavorites_ReturnsFavoritedSystemsUnique(t *testing.T) {
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Return duplicate results for NES and one for SNES; handler should
+	// deduplicate and return each system once.
+	results := []database.SearchResultWithCursor{
+		{SystemID: "NES", Name: "Game A", Path: "/games/a.nes", MediaID: 1},
+		{SystemID: "NES", Name: "Game B", Path: "/games/b.nes", MediaID: 2},
+		{SystemID: "SNES", Name: "Game C", Path: "/games/c.sfc", MediaID: 3},
+	}
+
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.MatchedBy(func(filters *database.SearchFilters) bool {
+		if len(filters.Tags) != 1 {
+			return false
+		}
+		return filters.Tags[0].Type == "user" && filters.Tags[0].Value == "favorite"
+	})).Return(results, nil)
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+	}
+
+	res, err := HandleSystemFavorites(env)
+	require.NoError(t, err)
+
+	resp, ok := res.(models.SystemsResponse)
+	require.True(t, ok, "expected SystemsResponse")
+
+	// Extract IDs for easy assertions
+	ids := make(map[string]struct{})
+	for _, s := range resp.Systems {
+		ids[s.ID] = struct{}{}
+	}
+
+	assert.Contains(t, ids, "NES")
+	assert.Contains(t, ids, "SNES")
+	// Ensure NES only appears once
+	countNES := 0
+	for _, s := range resp.Systems {
+		if s.ID == "NES" {
+			countNES++
+		}
+	}
+	assert.Equal(t, 1, countNES, "NES should appear only once")
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestHandleSystemFavorites_NoFavoritesReturnsEmpty(t *testing.T) {
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).Return([]database.SearchResultWithCursor{}, nil)
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+	}
+
+	res, err := HandleSystemFavorites(env)
+	require.NoError(t, err)
+
+	resp, ok := res.(models.SystemsResponse)
+	require.True(t, ok, "expected SystemsResponse")
+	assert.Len(t, resp.Systems, 0, "should return no systems when there are no favorites")
+
+	mockMediaDB.AssertExpectations(t)
 }

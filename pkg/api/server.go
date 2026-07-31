@@ -291,7 +291,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodPlaytimeLimitsUpdate:        methods.HandlePlaytimeLimitsUpdate,
 		models.MethodPlaytime:                    methods.HandlePlaytime,
 		// systems
-		models.MethodSystems: methods.HandleSystems,
+		models.MethodSystems:          methods.HandleSystems,
+		models.MethodSystemsFavorites: methods.HandleSystemFavorites,
 		// launchers
 		models.MethodLaunchers:        methods.HandleLaunchers,
 		models.MethodLaunchersRefresh: methods.HandleLaunchersRefresh,

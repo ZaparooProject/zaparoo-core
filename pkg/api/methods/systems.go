@@ -20,10 +20,14 @@
 package methods
 
 import (
+	"fmt"
+
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/rs/zerolog/log"
@@ -114,6 +118,65 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 				ZapScript: system.ZapScript(),
 			})
 		}
+	}
+
+	return models.SystemsResponse{Systems: respSystems}, nil
+}
+
+func HandleSystemFavorites(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	log.Info().Msg("received system favorites request")
+
+	filters := &database.SearchFilters{
+		Systems: systemdefs.AllSystems(),
+		Tags:    []zapscript.TagFilter{{Type: "user", Value: "favorite"}},
+		Limit:   0,
+	}
+
+	results, err := env.Database.MediaDB.SearchMediaWithFilters(env.Context, filters)
+	if err != nil {
+		return nil, fmt.Errorf("error searching favorite media: %w", err)
+	}
+
+	seen := make(map[string]struct{}, len(filters.Systems))
+	systemIDs := make([]string, 0, len(filters.Systems))
+
+	for _, result := range results {
+		if result.SystemID == "" {
+			continue
+		}
+		if _, ok := seen[result.SystemID]; ok {
+			continue
+		}
+		seen[result.SystemID] = struct{}{}
+		systemIDs = append(systemIDs, result.SystemID)
+		if len(seen) == len(filters.Systems) {
+			break
+		}
+	}
+
+	respSystems := make([]models.System, 0, len(systemIDs))
+	for _, id := range systemIDs {
+		system, systemErr := systemdefs.GetSystem(id)
+		if systemErr != nil {
+			log.Error().Err(systemErr).Msgf("error getting system: %s", id)
+			continue
+		}
+
+		sr := models.System{ID: system.ID}
+		sm, metadataErr := assets.GetSystemMetadata(id)
+		if metadataErr != nil {
+			log.Error().Err(metadataErr).Msgf("error getting system metadata: %s", id)
+		} else {
+			sr.Name = sm.Name
+			sr.Category = sm.Category
+			if sm.ReleaseDate != "" {
+				sr.ReleaseDate = &sm.ReleaseDate
+			}
+			if sm.Manufacturer != "" {
+				sr.Manufacturer = &sm.Manufacturer
+			}
+		}
+		respSystems = append(respSystems, sr)
 	}
 
 	return models.SystemsResponse{Systems: respSystems}, nil

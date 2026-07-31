@@ -38,6 +38,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const defaultSearchResultsCapacity = 16
+
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
 // Combines file-level (MediaTags) and title-level (MediaTitleTags) tags via UNION ALL
@@ -749,7 +751,11 @@ func sqlSearchMediaWithFilters(
 	limit int,
 	includeName bool,
 ) ([]database.SearchResultWithCursor, error) {
-	results := make([]database.SearchResultWithCursor, 0, limit)
+	initialCapacity := limit
+	if initialCapacity <= 0 {
+		initialCapacity = defaultSearchResultsCapacity
+	}
+	results := make([]database.SearchResultWithCursor, 0, initialCapacity)
 	if len(systems) == 0 {
 		return nil, errors.New("no systems provided for media search")
 	}
@@ -843,6 +849,11 @@ func sqlSearchMediaWithFilters(
 		orderCondition = ` ORDER BY Media.DBID ASC`
 	}
 
+	limitClause := " LIMIT ?"
+	if limit == 0 {
+		limitClause = ""
+	}
+
 	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 	mediaQuery := `
 		SELECT
@@ -861,13 +872,15 @@ func sqlSearchMediaWithFilters(
 		tagFilterCondition +
 		letterFilterCondition +
 		orderCondition +
-		` LIMIT ?`
+		limitClause
 
 	// Assemble final args: systems → variants → tag filters → limit
 	mediaArgs := append([]any(nil), args...)        // System IDs
 	mediaArgs = append(mediaArgs, variantArgs...)   // Variant args (includes cursor, letter if present)
 	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
-	mediaArgs = append(mediaArgs, limit)
+	if limit != 0 {
+		mediaArgs = append(mediaArgs, limit)
+	}
 
 	queryStarted := time.Now()
 	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
@@ -966,6 +979,11 @@ func sqlSearchMediaByTitleDBIDs(
 		whereExtra = " AND " + strings.Join(extraConditions, " AND ")
 	}
 
+	limitClause := "\n\t\tLIMIT ?"
+	if limit == 0 {
+		limitClause = ""
+	}
+
 	//nolint:gosec // Safe: WHERE clause built from sanitized components
 	query := `
 		SELECT
@@ -978,13 +996,14 @@ func sqlSearchMediaByTitleDBIDs(
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE ` + titleCondition + ` AND Media.IsMissing = 0` + whereExtra + `
-		ORDER BY Media.DBID ASC
-		LIMIT ?`
+		ORDER BY Media.DBID ASC` + limitClause
 
 	finalArgs := make([]any, 0, len(args)+len(extraArgs)+1)
 	finalArgs = append(finalArgs, args...)
 	finalArgs = append(finalArgs, extraArgs...)
-	finalArgs = append(finalArgs, limit)
+	if limit != 0 {
+		finalArgs = append(finalArgs, limit)
+	}
 
 	queryStarted := time.Now()
 	rows, err := db.QueryContext(ctx, query, finalArgs...)
@@ -993,7 +1012,11 @@ func sqlSearchMediaByTitleDBIDs(
 	}
 	defer func() { _ = rows.Close() }()
 
-	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
+	initialCapacity := min(limit, 100)
+	if initialCapacity <= 0 {
+		initialCapacity = defaultSearchResultsCapacity
+	}
+	results := make([]database.SearchResultWithCursor, 0, initialCapacity)
 	for rows.Next() {
 		var r database.SearchResultWithCursor
 		if scanErr := rows.Scan(
