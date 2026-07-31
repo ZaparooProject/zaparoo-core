@@ -706,6 +706,73 @@ func TestSqlSearchMediaWithFilters_AllSystemsTagOnlySkipsSystemFilter(t *testing
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlSearchMediaWithFilters_ZeroLimitOmitsLimitClause(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		limit int
+	}{
+		{name: "zero", limit: 0},
+		{name: "negative", limit: -1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db, mock, err := testsqlmock.NewSQLMock()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			systems := systemdefs.AllSystems()
+			require.NotEmpty(t, systems)
+			tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+
+			mock.ExpectPrepare("(?s).*Media\\.IsMissing = 0.*ORDER BY Media\\.DBID ASC\\s*$").
+				ExpectQuery().
+				WithArgs("user", "favorite", "user", "favorite").
+				WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+					AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), int64(7), ""))
+			expectSearchTagsQuery(mock, 7)
+
+			results, err := sqlSearchMediaWithFilters(
+				context.Background(), db, systems, nil, nil, tags, nil, nil, tt.limit, false,
+			)
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, systems[0].ID, results[0].SystemID)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestSqlSearchMediaWithFilters_PositiveLimitIncludesLimitClause(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := systemdefs.AllSystems()
+	require.NotEmpty(t, systems)
+	tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+	favoritePath := filepath.ToSlash(filepath.Join("roms", "favorite.rom"))
+
+	mock.ExpectPrepare("(?s).*Media\\.IsMissing = 0.*ORDER BY Media\\.DBID ASC.*LIMIT \\?").
+		ExpectQuery().
+		WithArgs("user", "favorite", "user", "favorite", 10).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
+			AddRow(systems[0].ID, "Favorite", favoritePath, 7, ""))
+	expectSearchTagsQuery(mock, 7)
+
+	results, err := sqlSearchMediaWithFilters(
+		context.Background(), db, systems, nil, nil, tags, nil, nil, 10, false,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, systems[0].ID, results[0].SystemID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlSearchMediaWithFilters_DuplicateSystemsMissingOneKeepsSystemFilter(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
