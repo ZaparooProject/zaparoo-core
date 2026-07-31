@@ -58,6 +58,14 @@ func (s *testMixSource) onDrained() {
 	}
 }
 
+func setTestSources(d *sharedDevice, sources ...mixSource) {
+	d.sources = make([]*mixSourceEntry, len(sources))
+	for i, src := range sources {
+		d.sources[i] = &mixSourceEntry{source: src}
+	}
+	d.publishSourcesLocked()
+}
+
 func float32At(b []byte, frame, channel int) float32 {
 	offset := (frame*2 + channel) * 4
 	return math.Float32frombits(binary.LittleEndian.Uint32(b[offset:]))
@@ -73,11 +81,9 @@ func TestSharedDeviceOnSamplesMixesClampsAndQueuesDrainedSources(t *testing.T) {
 	activeSrc := &testMixSource{
 		frames: [][2]float64{{0.5, 0.25}},
 	}
-	d := &sharedDevice{
-		manageCh: make(chan struct{}, 1),
-		sources:  []mixSource{drainedSrc, activeSrc},
-		mixBuf:   make([][2]float64, 2),
-	}
+	d := newSharedDevice()
+	setTestSources(d, drainedSrc, activeSrc)
+	d.mixBuf = make([][2]float64, 2)
 	output := []byte("sentinel sentinel sentinel")
 
 	d.onSamples(output, nil, 3)
@@ -87,26 +93,62 @@ func TestSharedDeviceOnSamplesMixesClampsAndQueuesDrainedSources(t *testing.T) {
 	assert.InDelta(t, float32(0.25), float32At(output, 1, 0), 1e-6)
 	assert.InDelta(t, float32(0.5), float32At(output, 1, 1), 1e-6)
 	assert.Equal(t, make([]byte, len(output)-16), output[16:], "trailing output must be zeroed")
-	require.Len(t, d.toRemove, 1)
-	assert.Same(t, drainedSrc, d.toRemove[0])
+	view := d.sourceView.Load()
+	require.NotNil(t, view)
+	require.Len(t, *view, 2)
+	assert.True(t, (*view)[0].drained.Load(), "expected drained source to be marked")
+}
+
+func TestSharedDeviceOnSamplesDoesNotAllocate(t *testing.T) {
+	d := newSharedDevice()
+	setTestSources(d, &testMixSource{frames: [][2]float64{{0.25, 0.25}}})
+	d.mixBuf = make([][2]float64, 1)
+	output := make([]byte, 8)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		d.onSamples(output, nil, 1)
+	})
+	assert.Zero(t, allocs)
+}
+
+func TestSharedDeviceOnSamplesDoesNotWaitForControlLock(t *testing.T) {
+	t.Parallel()
+
+	d := newSharedDevice()
+	setTestSources(d, &testMixSource{frames: [][2]float64{{0.25, 0.25}}})
+	d.mixBuf = make([][2]float64, 1)
+	output := make([]byte, 8)
+
+	// Control operations may hold devMu while the realtime callback fires.
+	// Callback must use its immutable snapshot rather than wait on that lock.
+	d.devMu.Lock()
+	defer d.devMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		d.onSamples(output, nil, 1)
+		close(done)
+	}()
+
 	select {
-	case <-d.manageCh:
-	default:
-		t.Fatal("expected manage wake after source drained")
+	case <-done:
+		assert.InDelta(t, float32(0.25), float32At(output, 0, 0), 1e-6)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("realtime callback blocked on device control lock")
 	}
 }
 
 func TestSharedDeviceOpenIfNeededRequiresActiveSource(t *testing.T) {
 	t.Parallel()
 
-	d := &sharedDevice{sources: []mixSource{&testMixSource{active: false}}}
+	d := newSharedDevice()
+	setTestSources(d, &testMixSource{active: false})
 	d.openIfNeeded()
 	d.devMu.Lock()
 	opening := d.opening
 	d.devMu.Unlock()
 	assert.False(t, opening)
 
-	d.sources = append(d.sources, &testMixSource{active: true})
+	setTestSources(d, d.sources[0].source, &testMixSource{active: true})
 	d.openIfNeeded()
 	// Read under devMu: failAllSources (called when ALSA is unavailable) also
 	// holds devMu when it clears d.opening, so the lock ensures we observe the
@@ -122,16 +164,13 @@ func TestSharedDeviceManageRemovesDrainedSourceAndNotifies(t *testing.T) {
 
 	keepSrc := &testMixSource{active: true}
 	drainedSrc := &testMixSource{onDrainedCh: make(chan struct{})}
-	d := &sharedDevice{
-		manageCh: make(chan struct{}, 1),
-		sources:  []mixSource{keepSrc, drainedSrc},
-		toRemove: []mixSource{drainedSrc},
-	}
+	d := newSharedDevice()
+	setTestSources(d, keepSrc, drainedSrc)
+	d.sources[1].drained.Store(true)
+	d.drainPending.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go d.manage(ctx, nil, nil, done)
-
-	d.manageCh <- struct{}{}
 
 	select {
 	case <-drainedSrc.onDrainedCh:
@@ -147,8 +186,11 @@ func TestSharedDeviceManageRemovesDrainedSourceAndNotifies(t *testing.T) {
 	}
 
 	require.Len(t, d.sources, 1)
-	assert.Same(t, keepSrc, d.sources[0])
-	assert.Empty(t, d.toRemove)
+	assert.Same(t, keepSrc, d.sources[0].source)
+	view := d.sourceView.Load()
+	require.NotNil(t, view)
+	require.Len(t, *view, 1)
+	assert.Same(t, keepSrc, (*view)[0].source)
 }
 
 // TestSharedDeviceOpenRequestsRealtimeThreadPriority verifies open passes
@@ -162,11 +204,9 @@ func TestSharedDeviceOpenRequestsRealtimeThreadPriority(t *testing.T) {
 		got = cfg
 		return nil, errors.New("stub: no real audio context in tests")
 	}
-	d := &sharedDevice{
-		manageCh:    make(chan struct{}, 1),
-		initContext: stubInit,
-	}
-	d.sources = append(d.sources, &testMixSource{active: true})
+	d := newSharedDevice()
+	d.initContext = stubInit
+	setTestSources(d, &testMixSource{active: true})
 
 	d.open()
 

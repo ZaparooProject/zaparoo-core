@@ -40,6 +40,16 @@ func newTestSource() *streamingSource {
 	}
 }
 
+func TestBoundedFrameCount(t *testing.T) {
+	t.Parallel()
+
+	assert.Zero(t, boundedFrameCount(10, 0))
+	assert.Zero(t, boundedFrameCount(0, 10))
+	assert.Equal(t, 5, boundedFrameCount(5, 10))
+	assert.Equal(t, 10, boundedFrameCount(10, 10))
+	assert.Equal(t, 10, boundedFrameCount(^uint64(0), 10))
+}
+
 func TestSampleDuration(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, time.Duration(0), sampleDuration(0))
@@ -52,7 +62,7 @@ func TestStreamingSource_State_PlayingLogic(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSource()
-	s.played = targetSampleRate / 2 // 0.5 s in
+	s.played.Store(targetSampleRate / 2) // 0.5 s in
 
 	// Default: not paused, not stopped, not eof → Playing
 	ps := s.state()
@@ -62,23 +72,22 @@ func TestStreamingSource_State_PlayingLogic(t *testing.T) {
 	assert.Equal(t, time.Second, ps.Duration)
 
 	// Paused → Playing=false
-	s.paused = true
+	s.paused.Store(true)
 	assert.False(t, s.state().Playing)
 	assert.True(t, s.state().Paused)
-	s.paused = false
+	s.paused.Store(false)
 
 	// Stopped → Playing=false
-	s.stopped = true
+	s.stopped.Store(true)
 	assert.False(t, s.state().Playing)
-	s.stopped = false
+	s.stopped.Store(false)
 
 	// EOF with ring drained → Playing=false
-	s.eof = true
-	s.filled = 0
+	s.eof.Store(true)
 	assert.False(t, s.state().Playing)
 
 	// EOF but ring still has frames → Playing=true (tail draining)
-	s.filled = 10
+	s.writePos.Store(10)
 	assert.True(t, s.state().Playing)
 }
 
@@ -87,10 +96,10 @@ func TestStreamingSource_IsActive(t *testing.T) {
 	s := newTestSource()
 
 	assert.True(t, s.isActive())
-	s.paused = true
+	s.paused.Store(true)
 	assert.False(t, s.isActive())
-	s.paused = false
-	s.stopped = true
+	s.paused.Store(false)
+	s.stopped.Store(true)
 	assert.False(t, s.isActive())
 }
 
@@ -105,14 +114,14 @@ func TestStreamingSource_OnDrained(t *testing.T) {
 	s.onDrain = func(natural bool) { gotNatural = &natural }
 
 	// stopped=false → natural drain
-	s.stopped = false
+	s.stopped.Store(false)
 	s.onDrained()
 	require.NotNil(t, gotNatural)
 	assert.True(t, *gotNatural)
 
 	// stopped=true → explicit stop
 	gotNatural = nil
-	s.stopped = true
+	s.stopped.Store(true)
 	s.onDrained()
 	require.NotNil(t, gotNatural)
 	assert.False(t, *gotNatural)
@@ -123,15 +132,11 @@ func TestStreamingSource_SetPaused(t *testing.T) {
 	s := newTestSource()
 
 	s.setPaused(true)
-	s.mu.Lock()
-	assert.True(t, s.paused)
-	s.mu.Unlock()
+	assert.True(t, s.paused.Load())
 
 	// Resume writes to wakeCh.
 	s.setPaused(false)
-	s.mu.Lock()
-	assert.False(t, s.paused)
-	s.mu.Unlock()
+	assert.False(t, s.paused.Load())
 
 	select {
 	case <-s.wakeCh:
@@ -146,15 +151,11 @@ func TestStreamingSource_TogglePause(t *testing.T) {
 
 	nowPaused := s.togglePause()
 	assert.True(t, nowPaused)
-	s.mu.Lock()
-	assert.True(t, s.paused)
-	s.mu.Unlock()
+	assert.True(t, s.paused.Load())
 
 	nowPaused = s.togglePause()
 	assert.False(t, nowPaused)
-	s.mu.Lock()
-	assert.False(t, s.paused)
-	s.mu.Unlock()
+	assert.False(t, s.paused.Load())
 
 	// Resume writes to wakeCh.
 	select {
@@ -167,19 +168,14 @@ func TestStreamingSource_TogglePause(t *testing.T) {
 func TestStreamingSource_Seek(t *testing.T) {
 	t.Parallel()
 	s := newTestSource()
-	// Pre-fill the ring to verify it is flushed on seek.
-	s.filled = 50
-	s.wpos = 50
-	s.played = int64(targetSampleRate) // 1 s
+	// Pre-fill the ring to verify it is hidden from the callback during seek.
+	s.writePos.Store(50)
+	s.played.Store(targetSampleRate) // 1 s
 
 	s.seek(0) // seek to current position (offset=0)
 
-	s.mu.Lock()
-	assert.True(t, s.seekPending, "seekPending must be set")
-	assert.Equal(t, 0, s.filled, "ring must be flushed")
-	assert.Equal(t, 0, s.wpos, "write pos must be reset")
-	assert.Equal(t, 0, s.rpos, "read pos must be reset")
-	s.mu.Unlock()
+	assert.True(t, s.seekPending.Load(), "seekPending must be set")
+	assert.Equal(t, 0, s.bufferedFrames(), "pending seek must hide stale ring frames")
 
 	select {
 	case <-s.wakeCh:
@@ -193,20 +189,17 @@ func TestStreamingSource_SeekClampsToTrackBounds(t *testing.T) {
 
 	s := newTestSource()
 	s.sourceRate = targetSampleRate
-	s.played = int64(targetSampleRate / 2)
+	s.played.Store(targetSampleRate / 2)
 	s.seek(-time.Second)
-	s.mu.Lock()
-	assert.Equal(t, int64(0), s.played)
-	assert.Equal(t, int64(0), s.seekSrcFrame)
-	s.mu.Unlock()
+	assert.Equal(t, int64(0), s.played.Load())
+	assert.Equal(t, int64(0), s.seekSrcFrame.Load())
 	<-s.wakeCh
 
-	s.played = int64(targetSampleRate)
+	s.seekPending.Store(false)
+	s.played.Store(targetSampleRate)
 	s.seek(time.Second)
-	s.mu.Lock()
-	assert.Equal(t, int64(targetSampleRate), s.played)
-	assert.Equal(t, int64(targetSampleRate), s.seekSrcFrame)
-	s.mu.Unlock()
+	assert.Equal(t, int64(targetSampleRate), s.played.Load())
+	assert.Equal(t, int64(targetSampleRate), s.seekSrcFrame.Load())
 }
 
 func TestStreamingSource_MixAdd(t *testing.T) {
@@ -218,8 +211,7 @@ func TestStreamingSource_MixAdd(t *testing.T) {
 	for i := range nFrames {
 		s.ring[i] = [2]float64{float64(i+1) * 0.1, float64(i+1) * 0.1}
 	}
-	s.wpos = nFrames
-	s.filled = nFrames
+	s.writePos.Store(nFrames)
 
 	buf := make([][2]float64, 20)
 	n, drained := s.mixAdd(buf, nFrames)
@@ -232,7 +224,7 @@ func TestStreamingSource_MixAdd(t *testing.T) {
 	}
 
 	// Now drained: eof=true, ring empty after mix.
-	s.eof = true
+	s.eof.Store(true)
 	buf2 := make([][2]float64, 5)
 	n2, drained2 := s.mixAdd(buf2, 5)
 	assert.Equal(t, 0, n2)
@@ -240,9 +232,57 @@ func TestStreamingSource_MixAdd(t *testing.T) {
 
 	// Stopped: drains immediately.
 	s2 := newTestSource()
-	s2.stopped = true
+	s2.stopped.Store(true)
 	_, stopped := s2.mixAdd(buf, 5)
 	assert.True(t, stopped)
+}
+
+func TestStreamingSource_MixAddDoesNotWaitForLifecycleLock(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSource()
+	s.ring[0] = [2]float64{0.5, 0.5}
+	s.writePos.Store(1)
+	buf := make([][2]float64, 1)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		s.mixAdd(buf, 1)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		assert.InDelta(t, 0.5, buf[0][0], 1e-9)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("realtime source mix blocked on lifecycle lock")
+	}
+}
+
+func TestStreamingSource_UnderrunEpisodes(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSource()
+	buf := make([][2]float64, 4)
+
+	written, drained := s.mixAdd(buf, len(buf))
+	assert.Zero(t, written)
+	assert.False(t, drained)
+	assert.Equal(t, uint64(1), s.underruns.Load())
+
+	// Repeated empty callbacks belong to the same underrun episode.
+	s.mixAdd(buf, len(buf))
+	assert.Equal(t, uint64(1), s.underruns.Load())
+
+	// Consuming newly published audio ends the episode; another empty callback
+	// starts a new one.
+	s.ring[0] = [2]float64{0.25, 0.25}
+	s.writePos.Store(1)
+	s.mixAdd(buf, 1)
+	s.mixAdd(buf, len(buf))
+	assert.Equal(t, uint64(2), s.underruns.Load())
 }
 
 func TestNewStreamingSource_UnsupportedExtension(t *testing.T) {
@@ -317,9 +357,7 @@ func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 
 			// Wait for the prefetch goroutine to fully decode the file.
 			require.Eventually(t, func() bool {
-				s.mu.Lock()
-				defer s.mu.Unlock()
-				return s.eof
+				return s.eof.Load()
 			}, 5*time.Second, 5*time.Millisecond, "prefetch should reach EOF")
 
 			// Simulate the tail playing out, then seek back to the start. Before the
@@ -330,14 +368,10 @@ func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 			s.seek(-time.Second)
 
 			require.Eventually(t, func() bool {
-				s.mu.Lock()
-				defer s.mu.Unlock()
-				return s.filled > 0
+				return s.bufferedFrames() > 0
 			}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
 
-			s.mu.Lock()
 			assert.Equal(t, tc.quality, s.quality, "seek must preserve the source's resample quality")
-			s.mu.Unlock()
 		})
 	}
 }
@@ -361,10 +395,45 @@ func TestStreamingSource_PrefetchFillsRingWithoutTickerPacing(t *testing.T) {
 	t.Cleanup(s.stopAndDeregister)
 
 	require.Eventually(t, func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.filled == len(s.ring)
+		return s.bufferedFrames() == len(s.ring)
 	}, 2*time.Second, 5*time.Millisecond, "prefetch should burst-fill the full ring")
+}
+
+func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, wavWithSamples(10*44100), 0o600))
+
+	s, err := newStreamingSource(path, 1.0, lowPowerResampleQuality)
+	require.NoError(t, err)
+	s.startPrefetch()
+	t.Cleanup(s.stopAndDeregister)
+	require.Eventually(t, func() bool {
+		return s.bufferedFrames() == len(s.ring)
+	}, 2*time.Second, 5*time.Millisecond)
+
+	buf := make([][2]float64, 2048)
+	deadline := time.Now().Add(5 * time.Second)
+	total := 0
+	for time.Now().Before(deadline) {
+		for i := range buf {
+			buf[i] = [2]float64{}
+		}
+		written, drained := s.mixAdd(buf, len(buf))
+		total += written
+		if drained {
+			break
+		}
+		if written == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	assert.Greater(t, total, ringBufferFrames)
+	assert.Equal(t, int64(total), s.played.Load())
+	assert.True(t, s.eof.Load())
+	assert.Zero(t, s.bufferedFrames())
 }
 
 func TestNewLongformPlaybackManager(t *testing.T) {
@@ -384,7 +453,8 @@ func TestNewLongformPlaybackManager_ResampleQuality(t *testing.T) {
 
 func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testing.T) {
 	oldDevice := globalDevice
-	testDevice := &sharedDevice{manageCh: make(chan struct{}, 1), opening: true}
+	testDevice := newSharedDevice()
+	testDevice.opening = true
 	globalDevice = testDevice
 	t.Cleanup(func() { globalDevice = oldDevice })
 
@@ -408,13 +478,11 @@ func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testi
 	require.NotNil(t, second)
 	assert.NotSame(t, first, second)
 	assert.InDelta(t, 0.25, second.volume, 1e-9)
-	first.mu.Lock()
-	assert.True(t, first.stopped, "replaced source must be stopped")
-	first.mu.Unlock()
+	assert.True(t, first.stopped.Load(), "replaced source must be stopped")
 
 	testDevice.devMu.Lock()
 	require.Len(t, testDevice.sources, 1)
-	assert.Same(t, second, testDevice.sources[0])
+	assert.Same(t, second, testDevice.sources[0].source)
 	testDevice.devMu.Unlock()
 
 	second.onDrained()
@@ -463,7 +531,7 @@ func TestLongformPlaybackManager_WithSourcePrimary(t *testing.T) {
 	t.Parallel()
 	m := NewLongformPlaybackManager(false)
 	s := newTestSource()
-	s.played = int64(targetSampleRate / 2) // 0.5 s in
+	s.played.Store(targetSampleRate / 2) // 0.5 s in
 	m.mu.Lock()
 	m.primary = s
 	m.mu.Unlock()
@@ -475,30 +543,22 @@ func TestLongformPlaybackManager_WithSourcePrimary(t *testing.T) {
 
 	// Seek schedules a seek.
 	require.NoError(t, m.Seek(mediaslot.Primary, 0))
-	s.mu.Lock()
-	assert.True(t, s.seekPending)
-	s.mu.Unlock()
+	assert.True(t, s.seekPending.Load())
 
 	// Pause sets the paused flag.
 	require.NoError(t, m.Pause(mediaslot.Primary))
-	s.mu.Lock()
-	assert.True(t, s.paused)
-	s.mu.Unlock()
+	assert.True(t, s.paused.Load())
 
 	// TogglePause unpauses.
 	require.NoError(t, m.TogglePause(mediaslot.Primary))
-	s.mu.Lock()
-	assert.False(t, s.paused)
-	s.mu.Unlock()
+	assert.False(t, s.paused.Load())
 
 	// Resume is a no-error call when already unpaused.
 	require.NoError(t, m.Resume(mediaslot.Primary))
 
 	// Stop sets stopped, clears the slot, and returns no error.
 	require.NoError(t, m.Stop(mediaslot.Primary))
-	s.mu.Lock()
-	assert.True(t, s.stopped)
-	s.mu.Unlock()
+	assert.True(t, s.stopped.Load())
 	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Primary))
 }
 
@@ -518,22 +578,16 @@ func TestLongformPlaybackManager_WithSourceBackground(t *testing.T) {
 
 	// Pause/TogglePause/Resume cycle.
 	require.NoError(t, m.Pause(mediaslot.Background))
-	s.mu.Lock()
-	assert.True(t, s.paused)
-	s.mu.Unlock()
+	assert.True(t, s.paused.Load())
 
 	require.NoError(t, m.TogglePause(mediaslot.Background))
-	s.mu.Lock()
-	assert.False(t, s.paused)
-	s.mu.Unlock()
+	assert.False(t, s.paused.Load())
 
 	require.NoError(t, m.Resume(mediaslot.Background))
 
 	// Stop clears background slot.
 	require.NoError(t, m.Stop(mediaslot.Background))
-	s.mu.Lock()
-	assert.True(t, s.stopped)
-	s.mu.Unlock()
+	assert.True(t, s.stopped.Load())
 	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Background))
 }
 
@@ -550,16 +604,12 @@ func TestLongformPlaybackManager_SlotAliasesResolve(t *testing.T) {
 
 	for _, alias := range []string{"bg", "Background", " background "} {
 		require.NoError(t, m.Pause(alias))
-		s.mu.Lock()
-		assert.True(t, s.paused, "alias %q must resolve to the background source", alias)
-		s.paused = false
-		s.mu.Unlock()
+		assert.True(t, s.paused.Load(), "alias %q must resolve to the background source", alias)
+		s.paused.Store(false)
 	}
 
 	require.NoError(t, m.Stop("bg"))
-	s.mu.Lock()
-	assert.True(t, s.stopped, "Stop via alias must stop the background source")
-	s.mu.Unlock()
+	assert.True(t, s.stopped.Load(), "Stop via alias must stop the background source")
 	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Background))
 }
 
