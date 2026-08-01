@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -145,6 +146,21 @@ func TestSettingsAuthClaim_RequiresHTTPS(t *testing.T) {
 	assert.Contains(t, err.Error(), "HTTPS")
 }
 
+func TestRemoteRequestError_StripsSensitiveURL(t *testing.T) {
+	t.Parallel()
+
+	const secretURL = "https://api.example.com/claim?token=zpc1_claim-secret" //nolint:gosec // test fixture claim URL
+	err := remoteRequestError("failed to contact claim server", &url.Error{
+		Op:  http.MethodPost,
+		URL: secretURL,
+		Err: errors.New("connection refused"),
+	})
+
+	assert.Contains(t, err.Error(), "connection refused")
+	assert.NotContains(t, err.Error(), secretURL)
+	assert.NotContains(t, err.Error(), "zpc1_claim-secret")
+}
+
 func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 	// Not parallel: swaps package-level claimClient
 
@@ -154,7 +170,7 @@ func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 		assert.Equal(t, runtime.GOARCH, r.Header.Get(zapscript.HeaderZaparooArch))
 		assert.Equal(t, "test-platform", r.Header.Get(zapscript.HeaderZaparooPlatform))
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("invalid token"))
+		_, _ = w.Write([]byte("invalid token: bad-token"))
 	}))
 	defer claimServer.Close()
 
@@ -191,6 +207,7 @@ func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
+	assert.NotContains(t, err.Error(), "bad-token")
 }
 
 func TestSettingsAuthClaim_RootMissingAuth(t *testing.T) {

@@ -315,6 +315,48 @@ func TestLogSafeRequest(t *testing.T) {
 	}
 }
 
+func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
+	const claimSecret = "zpc1_claim-secret" //nolint:gosec // test fixture claim token
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	logSafeRequest(&models.RequestObject{
+		JSONRPC: "2.0",
+		ID:      models.NewStringID("claim-request"),
+		Method:  models.MethodSettingsAuthClaim,
+		Params:  []byte(`{"claimUrl":"https://api.zaparoo.com/v1/device-claims/redeem","token":"` + claimSecret + `"}`),
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, models.MethodSettingsAuthClaim)
+	assert.NotContains(t, out, claimSecret)
+	assert.NotContains(t, out, "claimUrl")
+}
+
+func TestLogSafeResponse_AuthLinkCodesRedacted(t *testing.T) {
+	const userCode = "ABCD-1234"
+	const compactUserCode = "ABCD1234"
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	logSafeResponse(models.AuthLinkStatusResponse{
+		Status:                  models.AuthLinkStatusPending,
+		UserCode:                userCode,
+		VerificationURL:         "https://online.zaparoo.com/link",
+		VerificationURLComplete: "https://online.zaparoo.com/link?code=" + compactUserCode,
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, "AuthLinkStatusResponse")
+	assert.NotContains(t, out, compactUserCode)
+	assert.NotContains(t, out, userCode)
+	assert.NotContains(t, out, "verificationUrlComplete")
+}
+
 func TestLogWSWriteError(t *testing.T) {
 	tests := []struct {
 		name          string

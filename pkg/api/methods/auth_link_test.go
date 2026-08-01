@@ -281,6 +281,25 @@ func TestSettingsAuthLink_RejectsSecondPendingStart(t *testing.T) {
 	assert.Contains(t, err.Error(), "already pending")
 }
 
+func TestCreateDeviceLinkRequest_DoesNotReturnServerBody(t *testing.T) {
+	// Not parallel: swaps package-level claimClient.
+	const reflectedSecret = "zpl1_reflected-device-code" //nolint:gosec // test fixture device code
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("invalid device code: " + reflectedSecret))
+	}))
+	defer server.Close()
+
+	originalClient := claimClient
+	claimClient = server.Client()
+	t.Cleanup(func() { claimClient = originalClient })
+
+	_, err := createDeviceLinkRequest(t.Context(), server.URL, "test-platform", "test-device")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "400")
+	assert.NotContains(t, err.Error(), reflectedSecret)
+}
+
 func TestSettingsAuthLink_HappyPath(t *testing.T) {
 	// Not parallel: swaps package-level claimClient and link session state.
 	resetAuthLinkState(t)

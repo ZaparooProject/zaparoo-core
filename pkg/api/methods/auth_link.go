@@ -299,7 +299,7 @@ func createDeviceLinkRequest(
 
 	resp, err := claimClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to contact link server: %w", err)
+		return nil, remoteRequestError("failed to contact link server", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -307,11 +307,9 @@ func createDeviceLinkRequest(
 		}
 	}()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
-		return nil, fmt.Errorf(
-			"link server returned status %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(body)),
-		)
+		// Never propagate an untrusted response body into API errors or logs.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
+		return nil, fmt.Errorf("link server returned status %d", resp.StatusCode)
 	}
 
 	var created deviceLinkCreateResponse
@@ -415,7 +413,7 @@ func pollDeviceLinkOnce(ctx context.Context, baseURL, deviceCode string) (*devic
 
 	resp, err := claimClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to contact link server: %w", err)
+		return nil, remoteRequestError("failed to contact link server", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
