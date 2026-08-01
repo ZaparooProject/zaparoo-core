@@ -737,6 +737,7 @@ func TestSqlSearchMediaWithFilters_ZeroLimitOmitsLimitClause(t *testing.T) {
 						int64(7),
 						"",
 					))
+			expectSearchTagsQuery(mock, 7)
 
 			results, err := sqlSearchMediaWithFilters(
 				context.Background(), db, systems, nil, nil, tags, nil, nil, tt.limit, false,
