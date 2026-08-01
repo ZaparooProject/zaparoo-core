@@ -198,7 +198,11 @@ func TestHandleSystemFavorites_NoFavoritesReturnsEmpty(t *testing.T) {
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
-	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On(
+		"SearchMediaWithFilters",
+		mock.Anything,
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{}, nil)
 
 	env := requests.RequestEnv{
 		Context: context.Background(),
@@ -214,7 +218,7 @@ func TestHandleSystemFavorites_NoFavoritesReturnsEmpty(t *testing.T) {
 
 	resp, ok := res.(models.SystemsResponse)
 	require.True(t, ok, "expected SystemsResponse")
-	assert.Len(t, resp.Systems, 0, "should return no systems when there are no favorites")
+	assert.Empty(t, resp.Systems, "should return no systems when there are no favorites")
 
 	mockMediaDB.AssertExpectations(t)
 }

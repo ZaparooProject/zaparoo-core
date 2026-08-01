@@ -123,7 +123,8 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 	return models.SystemsResponse{Systems: respSystems}, nil
 }
 
-func HandleSystemFavorites(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleSystemFavorites(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received system favorites request")
 
 	filters := &database.SearchFilters{
@@ -140,7 +141,8 @@ func HandleSystemFavorites(env requests.RequestEnv) (any, error) { //nolint:gocr
 	seen := make(map[string]struct{}, len(filters.Systems))
 	systemIDs := make([]string, 0, len(filters.Systems))
 
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		if result.SystemID == "" {
 			continue
 		}

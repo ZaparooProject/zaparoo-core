@@ -730,8 +730,13 @@ func TestSqlSearchMediaWithFilters_ZeroLimitOmitsLimitClause(t *testing.T) {
 				ExpectQuery().
 				WithArgs("user", "favorite", "user", "favorite").
 				WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
-					AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), int64(7), ""))
-			expectSearchTagsQuery(mock, 7)
+					AddRow(
+						systems[0].ID,
+						"Favorite",
+						filepath.ToSlash(filepath.Join("roms", "favorite.rom")),
+						int64(7),
+						"",
+					))
 
 			results, err := sqlSearchMediaWithFilters(
 				context.Background(), db, systems, nil, nil, tags, nil, nil, tt.limit, false,
