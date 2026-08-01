@@ -550,6 +550,9 @@ func (s *streamingSource) mixAdd(buf [][2]float64, n int) (int, bool) {
 	}
 	// Re-read writePos after EOF so final producer frames cannot be skipped.
 	drained := s.writePos.Load() == readPos
+	if s.seekPending.Load() {
+		drained = false
+	}
 	s.consumerActive.Store(false)
 	return written, drained
 }
@@ -624,8 +627,12 @@ func (s *streamingSource) seek(offset time.Duration) {
 	// Gate new callback reads, then wait for any callback already consuming the
 	// ring to finish before replacing playback position and decoder state.
 	s.seekPending.Store(true)
-	for s.consumerActive.Load() {
+	deadline := time.Now().Add(3 * time.Second)
+	for s.consumerActive.Load() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
+	}
+	if s.consumerActive.Load() {
+		log.Warn().Str("path", s.path).Msg("timeout waiting for audio consumer before seek")
 	}
 
 	newPlayed := s.played.Load() + int64(offset.Seconds()*targetSampleRate)

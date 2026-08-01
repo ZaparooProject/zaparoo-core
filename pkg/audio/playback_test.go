@@ -416,6 +416,7 @@ func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
 	buf := make([][2]float64, 2048)
 	deadline := time.Now().Add(5 * time.Second)
 	total := 0
+	didDrain := false
 	for time.Now().Before(deadline) {
 		for i := range buf {
 			buf[i] = [2]float64{}
@@ -423,6 +424,7 @@ func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
 		written, drained := s.mixAdd(buf, len(buf))
 		total += written
 		if drained {
+			didDrain = true
 			break
 		}
 		if written == 0 {
@@ -430,6 +432,7 @@ func TestStreamingSource_ConcurrentPrefetchAndMix(t *testing.T) {
 		}
 	}
 
+	require.True(t, didDrain, "stream did not drain before deadline")
 	assert.Greater(t, total, ringBufferFrames)
 	assert.Equal(t, int64(total), s.played.Load())
 	assert.True(t, s.eof.Load())
