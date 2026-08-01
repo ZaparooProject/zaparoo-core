@@ -45,8 +45,9 @@ import (
 )
 
 const (
-	reflectedSecret  = "zpl1_reflected-device-code"       //nolint:gosec // Test fixture device code.
-	malformedLinkURL = "https://user:link-url-secret@%zz" //nolint:gosec // Test fixture credentials.
+	reflectedSecret       = "zpl1_reflected-device-code" //nolint:gosec // Test fixture device code.
+	reflectedResponseBody = "invalid device code: " + reflectedSecret
+	malformedLinkURL      = "https://user:link-url-secret@%zz" //nolint:gosec // Test fixture credentials.
 )
 
 func TestLogDeviceLinkPollFailure(t *testing.T) {
@@ -290,7 +291,7 @@ func TestCreateDeviceLinkRequest_DoesNotReturnServerBody(t *testing.T) {
 	// Not parallel: swaps package-level claimClient.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("invalid device code: " + reflectedSecret))
+		_, _ = w.Write([]byte(reflectedResponseBody))
 	}))
 	defer server.Close()
 
@@ -302,7 +303,26 @@ func TestCreateDeviceLinkRequest_DoesNotReturnServerBody(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
 	assert.NotContains(t, err.Error(), reflectedSecret)
-	assert.NotContains(t, err.Error(), "invalid device code: "+reflectedSecret)
+	assert.NotContains(t, err.Error(), reflectedResponseBody)
+}
+
+func TestPollDeviceLinkOnce_DoesNotReturnServerBody(t *testing.T) {
+	// Not parallel: swaps package-level claimClient.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(reflectedResponseBody))
+	}))
+	defer server.Close()
+
+	originalClient := claimClient
+	claimClient = server.Client()
+	t.Cleanup(func() { claimClient = originalClient })
+
+	_, err := pollDeviceLinkOnce(t.Context(), server.URL, reflectedSecret)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "400")
+	assert.NotContains(t, err.Error(), reflectedResponseBody)
+	assert.NotContains(t, err.Error(), reflectedSecret)
 }
 
 func TestSettingsAuthLink_MalformedURLRedacted(t *testing.T) {
