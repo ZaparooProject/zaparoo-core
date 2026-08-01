@@ -34,6 +34,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	claimSecret             = "zpc1_claim-secret" //nolint:gosec // Test fixture claim token.
+	userCode                = "ABCD-1234"
+	compactUserCode         = "ABCD1234"
+	authClaimURL            = "https://api.zaparoo.com/v1/device-claims/redeem"
+	authLinkVerificationURL = "https://online.zaparoo.com/link"
+)
+
 func TestLogSafeResponse(t *testing.T) {
 	tests := []struct {
 		result         any
@@ -316,7 +324,6 @@ func TestLogSafeRequest(t *testing.T) {
 }
 
 func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
-	const claimSecret = "zpc1_claim-secret" //nolint:gosec // test fixture claim token
 	var buf bytes.Buffer
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
@@ -326,18 +333,17 @@ func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      models.NewStringID("claim-request"),
 		Method:  models.MethodSettingsAuthClaim,
-		Params:  []byte(`{"claimUrl":"https://api.zaparoo.com/v1/device-claims/redeem","token":"` + claimSecret + `"}`),
+		Params:  []byte(`{"claimUrl":"` + authClaimURL + `","token":"` + claimSecret + `"}`),
 	})
 
 	out := buf.String()
 	assert.Contains(t, out, models.MethodSettingsAuthClaim)
 	assert.NotContains(t, out, claimSecret)
+	assert.NotContains(t, out, authClaimURL)
 	assert.NotContains(t, out, "claimUrl")
 }
 
 func TestLogSafeResponse_AuthLinkCodesRedacted(t *testing.T) {
-	const userCode = "ABCD-1234"
-	const compactUserCode = "ABCD1234"
 	var buf bytes.Buffer
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
@@ -346,14 +352,15 @@ func TestLogSafeResponse_AuthLinkCodesRedacted(t *testing.T) {
 	logSafeResponse(models.AuthLinkStatusResponse{
 		Status:                  models.AuthLinkStatusPending,
 		UserCode:                userCode,
-		VerificationURL:         "https://online.zaparoo.com/link",
-		VerificationURLComplete: "https://online.zaparoo.com/link?code=" + compactUserCode,
+		VerificationURL:         authLinkVerificationURL,
+		VerificationURLComplete: authLinkVerificationURL + "?code=" + compactUserCode,
 	})
 
 	out := buf.String()
 	assert.Contains(t, out, "AuthLinkStatusResponse")
 	assert.NotContains(t, out, compactUserCode)
 	assert.NotContains(t, out, userCode)
+	assert.NotContains(t, out, authLinkVerificationURL)
 	assert.NotContains(t, out, "verificationUrlComplete")
 }
 

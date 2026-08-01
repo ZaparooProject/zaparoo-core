@@ -138,7 +138,7 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 		baseURL = deviceLinkDefaultBaseURL
 	}
 	if err := config.ValidateBackupRemoteBaseURL(baseURL); err != nil {
-		return nil, models.ClientErrf("invalid link URL: %w", err)
+		return nil, models.ClientErr(remoteRequestError("invalid link URL", err))
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
@@ -288,7 +288,7 @@ func createDeviceLinkRequest(
 		ctx, http.MethodPost, baseURL+deviceLinkCreatePath, http.NoBody,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create link request: %w", err)
+		return nil, remoteRequestError("failed to create link request", err)
 	}
 	req.Header.Set(zapscript.HeaderZaparooOS, runtime.GOOS)
 	req.Header.Set(zapscript.HeaderZaparooArch, runtime.GOARCH)
@@ -407,7 +407,7 @@ func pollDeviceLinkOnce(ctx context.Context, baseURL, deviceCode string) (*devic
 		ctx, http.MethodPost, baseURL+deviceLinkPollPath, bytes.NewReader(body),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create poll request: %w", err)
+		return nil, remoteRequestError("failed to create poll request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 

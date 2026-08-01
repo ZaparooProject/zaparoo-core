@@ -215,14 +215,14 @@ func performClaim(
 	// Extract root domain (scheme + host) from the claim URL
 	claimURL, err := url.Parse(rawClaimURL)
 	if err != nil {
-		return nil, models.ClientErrf("invalid claim URL: %w", err)
+		return nil, models.ClientErr(remoteRequestError("invalid claim URL", err))
 	}
 	// HTTPS only, with the same private/localhost HTTP allowance the backup
 	// base URL gets — for developing against a locally-run API.
 	if claimURL.Scheme != "https" {
 		rootURL := claimURL.Scheme + "://" + claimURL.Host
 		if validateErr := config.ValidateBackupRemoteBaseURL(rootURL); validateErr != nil {
-			return nil, models.ClientErrf("claim URL must use HTTPS")
+			return nil, models.ClientErr(remoteRequestError("claim URL must use HTTPS", validateErr))
 		}
 	}
 	rootDomain := claimURL.Scheme + "://" + claimURL.Host
@@ -326,7 +326,7 @@ func redeemClaimToken(
 		ctx, http.MethodPost, claimURL, bytes.NewReader(body),
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to create claim request: %w", err)
+		return "", remoteRequestError("failed to create claim request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(zapscript.HeaderZaparooOS, runtime.GOOS)
