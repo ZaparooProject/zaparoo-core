@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -41,38 +42,58 @@ type mixSource interface {
 	isActive() bool
 }
 
+type mixSourceEntry struct {
+	source  mixSource
+	drained atomic.Bool
+}
+
+type mixSourceList []*mixSourceEntry
+
 // sharedDevice is a single on-demand malgo output device shared by all audio sources.
 // It opens when the first source registers, mixes all sources in the audio callback,
 // and releases when all sources finish or are explicitly closed.
 // This prevents concurrent ALSA device opens, which crash miniaudio on MiSTer.
 //
-// Lock order: devMu → individual source locks.
+// Control paths serialize mutations with devMu, then publish an immutable source
+// snapshot. The realtime callback only reads that snapshot and never takes devMu.
 type sharedDevice struct {
-	// initContext overrides malgo.InitContext in tests; nil means the real one.
-	initContext func([]malgo.Backend, malgo.ContextConfig, malgo.LogProc) (*malgo.AllocatedContext, error)
-	malgoCtx    *malgo.AllocatedContext
-	device      *malgo.Device
-	cancelFn    context.CancelFunc
-	devDone     chan struct{}
-	prevDone    <-chan struct{}
-	manageCh    chan struct{}
-	sources     []mixSource
-	toRemove    []mixSource
-	mixBuf      [][2]float64
-	devMu       syncutil.Mutex
-	opening     bool
+	initContext  func([]malgo.Backend, malgo.ContextConfig, malgo.LogProc) (*malgo.AllocatedContext, error)
+	malgoCtx     *malgo.AllocatedContext
+	device       *malgo.Device
+	cancelFn     context.CancelFunc
+	devDone      chan struct{}
+	prevDone     <-chan struct{}
+	sourceView   atomic.Pointer[mixSourceList]
+	sources      []*mixSourceEntry
+	mixBuf       [][2]float64
+	devMu        syncutil.Mutex
+	drainPending atomic.Bool
+	opening      bool
+}
+
+func newSharedDevice() *sharedDevice {
+	d := &sharedDevice{}
+	d.publishSourcesLocked()
+	return d
+}
+
+// publishSourcesLocked replaces the callback's immutable source snapshot.
+// Caller must hold devMu unless the device has not yet been published.
+func (d *sharedDevice) publishSourcesLocked() {
+	view := make(mixSourceList, len(d.sources))
+	copy(view, d.sources)
+	d.sourceView.Store(&view)
 }
 
 // globalDevice is the process-wide audio output device shared by all players.
-var globalDevice = &sharedDevice{
-	manageCh: make(chan struct{}, 1),
-}
+var globalDevice = newSharedDevice()
 
 // register adds src and opens the device if not already open.
 // Safe to call concurrently.
 func (d *sharedDevice) register(src mixSource) {
 	d.devMu.Lock()
-	d.sources = append(d.sources, src)
+	d.sources = append(d.sources, &mixSourceEntry{source: src})
+	d.publishSourcesLocked()
 	needOpen := src.isActive() && !d.opening && d.device == nil
 	if needOpen {
 		d.opening = true
@@ -87,18 +108,24 @@ func (d *sharedDevice) register(src mixSource) {
 // deregister removes src and closes the device when no sources remain.
 func (d *sharedDevice) deregister(src mixSource) {
 	d.devMu.Lock()
-	for i, s := range d.sources {
-		if s == src {
-			d.sources = append(d.sources[:i], d.sources[i+1:]...)
-			break
-		}
-	}
+	removed := d.removeSourceLocked(src)
 	empty := len(d.sources) == 0
 	d.devMu.Unlock()
 
-	if empty {
+	if removed && empty {
 		d.closeDevice()
 	}
+}
+
+func (d *sharedDevice) removeSourceLocked(src mixSource) bool {
+	for i, candidate := range d.sources {
+		if candidate.source == src {
+			d.sources = append(d.sources[:i], d.sources[i+1:]...)
+			d.publishSourcesLocked()
+			return true
+		}
+	}
+	return false
 }
 
 // releaseIfAllPaused closes the device when no source is currently active.
@@ -109,8 +136,8 @@ func (d *sharedDevice) releaseIfAllPaused() {
 		d.devMu.Unlock()
 		return
 	}
-	for _, s := range d.sources {
-		if s.isActive() {
+	for _, entry := range d.sources {
+		if entry.source.isActive() {
 			d.devMu.Unlock()
 			return
 		}
@@ -119,9 +146,9 @@ func (d *sharedDevice) releaseIfAllPaused() {
 	d.closeDevice()
 }
 
-func hasActiveSource(sources []mixSource) bool {
-	for _, src := range sources {
-		if src.isActive() {
+func hasActiveSource(sources []*mixSourceEntry) bool {
+	for _, entry := range sources {
+		if entry.source.isActive() {
 			return true
 		}
 	}
@@ -168,8 +195,11 @@ func (d *sharedDevice) closeDevice() {
 func (d *sharedDevice) failAllSources() {
 	d.devMu.Lock()
 	srcs := make([]mixSource, len(d.sources))
-	copy(srcs, d.sources)
+	for i, entry := range d.sources {
+		srcs[i] = entry.source
+	}
 	d.sources = d.sources[:0]
+	d.publishSourcesLocked()
 	d.opening = false
 	d.devMu.Unlock()
 
@@ -249,7 +279,6 @@ func (d *sharedDevice) open() {
 	d.devDone = done
 	d.prevDone = done // next open waits for this one
 	d.mixBuf = mixBuf
-	d.toRemove = d.toRemove[:0]
 	d.devMu.Unlock()
 
 	// F32 format, stereo, fixed sample rate with MiSTer-tuned period settings.
@@ -291,8 +320,8 @@ func (d *sharedDevice) open() {
 	go d.manage(ctx, device, malgoCtx, done)
 }
 
-// manage runs while the device is open. It drains source-removal notifications from
-// the audio callback and shuts down the device when all sources finish or ctx is cancelled.
+// manage runs while the device is open. It removes sources marked drained by
+// the callback and shuts down the device when all sources finish or ctx is cancelled.
 func (d *sharedDevice) manage(
 	ctx context.Context,
 	device *malgo.Device,
@@ -300,32 +329,44 @@ func (d *sharedDevice) manage(
 	done chan struct{},
 ) {
 	defer d.cleanup(done, malgoCtx, device)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-d.manageCh:
-			d.devMu.Lock()
-			for _, s := range d.toRemove {
-				for i, src := range d.sources {
-					if src == s {
-						d.sources = append(d.sources[:i], d.sources[i+1:]...)
-						// Notify the source asynchronously so it can do blocking work.
-						go func(drainedSrc mixSource) {
-							if cb, ok := drainedSrc.(interface{ onDrained() }); ok {
-								cb.onDrained()
-							}
-						}(s)
-						break
-					}
-				}
+		case <-ticker.C:
+			if !d.drainPending.Swap(false) {
+				continue
 			}
-			d.toRemove = d.toRemove[:0]
+			d.devMu.Lock()
+			drained := make([]mixSource, 0, len(d.sources))
+			remaining := d.sources[:0]
+			for _, entry := range d.sources {
+				if entry.drained.Load() {
+					drained = append(drained, entry.source)
+					continue
+				}
+				remaining = append(remaining, entry)
+			}
+			if len(drained) > 0 {
+				d.sources = remaining
+				d.publishSourcesLocked()
+			}
 			empty := len(d.sources) == 0
 			d.devMu.Unlock()
 
-			if empty {
+			for _, src := range drained {
+				// Notify asynchronously because source cleanup may block on decoder I/O.
+				go func(drainedSrc mixSource) {
+					if cb, ok := drainedSrc.(interface{ onDrained() }); ok {
+						cb.onDrained()
+					}
+				}(src)
+			}
+
+			if len(drained) > 0 && empty {
 				return
 			}
 		}
@@ -373,9 +414,6 @@ func (d *sharedDevice) cleanup(
 // onSamples is the malgo audio callback. It mixes all registered sources into the output
 // buffer. Called on the malgo audio thread — must not block, allocate, or make syscalls.
 func (d *sharedDevice) onSamples(output, _ []byte, frameCount uint32) {
-	d.devMu.Lock()
-	defer d.devMu.Unlock()
-
 	n := int(frameCount)
 	if n > len(d.mixBuf) {
 		n = len(d.mixBuf)
@@ -386,10 +424,13 @@ func (d *sharedDevice) onSamples(output, _ []byte, frameCount uint32) {
 		d.mixBuf[i] = [2]float64{}
 	}
 
-	for _, src := range d.sources {
-		_, drained := src.mixAdd(d.mixBuf, n)
-		if drained {
-			d.toRemove = append(d.toRemove, src)
+	if view := d.sourceView.Load(); view != nil {
+		for _, entry := range *view {
+			_, drained := entry.source.mixAdd(d.mixBuf, n)
+			if drained {
+				entry.drained.Store(true)
+				d.drainPending.Store(true)
+			}
 		}
 	}
 
@@ -407,14 +448,6 @@ func (d *sharedDevice) onSamples(output, _ []byte, frameCount uint32) {
 	// Zero any trailing output bytes we didn't fill.
 	for i := offset; i < len(output); i++ {
 		output[i] = 0
-	}
-
-	// Wake the manager goroutine when sources have drained.
-	if len(d.toRemove) > 0 {
-		select {
-		case d.manageCh <- struct{}{}:
-		default:
-		}
 	}
 }
 

@@ -21,10 +21,12 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -149,13 +151,15 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 		}
 	}
 
-	// Stop and deregister the previous source for this slot.
+	// Start decoding before touching the current source or opening ALSA. Device
+	// startup and previous-source cleanup then provide time to build a cushion,
+	// so the first callback does not race an empty ring.
+	src.startPrefetch()
 	if old != nil {
 		old.stopAndDeregister()
 	}
 
 	globalDevice.register(src)
-	src.startPrefetch()
 	return nil
 }
 
@@ -282,35 +286,37 @@ func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 // background goroutine. This bounds memory use to ringBufferFrames regardless of
 // file length and keeps decoding off the malgo audio thread.
 type streamingSource struct {
-	resampler    beep.Streamer
-	decoder      beep.StreamSeekCloser
-	onDrain      func(natural bool)
-	file         *os.File
-	wakeCh       chan struct{}
-	doneCh       chan struct{}
-	cancelFn     context.CancelFunc
-	path         string
-	ring         [][2]float64
-	chunk        [][2]float64
-	volume       float64
-	totalFrames  int64
-	sourceRate   int
-	quality      int
-	seekSrcFrame int64
-	played       int64
-	filled       int
-	wpos         int
-	rpos         int
-	mu           syncutil.Mutex
-	seekPending  bool
-	eof          bool
-	stopped      bool
-	paused       bool
+	resampler      beep.Streamer
+	decoder        beep.StreamSeekCloser
+	onDrain        func(natural bool)
+	file           *os.File
+	wakeCh         chan struct{}
+	doneCh         chan struct{}
+	cancelFn       context.CancelFunc
+	path           string
+	ring           [][2]float64
+	chunk          [][2]float64
+	volume         float64
+	totalFrames    int64
+	sourceRate     int
+	quality        int
+	mu             syncutil.Mutex
+	seekMu         syncutil.Mutex
+	readPos        atomic.Uint64
+	writePos       atomic.Uint64
+	played         atomic.Int64
+	seekSrcFrame   atomic.Int64
+	underruns      atomic.Uint64
+	seekPending    atomic.Bool
+	consumerActive atomic.Bool
+	underrunActive atomic.Bool
+	eof            atomic.Bool
+	stopped        atomic.Bool
+	paused         atomic.Bool
 }
 
 // newStreamingSource opens path for streaming decode and returns a ready source.
-// The prefetch goroutine is NOT started yet — call startPrefetch after registering
-// with the device.
+// The prefetch goroutine is not started yet; start it before device registration.
 func newStreamingSource(path string, volume float64, quality int) (*streamingSource, error) {
 	//nolint:gosec // G304: callers validate media paths before launching.
 	f, err := os.Open(path)
@@ -364,7 +370,7 @@ func newStreamingSource(path string, volume float64, quality int) (*streamingSou
 }
 
 // startPrefetch launches the background goroutine that fills the ring buffer.
-// Must be called after the source is registered with the device.
+// Call before device registration so playback starts with buffered audio.
 func (s *streamingSource) startPrefetch() {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -375,89 +381,91 @@ func (s *streamingSource) startPrefetch() {
 	go s.prefetch(ctx, done)
 }
 
-// prefetch runs in a background goroutine, filling the ring buffer from the decoder.
+// prefetch runs in a background goroutine, filling the single-producer,
+// single-consumer ring buffer from the decoder.
 func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	defer func() {
 		if err := s.decoder.Close(); err != nil {
 			log.Warn().Err(err).Str("path", s.path).Msg("close audio decoder")
 		}
-		if err := s.file.Close(); err != nil {
+		if err := s.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 			log.Warn().Err(err).Str("path", s.path).Msg("close audio file")
 		}
 	}()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	var reportedUnderruns uint64
 
+prefetchLoop:
 	for {
-		// Handle a pending seek: flush ring, reposition decoder, rebuild resampler.
-		s.mu.Lock()
-		seekPending := s.seekPending
-		seekFrame := s.seekSrcFrame
-		if seekPending {
-			s.seekPending = false
-			s.rpos = 0
-			s.wpos = 0
-			s.filled = 0
-			s.eof = false
-		}
-		stopped := s.stopped
-		s.mu.Unlock()
-
-		if stopped {
+		if s.stopped.Load() {
 			return
 		}
-		if seekPending {
+
+		if s.seekPending.Load() {
+			s.seekMu.Lock()
+			seekFrame := s.seekSrcFrame.Load()
 			if err := s.decoder.Seek(int(seekFrame)); err != nil {
 				log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
 			}
 			s.resampler = beep.Resample(s.quality, beep.SampleRate(s.sourceRate),
 				beep.SampleRate(targetSampleRate), s.decoder)
+			s.readPos.Store(0)
+			s.writePos.Store(0)
+			s.eof.Store(false)
+			s.underrunActive.Store(false)
+			s.seekPending.Store(false)
+			s.seekMu.Unlock()
 		}
 
-		// Fill all available ring space before sleeping. Decoding a single chunk
-		// per wake caps sustained decode at 1x realtime, leaving no headroom to
-		// rebuild the cushion when the CPU is contended (audible dropouts on
-		// slow ARM devices); filling to capacity lets the ring absorb stalls.
-		for {
-			s.mu.Lock()
-			space := 0
-			if !s.paused && !s.eof && !s.stopped && !s.seekPending {
-				space = len(s.ring) - s.filled
+		if count := s.underruns.Load(); count > reportedUnderruns {
+			log.Warn().
+				Str("path", s.path).
+				Uint64("underruns", count).
+				Int("bufferedFrames", s.bufferedFrames()).
+				Msg("audio stream buffer underrun")
+			reportedUnderruns = count
+		}
+
+		// Fill all available ring space before sleeping. The producer writes frame
+		// data before publishing writePos; the callback consumes published frames
+		// and advances readPos. Neither side takes a mutex.
+		for !s.paused.Load() && !s.eof.Load() && !s.stopped.Load() {
+			if s.seekPending.Load() {
+				continue prefetchLoop
 			}
-			s.mu.Unlock()
-			if space == 0 {
+			readPos := s.readPos.Load()
+			writePos := s.writePos.Load()
+			buffered := writePos - readPos
+			if buffered >= uint64(len(s.ring)) {
 				break
 			}
 
+			space := len(s.ring) - boundedFrameCount(buffered, len(s.ring))
 			n := min(space, len(s.chunk))
 			written, ok := s.resampler.Stream(s.chunk[:n])
+			if s.seekPending.Load() {
+				continue prefetchLoop
+			}
 			if written > 0 {
-				s.mu.Lock()
 				for i := range written {
-					s.ring[s.wpos] = s.chunk[i]
-					s.wpos = (s.wpos + 1) % len(s.ring)
+					s.ring[(writePos+uint64(i))%uint64(len(s.ring))] = s.chunk[i]
 				}
-				s.filled += written
-				s.mu.Unlock()
+				s.writePos.Store(writePos + uint64(written))
 			}
 			if !ok {
 				if err := s.decoder.Err(); err != nil {
 					log.Warn().Err(err).Str("path", s.path).Msg("audio decode error")
 				}
-				// Decoder exhausted or errored; let the ring drain naturally.
-				// Don't exit: a seek can still arrive while the tail plays out
-				// (it clears eof and repositions the decoder). The goroutine is
-				// cancelled on stop or when the drained source is deregistered.
-				s.mu.Lock()
-				s.eof = true
-				s.mu.Unlock()
+				// Publish EOF only after final frames. Loading EOF before writePos
+				// lets the consumer observe every frame before reporting drained.
+				s.eof.Store(true)
 				break
 			}
 		}
 
-		// Sleep until the ring needs refilling or a seek arrives.
 		select {
 		case <-ctx.Done():
 			return
@@ -467,54 +475,99 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 	}
 }
 
-// mixAdd implements mixSource. Called on the malgo audio thread; must not block or alloc.
-func (s *streamingSource) mixAdd(buf [][2]float64, n int) (int, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func boundedFrameCount(frames uint64, limit int) int {
+	if limit <= 0 || frames == 0 {
+		return 0
+	}
+	if frames >= uint64(limit) {
+		return limit
+	}
+	return int(frames) //nolint:gosec // frames is proven positive and below the platform-sized limit.
+}
 
-	if s.stopped {
+func (s *streamingSource) bufferedFrames() int {
+	if s.seekPending.Load() {
+		return 0
+	}
+	readPos := s.readPos.Load()
+	writePos := s.writePos.Load()
+	if writePos <= readPos {
+		return 0
+	}
+	buffered := writePos - readPos
+	return boundedFrameCount(buffered, len(s.ring))
+}
+
+func (s *streamingSource) wakePrefetch() {
+	select {
+	case s.wakeCh <- struct{}{}:
+	default:
+	}
+}
+
+// mixAdd implements mixSource. Called on the malgo realtime thread; this is the
+// single ring consumer and performs no blocking synchronization or allocation.
+func (s *streamingSource) mixAdd(buf [][2]float64, n int) (int, bool) {
+	if s.stopped.Load() {
 		return 0, true
 	}
-	if s.paused || s.filled == 0 {
-		// Drained only when the prefetch finished AND the ring is empty.
-		return 0, s.eof && s.filled == 0
+	if s.paused.Load() || s.seekPending.Load() {
+		return 0, false
 	}
 
-	written := 0
-	for written < n && s.filled > 0 {
-		buf[written][0] += s.ring[s.rpos][0] * s.volume
-		buf[written][1] += s.ring[s.rpos][1] * s.volume
-		s.rpos = (s.rpos + 1) % len(s.ring)
-		s.filled--
-		s.played++
-		written++
+	s.consumerActive.Store(true)
+	if s.seekPending.Load() {
+		s.consumerActive.Store(false)
+		return 0, false
 	}
 
-	// Kick the prefetch goroutine when the ring drops below 25 % capacity.
-	if s.filled < len(s.ring)/4 && !s.eof {
-		select {
-		case s.wakeCh <- struct{}{}:
-		default:
-		}
+	// Load EOF before writePos. When EOF is true, the producer's final writePos
+	// publication is guaranteed to be visible before deciding the source drained.
+	eof := s.eof.Load()
+	readPos := s.readPos.Load()
+	writePos := s.writePos.Load()
+	available := writePos - readPos
+	written := boundedFrameCount(available, n)
+	for i := range written {
+		sample := s.ring[(readPos+uint64(i))%uint64(len(s.ring))]
+		buf[i][0] += sample[0] * s.volume
+		buf[i][1] += sample[1] * s.volume
+	}
+	if written > 0 {
+		readPos += uint64(written)
+		s.readPos.Store(readPos)
+		s.played.Add(int64(written))
+		s.underrunActive.Store(false)
 	}
 
-	return written, s.eof && s.filled == 0
+	if written < n && !eof && s.underrunActive.CompareAndSwap(false, true) {
+		s.underruns.Add(1)
+	}
+
+	if !eof {
+		s.consumerActive.Store(false)
+		return written, false
+	}
+	// Re-read writePos after EOF so final producer frames cannot be skipped.
+	drained := s.writePos.Load() == readPos
+	if s.seekPending.Load() {
+		drained = false
+	}
+	s.consumerActive.Store(false)
+	return written, drained
 }
 
 // isActive returns false when paused (contributing silence) so the device can be
 // released when all sources are idle.
 func (s *streamingSource) isActive() bool {
-	s.mu.Lock()
-	active := !s.paused && !s.stopped
-	s.mu.Unlock()
-	return active
+	return !s.paused.Load() && !s.stopped.Load()
 }
 
 // fail cancels the prefetch goroutine and fires the drain callback, used when the
 // device fails to open. Does not block waiting for the goroutine to exit.
 func (s *streamingSource) fail() {
+	s.stopped.Store(true)
 	s.mu.Lock()
-	s.stopped = true
 	cancelFn := s.cancelFn
 	s.mu.Unlock()
 	if cancelFn != nil {
@@ -528,9 +581,8 @@ func (s *streamingSource) fail() {
 // (Stop/replace), then cancels the prefetch goroutine, which parks at EOF while
 // the ring tail plays out and would otherwise leak.
 func (s *streamingSource) onDrained() {
+	natural := !s.stopped.Swap(true)
 	s.mu.Lock()
-	natural := !s.stopped
-	s.stopped = true
 	cancelFn := s.cancelFn
 	s.mu.Unlock()
 
@@ -544,38 +596,46 @@ func (s *streamingSource) onDrained() {
 
 // setPaused sets the paused flag.
 func (s *streamingSource) setPaused(paused bool) {
-	s.mu.Lock()
-	s.paused = paused
-	s.mu.Unlock()
+	s.paused.Store(paused)
 	// Wake the prefetch goroutine on resume so it can refill the ring.
 	if !paused {
-		select {
-		case s.wakeCh <- struct{}{}:
-		default:
-		}
+		s.wakePrefetch()
 	}
 }
 
 // togglePause flips the paused state and returns the new value.
 func (s *streamingSource) togglePause() bool {
-	s.mu.Lock()
-	s.paused = !s.paused
-	nowPaused := s.paused
-	s.mu.Unlock()
-	if !nowPaused {
-		select {
-		case s.wakeCh <- struct{}{}:
-		default:
+	for {
+		wasPaused := s.paused.Load()
+		nowPaused := !wasPaused
+		if !s.paused.CompareAndSwap(wasPaused, nowPaused) {
+			continue
 		}
+		if !nowPaused {
+			s.wakePrefetch()
+		}
+		return nowPaused
 	}
-	return nowPaused
 }
 
 // seek schedules a seek to the given offset from the current position.
 // The ring buffer is flushed atomically; a brief silence occurs during the re-fill.
 func (s *streamingSource) seek(offset time.Duration) {
-	s.mu.Lock()
-	newPlayed := s.played + int64(offset.Seconds()*targetSampleRate)
+	s.seekMu.Lock()
+	defer s.seekMu.Unlock()
+
+	// Gate new callback reads, then wait for any callback already consuming the
+	// ring to finish before replacing playback position and decoder state.
+	s.seekPending.Store(true)
+	deadline := time.Now().Add(3 * time.Second)
+	for s.consumerActive.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if s.consumerActive.Load() {
+		log.Warn().Str("path", s.path).Msg("timeout waiting for audio consumer before seek")
+	}
+
+	newPlayed := s.played.Load() + int64(offset.Seconds()*targetSampleRate)
 	if newPlayed < 0 {
 		newPlayed = 0
 	}
@@ -583,28 +643,17 @@ func (s *streamingSource) seek(offset time.Duration) {
 		newPlayed = s.totalFrames
 	}
 	srcFrame := int64(float64(newPlayed) / targetSampleRate * float64(s.sourceRate))
-	s.seekPending = true
-	s.seekSrcFrame = srcFrame
-	s.played = newPlayed
-	// Flush ring so the callback returns silence until the prefetch refills it.
-	s.rpos = 0
-	s.wpos = 0
-	s.filled = 0
-	s.eof = false
-	s.mu.Unlock()
-
-	// Wake the prefetch goroutine immediately to process the seek.
-	select {
-	case s.wakeCh <- struct{}{}:
-	default:
-	}
+	s.seekSrcFrame.Store(srcFrame)
+	s.played.Store(newPlayed)
+	s.eof.Store(false)
+	s.wakePrefetch()
 }
 
 // stopAndDeregister cancels the prefetch goroutine and removes this source from
 // the shared device. Blocks until the prefetch goroutine exits.
 func (s *streamingSource) stopAndDeregister() {
+	s.stopped.Store(true)
 	s.mu.Lock()
-	s.stopped = true
 	cancelFn := s.cancelFn
 	doneCh := s.doneCh
 	s.mu.Unlock()
@@ -625,14 +674,15 @@ func (s *streamingSource) stopAndDeregister() {
 
 // state returns a snapshot of the current playback state.
 func (s *streamingSource) state() PlaybackState {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	paused := s.paused.Load()
+	stopped := s.stopped.Load()
+	eof := s.eof.Load()
 	return PlaybackState{
 		Path:     s.path,
-		Position: sampleDuration(int(s.played)),
+		Position: sampleDuration(int(s.played.Load())),
 		Duration: sampleDuration(int(s.totalFrames)),
-		Playing:  !s.paused && !s.stopped && (!s.eof || s.filled != 0),
-		Paused:   s.paused,
+		Playing:  !paused && !stopped && (!eof || s.bufferedFrames() != 0),
+		Paused:   paused,
 	}
 }
 

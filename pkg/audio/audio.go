@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/gopxl/beep/v2"
@@ -227,16 +228,13 @@ type oneshotSource struct {
 	samples [][2]float64
 	pos     int
 	volume  float64
-	mu      syncutil.Mutex
-	stopped bool
+	stopped atomic.Bool
 }
 
 // mixAdd sums up to n frames from the buffer into buf. Returns drained when exhausted.
-// Called on the malgo audio thread under devMu — must not block or alloc.
+// Called on the malgo realtime thread and performs no blocking synchronization.
 func (s *oneshotSource) mixAdd(buf [][2]float64, n int) (int, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stopped {
+	if s.stopped.Load() {
 		return 0, true
 	}
 	written := 0
@@ -249,16 +247,14 @@ func (s *oneshotSource) mixAdd(buf [][2]float64, n int) (int, bool) {
 	return written, s.pos >= len(s.samples)
 }
 
-// isActive always returns true: one-shot sources are active until drained or cancelled.
-func (*oneshotSource) isActive() bool {
-	return true
+// isActive returns false once cancellation makes the source drain immediately.
+func (s *oneshotSource) isActive() bool {
+	return !s.stopped.Load()
 }
 
 // cancel marks the source as stopped so it drains immediately on the next callback.
 func (s *oneshotSource) cancel() {
-	s.mu.Lock()
-	s.stopped = true
-	s.mu.Unlock()
+	s.stopped.Store(true)
 }
 
 // onDrained implements the optional drainCallback interface used by the device manager.
