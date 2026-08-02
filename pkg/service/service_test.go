@@ -567,6 +567,177 @@ func TestAdvanceBackgroundPlaylist_NilPlaylistClearsBackgroundMedia(t *testing.T
 	}
 }
 
+func TestRecoverInterruptedMediaDBRecreate_RestoresPendingState(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.True(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRecoverInterruptedMediaDBRecreate_StatusErrorReleasesBackgroundOperation(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(assert.AnError).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+}
+
+func TestRecoverInterruptedMediaDBRecreate_RejectsAmbiguousState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		statusErr        error
+		lastGeneratedErr error
+		hasMediaErr      error
+		name             string
+		status           string
+		hasMedia         bool
+		checkGenerated   bool
+		checkMedia       bool
+	}{
+		{
+			name:      "indexing status unavailable",
+			statusErr: assert.AnError,
+		},
+		{
+			name:   "index already pending",
+			status: mediadb.IndexingStatusPending,
+		},
+		{
+			name:             "last generation unavailable",
+			lastGeneratedErr: assert.AnError,
+			checkGenerated:   true,
+		},
+		{
+			name:           "media rows unavailable",
+			hasMediaErr:    assert.AnError,
+			checkGenerated: true,
+			checkMedia:     true,
+		},
+		{
+			name:           "database still has media",
+			hasMedia:       true,
+			checkGenerated: true,
+			checkMedia:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := &testhelpers.MockMediaDBI{}
+			mockMediaDB.On("GetIndexingStatus").Return(tt.status, tt.statusErr).Once()
+			if tt.checkGenerated {
+				mockMediaDB.On("GetLastGenerated").Return(time.Time{}, tt.lastGeneratedErr).Once()
+			}
+			if tt.checkMedia {
+				mockMediaDB.On("HasAnyMedia").Return(tt.hasMedia, tt.hasMediaErr).Once()
+			}
+
+			recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+			assert.False(t, recovered)
+			mockMediaDB.AssertExpectations(t)
+			mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+		})
+	}
+}
+
+func TestRecoverInterruptedMediaDBRecreate_CacheFailuresKeepRecoveryPending(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		rebuildErr  error
+		persistErr  error
+		name        string
+		callPersist bool
+	}{
+		{
+			name:       "cache rebuild fails",
+			rebuildErr: assert.AnError,
+		},
+		{
+			name:        "cache persistence fails",
+			persistErr:  assert.AnError,
+			callPersist: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := &testhelpers.MockMediaDBI{}
+			mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+			mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+			mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+			mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+			mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
+			mockMediaDB.On("RebuildSlugSearchCache").Return(tt.rebuildErr).Once()
+			if tt.callPersist {
+				mockMediaDB.On("PersistSlugSearchCache").Return(tt.persistErr).Once()
+			}
+			mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+			recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+			assert.True(t, recovered)
+			mockMediaDB.AssertExpectations(t)
+			if !tt.callPersist {
+				mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+			}
+		})
+	}
+}
+
+func TestRecoverInterruptedMediaDBRecreate_IgnoresFirstInstall(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, false)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertNotCalled(t, "GetIndexingStatus")
+}
+
+func TestRecoverInterruptedMediaDBRecreate_IgnoresCompletedEmptyIndex(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "SetIndexingStatus", mock.Anything)
+}
+
 func TestRebuildStartupSlugSearchCache_SkipsWhenLoaded(t *testing.T) {
 	t.Parallel()
 
@@ -633,6 +804,70 @@ func TestRebuildStartupSlugSearchCache_RebuildsWhenIdle(t *testing.T) {
 	rebuildStartupSlugSearchCache(mockMediaDB, false)
 
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestIndexingStatusNeedsResume(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		hasMediaErr error
+		name        string
+		status      string
+		hasMedia    bool
+		expected    bool
+		checkRows   bool
+		expectedErr bool
+	}{
+		{
+			name:     "pending",
+			status:   mediadb.IndexingStatusPending,
+			expected: true,
+		},
+		{
+			name:      "failed empty database",
+			status:    mediadb.IndexingStatusFailed,
+			expected:  true,
+			checkRows: true,
+		},
+		{
+			name:      "failed database with media",
+			status:    mediadb.IndexingStatusFailed,
+			hasMedia:  true,
+			checkRows: true,
+		},
+		{
+			name:        "failed media check",
+			status:      mediadb.IndexingStatusFailed,
+			hasMediaErr: assert.AnError,
+			checkRows:   true,
+			expectedErr: true,
+		},
+		{
+			name:   "cancelled",
+			status: mediadb.IndexingStatusCancelled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := &testhelpers.MockMediaDBI{}
+			if tt.checkRows {
+				mockMediaDB.On("HasAnyMedia").Return(tt.hasMedia, tt.hasMediaErr).Once()
+			}
+
+			actual, err := indexingStatusNeedsResume(tt.status, mockMediaDB)
+
+			if tt.expectedErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.expected, actual)
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
 }
 
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
@@ -852,6 +1087,20 @@ func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
 }
 
+func TestCheckAndResumeIndexing_FailedStatusMediaCheckError(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, assert.AnError).Once()
+
+	started := checkAndResumeIndexing(nil, nil, &database.Database{MediaDB: mockMediaDB}, nil, nil)
+
+	assert.False(t, started)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "ResetIndexResumeAttempts")
+}
+
 func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
 	methods.ClearIndexingStatus()
@@ -873,8 +1122,9 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	// Create mock state
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	// Mock database to return "failed" status (should not resume)
+	// A failed update over a still-usable database should not auto-resume.
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil)
+	mockMediaDB.On("HasAnyMedia").Return(true, nil)
 	// A non-interrupted state resets the resume-attempt counter.
 	mockMediaDB.On("ResetIndexResumeAttempts").Return(nil)
 

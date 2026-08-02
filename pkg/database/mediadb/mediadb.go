@@ -875,11 +875,12 @@ func (db *MediaDB) IntegrityReport() []string {
 
 // Recreate discards the database file and reopens a fresh one. The connection is
 // closed; the main file is either preserved as a <db>.corrupt.bak forensic copy
-// (keepBackup — development builds only) or deleted; the -wal/-shm sidecars and any
-// corrupt marker are removed (a stale WAL would re-corrupt the new file); and Open()
-// allocates a fresh schema. MediaDB is a rebuildable cache, so nothing is salvaged —
-// the caller triggers a reindex afterwards. Callers: corruption recovery and the
-// user-requested fresh-start rebuild (media.index with rebuild:true).
+// (keepBackup — development builds only) or deleted; the -wal/-shm sidecars are
+// removed (a stale WAL would re-corrupt the new file); and Open() allocates a fresh
+// schema. Before any corrupt marker is cleared, the fresh database is marked pending
+// for reindex and stale search caches are removed. This durable handoff lets startup
+// resume if the process exits before the caller starts indexing. Callers: corruption
+// recovery and the user-requested fresh-start rebuild (media.index with rebuild:true).
 func (db *MediaDB) Recreate(keepBackup bool) error {
 	// Serialize recreates: a user-triggered rebuild must never interleave its
 	// close/delete/reopen with corruption recovery's (or another rebuild's).
@@ -939,8 +940,28 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 		return errors.New("recreated media database failed quick_check")
 	}
 
-	// Clear the marker only after the fresh database opens and passes verification,
-	// so a failed replacement leaves the durable signal for the next recovery attempt.
+	// Persist reindex intent before clearing the corrupt marker. Path discovery and
+	// indexing start asynchronously after Recreate returns, so a power loss or startup
+	// failure in that window must not leave an empty database with no resume signal.
+	if err := db.SetIndexingStatus(IndexingStatusPending); err != nil {
+		return fmt.Errorf("failed to mark recreated media database pending reindex: %w", err)
+	}
+
+	// Persisted caches belong to the discarded database. A fresh DB starts with the
+	// same generation value, so leaving generation-zero files behind can make stale
+	// title candidates look valid even though their SQL rows no longer exist.
+	db.inMemoryTagCache.Store(nil)
+	db.slugSearchCache.Store(nil)
+	cacheErr := errors.Join(
+		removePersistedCacheFile(db.tagCachePath(), tagCacheKind),
+		removePersistedCacheFile(db.slugSearchCachePath(), slugSearchCacheKind),
+	)
+	if cacheErr != nil {
+		return fmt.Errorf("failed to clear caches after media database recreate: %w", cacheErr)
+	}
+
+	// Clear the marker only after the fresh database is verified and has durable
+	// reindex intent, so every failure before this point remains recoverable on boot.
 	if err := db.ClearCorruptMarker(); err != nil {
 		return fmt.Errorf("failed to clear corrupt marker after media database recreate: %w", err)
 	}

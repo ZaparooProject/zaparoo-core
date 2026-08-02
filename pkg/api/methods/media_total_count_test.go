@@ -207,6 +207,47 @@ func TestHandleMedia_MissingMediaCount(t *testing.T) {
 	}
 }
 
+func TestMediaDBHasUsableData(t *testing.T) {
+	tests := []struct {
+		lastGenerated    time.Time
+		lastGeneratedErr error
+		name             string
+		hasMedia         bool
+		expected         bool
+	}{
+		{
+			name: "fresh empty database",
+		},
+		{
+			name:     "partial index has media",
+			hasMedia: true,
+			expected: true,
+		},
+		{
+			name:          "completed empty index",
+			lastGenerated: time.Now(),
+			expected:      true,
+		},
+		{
+			name:             "timestamp read failure falls back to media",
+			lastGeneratedErr: assert.AnError,
+			hasMedia:         true,
+			expected:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockMediaDB := &helpers.MockMediaDBI{}
+			mockMediaDB.On("GetLastGenerated").Return(tt.lastGenerated, tt.lastGeneratedErr)
+			mockMediaDB.On("HasAnyMedia").Return(tt.hasMedia, nil).Maybe()
+
+			assert.Equal(t, tt.expected, mediaDBHasUsableData(mockMediaDB))
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
+}
+
 func intPtr(i int) *int {
 	return &i
 }

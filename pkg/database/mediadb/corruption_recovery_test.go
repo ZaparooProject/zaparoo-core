@@ -180,11 +180,56 @@ func TestMediaDB_Recreate_KeepBackup(t *testing.T) {
 	require.NoError(t, backupErr, "backup copy should be kept when keepBackup=true")
 	assert.False(t, mediaDB.IsMarkedCorrupt(), "marker should be cleared after recreate")
 
-	// Fresh schema: queryable and empty.
+	// Fresh schema: queryable and empty, with durable intent to rebuild it.
 	var count int
 	require.NoError(t, mediaDB.sql.Load().QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM Media").Scan(&count))
 	assert.Equal(t, 0, count, "recreated database should be empty")
+	status, err := mediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, IndexingStatusPending, status)
+}
+
+func TestMediaDB_Recreate_RemovesPersistedCaches(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	insertSystemWithMedia(t, mediaDB, "NES", "Some Game", filepath.Join("roms", "nes", "game.nes"))
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	require.NoError(t, mediaDB.PersistSlugSearchCache())
+	require.FileExists(t, mediaDB.slugSearchCachePath())
+
+	// A stale tag cache must be removed even if its contents cannot be decoded.
+	require.NoError(t, os.MkdirAll(filepath.Dir(mediaDB.tagCachePath()), 0o750))
+	require.NoError(t, os.WriteFile(mediaDB.tagCachePath(), []byte("stale"), 0o600))
+	require.FileExists(t, mediaDB.tagCachePath())
+
+	require.NoError(t, mediaDB.Recreate(false))
+
+	assert.NoFileExists(t, mediaDB.slugSearchCachePath())
+	assert.NoFileExists(t, mediaDB.tagCachePath())
+	loaded, err := mediaDB.LoadCachedSlugSearchCache()
+	require.NoError(t, err)
+	assert.False(t, loaded)
+}
+
+func TestMediaDB_Recreate_CacheRemovalFailureKeepsReindexPending(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	mediaDB.MarkCorrupt("test")
+	cachePath := mediaDB.slugSearchCachePath()
+	require.NoError(t, os.MkdirAll(cachePath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "blocker"), []byte("stale"), 0o600))
+
+	err := mediaDB.Recreate(false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear caches")
+	status, statusErr := mediaDB.GetIndexingStatus()
+	require.NoError(t, statusErr)
+	assert.Equal(t, IndexingStatusPending, status)
+	assert.True(t, mediaDB.IsMarkedCorrupt(), "corrupt marker must survive cache cleanup failure")
 }
 
 // zeroHighPages reproduces the real-world corruption: a contiguous run of high-numbered

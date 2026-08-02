@@ -91,6 +91,59 @@ func waitForBackupShutdown(
 	return nil
 }
 
+// recoverInterruptedMediaDBRecreate repairs the 2.16 failure state where a
+// recreated database lost its reindex intent before indexing persisted a status.
+// A non-empty persisted slug cache plus a blank, never-generated, empty database
+// is durable evidence that an indexed database existed before it was replaced.
+func recoverInterruptedMediaDBRecreate(mediaDB database.MediaDBI, slugCacheLoaded bool) bool {
+	if mediaDB == nil || !slugCacheLoaded {
+		return false
+	}
+
+	status, err := mediaDB.GetIndexingStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check indexing status for interrupted database recreation")
+		return false
+	}
+	if status != "" {
+		return false
+	}
+
+	lastGenerated, err := mediaDB.GetLastGenerated()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check generation time for interrupted database recreation")
+		return false
+	}
+	if !lastGenerated.IsZero() {
+		return false
+	}
+
+	hasMedia, err := mediaDB.HasAnyMedia()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check media rows for interrupted database recreation")
+		return false
+	}
+	if hasMedia {
+		return false
+	}
+
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
+
+	if err := mediaDB.SetIndexingStatus(mediadb.IndexingStatusPending); err != nil {
+		log.Error().Err(err).Msg("failed to restore reindex intent for empty recreated media database")
+		return false
+	}
+
+	log.Warn().Msg("detected empty media database with stale search cache; resuming interrupted rebuild")
+	if err := mediaDB.RebuildSlugSearchCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to clear stale slug search cache after interrupted rebuild")
+	} else if err := mediaDB.PersistSlugSearchCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to remove stale persisted slug search cache after interrupted rebuild")
+	}
+	return true
+}
+
 func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bool) {
 	if mediaDB == nil || slugCacheLoaded {
 		return
@@ -482,6 +535,20 @@ func Start(
 					Dur("duration", time.Since(slugCacheStarted)).
 					Msg("cached slug search cache load completed")
 				slugCacheLoaded = loaded
+			}
+
+			if recoverInterruptedMediaDBRecreate(db.MediaDB, slugCacheLoaded) {
+				slugCacheLoaded = false
+				if inboxSvc := st.Inbox(); inboxSvc != nil {
+					if inboxErr := inboxSvc.Add("Media database rebuild resumed",
+						inbox.WithBody("A previous media database rebuild was interrupted. Full media indexing "+
+							"will resume automatically; keep the device powered until it completes."),
+						inbox.WithSeverity(inbox.SeverityWarning),
+						inbox.WithCategory(inbox.CategoryMediaDBInterruptedRebuild),
+					); inboxErr != nil {
+						log.Warn().Err(inboxErr).Msg("failed to add inbox message about resumed media database rebuild")
+					}
+				}
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)

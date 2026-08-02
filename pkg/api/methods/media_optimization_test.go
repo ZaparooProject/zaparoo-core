@@ -139,7 +139,7 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 			// fallback) in every branch, including mid-index.
 			lastGenerated := time.Now()
 			if tt.dbEmpty {
-				lastGenerated = time.Unix(0, 0)
+				lastGenerated = time.Time{}
 			}
 			mockMediaDB.On("GetLastGenerated").Return(lastGenerated, nil).Maybe()
 			mockMediaDB.On("GetTotalMediaCount").Return(100, nil).Maybe()
@@ -186,7 +186,7 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 	// Both indexing and optimization are "running"
 	mockMediaDB.On("GetOptimizationStatus").Return("running", nil)
 	// Empty database: first index still running, nothing committed yet.
-	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
 
 	// Set indexing as active - use set() to avoid data race
 	statusInstance.set(indexingStatusVals{
@@ -270,7 +270,7 @@ func TestHandleMedia_IndexingPriorityOverBrowseCacheRebuild(t *testing.T) {
 	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	mockMediaDB.On("GetOptimizationStatus").Return("completed", nil)
-	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
 	mockMediaDB.BeginBrowseCacheRebuild()
 
 	statusInstance.set(indexingStatusVals{indexing: true, totalSteps: 10, currentStep: 5})
@@ -374,7 +374,7 @@ func TestHandleMedia_PersistedIndexingStatusShowsPreparingResume(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil)
 	// Interrupted first index on an empty database awaiting resume.
-	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
 
 	db := &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB}
 	env := requests.RequestEnv{Context: context.Background(), Database: db, State: testState}
@@ -399,7 +399,7 @@ func TestGenerateMediaDB_NotifiesPreparingBeforeOptimizationPreflightFailure(t *
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.Optimizing = true
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
-	mockMediaDB.On("GetLastGenerated").Return(time.Unix(0, 0), nil).Maybe()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Maybe()
 	ns := make(chan models.Notification, 2)
 	db := &database.Database{MediaDB: mockMediaDB}
 
