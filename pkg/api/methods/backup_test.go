@@ -99,15 +99,21 @@ func newBackupTestEnv(t *testing.T) requests.RequestEnv {
 	}
 }
 
-func TestHandleBackup_RejectsPlatformWithoutFullDeviceProvider(t *testing.T) {
+func TestHandleBackup_SucceedsWithoutPlatformBackupProvider(t *testing.T) {
 	env := newBackupTestEnv(t)
 	platformWithBackup, ok := env.Platform.(*backupCapableTestPlatform)
 	require.True(t, ok)
 	env.Platform = platformWithBackup.MockPlatform
 
-	_, err := HandleBackup(env)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not supported on this platform")
+	result, err := HandleBackup(env)
+	require.NoError(t, err)
+	info, ok := result.(backupsvc.Info)
+	require.True(t, ok)
+	assert.NotZero(t, info.Categories[backupsvc.CategoryZaparoo].Files)
+	assert.Zero(t, info.Categories[backupsvc.CategorySettings].Files)
+	assert.Zero(t, info.Categories[backupsvc.CategoryInputs].Files)
+	assert.Zero(t, info.Categories[backupsvc.CategorySaves].Files)
+	assert.Zero(t, info.Categories[backupsvc.CategorySavestates].Files)
 }
 
 func TestHandleBackup_Success(t *testing.T) {
@@ -309,7 +315,6 @@ func TestBackupMethodErrorMapsExpectedConditions(t *testing.T) {
 		err      error
 		contains string
 	}{
-		{err: backupsvc.ErrPlatformBackupUnsupported, contains: "not supported on this platform"},
 		{err: backupsvc.ErrRestoreMediaActive, contains: "while media is active"},
 		{err: backupsvc.ErrRestoreLaunchInProgress, contains: "media is launching or restart is pending"},
 		{err: &backupsvc.BusyError{Kind: backupsvc.OperationRemoteUpload}, contains: "busy with remote-upload"},

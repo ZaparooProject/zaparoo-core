@@ -50,9 +50,6 @@ func requireBackupRuntime(env *requests.RequestEnv) error {
 }
 
 func backupMethodError(action string, err error) error {
-	if errors.Is(err, backupsvc.ErrPlatformBackupUnsupported) {
-		return models.ClientErrf("full-device backup is not supported on this platform")
-	}
 	if errors.Is(err, backupsvc.ErrRestoreMediaActive) {
 		return models.ClientErrf("cannot restore backup while media is active")
 	}
