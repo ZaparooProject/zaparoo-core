@@ -170,6 +170,25 @@ func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *tes
 	mockDB.AssertExpectations(t)
 }
 
+func TestFinishMediaDBRecoveryNotification_ReportsCompletedDatabase(t *testing.T) {
+	t.Parallel()
+
+	mockDB := &helpers.MockMediaDBI{}
+	mockDB.On("GetLastGenerated").Return(time.Now(), nil).Once()
+	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	finishMediaDBRecoveryNotification(st, mockDB)
+
+	notification := <-ns
+	var status models.IndexingStatusResponse
+	require.NoError(t, json.Unmarshal(notification.Params, &status))
+	assert.True(t, status.Exists)
+	assert.False(t, status.Indexing)
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "HasAnyMedia")
+}
+
 func TestCheckAndRecoverCorruptMediaDB_ReleasesGateBeforeReindex(t *testing.T) {
 	mediaDBRecoveryAttempts.Store(0)
 	mediaDBRecoveryLimitReported.Store(false)

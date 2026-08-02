@@ -213,6 +213,25 @@ func TestMediaDB_Recreate_RemovesPersistedCaches(t *testing.T) {
 	assert.False(t, loaded)
 }
 
+func TestMediaDB_Recreate_CacheRemovalFailureKeepsReindexPending(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	mediaDB.MarkCorrupt("test")
+	cachePath := mediaDB.slugSearchCachePath()
+	require.NoError(t, os.MkdirAll(cachePath, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "blocker"), []byte("stale"), 0o600))
+
+	err := mediaDB.Recreate(false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear caches")
+	status, statusErr := mediaDB.GetIndexingStatus()
+	require.NoError(t, statusErr)
+	assert.Equal(t, IndexingStatusPending, status)
+	assert.True(t, mediaDB.IsMarkedCorrupt(), "corrupt marker must survive cache cleanup failure")
+}
+
 // zeroHighPages reproduces the real-world corruption: a contiguous run of high-numbered
 // (table-data) pages overwritten with 0x00, leaving the schema pages intact so the DB still
 // opens but integrity checks fail — mirroring the supplied corrupt media.db.
