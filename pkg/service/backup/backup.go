@@ -48,10 +48,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var (
-	ErrPlatformBackupUnsupported = errors.New("platform does not support full-device backup")
-	statusMu                     syncutil.RWMutex
-)
+var statusMu syncutil.RWMutex
 
 const (
 	CategoryZaparoo    = "zaparoo"
@@ -709,11 +706,7 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 	dataDir := helpers.DataDir(m.pl)
 	configDir := helpers.ConfigDir(m.pl)
 	var platformPlan platforms.BackupPlan
-	if scope == config.BackupScopePlatform {
-		provider, ok := m.pl.(platforms.BackupProvider)
-		if !ok {
-			return fileCollection{}, ErrPlatformBackupUnsupported
-		}
+	if provider, ok := m.pl.(platforms.BackupProvider); scope == config.BackupScopePlatform && ok {
 		platformPlan = platforms.BackupPlan{Definitions: provider.BackupDefinitions()}
 		if planner, planning := m.pl.(platforms.BackupPlanningProvider); planning {
 			platformPlan = planner.BackupPlan()

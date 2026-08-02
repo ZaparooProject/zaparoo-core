@@ -718,10 +718,6 @@ func TestBackupActionErrorTextMapsSafeGuidance(t *testing.T) {
 			expected: "Wait for media launch to finish",
 		},
 		{
-			name: "unsupported platform", err: errors.New("full-device backup is not supported on this platform"),
-			expected: "Full-device backup is not available on this platform",
-		},
-		{
 			name: "warp", err: errors.New("remote backup is not available for this account"),
 			expected: "requires an active Zaparoo Warp subscription",
 		},
@@ -909,7 +905,7 @@ func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(
 	mockSvc.SetupGetBackupStatus(status)
 	mockSvc.SetupUpdateSettingsSuccess()
 	mockSvc.On("RunRemoteBackup", mock.Anything).
-		Return("", errors.New("remote backup is not available for this account"))
+		Return(nil, errors.New("remote backup is not available for this account"))
 
 	runner.Start(pages)
 	runner.QueueUpdateDraw(func() {
@@ -992,7 +988,12 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 	mockSvc := NewMockSettingsService()
 	mockSvc.SetupGetBackupStatus(backupTestStatus(true))
 	mockSvc.SetupUpdateSettingsSuccess()
-	mockSvc.On("RunRemoteBackup", mock.Anything).Return("backup-42", nil)
+	mockSvc.On("RunRemoteBackup", mock.Anything).Return(&RemoteBackupRun{
+		Backup: RemoteBackupItem{
+			ID: "backup-42", CreatedAt: time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		},
+		NoChanges: true,
+	}, nil)
 
 	runner.Start(pages)
 	runner.QueueUpdateDraw(func() {
@@ -1007,8 +1008,11 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Cloud backup created", 500*time.Millisecond))
-	require.True(t, runner.WaitForText("Cloud backup backup-42", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("This device is already backed up.", 500*time.Millisecond))
+	assert.True(t, runner.ContainsText("Cloud backup"))
+	assert.False(t, runner.ContainsText("Cloud backup created"))
+	assert.True(t, runner.ContainsText("Snapshot: 2026-07-10 12:00:00 UTC"))
+	assert.False(t, runner.ContainsText("backup-42"))
 	mockSvc.AssertCalled(t, "RunRemoteBackup", mock.Anything)
 }
 
@@ -1579,6 +1583,19 @@ func TestRemoteBackupSnapshotsPage_ShowsTypeAndSize_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("Manual"))
 	assert.True(t, runner.ContainsText("Scheduled"))
 	assert.True(t, runner.ContainsText("4 MB"))
+}
+
+func TestRemoteBackupRunLabel_NoChanges(t *testing.T) {
+	t.Parallel()
+
+	label := remoteBackupRunLabel(&RemoteBackupRun{
+		Backup: RemoteBackupItem{
+			CreatedAt: time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		},
+		NoChanges: true,
+	})
+
+	assert.Equal(t, "This device is already backed up.\nSnapshot: 2026-07-10 12:00:00 UTC", label)
 }
 
 func TestRemoteBackupSnapshotsPage_IncompatibleCannotRestore_Integration(t *testing.T) {

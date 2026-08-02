@@ -641,7 +641,7 @@ func TestManagerPreRestoreBackupIgnoresZaparooScope(t *testing.T) {
 	assert.Positive(t, pre.Categories[CategorySavestates].Files)
 }
 
-func TestManagerCreateUnsupportedPlatformScopes(t *testing.T) {
+func TestManagerCreateWithoutPlatformBackupProvider(t *testing.T) {
 	t.Parallel()
 	rootDir := t.TempDir()
 	dataDir := filepath.Join(rootDir, "zaparoo")
@@ -667,17 +667,115 @@ func TestManagerCreateUnsupportedPlatformScopes(t *testing.T) {
 	}, func() error { return nil }, nil)
 	mgr := NewManager(cfg, mockPlatform, &database.Database{UserDB: userDB})
 
-	// Platform scope still requires a backup provider.
-	_, err = mgr.Create(context.Background())
-	require.ErrorIs(t, err, ErrPlatformBackupUnsupported)
-
-	// Zaparoo scope backs up Core data on any platform, and pre-restore
-	// collection degrades to it when no provider exists.
-	assert.Equal(t, config.BackupScopeZaparoo, mgr.preRestoreScope())
-	cfg.SetBackupScope(config.BackupScopeZaparoo)
+	// Default platform scope degrades to Zaparoo-only when this platform
+	// has no platform backup definitions.
 	info, err := mgr.Create(context.Background())
 	require.NoError(t, err)
 	assert.Positive(t, info.Categories[CategoryZaparoo].Files)
+	assert.Zero(t, info.Categories[CategorySettings].Files)
+	assert.Zero(t, info.Categories[CategoryInputs].Files)
+	assert.Zero(t, info.Categories[CategorySaves].Files)
+	assert.Zero(t, info.Categories[CategorySavestates].Files)
+
+	// Pre-restore safety backups use the same supported Zaparoo-only scope.
+	assert.Equal(t, config.BackupScopeZaparoo, mgr.preRestoreScope())
+}
+
+func removeBackupProvider(t *testing.T, manager *Manager) {
+	t.Helper()
+	platformWithBackup, ok := manager.pl.(backupPlatform)
+	require.True(t, ok)
+	manager.pl = platformWithBackup.MockPlatform
+}
+
+func TestManagerRestoreWithoutPlatformBackupProvider(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Linux)
+	removeBackupProvider(t, env.Manager)
+
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+	frontendPath := filepath.Join(env.DataDir, "frontend.toml")
+	require.NoError(t, os.Remove(frontendPath))
+
+	_, err = env.Manager.Restore(context.Background(), info.Name)
+	require.NoError(t, err)
+	restored, err := os.ReadFile(frontendPath) // #nosec G304 -- path belongs to test temp dir.
+	require.NoError(t, err)
+	assert.Equal(t, "enabled = true\n", string(restored))
+}
+
+func TestManagerRunRemoteWithoutPlatformBackupProvider(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Linux)
+	removeBackupProvider(t, env.Manager)
+	var committed remoteSnapshotRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			writeJSON(t, w, remoteCheckResponse{})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&committed)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(t, w, testCommittedRemoteResponse(t, "backup-linux", platformids.Linux, &committed))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageQuotaBytes: 1 << 30})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	info, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err)
+	assert.Equal(t, "backup-linux", info.Backup.ID)
+	require.NotEmpty(t, committed.Categories[CategoryZaparoo])
+	assert.NotContains(t, committed.Categories, CategorySettings)
+	assert.NotContains(t, committed.Categories, CategoryInputs)
+	assert.NotContains(t, committed.Categories, CategorySaves)
+	assert.NotContains(t, committed.Categories, CategorySavestates)
+}
+
+func TestManagerRestoreRemoteWithoutPlatformBackupProvider(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Linux)
+	removeBackupProvider(t, env.Manager)
+	manifestData, manifestHash, err := canonicalRemoteManifest(map[string][]remoteManifestEntry{
+		CategoryZaparoo: {{Path: config.UserDbFile, SHA256: remoteEmptyContentSHA256, Size: 0}},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups/backup-linux":
+			writeJSON(t, w, remoteBackupResponse{
+				ID: "backup-linux", BackupType: RemoteBackupTypeManual, SchemaVersion: remoteSchemaVersion,
+				Platform:     testStringPointer(platformids.Linux),
+				ManifestHash: manifestHash,
+				Categories: map[string]remoteCategorySummary{
+					CategoryZaparoo: {Files: 1},
+				},
+				Manifest: manifestData, CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/backup-linux/restore-complete":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	restore, err := env.Manager.RestoreRemote(context.Background(), "backup-linux")
+	require.NoError(t, err)
+	assert.Equal(t, "backup-linux", restore.RestoredFrom.ID)
+	env.UserDB.AssertCalled(t, "RestoreBackup", testifymock.AnythingOfType("string"))
 }
 
 func TestManagerTrackScheduleStale(t *testing.T) {

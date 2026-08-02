@@ -617,14 +617,14 @@ func addCloudBackupItems(
 			"Creating cloud backup",
 			"Uploading backup to the cloud...",
 			func(ctx context.Context) (string, error) {
-				id, backupErr := svc.RunRemoteBackup(ctx)
+				run, backupErr := svc.RunRemoteBackup(ctx)
 				if backupErr != nil {
 					return "", fmt.Errorf("create cloud backup: %w", backupErr)
 				}
-				return "Cloud backup " + id, nil
+				return remoteBackupRunLabel(run), nil
 			},
 			func(label string) {
-				ShowInfoModal(pages, app, "Cloud backup created", label, rebuild)
+				ShowInfoModal(pages, app, "Cloud backup", label, rebuild)
 			},
 		)
 	})
@@ -657,8 +657,6 @@ func backupActionErrorText(title string, err error) string {
 	case strings.Contains(message, "cannot restore backup while media is launching") ||
 		strings.Contains(message, "media launch is in progress"):
 		guidance = "Wait for media launch to finish, then try restoring again."
-	case strings.Contains(message, "full-device backup is not supported on this platform"):
-		guidance = "Full-device backup is not available on this platform."
 	case strings.Contains(message, "remote backup is not available for this account"):
 		guidance = "Cloud backup requires an active Zaparoo Warp subscription."
 	case strings.Contains(message, "backup restore rollback requires recovery") ||
@@ -1347,6 +1345,17 @@ func remoteBackupTypeLabel(backupType string) string {
 	default:
 		return "Backup"
 	}
+}
+
+func remoteBackupRunLabel(run *RemoteBackupRun) string {
+	label := "Backed up this device."
+	if run.NoChanges {
+		label = "This device is already backed up."
+	}
+	if !run.Backup.CreatedAt.IsZero() {
+		label += "\nSnapshot: " + formatBackupTime(run.Backup.CreatedAt)
+	}
+	return label
 }
 
 // remoteBackupOverwriteSummary names the categories a restore replaces on

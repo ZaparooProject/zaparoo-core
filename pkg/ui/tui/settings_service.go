@@ -59,6 +59,12 @@ type RemoteBackupItem struct {
 	Incompatible bool                            `json:"incompatible"`
 }
 
+// RemoteBackupRun describes one completed cloud backup operation.
+type RemoteBackupRun struct {
+	Backup    RemoteBackupItem `json:"backup"`
+	NoChanges bool             `json:"noChanges"`
+}
+
 // SettingsService handles settings API operations.
 type SettingsService interface {
 	// GetSettings fetches current settings from the API.
@@ -89,7 +95,7 @@ type SettingsService interface {
 	GetBackupStatus(ctx context.Context) (*models.BackupStatusResponse, error)
 
 	// RunRemoteBackup uploads a backup to the configured remote provider.
-	RunRemoteBackup(ctx context.Context) (string, error)
+	RunRemoteBackup(ctx context.Context) (*RemoteBackupRun, error)
 
 	// ListRemoteBackups fetches the account's cloud backup snapshots.
 	ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error)
@@ -167,14 +173,6 @@ type SettingsService interface {
 // DefaultSettingsService implements SettingsService using an APIClient.
 type DefaultSettingsService struct {
 	apiClient client.APIClient
-}
-
-type remoteBackupRunRaw struct {
-	Backup remoteBackupIDRaw `json:"backup"`
-}
-
-type remoteBackupIDRaw struct {
-	ID string `json:"id"`
 }
 
 // NewSettingsService creates a SettingsService that uses the given APIClient.
@@ -299,16 +297,16 @@ func (s *DefaultSettingsService) GetBackupStatus(ctx context.Context) (*models.B
 	return &status, nil
 }
 
-func (s *DefaultSettingsService) RunRemoteBackup(ctx context.Context) (string, error) {
+func (s *DefaultSettingsService) RunRemoteBackup(ctx context.Context) (*RemoteBackupRun, error) {
 	resp, err := s.apiClient.Call(ctx, models.MethodSettingsBackupRemoteRun, "")
 	if err != nil {
-		return "", fmt.Errorf("failed to run remote backup: %w", err)
+		return nil, fmt.Errorf("failed to run remote backup: %w", err)
 	}
-	var raw remoteBackupRunRaw
-	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
-		return "", fmt.Errorf("failed to parse remote backup result: %w", err)
+	var run RemoteBackupRun
+	if err := json.Unmarshal([]byte(resp), &run); err != nil {
+		return nil, fmt.Errorf("failed to parse remote backup result: %w", err)
 	}
-	return raw.Backup.ID, nil
+	return &run, nil
 }
 
 func (s *DefaultSettingsService) ListRemoteBackups(ctx context.Context) ([]RemoteBackupItem, error) {
