@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -32,6 +33,28 @@ import (
 
 var dbMatchProperties = map[string]struct{}{
 	string(tags.TagPropertyGameID): {},
+}
+
+var deprioritizedPropertyMatchTags = map[database.MediaTagRef]struct{}{
+	{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedSample)}:         {},
+	{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedPreview)}:        {},
+	{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedPrerelease)}:     {},
+	{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedBootleg)}:        {},
+	{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedHack)}:           {},
+	{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedClone)}:          {},
+	{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslation)}:    {},
+	{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslationOld)}: {},
+	{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpHacked)}:                     {},
+	{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpModified)}:                   {},
+	{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpTranslated)}:                 {},
+	{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpBad)}:                        {},
+}
+
+var deprioritizedUnfinishedPrefixes = []string{
+	string(tags.TagUnfinishedAlpha),
+	string(tags.TagUnfinishedBeta),
+	string(tags.TagUnfinishedProto),
+	string(tags.TagUnfinishedDemo),
 }
 
 // resolveTokenProperties looks for a launch implied by properties a reader
@@ -81,18 +104,83 @@ func resolveTokenProperties(
 		return
 	}
 
-	switch len(matches) {
-	case 0:
+	if len(matches) == 0 {
 		log.Info().Any("properties", properties).Msg("no indexed media matched scanned properties")
-	case 1:
-		token.Text = gozapscript.Command{
-			Name: gozapscript.ZapScriptCmdLaunch,
-			Args: []string{matches[0].Path},
-		}.String()
-		log.Info().Str("system", matches[0].SystemID).Str("path", matches[0].Path).
-			Msg("resolved scan by property match")
-	default:
-		log.Warn().Any("properties", properties).Int("matches", len(matches)).
-			Msg("scan property matched multiple media")
+		return
 	}
+
+	selected := matches[0]
+	if len(matches) > 1 {
+		var preferredNonVariant bool
+		selected, preferredNonVariant = selectPreferredPropertyMatch(ctx, svc, matches)
+		selection := "first"
+		if preferredNonVariant {
+			selection = "non_variant"
+		}
+		log.Warn().Any("properties", properties).Int("matches", len(matches)).
+			Str("selection", selection).
+			Str("selected_path", selected.Path).
+			Msg("scan property matched multiple media; selecting preferred match")
+	}
+
+	token.Text = gozapscript.Command{
+		Name: gozapscript.ZapScriptCmdLaunch,
+		Args: []string{selected.Path},
+	}.String()
+	log.Info().Str("system", selected.SystemID).Str("path", selected.Path).
+		Msg("resolved scan by property match")
+}
+
+func selectPreferredPropertyMatch(
+	ctx context.Context,
+	svc *ServiceContext,
+	matches []database.SearchResult,
+) (database.SearchResult, bool) {
+	mediaIDs := make([]int64, len(matches))
+	for i := range matches {
+		mediaIDs[i] = matches[i].MediaID
+	}
+
+	mediaTags, err := svc.DB.MediaDB.GetMediaTagsByMediaDBIDs(ctx, mediaIDs)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load media tags for property match ranking")
+		return matches[0], false
+	}
+
+	firstPreferred := -1
+	deprioritized := 0
+	for i := range matches {
+		if isDeprioritizedPropertyMatch(mediaTags[matches[i].MediaID]) {
+			deprioritized++
+			continue
+		}
+		if firstPreferred == -1 {
+			firstPreferred = i
+		}
+	}
+
+	if deprioritized > 0 && firstPreferred >= 0 {
+		return matches[firstPreferred], true
+	}
+	return matches[0], false
+}
+
+func isDeprioritizedPropertyMatch(mediaTags []database.TagInfo) bool {
+	for _, mediaTag := range mediaTags {
+		if _, ok := deprioritizedPropertyMatchTags[database.MediaTagRef{
+			Type: mediaTag.Type,
+			Tag:  mediaTag.Tag,
+		}]; ok {
+			return true
+		}
+		if mediaTag.Type != string(tags.TagTypeUnfinished) {
+			continue
+		}
+		for _, prefix := range deprioritizedUnfinishedPrefixes {
+			if strings.HasPrefix(mediaTag.Tag, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }

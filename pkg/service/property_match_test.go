@@ -83,15 +83,46 @@ func TestResolveTokenProperties_ExistingMappingWins(t *testing.T) {
 	mediaDB.AssertNotCalled(t, "SearchMediaByProperty", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-func TestResolveTokenProperties_AmbiguousMatchDoesNotLaunch(t *testing.T) {
+func TestResolveTokenProperties_AmbiguousMatchSelectsFirst(t *testing.T) {
 	t.Parallel()
 
+	firstPath := filepath.Join("games", "psx", "a.cue")
 	svc, mediaDB, platform := newPropertyMatchService(t, nil)
 	mediaDB.On(
 		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345",
 	).Return([]database.SearchResult{
-		{SystemID: systemdefs.SystemPSX, Path: filepath.Join("games", "psx", "a.cue"), MediaID: 7},
+		{SystemID: systemdefs.SystemPSX, Path: firstPath, MediaID: 7},
 		{SystemID: systemdefs.SystemPSX, Path: filepath.Join("games", "psx", "b.cue"), MediaID: 8},
+	}, nil)
+	mediaDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{7, 8}).
+		Return(map[int64][]database.TagInfo{}, nil)
+	platform.On("LookupMapping", mock.Anything).Return("", false)
+
+	token := &tokens.Token{UID: "legacy-id", ScanTime: time.Now()}
+	resolveTokenProperties(context.Background(), svc, token, []readers.ScanProperty{{
+		System: systemdefs.SystemPSX,
+		Name:   string(tags.TagPropertyGameID),
+		Value:  "SLUS-12345",
+	}})
+
+	require.Equal(t, "**launch:"+firstPath, token.Text)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestResolveTokenProperties_AmbiguousMatchPrefersNonVariant(t *testing.T) {
+	t.Parallel()
+
+	hackPath := filepath.Join("games", "psx", "game-hack.cue")
+	officialPath := filepath.Join("games", "psx", "game.cue")
+	svc, mediaDB, platform := newPropertyMatchService(t, nil)
+	mediaDB.On(
+		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345",
+	).Return([]database.SearchResult{
+		{SystemID: systemdefs.SystemPSX, Path: hackPath, MediaID: 7},
+		{SystemID: systemdefs.SystemPSX, Path: officialPath, MediaID: 8},
+	}, nil)
+	mediaDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{7, 8}).Return(map[int64][]database.TagInfo{
+		7: {{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedHack)}},
 	}, nil)
 	platform.On("LookupMapping", mock.Anything).Return("", false)
 
@@ -102,7 +133,173 @@ func TestResolveTokenProperties_AmbiguousMatchDoesNotLaunch(t *testing.T) {
 		Value:  "SLUS-12345",
 	}})
 
-	require.Empty(t, token.Text)
+	require.Equal(t, "**launch:"+officialPath, token.Text)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestResolveTokenProperties_AmbiguousMatchAllVariantsSelectsFirst(t *testing.T) {
+	t.Parallel()
+
+	firstPath := filepath.Join("games", "psx", "game-hack.cue")
+	svc, mediaDB, platform := newPropertyMatchService(t, nil)
+	mediaDB.On(
+		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345",
+	).Return([]database.SearchResult{
+		{SystemID: systemdefs.SystemPSX, Path: firstPath, MediaID: 7},
+		{SystemID: systemdefs.SystemPSX, Path: filepath.Join("games", "psx", "game-translation.cue"), MediaID: 8},
+	}, nil)
+	mediaDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{7, 8}).Return(map[int64][]database.TagInfo{
+		7: {{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpModified)}},
+		8: {{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslation)}},
+	}, nil)
+	platform.On("LookupMapping", mock.Anything).Return("", false)
+
+	token := &tokens.Token{UID: "legacy-id", ScanTime: time.Now()}
+	resolveTokenProperties(context.Background(), svc, token, []readers.ScanProperty{{
+		System: systemdefs.SystemPSX,
+		Name:   string(tags.TagPropertyGameID),
+		Value:  "SLUS-12345",
+	}})
+
+	require.Equal(t, "**launch:"+firstPath, token.Text)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestResolveTokenProperties_TagLookupErrorSelectsFirst(t *testing.T) {
+	t.Parallel()
+
+	firstPath := filepath.Join("games", "psx", "a.cue")
+	svc, mediaDB, platform := newPropertyMatchService(t, nil)
+	mediaDB.On(
+		"SearchMediaByProperty", mock.Anything, systemdefs.SystemPSX, string(tags.TagPropertyGameID), "SLUS-12345",
+	).Return([]database.SearchResult{
+		{SystemID: systemdefs.SystemPSX, Path: firstPath, MediaID: 7},
+		{SystemID: systemdefs.SystemPSX, Path: filepath.Join("games", "psx", "b.cue"), MediaID: 8},
+	}, nil)
+	mediaDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{7, 8}).Return(nil, context.Canceled)
+	platform.On("LookupMapping", mock.Anything).Return("", false)
+
+	token := &tokens.Token{UID: "legacy-id", ScanTime: time.Now()}
+	resolveTokenProperties(context.Background(), svc, token, []readers.ScanProperty{{
+		System: systemdefs.SystemPSX,
+		Name:   string(tags.TagPropertyGameID),
+		Value:  "SLUS-12345",
+	}})
+
+	require.Equal(t, "**launch:"+firstPath, token.Text)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestIsDeprioritizedPropertyMatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		tag  database.TagInfo
+		want bool
+	}{
+		{
+			name: "sample",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedSample)},
+			want: true,
+		},
+		{
+			name: "preview",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedPreview)},
+			want: true,
+		},
+		{
+			name: "prerelease",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedPrerelease)},
+			want: true,
+		},
+		{
+			name: "bootleg",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedBootleg)},
+			want: true,
+		},
+		{
+			name: "hack",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedHack)},
+			want: true,
+		},
+		{
+			name: "clone",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedClone)},
+			want: true,
+		},
+		{
+			name: "translation",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslation)},
+			want: true,
+		},
+		{
+			name: "legacy translation",
+			tag: database.TagInfo{
+				Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslationOld),
+			},
+			want: true,
+		},
+		{
+			name: "hacked dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpHacked)},
+			want: true,
+		},
+		{
+			name: "modified dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpModified)},
+			want: true,
+		},
+		{
+			name: "translated dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpTranslated)},
+			want: true,
+		},
+		{
+			name: "bad dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpBad)},
+			want: true,
+		},
+		{
+			name: "alpha prefix",
+			tag: database.TagInfo{
+				Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedAlpha) + ":1",
+			},
+			want: true,
+		},
+		{
+			name: "numbered beta",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedBeta2)},
+			want: true,
+		},
+		{
+			name: "prototype",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedProto)},
+			want: true,
+		},
+		{
+			name: "numbered demo",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedDemo1)},
+			want: true,
+		},
+		{
+			name: "verified dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpVerified)},
+			want: false,
+		},
+		{
+			name: "region",
+			tag:  database.TagInfo{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, isDeprioritizedPropertyMatch([]database.TagInfo{tt.tag}))
+		})
+	}
 }
 
 func TestResolveTokenProperties_PathWithCommaRoundTrips(t *testing.T) {
