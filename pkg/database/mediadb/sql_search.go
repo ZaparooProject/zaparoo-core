@@ -937,6 +937,153 @@ func sqlSearchMediaWithFilters(
 	return results, nil
 }
 
+func sqlSearchMediaWithFiltersCount(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+	variantGroups [][]string,
+	rawWords []string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	includeName bool,
+) (int, error) {
+	if len(systems) == 0 {
+		return 0, errors.New("no systems provided for media search")
+	}
+
+	skipSystemFilter := len(variantGroups) == 0 && !includeName && len(tags) > 0 &&
+		requestedAllSystems(systems)
+
+	args := make([]any, 0)
+	if !skipSystemFilter {
+		for _, sys := range systems {
+			args = append(args, sys.ID)
+		}
+	}
+
+	groupClauses := make([]string, 0, len(variantGroups))
+	variantArgs := make([]any, 0, len(variantGroups)*4)
+
+	for wordIdx, variants := range variantGroups {
+		if len(variants) == 0 {
+			continue
+		}
+
+		orConditions := make([]string, 0, len(variants)*2+1)
+
+		for _, variant := range variants {
+			orConditions = append(orConditions, "MediaTitles.Slug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+			orConditions = append(orConditions, "MediaTitles.SecondarySlug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+		}
+
+		if includeName && wordIdx < len(rawWords) && rawWords[wordIdx] != "" {
+			orConditions = append(orConditions, "MediaTitles.Name LIKE ?")
+			variantArgs = append(variantArgs, "%"+rawWords[wordIdx]+"%")
+		}
+
+		groupClauses = append(groupClauses, "("+strings.Join(orConditions, " OR ")+")")
+	}
+
+	variantCondition := ""
+	if len(groupClauses) > 0 {
+		variantCondition = " AND " + strings.Join(groupClauses, " AND ")
+	}
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	tagFilterCondition := ""
+	if len(tagFilterClauses) > 0 {
+		tagFilterCondition = " AND " + strings.Join(tagFilterClauses, " AND ")
+	}
+
+	letterFilterCondition := ""
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	if len(letterClauses) > 0 {
+		letterFilterCondition = " AND " + strings.Join(letterClauses, " AND ")
+		variantArgs = append(variantArgs, letterArgs...)
+	}
+
+	systemCondition := ""
+	if !skipSystemFilter {
+		systemCondition = `Systems.SystemID IN (` + prepareVariadic("?", ",", len(systems)) + `) AND `
+	}
+
+	//nolint:gosec // Safe: WHERE clause is built from sanitized components and parameterized args.
+	query := `
+		SELECT COUNT(*)
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + systemCondition +
+		`Media.IsMissing = 0` +
+		variantCondition +
+		tagFilterCondition +
+		letterFilterCondition
+
+	finalArgs := append([]any(nil), args...)
+	finalArgs = append(finalArgs, variantArgs...)
+	finalArgs = append(finalArgs, tagFilterArgs...)
+
+	var count int
+	if err := db.QueryRowContext(ctx, query, finalArgs...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to execute media count query: %w", err)
+	}
+
+	return count, nil
+}
+
+func sqlSearchMediaByTitleDBIDsCount(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	tags []zapscript.TagFilter,
+	letter *string,
+) (int, error) {
+	if len(titleDBIDs) == 0 {
+		return 0, nil
+	}
+
+	args := make([]any, 0, len(titleDBIDs)+10)
+	for _, id := range titleDBIDs {
+		args = append(args, id)
+	}
+	titleCondition := "MediaTitles.DBID IN (" + prepareVariadic("?", ",", len(titleDBIDs)) + ")"
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	extraConditions := make([]string, 0, len(tagFilterClauses)+len(letterClauses))
+	extraArgs := make([]any, 0, len(tagFilterArgs)+len(letterArgs))
+	extraConditions = append(extraConditions, tagFilterClauses...)
+	extraArgs = append(extraArgs, tagFilterArgs...)
+	extraConditions = append(extraConditions, letterClauses...)
+	extraArgs = append(extraArgs, letterArgs...)
+
+	whereExtra := ""
+	if len(extraConditions) > 0 {
+		whereExtra = " AND " + strings.Join(extraConditions, " AND ")
+	}
+
+	//nolint:gosec // Safe: WHERE clause is built from sanitized components and parameterized args.
+	query := `
+		SELECT COUNT(*)
+		FROM MediaTitles
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + titleCondition + ` AND Media.IsMissing = 0` + whereExtra
+
+	finalArgs := make([]any, 0, len(args)+len(extraArgs))
+	finalArgs = append(finalArgs, args...)
+	finalArgs = append(finalArgs, extraArgs...)
+
+	var count int
+	if err := db.QueryRowContext(ctx, query, finalArgs...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to execute title DBIDs count query: %w", err)
+	}
+
+	return count, nil
+}
+
 func sqlSearchMediaByTitleDBIDs(
 	ctx context.Context,
 	db sqlQueryable,

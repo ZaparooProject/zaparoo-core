@@ -1215,6 +1215,20 @@ func (m *MockMediaDBI) SearchMediaWithFilters(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) SearchMediaWithFiltersCount(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) (int, error) {
+	args := m.Called(ctx, filters)
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if count, ok := args.Get(0).(int); ok {
+		return count, nil
+	}
+	return 0, nil
+}
+
 func (m *MockMediaDBI) SearchMediaBySlug(
 	ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {

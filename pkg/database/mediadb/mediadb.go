@@ -2332,6 +2332,99 @@ func (db *MediaDB) SearchMediaWithFilters(
 	return results, err
 }
 
+func (db *MediaDB) SearchMediaWithFiltersCount(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) (int, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+
+	// Collect unique MediaTypes from the systems being searched
+	uniqueMediaTypes := make(map[slugs.MediaType]struct{})
+	for _, system := range filters.Systems {
+		uniqueMediaTypes[system.GetMediaType()] = struct{}{}
+	}
+
+	qWords := strings.Fields(filters.Query)
+	variantGroups := make([][]string, 0, len(qWords))
+	includeName := false
+
+	for _, word := range qWords {
+		seenVariants := make(map[string]struct{})
+		variants := make([]string, 0, len(uniqueMediaTypes))
+
+		for mediaType := range uniqueMediaTypes {
+			slugVariant := slugs.Slugify(mediaType, word)
+			if slugVariant != "" {
+				if _, exists := seenVariants[slugVariant]; !exists {
+					variants = append(variants, slugVariant)
+					seenVariants[slugVariant] = struct{}{}
+				}
+			}
+		}
+
+		if len(variants) == 0 && word != "" {
+			includeName = true
+		}
+
+		const maxVariantsPerWord = 8
+		if len(variants) > maxVariantsPerWord {
+			variants = variants[:maxVariantsPerWord]
+		}
+
+		if len(variants) > 0 {
+			variantGroups = append(variantGroups, variants)
+		}
+	}
+
+	cache := db.slugSearchCache.Load()
+	systemIDs := make([]string, len(filters.Systems))
+	for i, sys := range filters.Systems {
+		systemIDs[i] = sys.ID
+	}
+	cacheReady := cache != nil && cache.CanServeSystems(systemIDs)
+	var systemDBIDs []int64
+	if cacheReady {
+		systemDBIDs = cache.ResolveSystemDBIDs(systemIDs)
+	}
+	if cacheReady && len(variantGroups) > 0 && !includeName {
+		log.Debug().
+			Strs("systems", systemIDs).
+			Int("variantGroups", len(variantGroups)).
+			Bool("includeName", includeName).
+			Msg("media search count using in-memory slug cache")
+
+		candidateIDs := cache.Search(systemDBIDs, func() [][][]byte {
+			byteGroups := make([][][]byte, len(variantGroups))
+			for i, group := range variantGroups {
+				byteGroups[i] = make([][]byte, len(group))
+				for j, v := range group {
+					byteGroups[i][j] = []byte(v)
+				}
+			}
+			return byteGroups
+		}())
+		if len(candidateIDs) == 0 {
+			return 0, nil
+		}
+
+		return sqlSearchMediaByTitleDBIDsCount(ctx, db.sql.Load(), candidateIDs, filters.Tags, filters.Letter)
+	}
+
+	log.Debug().
+		Strs("systems", systemIDs).
+		Bool("cachePresent", cache != nil).
+		Bool("cacheReady", cacheReady).
+		Int("variantGroups", len(variantGroups)).
+		Bool("includeName", includeName).
+		Msg("media search count falling back to SQL LIKE path")
+
+	return sqlSearchMediaWithFiltersCount(
+		ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
+		filters.Letter, includeName)
+}
+
 // slugCacheSearch is a shared helper for slug-based search methods that use the
 // in-memory cache. It handles slugification, system resolution, and SQL fallback.
 // Returns (results, true, nil) on cache hit, or (nil, false, nil) when the caller

@@ -901,6 +901,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, fmt.Errorf("error searching media with filters: %w", err)
 	}
 
+	// Count the full result set for the query, ignoring cursor pagination.
+	countFilters := searchFilters
+	countFilters.Cursor = nil
+	fullTotal, err := env.Database.MediaDB.SearchMediaWithFiltersCount(ctx, &countFilters)
+	if err != nil {
+		return nil, fmt.Errorf("error counting search results: %w", err)
+	}
+
 	// Check if there are more results
 	hasNextPage := len(searchResults) > maxResults
 	if hasNextPage {
@@ -984,7 +992,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	return models.SearchResults{
 		Results:    results,
-		Total:      len(results), // Deprecated: returns count of results in response
+		Total:      fullTotal,
 		Pagination: pagination,
 	}, nil
 }
