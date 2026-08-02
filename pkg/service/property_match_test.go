@@ -106,6 +106,7 @@ func TestResolveTokenProperties_AmbiguousMatchSelectsFirst(t *testing.T) {
 	}})
 
 	require.Equal(t, "**launch:"+firstPath, token.Text)
+	mediaDB.AssertExpectations(t)
 }
 
 func TestResolveTokenProperties_AmbiguousMatchPrefersNonVariant(t *testing.T) {
@@ -133,6 +134,7 @@ func TestResolveTokenProperties_AmbiguousMatchPrefersNonVariant(t *testing.T) {
 	}})
 
 	require.Equal(t, "**launch:"+officialPath, token.Text)
+	mediaDB.AssertExpectations(t)
 }
 
 func TestResolveTokenProperties_AmbiguousMatchAllVariantsSelectsFirst(t *testing.T) {
@@ -160,6 +162,7 @@ func TestResolveTokenProperties_AmbiguousMatchAllVariantsSelectsFirst(t *testing
 	}})
 
 	require.Equal(t, "**launch:"+firstPath, token.Text)
+	mediaDB.AssertExpectations(t)
 }
 
 func TestResolveTokenProperties_TagLookupErrorSelectsFirst(t *testing.T) {
@@ -184,6 +187,7 @@ func TestResolveTokenProperties_TagLookupErrorSelectsFirst(t *testing.T) {
 	}})
 
 	require.Equal(t, "**launch:"+firstPath, token.Text)
+	mediaDB.AssertExpectations(t)
 }
 
 func TestIsDeprioritizedPropertyMatch(t *testing.T) {
@@ -195,13 +199,72 @@ func TestIsDeprioritizedPropertyMatch(t *testing.T) {
 		want bool
 	}{
 		{
+			name: "sample",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedSample)},
+			want: true,
+		},
+		{
+			name: "preview",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedPreview)},
+			want: true,
+		},
+		{
+			name: "prerelease",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedPrerelease)},
+			want: true,
+		},
+		{
+			name: "bootleg",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedBootleg)},
+			want: true,
+		},
+		{
 			name: "hack",
 			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedHack)},
 			want: true,
 		},
 		{
+			name: "clone",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedClone)},
+			want: true,
+		},
+		{
+			name: "translation",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslation)},
+			want: true,
+		},
+		{
+			name: "legacy translation",
+			tag: database.TagInfo{
+				Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslationOld),
+			},
+			want: true,
+		},
+		{
+			name: "hacked dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpHacked)},
+			want: true,
+		},
+		{
 			name: "modified dump",
 			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpModified)},
+			want: true,
+		},
+		{
+			name: "translated dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpTranslated)},
+			want: true,
+		},
+		{
+			name: "bad dump",
+			tag:  database.TagInfo{Type: string(tags.TagTypeDump), Tag: string(tags.TagDumpBad)},
+			want: true,
+		},
+		{
+			name: "alpha prefix",
+			tag: database.TagInfo{
+				Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedAlpha) + ":1",
+			},
 			want: true,
 		},
 		{
@@ -212,6 +275,11 @@ func TestIsDeprioritizedPropertyMatch(t *testing.T) {
 		{
 			name: "prototype",
 			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedProto)},
+			want: true,
+		},
+		{
+			name: "numbered demo",
+			tag:  database.TagInfo{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedDemo1)},
 			want: true,
 		},
 		{
