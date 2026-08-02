@@ -112,6 +112,8 @@ func TestCheckAndRecoverCorruptMediaDB_RecreateFailureFinishesNotification(t *te
 	mockDB.On("EndRecovery").Return()
 	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
 	mockDB.On("Recreate", mock.Anything).Return(errors.New("storage unavailable"))
+	mockDB.On("GetLastGenerated").Return(time.Time{}, nil)
+	mockDB.On("HasAnyMedia").Return(false, nil)
 
 	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
 	t.Cleanup(st.StopService)
@@ -124,6 +126,7 @@ func TestCheckAndRecoverCorruptMediaDB_RecreateFailureFinishesNotification(t *te
 	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
 	assert.True(t, startedStatus.Indexing)
 	assert.False(t, finishedStatus.Indexing)
+	assert.False(t, finishedStatus.Exists)
 }
 
 func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *testing.T) {
@@ -141,6 +144,8 @@ func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *tes
 	mockDB.On("EndRecovery").Return()
 	mockDB.On("IntegrityReport").Return([]string{"Page 4: malformed"})
 	mockDB.On("Recreate", mock.Anything).Return(nil)
+	mockDB.On("GetLastGenerated").Return(time.Time{}, nil)
+	mockDB.On("HasAnyMedia").Return(false, nil)
 
 	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
 	t.Cleanup(st.StopService)
@@ -161,7 +166,50 @@ func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *tes
 	assert.True(t, generateCalled)
 	assert.True(t, startedStatus.Indexing)
 	assert.False(t, finishedStatus.Indexing)
+	assert.False(t, finishedStatus.Exists)
 	mockDB.AssertExpectations(t)
+}
+
+func TestCheckAndRecoverCorruptMediaDB_ReleasesGateBeforeReindex(t *testing.T) {
+	mediaDBRecoveryAttempts.Store(0)
+	mediaDBRecoveryLimitReported.Store(false)
+	t.Cleanup(func() {
+		mediaDBRecoveryAttempts.Store(0)
+		mediaDBRecoveryLimitReported.Store(false)
+	})
+
+	db, cleanup := helpers.NewTestDatabase(t)
+	defer cleanup()
+	db.MediaDB.MarkCorrupt("test recovery gate")
+
+	st, _ := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	reindexRegistered := make(chan struct{})
+	recoveryDone := make(chan struct{})
+	go func() {
+		defer close(recoveryDone)
+		checkAndRecoverCorruptMediaDBWithGenerator(nil, nil, db, st, syncutil.NewPauser(),
+			func(_ context.Context, _ platforms.Platform, _ *config.Instance, _ chan<- models.Notification,
+				_ []systemdefs.System, targetDB *database.Database, _ *syncutil.Pauser,
+			) error {
+				targetDB.MediaDB.TrackBackgroundOperation()
+				targetDB.MediaDB.BackgroundOperationDone()
+				close(reindexRegistered)
+				return errors.New("stop after background registration")
+			})
+	}()
+
+	select {
+	case <-reindexRegistered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reindex blocked while registering its background operation")
+	}
+	select {
+	case <-recoveryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("corruption recovery did not finish after reindex registration")
+	}
 }
 
 func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {

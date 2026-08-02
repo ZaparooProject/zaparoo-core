@@ -113,7 +113,24 @@ func recordIndexResumeCheckpoint(mediaDB database.MediaDBI) (attempts int, stall
 	return attempts, attempts >= maxIndexNoProgressResumeAttempts, nil
 }
 
+func indexingStatusNeedsResume(status string, mediaDB database.MediaDBI) (bool, error) {
+	switch status {
+	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending:
+		return true, nil
+	case mediadb.IndexingStatusFailed:
+		hasMedia, err := mediaDB.HasAnyMedia()
+		if err != nil {
+			return false, fmt.Errorf("failed to check media after indexing failure: %w", err)
+		}
+		return !hasMedia, nil
+	default:
+		return false, nil
+	}
+}
+
 // checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it.
+// It also retries a failed index when the database has no usable media, which prevents a
+// failed corruption-recovery reindex from permanently stranding a fresh empty database.
 // It returns true when an index resume was started so callers can defer lower-priority
 // media maintenance until indexing reaches a terminal state.
 func checkAndResumeIndexing(
@@ -130,8 +147,13 @@ func checkAndResumeIndexing(
 		return false
 	}
 
-	// Only resume if indexing was interrupted (running or pending states)
-	if indexingStatus != mediadb.IndexingStatusRunning && indexingStatus != mediadb.IndexingStatusPending {
+	resumeNeeded, resumeErr := indexingStatusNeedsResume(indexingStatus, db.MediaDB)
+	if resumeErr != nil {
+		log.Warn().Err(resumeErr).Str("status", indexingStatus).
+			Msg("failed to determine whether media indexing needs auto-resume")
+		return false
+	}
+	if !resumeNeeded {
 		log.Debug().Msgf("indexing status is '%s', no auto-resume needed", indexingStatus)
 		// A clean state means the previous index either completed or was never
 		// interrupted; give any future interruption a fresh resume budget.
@@ -139,6 +161,9 @@ func checkAndResumeIndexing(
 			log.Warn().Err(resetErr).Msg("failed to reset index resume attempt counter")
 		}
 		return false
+	}
+	if indexingStatus == mediadb.IndexingStatusFailed {
+		log.Warn().Msg("media indexing failed with an empty database; retrying automatically")
 	}
 
 	// Bound only stalled resumes. A full reindex on a large library can span many
@@ -284,9 +309,16 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 	}
 
 	// Close the race between the active-work check and Recreate: once this gate is
-	// held, new tracked work waits until the replacement database is ready.
+	// held, new tracked work waits until the replacement database is ready. Release
+	// it before starting the reindex: GenerateMediaDB registers that work through
+	// TrackBackgroundOperation, which needs the gate's read lock.
 	db.MediaDB.BeginRecovery()
-	defer db.MediaDB.EndRecovery()
+	recoveryGateHeld := true
+	defer func() {
+		if recoveryGateHeld {
+			db.MediaDB.EndRecovery()
+		}
+	}()
 
 	attempt, allowed := claimMediaDBRecoveryAttempt()
 	if !allowed {
@@ -315,11 +347,14 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 		addMediaDBRecoveryFailureInbox(st, "Automatic media database recovery failed. Safely shut down, "+
 			"check free space, and inspect or replace the storage device before trying again.",
 			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
-		finishMediaDBRecoveryNotification(st)
+		finishMediaDBRecoveryNotification(st, db.MediaDB)
 		return
 	}
 	log.Info().Int32("recovery_attempt", attempt).Str("recovery_outcome", "verified_recreate").
 		Msg("media database recreated and verified after corruption; starting full reindex")
+
+	db.MediaDB.EndRecovery()
+	recoveryGateHeld = false
 
 	// Tell the user persistently: the rebuild discards scraped metadata (it lived in the
 	// corrupt cache), so artwork returns only after a re-scrape. The inbox lives in UserDB,
@@ -356,16 +391,24 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 		addMediaDBRecoveryFailureInbox(st, "Media database was rebuilt, but reindexing could not start. "+
 			"Restart Zaparoo after checking available storage space.",
 			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
-		finishMediaDBRecoveryNotification(st)
+		finishMediaDBRecoveryNotification(st, db.MediaDB)
 	}
 }
 
-func finishMediaDBRecoveryNotification(st *state.State) {
+func finishMediaDBRecoveryNotification(st *state.State, mediaDB database.MediaDBI) {
 	if st == nil {
 		return
 	}
+	exists := false
+	if mediaDB != nil {
+		if lastGenerated, err := mediaDB.GetLastGenerated(); err == nil && !lastGenerated.IsZero() {
+			exists = true
+		} else if hasMedia, hasErr := mediaDB.HasAnyMedia(); hasErr == nil {
+			exists = hasMedia
+		}
+	}
 	notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
-		Exists:   true,
+		Exists:   exists,
 		Indexing: false,
 	})
 }

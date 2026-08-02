@@ -395,7 +395,7 @@ func mediaDBHasUsableData(mediaDB database.MediaDBI) bool {
 	if mediaDB == nil {
 		return false
 	}
-	if lastGenerated, err := mediaDB.GetLastGenerated(); err == nil && !time.Unix(0, 0).Equal(lastGenerated) {
+	if lastGenerated, err := mediaDB.GetLastGenerated(); err == nil && !lastGenerated.IsZero() {
 		return true
 	}
 	hasMedia, err := mediaDB.HasAnyMedia()
