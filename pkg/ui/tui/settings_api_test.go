@@ -204,7 +204,7 @@ func TestDefaultSettingsService_RemoteBackupAPIContracts(t *testing.T) {
 	mockClient := mocks.NewMockAPIClient()
 	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackupRemoteRun, "").Return(
 		`{"backup":{"id":"save/a%b ?\u96ea","createdAt":"2026-07-10T12:00:00Z",`+
-			`"backupType":"manual","sizeBytes":42},"noChanges":false}`, nil,
+			`"backupType":"manual","sizeBytes":42},"noChanges":true}`, nil,
 	).Once()
 	mockClient.On("Call", testifymock.Anything, models.MethodSettingsBackupRemoteList, "").Return(
 		`{"items":[{"id":"save/a%b ?\u96ea","createdAt":"2026-07-10T12:00:00Z",`+
@@ -222,7 +222,7 @@ func TestDefaultSettingsService_RemoteBackupAPIContracts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, backupID, run.Backup.ID)
 	assert.Equal(t, time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC), run.Backup.CreatedAt)
-	assert.False(t, run.NoChanges)
+	assert.True(t, run.NoChanges)
 
 	backups, err := svc.ListRemoteBackups(ctx)
 	require.NoError(t, err)

@@ -992,6 +992,7 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 		Backup: RemoteBackupItem{
 			ID: "backup-42", CreatedAt: time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
 		},
+		NoChanges: true,
 	}, nil)
 
 	runner.Start(pages)
@@ -1007,8 +1008,9 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Cloud backup created", 500*time.Millisecond))
-	assert.True(t, runner.ContainsText("Backed up this device."))
+	require.True(t, runner.WaitForText("This device is already backed up.", 500*time.Millisecond))
+	assert.True(t, runner.ContainsText("Cloud backup"))
+	assert.False(t, runner.ContainsText("Cloud backup created"))
 	assert.True(t, runner.ContainsText("Snapshot: 2026-07-10 12:00:00 UTC"))
 	assert.False(t, runner.ContainsText("backup-42"))
 	mockSvc.AssertCalled(t, "RunRemoteBackup", mock.Anything)

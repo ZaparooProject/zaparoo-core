@@ -624,7 +624,7 @@ func addCloudBackupItems(
 				return remoteBackupRunLabel(run), nil
 			},
 			func(label string) {
-				ShowInfoModal(pages, app, "Cloud backup created", label, rebuild)
+				ShowInfoModal(pages, app, "Cloud backup", label, rebuild)
 			},
 		)
 	})
