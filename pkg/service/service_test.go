@@ -574,14 +574,34 @@ func TestRecoverInterruptedMediaDBRecreate_RestoresPendingState(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
 	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
 	mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
 	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(nil).Once()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
 	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
 
 	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
 
 	assert.True(t, recovered)
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRecoverInterruptedMediaDBRecreate_StatusErrorReleasesBackgroundOperation(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("GetLastGenerated").Return(time.Time{}, nil).Once()
+	mockMediaDB.On("HasAnyMedia").Return(false, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusPending).Return(assert.AnError).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	recovered := recoverInterruptedMediaDBRecreate(mockMediaDB, true)
+
+	assert.False(t, recovered)
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
 }
 
 func TestRecoverInterruptedMediaDBRecreate_IgnoresFirstInstall(t *testing.T) {

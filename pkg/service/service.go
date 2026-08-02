@@ -127,6 +127,9 @@ func recoverInterruptedMediaDBRecreate(mediaDB database.MediaDBI, slugCacheLoade
 		return false
 	}
 
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
+
 	if err := mediaDB.SetIndexingStatus(mediadb.IndexingStatusPending); err != nil {
 		log.Error().Err(err).Msg("failed to restore reindex intent for empty recreated media database")
 		return false
