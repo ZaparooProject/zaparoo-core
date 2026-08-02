@@ -74,6 +74,17 @@ type claimResponse struct {
 // wellKnownFetcher fetches and parses a .well-known/zaparoo file from a base URL.
 type wellKnownFetcher func(baseURL string) (*zapscript.WellKnown, error)
 
+// remoteRequestError strips net/http's URL wrapper before returning an error.
+// Claim and link URLs may contain short-lived credentials, so they must never
+// be copied into API errors or logs.
+func remoteRequestError(action string, err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 // HandleSettingsAuthStatus reports whether Core has a local bearer for an allowed auth URL.
 // It does not validate the token remotely and never exposes token material or credential domains.
 //
@@ -204,14 +215,14 @@ func performClaim(
 	// Extract root domain (scheme + host) from the claim URL
 	claimURL, err := url.Parse(rawClaimURL)
 	if err != nil {
-		return nil, models.ClientErrf("invalid claim URL: %w", err)
+		return nil, models.ClientErr(remoteRequestError("invalid claim URL", err))
 	}
 	// HTTPS only, with the same private/localhost HTTP allowance the backup
 	// base URL gets — for developing against a locally-run API.
 	if claimURL.Scheme != "https" {
 		rootURL := claimURL.Scheme + "://" + claimURL.Host
 		if validateErr := config.ValidateBackupRemoteBaseURL(rootURL); validateErr != nil {
-			return nil, models.ClientErrf("claim URL must use HTTPS")
+			return nil, models.ClientErr(remoteRequestError("claim URL must use HTTPS", validateErr))
 		}
 	}
 	rootDomain := claimURL.Scheme + "://" + claimURL.Host
@@ -315,7 +326,7 @@ func redeemClaimToken(
 		ctx, http.MethodPost, claimURL, bytes.NewReader(body),
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to create claim request: %w", err)
+		return "", remoteRequestError("failed to create claim request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(zapscript.HeaderZaparooOS, runtime.GOOS)
@@ -327,7 +338,7 @@ func redeemClaimToken(
 
 	resp, err := claimClient.Do(req) //nolint:gosec // G107: claim URL from user input, validated as HTTPS
 	if err != nil {
-		return "", fmt.Errorf("failed to contact claim server: %w", err)
+		return "", remoteRequestError("failed to contact claim server", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -336,11 +347,10 @@ func redeemClaimToken(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
-		return "", fmt.Errorf(
-			"claim server returned status %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(body)),
-		)
+		// Drain a bounded amount for connection reuse, but never copy an
+		// untrusted server body into an API error: it may echo the claim token.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
+		return "", fmt.Errorf("claim server returned status %d", resp.StatusCode)
 	}
 
 	var claim claimResponse

@@ -20,12 +20,14 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,9 +41,18 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	//nolint:gosec // Test fixture claim URL.
+	secretURL = "https://api.example.com/claim?token=zpc1_claim-secret"
+	//nolint:gosec // Test fixture credentials.
+	malformedClaimURL = "https://user:claim-url-secret@%zz"
 )
 
 func TestSettingsAuthStatus_RequiresURL(t *testing.T) {
@@ -143,6 +154,49 @@ func TestSettingsAuthClaim_RequiresHTTPS(t *testing.T) {
 	_, err = HandleSettingsAuthClaim(env, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTPS")
+	assert.NotContains(t, err.Error(), params.ClaimURL)
+}
+
+func TestRemoteRequestError_StripsSensitiveURL(t *testing.T) {
+	// Not parallel: swaps package-level logger.
+	err := remoteRequestError("failed to contact claim server", &url.Error{
+		Op:  http.MethodPost,
+		URL: secretURL,
+		Err: errors.New("connection refused"),
+	})
+
+	assert.Contains(t, err.Error(), "connection refused")
+	assert.NotContains(t, err.Error(), secretURL)
+	assert.NotContains(t, err.Error(), "zpc1_claim-secret")
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+	log.Warn().Err(err).Msg("claim request failed")
+	assert.Contains(t, buf.String(), "failed to contact claim server")
+	assert.NotContains(t, buf.String(), secretURL)
+	assert.NotContains(t, buf.String(), "zpc1_claim-secret")
+}
+
+func TestPerformClaim_MalformedURLRedacted(t *testing.T) {
+	t.Parallel()
+
+	_, err := performClaim(t.Context(), nil, nil, nil, malformedClaimURL, "token", nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid claim URL")
+	assert.NotContains(t, err.Error(), malformedClaimURL)
+	assert.NotContains(t, err.Error(), "claim-url-secret")
+}
+
+func TestRedeemClaimToken_RequestErrorRedactsURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := redeemClaimToken(t.Context(), malformedClaimURL, "token", "test", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create claim request")
+	assert.NotContains(t, err.Error(), malformedClaimURL)
+	assert.NotContains(t, err.Error(), "claim-url-secret")
 }
 
 func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
@@ -154,7 +208,7 @@ func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 		assert.Equal(t, runtime.GOARCH, r.Header.Get(zapscript.HeaderZaparooArch))
 		assert.Equal(t, "test-platform", r.Header.Get(zapscript.HeaderZaparooPlatform))
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("invalid token"))
+		_, _ = w.Write([]byte("invalid token: bad-token"))
 	}))
 	defer claimServer.Close()
 
@@ -191,6 +245,8 @@ func TestSettingsAuthClaim_ClaimTokenFailure(t *testing.T) {
 	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "401")
+	assert.NotContains(t, err.Error(), "bad-token")
+	assert.NotContains(t, err.Error(), "invalid token: bad-token")
 }
 
 func TestSettingsAuthClaim_RootMissingAuth(t *testing.T) {

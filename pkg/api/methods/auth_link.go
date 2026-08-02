@@ -138,7 +138,7 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 		baseURL = deviceLinkDefaultBaseURL
 	}
 	if err := config.ValidateBackupRemoteBaseURL(baseURL); err != nil {
-		return nil, models.ClientErrf("invalid link URL: %w", err)
+		return nil, models.ClientErr(remoteRequestError("invalid link URL", err))
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
@@ -288,7 +288,7 @@ func createDeviceLinkRequest(
 		ctx, http.MethodPost, baseURL+deviceLinkCreatePath, http.NoBody,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create link request: %w", err)
+		return nil, remoteRequestError("failed to create link request", err)
 	}
 	req.Header.Set(zapscript.HeaderZaparooOS, runtime.GOOS)
 	req.Header.Set(zapscript.HeaderZaparooArch, runtime.GOARCH)
@@ -299,7 +299,7 @@ func createDeviceLinkRequest(
 
 	resp, err := claimClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to contact link server: %w", err)
+		return nil, remoteRequestError("failed to contact link server", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -307,11 +307,9 @@ func createDeviceLinkRequest(
 		}
 	}()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
-		return nil, fmt.Errorf(
-			"link server returned status %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(body)),
-		)
+		// Never propagate an untrusted response body into API errors or logs.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
+		return nil, fmt.Errorf("link server returned status %d", resp.StatusCode)
 	}
 
 	var created deviceLinkCreateResponse
@@ -409,13 +407,13 @@ func pollDeviceLinkOnce(ctx context.Context, baseURL, deviceCode string) (*devic
 		ctx, http.MethodPost, baseURL+deviceLinkPollPath, bytes.NewReader(body),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create poll request: %w", err)
+		return nil, remoteRequestError("failed to create poll request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := claimClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to contact link server: %w", err)
+		return nil, remoteRequestError("failed to contact link server", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {

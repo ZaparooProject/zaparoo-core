@@ -44,6 +44,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	reflectedSecret       = "zpl1_reflected-device-code" //nolint:gosec // Test fixture device code.
+	reflectedResponseBody = "invalid device code: " + reflectedSecret
+	malformedLinkURL      = "https://user:link-url-secret@%zz" //nolint:gosec // Test fixture credentials.
+)
+
 func TestLogDeviceLinkPollFailure(t *testing.T) {
 	var buf bytes.Buffer
 	originalLogger := log.Logger
@@ -279,6 +285,80 @@ func TestSettingsAuthLink_RejectsSecondPendingStart(t *testing.T) {
 	err = beginAuthLinkStart()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already pending")
+}
+
+func TestCreateDeviceLinkRequest_DoesNotReturnServerBody(t *testing.T) {
+	// Not parallel: swaps package-level claimClient.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(reflectedResponseBody))
+	}))
+	defer server.Close()
+
+	originalClient := claimClient
+	claimClient = server.Client()
+	t.Cleanup(func() { claimClient = originalClient })
+
+	_, err := createDeviceLinkRequest(t.Context(), server.URL, "test-platform", "test-device")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "400")
+	assert.NotContains(t, err.Error(), reflectedSecret)
+	assert.NotContains(t, err.Error(), reflectedResponseBody)
+}
+
+func TestPollDeviceLinkOnce_DoesNotReturnServerBody(t *testing.T) {
+	// Not parallel: swaps package-level claimClient.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(reflectedResponseBody))
+	}))
+	defer server.Close()
+
+	originalClient := claimClient
+	claimClient = server.Client()
+	t.Cleanup(func() { claimClient = originalClient })
+
+	_, err := pollDeviceLinkOnce(t.Context(), server.URL, reflectedSecret)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "400")
+	assert.NotContains(t, err.Error(), reflectedResponseBody)
+	assert.NotContains(t, err.Error(), reflectedSecret)
+}
+
+func TestSettingsAuthLink_MalformedURLRedacted(t *testing.T) {
+	t.Parallel()
+
+	params, err := json.Marshal(models.SettingsAuthLinkParams{URL: malformedLinkURL})
+	require.NoError(t, err)
+	_, err = HandleSettingsAuthLink(requests.RequestEnv{IsLocal: true, Params: params}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid link URL")
+	assert.NotContains(t, err.Error(), malformedLinkURL)
+	assert.NotContains(t, err.Error(), "link-url-secret")
+}
+
+func TestDeviceLinkRequestErrorsRedactURL(t *testing.T) {
+	// Not parallel: captures package-level logger.
+	_, createErr := createDeviceLinkRequest(t.Context(), malformedLinkURL, "test", "")
+	require.Error(t, createErr)
+	assert.Contains(t, createErr.Error(), "failed to create link request")
+	assert.NotContains(t, createErr.Error(), malformedLinkURL)
+	assert.NotContains(t, createErr.Error(), "link-url-secret")
+
+	_, pollErr := pollDeviceLinkOnce(t.Context(), malformedLinkURL, "device-code")
+	require.Error(t, pollErr)
+	assert.Contains(t, pollErr.Error(), "failed to create poll request")
+	assert.NotContains(t, pollErr.Error(), malformedLinkURL)
+	assert.NotContains(t, pollErr.Error(), "link-url-secret")
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = originalLogger })
+	logDeviceLinkPollFailure(pollErr, 1)
+	assert.Contains(t, buf.String(), "failed to create poll request")
+	assert.NotContains(t, buf.String(), malformedLinkURL)
+	assert.NotContains(t, buf.String(), "link-url-secret")
 }
 
 func TestSettingsAuthLink_HappyPath(t *testing.T) {

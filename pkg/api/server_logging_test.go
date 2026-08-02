@@ -34,6 +34,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	claimSecret             = "zpc1_claim-secret" //nolint:gosec // Test fixture claim token.
+	userCode                = "ABCD-1234"
+	compactUserCode         = "ABCD1234"
+	authClaimURL            = "https://api.zaparoo.com/v1/device-claims/redeem"
+	authLinkVerificationURL = "https://online.zaparoo.com/link"
+)
+
 func TestLogSafeResponse(t *testing.T) {
 	tests := []struct {
 		result         any
@@ -313,6 +321,47 @@ func TestLogSafeRequest(t *testing.T) {
 			assert.NotContains(t, logOutput, "jsonrpc")
 		})
 	}
+}
+
+func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	logSafeRequest(&models.RequestObject{
+		JSONRPC: "2.0",
+		ID:      models.NewStringID("claim-request"),
+		Method:  models.MethodSettingsAuthClaim,
+		Params:  []byte(`{"claimUrl":"` + authClaimURL + `","token":"` + claimSecret + `"}`),
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, models.MethodSettingsAuthClaim)
+	assert.NotContains(t, out, claimSecret)
+	assert.NotContains(t, out, authClaimURL)
+	assert.NotContains(t, out, "claimUrl")
+}
+
+func TestLogSafeResponse_AuthLinkCodesRedacted(t *testing.T) {
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	logSafeResponse(models.AuthLinkStatusResponse{
+		Status:                  models.AuthLinkStatusPending,
+		UserCode:                userCode,
+		VerificationURL:         authLinkVerificationURL,
+		VerificationURLComplete: authLinkVerificationURL + "?code=" + compactUserCode,
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, "AuthLinkStatusResponse")
+	assert.NotContains(t, out, compactUserCode)
+	assert.NotContains(t, out, userCode)
+	assert.NotContains(t, out, authLinkVerificationURL)
+	assert.NotContains(t, out, "verificationUrlComplete")
 }
 
 func TestLogWSWriteError(t *testing.T) {
