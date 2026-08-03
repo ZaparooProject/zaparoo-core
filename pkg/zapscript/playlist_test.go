@@ -141,6 +141,7 @@ func TestQueuePlaylistUpdate_HoldTokenAssignment(t *testing.T) {
 			assert.NotSame(t, owner, queued.HoldToken)
 			assert.True(t, helpers.TokensEqual(owner, queued.HoldToken))
 			assert.Equal(t, owner.ReaderID, queued.HoldToken.ReaderID)
+			assert.Equal(t, owner.Source, queued.HoldToken.Source)
 		})
 	}
 }
