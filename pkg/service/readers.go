@@ -322,6 +322,12 @@ func timedExit(
 		}
 		runBeforeExitHook(svc, *activeMedia)
 
+		softwareToken = svc.State.GetSoftwareToken()
+		if exitGeneration.Load() != generation || !helpers.TokensEqual(&ownerCopy, softwareToken) {
+			log.Debug().Msg("hold owner changed during before_exit, cancelling exit")
+			return
+		}
+
 		log.Info().Msg("exiting media")
 		err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
 		if err != nil {

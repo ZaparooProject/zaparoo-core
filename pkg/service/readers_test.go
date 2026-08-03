@@ -26,9 +26,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -596,6 +598,95 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 				"%s: sourceIsReader=%v, readerExists=%v, hasRemovableCap=%v",
 				tt.expectedReason, sourceIsReader, readerExists, hasRemovableCap)
 		})
+	}
+}
+
+func TestTimedExit_RevalidatesOwnerAfterBeforeExit(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+	cfg.SetSystemDefaults([]config.SystemsDefault{{
+		System:     "NES",
+		BeforeExit: "**input.keyboard:{f2}",
+	}})
+	require.NoError(t, cfg.LoadTOML(`[zapscript.input]
+mode = "unrestricted"`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID:       "test-launcher",
+		SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("test-reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"})
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID:      "game-card",
+		Text:     "game.nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("test-launcher", "NES", "game.nes", "Game", "test-launcher"))
+
+	replacement := tokens.Token{
+		UID:      "replacement-card",
+		Text:     "other.nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	hookRan := make(chan struct{})
+	mockPlatform.On("KeyboardPress", "{f2}").Run(func(_ mock.Arguments) {
+		st.SetSoftwareToken(&replacement)
+		close(hookRan)
+	}).Return(nil).Once()
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(nil).Maybe()
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-hookRan:
+	case <-time.After(time.Second):
+		t.Fatal("before_exit hook did not run")
+	}
+	select {
+	case <-stopCalled:
+		t.Fatal("stale hold owner stopped active media after before_exit hook")
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
