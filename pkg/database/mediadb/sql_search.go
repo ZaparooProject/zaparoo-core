@@ -937,6 +937,74 @@ func sqlSearchMediaWithFilters(
 	return results, nil
 }
 
+func sqlSearchMediaWithFiltersSystemIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
+) ([]string, error) {
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
+
+	skipSystemFilter := requestedAllSystems(systems)
+
+	args := make([]any, 0)
+	if !skipSystemFilter {
+		for _, sys := range systems {
+			args = append(args, sys.ID)
+		}
+	}
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	tagFilterCondition := ""
+	if len(tagFilterClauses) > 0 {
+		tagFilterCondition = " AND " + strings.Join(tagFilterClauses, " AND ")
+	}
+
+	systemCondition := ""
+	if !skipSystemFilter {
+		systemCondition = `Systems.SystemID IN (` + prepareVariadic("?", ",", len(systems)) + `) AND `
+	}
+
+	query := `
+		SELECT DISTINCT Systems.SystemID
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + systemCondition +
+		`Media.IsMissing = 0` +
+		tagFilterCondition +
+		` ORDER BY Systems.SystemID ASC`
+
+	finalArgs := append([]any(nil), args...)
+	finalArgs = append(finalArgs, tagFilterArgs...)
+
+	rows, err := db.QueryContext(ctx, query, finalArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute system IDs query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close system IDs rows")
+		}
+	}()
+
+	results := make([]string, 0)
+	for rows.Next() {
+		var systemID string
+		if scanErr := rows.Scan(&systemID); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan system ID: %w", scanErr)
+		}
+		results = append(results, systemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
 func sqlSearchMediaWithFiltersCount(
 	ctx context.Context,
 	db sqlQueryable,
@@ -1148,7 +1216,7 @@ func sqlSearchMediaByTitleDBIDs(
 	finalArgs := make([]any, 0, len(args)+len(extraArgs)+1)
 	finalArgs = append(finalArgs, args...)
 	finalArgs = append(finalArgs, extraArgs...)
-	if limit != 0 {
+	if limit > 0 {
 		finalArgs = append(finalArgs, limit)
 	}
 

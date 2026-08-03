@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -136,26 +135,19 @@ func TestHandleSystemFavorites_ReturnsFavoritedSystemsUnique(t *testing.T) {
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
-	// Return duplicate results for NES and one for SNES; handler should
-	// deduplicate and return each system once.
-	results := []database.SearchResultWithCursor{
-		{SystemID: "NES", Name: "Game A", Path: filepath.Join("games", "a.nes"), MediaID: 1},
-		{SystemID: "NES", Name: "Game B", Path: filepath.Join("games", "b.nes"), MediaID: 2},
-		{SystemID: "SNES", Name: "Game C", Path: filepath.Join("games", "c.sfc"), MediaID: 3},
-	}
-
-	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.MatchedBy(func(filters *database.SearchFilters) bool {
-		if len(filters.Tags) != 1 {
-			return false
-		}
-		if filters.Tags[0].Type != "user" || filters.Tags[0].Value != "favorite" {
-			return false
-		}
-		if filters.Limit != 0 {
-			return false
-		}
-		return assert.Equal(t, systemdefs.AllSystems(), filters.Systems)
-	})).Return(results, nil)
+	mockMediaDB.On(
+		"SearchMediaWithFiltersSystemIDs",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			if len(filters.Tags) != 1 {
+				return false
+			}
+			if filters.Tags[0].Type != "user" || filters.Tags[0].Value != "favorite" {
+				return false
+			}
+			return assert.Equal(t, systemdefs.AllSystems(), filters.Systems)
+		}),
+	).Return([]string{"NES", "SNES"}, nil)
 
 	env := requests.RequestEnv{
 		Context: context.Background(),
@@ -199,10 +191,10 @@ func TestHandleSystemFavorites_NoFavoritesReturnsEmpty(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	mockMediaDB.On(
-		"SearchMediaWithFilters",
+		"SearchMediaWithFiltersSystemIDs",
 		mock.Anything,
 		mock.Anything,
-	).Return([]database.SearchResultWithCursor{}, nil)
+	).Return([]string{}, nil)
 
 	env := requests.RequestEnv{
 		Context: context.Background(),

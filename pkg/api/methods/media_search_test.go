@@ -142,13 +142,6 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 				len(filters.Tags) == 0 // No tags for this test
 		}),
 	).Return(expectedResults, nil)
-	mockMediaDB.On("SearchMediaWithFiltersCount",
-		mock.Anything,
-		mock.MatchedBy(func(filters *database.SearchFilters) bool {
-			return filters.Query == "mario" && filters.Cursor == nil && len(filters.Tags) == 0
-		}),
-	).Return(len(expectedResults), nil)
-
 	// Create request without cursor (initial request)
 	query := "mario"
 	params := models.SearchParams{
@@ -177,8 +170,9 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	result, err := HandleMediaSearch(env)
 	require.NoError(t, err)
 
-	// Check if mocks were called at all
-	t.Logf("Mock calls made: %v", mockMediaDB.Calls)
+	// Verify SearchMediaWithFiltersCount was not called because the first page
+	// proved there are no more results.
+	mockMediaDB.AssertNotCalled(t, "SearchMediaWithFiltersCount", mock.Anything, mock.Anything)
 
 	// Verify response format with cursor-based pagination
 	searchResults, ok := result.(models.SearchResults)

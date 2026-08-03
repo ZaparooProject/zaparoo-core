@@ -2425,6 +2425,18 @@ func (db *MediaDB) SearchMediaWithFiltersCount(
 		filters.Letter, includeName)
 }
 
+func (db *MediaDB) SearchMediaWithFiltersSystemIDs(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]string, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+
+	return sqlSearchMediaWithFiltersSystemIDs(
+		ctx, db.sql.Load(), filters.Systems, filters.Tags)
+}
+
 // slugCacheSearch is a shared helper for slug-based search methods that use the
 // in-memory cache. It handles slugification, system resolution, and SQL fallback.
 // Returns (results, true, nil) on cache hit, or (nil, false, nil) when the caller

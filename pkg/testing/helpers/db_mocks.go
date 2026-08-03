@@ -1226,7 +1226,24 @@ func (m *MockMediaDBI) SearchMediaWithFiltersCount(
 	if count, ok := args.Get(0).(int); ok {
 		return count, nil
 	}
+	if count, ok := args.Get(0).(int64); ok {
+		return int(count), nil
+	}
 	return 0, nil
+}
+
+func (m *MockMediaDBI) SearchMediaWithFiltersSystemIDs(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]string, error) {
+	args := m.Called(ctx, filters)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if results, ok := args.Get(0).([]string); ok {
+		return results, nil
+	}
+	return nil, nil
 }
 
 func (m *MockMediaDBI) SearchMediaBySlug(

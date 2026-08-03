@@ -973,6 +973,7 @@ type MediaDBI interface {
 	SearchMediaPathExact(ctx context.Context, systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	SearchMediaWithFiltersCount(ctx context.Context, filters *SearchFilters) (int, error)
+	SearchMediaWithFiltersSystemIDs(ctx context.Context, filters *SearchFilters) ([]string, error)
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)

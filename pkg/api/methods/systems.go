@@ -130,30 +130,11 @@ func HandleSystemFavorites(env requests.RequestEnv) (any, error) {
 	filters := &database.SearchFilters{
 		Systems: systemdefs.AllSystems(),
 		Tags:    []zapscript.TagFilter{{Type: "user", Value: "favorite"}},
-		Limit:   0,
 	}
 
-	results, err := env.Database.MediaDB.SearchMediaWithFilters(env.Context, filters)
+	systemIDs, err := env.Database.MediaDB.SearchMediaWithFiltersSystemIDs(env.Context, filters)
 	if err != nil {
-		return nil, fmt.Errorf("error searching favorite media: %w", err)
-	}
-
-	seen := make(map[string]struct{}, len(filters.Systems))
-	systemIDs := make([]string, 0, len(filters.Systems))
-
-	for i := range results {
-		result := &results[i]
-		if result.SystemID == "" {
-			continue
-		}
-		if _, ok := seen[result.SystemID]; ok {
-			continue
-		}
-		seen[result.SystemID] = struct{}{}
-		systemIDs = append(systemIDs, result.SystemID)
-		if len(seen) == len(filters.Systems) {
-			break
-		}
+		return nil, fmt.Errorf("error searching favorite systems: %w", err)
 	}
 
 	respSystems := make([]models.System, 0, len(systemIDs))
