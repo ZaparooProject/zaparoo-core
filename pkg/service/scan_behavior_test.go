@@ -307,14 +307,20 @@ func (env *scanBehaviorEnv) waitForKeyboard(t *testing.T) string {
 // token back through lsq and readerManager has set it in state.
 func (env *scanBehaviorEnv) waitForSoftwareToken(t *testing.T) {
 	t.Helper()
+	env.waitForSoftwareTokenUID(t, "")
+}
+
+func (env *scanBehaviorEnv) waitForSoftwareTokenUID(t *testing.T, uid string) {
+	t.Helper()
 	deadline := time.After(behaviorTimeout)
 	for {
-		if env.st.GetSoftwareToken() != nil {
+		softwareToken := env.st.GetSoftwareToken()
+		if softwareToken != nil && (uid == "" || softwareToken.UID == uid) {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatal("timed out waiting for software token to be set")
+			t.Fatalf("timed out waiting for software token UID=%q", uid)
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -354,6 +360,21 @@ func (env *scanBehaviorEnv) waitForTimerStopped(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for exit timer to be stopped")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func (env *scanBehaviorEnv) waitForPlaylistCleared(t *testing.T) {
+	t.Helper()
+	deadline := time.After(behaviorTimeout)
+	for {
+		if env.st.GetActivePlaylist() == nil {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for active playlist to clear")
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -476,12 +497,53 @@ func TestScanBehavior_HoldImmediate_RemovalClosesGame(t *testing.T) {
 
 	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
-	// Wait for the software token roundtrip through lsq before removal,
-	// otherwise the 0s timer fires before software token is set.
 	env.waitForSoftwareToken(t)
 
 	env.sendRemoval()
 	env.waitForStop(t)
+}
+
+func TestScanBehavior_HoldImmediate_FastRemovalClosesAfterLaunchOwnershipArrives(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.sendRemoval()
+
+	env.waitForStop(t)
+}
+
+func TestScanBehavior_HoldImmediate_UtilityRemovalDoesNotCloseGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+
+	env.sendCommandScan("keyboard", "**input.keyboard:coin")
+	env.waitForKeyboard(t)
+	env.sendRemoval()
+
+	env.expectNoStop(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+}
+
+func TestScanBehavior_HoldImmediate_OwnerRemovalClearsPrimaryPlaylist(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareTokenUID(t, "game1")
+	playlist := playlists.NewPlaylist("playlist", "Playlist", []playlists.PlaylistItem{{ZapScript: "game"}})
+	playlist.Playing = true
+	env.st.SetActivePlaylist(playlist)
+
+	env.sendRemoval()
+	env.waitForStop(t)
+	env.waitForPlaylistCleared(t)
 }
 
 func TestScanBehavior_HoldImmediate_ManualExitNoRelaunch(t *testing.T) {
@@ -553,14 +615,18 @@ func TestScanBehavior_HoldDelayed_DifferentCardLaunchesImmediately(t *testing.T)
 
 	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
 	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
-	env.waitForSoftwareToken(t)
+	env.waitForSoftwareTokenUID(t, "gameA")
 
 	env.sendRemoval()
 	env.sendGameScan("gameB", env.gamePath("gameB.rom"))
 	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "gameB")
+
+	env.clock.Advance(10 * time.Second)
+	env.expectNoStop(t)
 }
 
-func TestScanBehavior_HoldDelayed_CommandResetsCountdown(t *testing.T) {
+func TestScanBehavior_HoldDelayed_CommandDoesNotResetCountdown(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
@@ -570,31 +636,15 @@ func TestScanBehavior_HoldDelayed_CommandResetsCountdown(t *testing.T) {
 
 	env.sendRemoval()
 
-	// First command card resets the 5s countdown.
 	env.sendCommandScan("cmd1", "**input.keyboard:coin")
 	env.waitForKeyboard(t)
-
-	// Advance 4s (< 5s exit_delay). If the timer was reset by the command,
-	// there's 1s remaining. If it wasn't, 4s > original timer and it would fire.
 	env.clock.Advance(4 * time.Second)
+	env.expectNoStop(t)
 
-	// Second command card resets the countdown again.
 	env.sendCommandScan("cmd2", "**input.keyboard:start")
 	env.waitForKeyboard(t)
-
-	// Advance another 4s (total 8s > 5s). Only passes if the second command
-	// truly reset the timer — otherwise the first command's timer (1s remaining)
-	// would have fired.
-	env.clock.Advance(4 * time.Second)
-	env.expectNoStop(t)
-
-	// Reinsert original game card — cancels timer, session continues.
-	env.sendGameScan("game1", env.gamePath("game.rom"))
-	env.waitForActiveCard(t, "game1")
-	env.waitForTimerStopped(t)
-
-	env.clock.Advance(10 * time.Second)
-	env.expectNoStop(t)
+	env.clock.Advance(time.Second)
+	env.waitForStop(t)
 }
 
 func TestScanBehavior_HoldDelayed_ManualExitNoRelaunch(t *testing.T) {

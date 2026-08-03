@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -66,4 +67,18 @@ func TestTransitions_PreserveSlot(t *testing.T) {
 		t.Parallel()
 		assert.Equal(t, mediaslot.Background, playlists.Pause(*p).Slot)
 	})
+}
+
+func TestTransitions_PreserveHoldToken(t *testing.T) {
+	t.Parallel()
+
+	owner := &tokens.Token{UID: "playlist-card", Text: "**playlist.next"}
+	p := playlists.NewPlaylist("id", "name", []playlists.PlaylistItem{{ZapScript: "a"}, {ZapScript: "b"}})
+	p.HoldToken = owner
+
+	assert.Same(t, owner, playlists.Next(*p).HoldToken)
+	assert.Same(t, owner, playlists.Previous(*p).HoldToken)
+	assert.Same(t, owner, playlists.Goto(*p, 1).HoldToken)
+	assert.Same(t, owner, playlists.Play(*p).HoldToken)
+	assert.Same(t, owner, playlists.Pause(*p).HoldToken)
 }

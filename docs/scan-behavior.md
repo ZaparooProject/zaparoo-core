@@ -22,7 +22,8 @@ When `readers.scan.mode='tap'` (default setting) and a game is launched using a 
 
 When `readers.scan.mode='hold'` with `readers.scan.exit_delay=0.0` and a game is launched using a card:
 
-- [ ] Removing the card from the reader will immediately close the game.
+- [ ] Removing the card from the reader will immediately close the game, including when removal happens before launch initialization finishes.
+- [ ] Scanning and removing a command card will execute the command without closing the game; only the launch card owns Hold mode exit.
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
 - [ ] Exiting the game manually via the internal menu and then removing the card won't trigger a core menu reload.
 
@@ -35,7 +36,7 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is l
 - [ ] Removing the card from the reader will close the game after **N seconds**.
 - [ ] Removing the card and reinserting it before the N-second countdown ends will not interrupt the ongoing game.
 - [ ] Removing the card and tapping a different game card will immediately launch the other game.
-- [ ] Removing the card and tapping a command card will execute the command and reset the countdown timer. You can repeatedly tap various command cards without changing the game, resetting the timer each time, and then reinsert the original game card to continue the session.
+- [ ] Removing the launch card and tapping a command card will execute the command without resetting or transferring the countdown. Removing the command card will not trigger another exit.
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
 - [ ] Exiting the game manually via the internal menu and then removing the card won't trigger a core menu reload.
 - [ ] Exiting the game manually during the N-second countdown cancels the countdown and returns to the menu.

@@ -183,6 +183,12 @@ func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
 	}
 	if pls != nil {
 		pls.Slot = slot
+		if slot == mediaslot.Primary && env.Playlist.HoldToken != nil {
+			holdToken := *env.Playlist.HoldToken
+			pls.HoldToken = &holdToken
+		} else {
+			pls.HoldToken = nil
+		}
 	}
 	if env.LauncherCtx == nil && env.ServiceCtx == nil {
 		env.Playlist.Queue <- pls

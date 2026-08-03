@@ -20,6 +20,7 @@
 package service
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -621,14 +622,14 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
 	st.SetReader(mockReader)
 
-	st.SetActiveCard(tokens.Token{
+	owner := tokens.Token{
 		UID:      "abc123",
 		Text:     "**launch.system:nes",
 		Source:   tokens.SourceReader,
 		ReaderID: readerID,
 		ScanTime: time.Now(),
-	})
-	st.SetSoftwareToken(&tokens.Token{Text: "NES/Super Mario Bros.nes"})
+	}
+	st.SetSoftwareToken(&owner)
 	st.SetActiveMedia(models.NewActiveMedia("nes", "NES", "game.nes", "Game", "launcher"))
 
 	stopCalled := make(chan struct{})
@@ -648,7 +649,8 @@ func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T)
 	}
 	clock := clockwork.NewFakeClock()
 
-	exitTimer := timedExit(svc, clock, nil)
+	var exitGeneration atomic.Uint64
+	exitTimer := timedExit(svc, clock, nil, &exitGeneration, &owner)
 	require.NotNil(t, exitTimer)
 	clock.Advance(time.Millisecond)
 

@@ -22,6 +22,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -48,6 +49,32 @@ var ErrNoStagedToken = errors.New("no staged token to confirm")
 type toConnectDevice struct {
 	connectionString string
 	device           config.ReadersConnect
+}
+
+const maxPendingHoldRemovals = 32
+
+type holdTokenKey struct {
+	uid      string
+	text     string
+	pathRoot string
+}
+
+func newHoldTokenKey(token *tokens.Token) holdTokenKey {
+	return holdTokenKey{
+		uid:      token.UID,
+		text:     token.Text,
+		pathRoot: token.PathRoot,
+	}
+}
+
+func recordPendingHoldRemoval(pending map[holdTokenKey]tokens.Token, token *tokens.Token) {
+	if len(pending) >= maxPendingHoldRemovals {
+		for key := range pending {
+			delete(pending, key)
+			break
+		}
+	}
+	pending[newHoldTokenKey(token)] = *token
 }
 
 // isPathConnected checks if any connected reader is using the given path.
@@ -209,16 +236,20 @@ func runBeforeExitHook(
 	}
 }
 
+func cancelTimedExit(exitTimer clockwork.Timer, exitGeneration *atomic.Uint64) bool {
+	exitGeneration.Add(1)
+	return exitTimer != nil && exitTimer.Stop()
+}
+
 func timedExit(
 	svc *ServiceContext,
 	clock clockwork.Clock,
 	exitTimer clockwork.Timer,
+	exitGeneration *atomic.Uint64,
+	owner *tokens.Token,
 ) clockwork.Timer {
-	if exitTimer != nil {
-		stopped := exitTimer.Stop()
-		if stopped {
-			log.Debug().Msg("cancelling previous exit timer")
-		}
+	if cancelTimedExit(exitTimer, exitGeneration) {
+		log.Debug().Msg("cancelling previous exit timer")
 	}
 
 	if !svc.Config.HoldModeEnabled() {
@@ -226,37 +257,53 @@ func timedExit(
 		return exitTimer
 	}
 
-	// Only hardware readers support hold mode exit
-	lastToken := svc.State.GetLastScanned()
-	if lastToken.Source != tokens.SourceReader {
-		log.Debug().Str("source", lastToken.Source).Msg("skipping exit timer for non-reader source")
+	if owner.Source != tokens.SourceReader {
+		log.Debug().Str("source", owner.Source).Msg("skipping exit timer for non-reader source")
 		return exitTimer
 	}
 
-	// Check if the reader supports removal detection
-	r, ok := svc.State.GetReader(lastToken.ReaderID)
+	// Only hardware readers that report removal can own hold-mode media.
+	r, ok := svc.State.GetReader(owner.ReaderID)
 	if !ok {
-		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader not found in state, skipping exit timer")
+		log.Debug().Str("readerID", owner.ReaderID).Msg("reader not found in state, skipping exit timer")
 		return exitTimer
 	}
 	if !readers.HasCapability(r, readers.CapabilityRemovable) {
-		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader lacks removable capability, skipping exit timer")
+		log.Debug().Str("readerID", owner.ReaderID).Msg("reader lacks removable capability, skipping exit timer")
 		return exitTimer
 	}
 
+	ownerCopy := *owner
 	timerLen := time.Duration(float64(svc.Config.ReadersScan().ExitDelay) * float64(time.Second))
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
 	exitTimer = clock.NewTimer(timerLen)
+	timer := exitTimer
+	generation := exitGeneration.Add(1)
 
 	go func() {
 		select {
-		case <-exitTimer.Chan():
+		case <-timer.Chan():
 		case <-svc.State.GetContext().Done():
 			return
 		}
 
+		if exitGeneration.Load() != generation {
+			log.Debug().Msg("stale exit timer expired, cancelling exit")
+			return
+		}
 		if !svc.Config.HoldModeEnabled() {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
+			return
+		}
+
+		softwareToken := svc.State.GetSoftwareToken()
+		if !helpers.TokensEqual(&ownerCopy, softwareToken) {
+			log.Debug().Msg("hold owner changed, cancelling exit")
+			return
+		}
+		activeCard := svc.State.GetActiveCard()
+		if helpers.TokensEqual(&ownerCopy, &activeCard) {
+			log.Debug().Msg("hold owner reinserted, cancelling exit")
 			return
 		}
 
@@ -265,17 +312,14 @@ func timedExit(
 			log.Debug().Msg("no active media, cancelling exit")
 			return
 		}
-
-		if svc.State.GetSoftwareToken() == nil {
-			log.Debug().Msg("no active software token, cancelling exit")
-			return
-		}
-
 		if svc.Config.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
 			log.Debug().Msg("active system ignored in config, cancelling exit")
 			return
 		}
 
+		if exitGeneration.Load() != generation {
+			return
+		}
 		runBeforeExitHook(svc, *activeMedia)
 
 		log.Info().Msg("exiting media")
@@ -284,6 +328,13 @@ func timedExit(
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}
 
+		if svc.PlaylistQueue != nil {
+			select {
+			case svc.PlaylistQueue <- nil:
+			case <-svc.State.GetContext().Done():
+				return
+			}
+		}
 		select {
 		case svc.LaunchSoftwareQueue <- nil:
 		case <-svc.State.GetContext().Done():
@@ -319,7 +370,9 @@ func readerManager(
 
 	proc := &scanPreprocessor{}
 	connectScanSeen := make(map[string]bool)
+	pendingRemovals := make(map[holdTokenKey]tokens.Token)
 	var exitTimer clockwork.Timer
+	var exitGeneration atomic.Uint64
 
 	var stagedToken *tokens.Token
 	var guardUI *uievents.Handle
@@ -486,14 +539,22 @@ preprocessing:
 			scanSource = t.Source
 			scanProperties = t.Properties
 		case stoken := <-svc.LaunchSoftwareQueue:
-			// a token has been launched that starts software, used for managing exits
+			// A token has launched primary software and now owns hold-mode exit.
 			log.Debug().Msgf("new software token: %v", stoken)
-			if exitTimer != nil && !helpers.TokensEqual(stoken, svc.State.GetSoftwareToken()) {
-				if stopped := exitTimer.Stop(); stopped {
-					log.Info().Msg("different software token inserted, cancelling exit")
+			currentSoftwareToken := svc.State.GetSoftwareToken()
+			if stoken == nil || !helpers.TokensEqual(stoken, currentSoftwareToken) {
+				if cancelTimedExit(exitTimer, &exitGeneration) {
+					log.Info().Msg("software token changed, cancelling exit")
 				}
 			}
 			svc.State.SetSoftwareToken(stoken)
+			if stoken != nil {
+				key := newHoldTokenKey(stoken)
+				if removedToken, ok := pendingRemovals[key]; ok && helpers.TokensEqual(stoken, &removedToken) {
+					delete(pendingRemovals, key)
+					exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, stoken)
+				}
+			}
 			continue preprocessing
 		case result := <-svc.ConfirmQueue:
 			// Legacy API confirm remains launch-guard-specific and bypasses delay.
@@ -620,6 +681,14 @@ preprocessing:
 			}
 		}
 
+		var removedToken *tokens.Token
+		if scan == nil && !readerError {
+			if previous := proc.PrevToken(); previous != nil {
+				previousCopy := *previous
+				removedToken = &previousCopy
+			}
+		}
+
 		switch proc.Process(scan, readerError) {
 		case scanSkipDuplicate:
 			log.Debug().
@@ -629,6 +698,8 @@ preprocessing:
 			continue preprocessing
 
 		case scanNewToken:
+			delete(pendingRemovals, newHoldTokenKey(scan))
+
 			// Suppress the first scan from each newly-connected reader when ignore_on_connect is enabled
 			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" && !connectScanSeen[scan.ReaderID] {
 				connectScanSeen[scan.ReaderID] = true
@@ -658,16 +729,11 @@ preprocessing:
 
 			svc.State.SetActiveCard(*scan)
 
-			if exitTimer != nil {
-				stopped := exitTimer.Stop()
-				stoken := svc.State.GetSoftwareToken()
-				if stopped && helpers.TokensEqual(scan, stoken) {
-					log.Info().Msg("same token reinserted, cancelling exit")
-					continue preprocessing
-				} else if stopped {
-					log.Info().Msg("new token inserted, restarting exit timer")
-					exitTimer = timedExit(svc, clock, exitTimer)
+			if exitTimer != nil && helpers.TokensEqual(scan, svc.State.GetSoftwareToken()) {
+				if cancelTimedExit(exitTimer, &exitGeneration) {
+					log.Info().Msg("hold owner reinserted, cancelling exit")
 				}
+				continue preprocessing
 			}
 
 			// avoid launching a token that was just written by a reader
@@ -767,20 +833,19 @@ preprocessing:
 			if pt := proc.PrevToken(); pt != nil && pt.ReaderID != "" {
 				delete(connectScanSeen, pt.ReaderID)
 			}
-			if exitTimer != nil {
-				if stopped := exitTimer.Stop(); stopped {
-					log.Debug().Msg("cancelled exit timer due to reader error")
-				}
+			if cancelTimedExit(exitTimer, &exitGeneration) {
+				log.Debug().Msg("cancelled exit timer due to reader error")
 			}
 			svc.State.SetActiveCard(tokens.Token{})
 
 		case scanNormalRemoval:
 			log.Info().Msg("token was removed")
 
-			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
+			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans.
 			svc.State.SetActiveCard(tokens.Token{})
 
-			// Run on_remove hook; errors skip exit timer but card state is already cleared
+			// Run on_remove hook for every normal removal. A blocked removal must not
+			// become a deferred hold exit when its launch completes later.
 			onRemoveScript := svc.Config.ReadersScan().OnRemove
 			if svc.Config.HoldModeEnabled() && onRemoveScript != "" {
 				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
@@ -789,7 +854,18 @@ preprocessing:
 				}
 			}
 
-			exitTimer = timedExit(svc, clock, exitTimer)
+			if removedToken == nil {
+				continue preprocessing
+			}
+			key := newHoldTokenKey(removedToken)
+			recordPendingHoldRemoval(pendingRemovals, removedToken)
+			softwareToken := svc.State.GetSoftwareToken()
+			if !helpers.TokensEqual(removedToken, softwareToken) {
+				log.Debug().Msg("removed token does not own active media, skipping exit timer")
+				continue preprocessing
+			}
+			delete(pendingRemovals, key)
+			exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, removedToken)
 		}
 	}
 

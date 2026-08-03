@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -506,6 +507,82 @@ func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
 	default:
 	}
 	mockPlatform.AssertNumberOfCalls(t, "LaunchMedia", 1)
+}
+
+func TestRunTokenZapScript_PhysicalPlaylistCommandTransfersHoldOwner(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	active.Playing = true
+	plq := make(chan *playlists.Playlist, 1)
+	owner := tokens.Token{
+		UID:      "playlist-card",
+		Text:     "**playlist.next",
+		Source:   tokens.SourceReader,
+		ReaderID: "mock-removable-reader",
+		ScanTime: time.Now(),
+	}
+
+	err := runTokenZapScript(svc, owner, playlists.PlaylistController{
+		Active:  active,
+		Current: active,
+		Queue:   plq,
+	}, nil, false)
+	require.NoError(t, err)
+
+	updated := <-plq
+	require.NotNil(t, updated.HoldToken)
+	assert.True(t, helpers.TokensEqual(&owner, updated.HoldToken))
+	assert.Equal(t, owner.ReaderID, updated.HoldToken.ReaderID)
+}
+
+func TestRunTokenZapScript_PrimaryPlaylistLaunchPublishesPhysicalOwner(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	const readerID = "mock-removable-reader"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	mockReader.On("ReaderID").Return(readerID).Maybe()
+	svc.State.SetReader(mockReader)
+
+	owner := &tokens.Token{
+		UID:      "playlist-card",
+		Text:     "**playlist.play:games",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	}
+	active := makeServicePlaylist()
+	active.Playing = true
+	active.HoldToken = owner
+
+	path := filepath.Join(t.TempDir(), "game.rom")
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Return(nil).Once()
+
+	err := runTokenZapScript(svc, tokens.Token{
+		Text:     "**launch:" + path,
+		Source:   tokens.SourcePlaylist,
+		ScanTime: time.Now(),
+	}, playlists.PlaylistController{
+		Active:    active,
+		Current:   active,
+		HoldToken: owner,
+		Queue:     make(chan *playlists.Playlist, 1),
+	}, nil, false)
+	require.NoError(t, err)
+
+	softwareToken := <-svc.LaunchSoftwareQueue
+	require.NotNil(t, softwareToken)
+	assert.True(t, helpers.TokensEqual(owner, softwareToken))
+	assert.Equal(t, owner.ReaderID, softwareToken.ReaderID)
 }
 
 // statefulPlaybackStub tracks per-slot playing state so tests can observe the
