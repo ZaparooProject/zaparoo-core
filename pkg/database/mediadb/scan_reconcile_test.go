@@ -35,6 +35,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,68 @@ func mediaDBIDsBySystem(t *testing.T, db *mediadb.MediaDB, systemID string) map[
 		byPath[row.Path] = row
 	}
 	return byPath
+}
+
+func canonicalWorldTagDBID(t *testing.T, mediaDB *mediadb.MediaDB) int64 {
+	t.Helper()
+	var tagDBID int64
+	err := mediaDB.UnsafeGetSQLDb().QueryRowContext(context.Background(), `
+		SELECT t.DBID
+		FROM Tags t
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE tt.Type = 'region' AND t.Tag = 'world'
+	`).Scan(&tagDBID)
+	require.NoError(t, err)
+	return tagDBID
+}
+
+func attachCanonicalWorldTagToMedia(t *testing.T, mediaDB *mediadb.MediaDB, tagDBID int64, missing bool) {
+	t.Helper()
+	missingValue := 0
+	if missing {
+		missingValue = 1
+	}
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "cleanup", "game.rom"))
+	_, err := mediaDB.UnsafeGetSQLDb().ExecContext(context.Background(), `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'Cleanup', 'Cleanup');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (1, 1, 1, ?, ?);
+		INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, ?);
+	`, mediaPath, missingValue, tagDBID)
+	require.NoError(t, err)
+}
+
+func assertCanonicalWorldRestoredAfterCleanup(t *testing.T, mediaDB *mediadb.MediaDB) {
+	t.Helper()
+	ctx := context.Background()
+	conn := mediaDB.UnsafeGetSQLDb()
+
+	var worldCount int
+	err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM Tags t
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE tt.Type = 'region' AND t.Tag = 'world'
+	`).Scan(&worldCount)
+	require.NoError(t, err)
+	require.Zero(t, worldCount, "cleanup path must delete the canonical tag")
+
+	var stampCount int
+	err = conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM DBConfig WHERE Name = ?", mediadb.DBConfigCanonicalTagVocabHash,
+	).Scan(&stampCount)
+	require.NoError(t, err)
+	require.Zero(t, stampCount, "cleanup path must invalidate the vocabulary stamp")
+
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	err = conn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM Tags t
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE tt.Type = 'region' AND t.Tag = 'world'
+	`).Scan(&worldCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, worldCount)
 }
 
 func TestReconcileStagedSystem_FullScanInsertsTitlesMediaAndTags(t *testing.T) {
@@ -230,4 +293,86 @@ func TestSeedCanonicalTagDefinitions_VocabStampSkipsReseed(t *testing.T) {
 	require.NoError(t, conn.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?", mediadb.DBConfigCanonicalTagVocabHash).Scan(&restamped))
 	assert.Equal(t, stamp, restamped)
+
+	cleanupPaths := []struct {
+		run  func(*testing.T, *mediadb.MediaDB, int64)
+		name string
+	}{
+		{
+			name: "sqlTruncateSystems",
+			run: func(t *testing.T, mediaDB *mediadb.MediaDB, tagDBID int64) {
+				attachCanonicalWorldTagToMedia(t, mediaDB, tagDBID, false)
+				require.NoError(t, mediaDB.TruncateSystems([]string{"Cleanup"}))
+			},
+		},
+		{
+			name: "sqlCleanMediaOrphans",
+			run: func(t *testing.T, mediaDB *mediadb.MediaDB, tagDBID int64) {
+				attachCanonicalWorldTagToMedia(t, mediaDB, tagDBID, true)
+				deleted, cleanupErr := mediaDB.CleanMediaOrphans(context.Background())
+				require.NoError(t, cleanupErr)
+				require.EqualValues(t, 1, deleted)
+			},
+		},
+		{
+			name: "clearMediaTagsForTagDBIDs",
+			run: func(t *testing.T, mediaDB *mediadb.MediaDB, tagDBID int64) {
+				ctx := context.Background()
+				conn := mediaDB.UnsafeGetSQLDb()
+				_, cleanupErr := conn.ExecContext(ctx,
+					"INSERT INTO TagTypes (Type, IsExclusive) VALUES ('scraper-run.cleanup', 0)")
+				require.NoError(t, cleanupErr)
+				_, cleanupErr = conn.ExecContext(ctx, `
+					UPDATE Tags
+					SET TypeDBID = (SELECT DBID FROM TagTypes WHERE Type = 'scraper-run.cleanup')
+					WHERE DBID = ?
+				`, tagDBID)
+				require.NoError(t, cleanupErr)
+				attachCanonicalWorldTagToMedia(t, mediaDB, tagDBID, false)
+				require.NoError(t, mediaDB.ClearScrapeRunMarkers(ctx, "cleanup", "world"))
+			},
+		},
+	}
+	for _, cleanupPath := range cleanupPaths {
+		t.Run(cleanupPath.name, func(t *testing.T) {
+			cleanupDB, cleanup := helpers.NewInMemoryMediaDB(t)
+			t.Cleanup(cleanup)
+			require.NoError(t, cleanupDB.SeedCanonicalTagDefinitions(context.Background()))
+			tagDBID := canonicalWorldTagDBID(t, cleanupDB)
+
+			cleanupPath.run(t, cleanupDB, tagDBID)
+			assertCanonicalWorldRestoredAfterCleanup(t, cleanupDB)
+		})
+	}
+}
+
+func TestSeedCanonicalTagDefinitions_RestoresCanonicalTypeExclusivity(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	conn := mediaDB.UnsafeGetSQLDb()
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+
+	typeName := string(tags.TagTypeExtension)
+	expectedExclusive := tags.IsExclusiveType(tags.TagTypeExtension)
+	var typeDBID int64
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT DBID FROM TagTypes WHERE Type = ?", typeName).Scan(&typeDBID))
+	_, err := conn.ExecContext(ctx,
+		"UPDATE TagTypes SET IsExclusive = ? WHERE DBID = ?", !expectedExclusive, typeDBID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx,
+		"DELETE FROM DBConfig WHERE Name = ?", mediadb.DBConfigCanonicalTagVocabHash)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	var restoredDBID int64
+	var restoredExclusive bool
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT DBID, IsExclusive FROM TagTypes WHERE Type = ?", typeName,
+	).Scan(&restoredDBID, &restoredExclusive))
+	assert.Equal(t, typeDBID, restoredDBID, "upsert must preserve the existing type row")
+	assert.Equal(t, expectedExclusive, restoredExclusive)
 }

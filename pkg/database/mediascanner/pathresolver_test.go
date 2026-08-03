@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -56,6 +57,29 @@ func readCount(counts *sync.Map, path string) int64 {
 		return 0
 	}
 	return counter.Load()
+}
+
+func TestPathResolverRetriesFailedDirectoryRead(t *testing.T) {
+	t.Parallel()
+
+	readErr := errors.New("transient read failure")
+	resolver := newPathResolver()
+	var calls atomic.Int64
+	resolver.readDirFn = func(context.Context, string) ([]os.DirEntry, error) {
+		if calls.Add(1) == 1 {
+			return nil, readErr
+		}
+		return []os.DirEntry{}, nil
+	}
+
+	_, err := resolver.readDir(context.Background(), "transient")
+	require.ErrorIs(t, err, readErr)
+	entries, err := resolver.readDir(context.Background(), "transient")
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	_, err = resolver.readDir(context.Background(), "transient")
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, calls.Load(), "successful retry must be memoized")
 }
 
 // TestPathResolverMemoizesSharedParents pins the memoization: probing many

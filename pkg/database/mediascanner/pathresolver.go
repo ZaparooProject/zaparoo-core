@@ -22,7 +22,6 @@ package mediascanner
 import (
 	"context"
 	"os"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
@@ -45,9 +44,9 @@ type pathResolver struct {
 }
 
 type dirListing struct {
+	ready   chan struct{}
 	err     error
 	entries []os.DirEntry
-	once    sync.Once
 }
 
 type resolvedPath struct {
@@ -63,21 +62,29 @@ func newPathResolver() *pathResolver {
 	}
 }
 
-// readDir returns the memoized listing for path, performing the underlying
-// read exactly once per resolver lifetime.
+// readDir returns the memoized successful listing for path. Concurrent callers
+// share one in-flight read; failed reads are removed so a later caller can retry.
 func (r *pathResolver) readDir(ctx context.Context, path string) ([]os.DirEntry, error) {
 	r.mu.Lock()
 	listing, ok := r.dirs[path]
 	if !ok {
-		listing = &dirListing{}
+		listing = &dirListing{ready: make(chan struct{})}
 		r.dirs[path] = listing
+		r.mu.Unlock()
+
+		listing.entries, listing.err = r.readDirFn(ctx, path)
+
+		r.mu.Lock()
+		if listing.err != nil {
+			delete(r.dirs, path)
+		}
+		close(listing.ready)
+		r.mu.Unlock()
+		return listing.entries, listing.err
 	}
 	r.mu.Unlock()
-	// The read runs outside the resolver lock so unrelated directories can be
-	// listed concurrently; Once makes racers for the same directory wait.
-	listing.once.Do(func() {
-		listing.entries, listing.err = r.readDirFn(ctx, path)
-	})
+
+	<-listing.ready
 	return listing.entries, listing.err
 }
 

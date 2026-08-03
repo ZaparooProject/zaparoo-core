@@ -65,6 +65,45 @@ func newTestArcadeSystemCache(t *testing.T) *arcadeSystemCache {
 	return cache
 }
 
+func TestLoadArcadeClassCacheRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), arcadeClassCacheFileName)
+	require.NoError(t, saveArcadeClassCache(path, map[string]arcadeClassCacheEntry{
+		"oversized.mra": {SetName: "oversized", Size: 1, MtimeNs: 1},
+	}))
+
+	previousMax := arcadeClassCacheMaxBytes
+	arcadeClassCacheMaxBytes = 1
+	t.Cleanup(func() { arcadeClassCacheMaxBytes = previousMax })
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), arcadeClassCacheMaxBytes)
+	assert.Empty(t, loadArcadeClassCache(path))
+}
+
+func TestArcadeSystemCacheEmptyScanPreservesPersistedCache(t *testing.T) {
+	t.Parallel()
+
+	cache := newTestArcadeSystemCache(t)
+	persisted := map[string]arcadeClassCacheEntry{
+		"existing.mra": {SetName: "existing", Size: 10, MtimeNs: 20},
+	}
+	require.NoError(t, saveArcadeClassCache(cache.persistPath, persisted))
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return nil, nil
+	}
+
+	_, err := cache.captureScanner(
+		context.Background(), &config.Instance{}, systemdefs.SystemArcade, nil,
+	)
+	require.NoError(t, err)
+	_, err = cache.scanner(systemdefs.SystemCPS1)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, persisted, loadArcadeClassCache(cache.persistPath))
+}
+
 func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	t.Parallel()
 

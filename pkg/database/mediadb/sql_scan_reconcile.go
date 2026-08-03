@@ -57,6 +57,16 @@ type scanReconcileStep struct {
 	args  []any
 }
 
+type canonicalTypeRow struct {
+	name        string
+	isExclusive bool
+}
+
+type canonicalTagRow struct {
+	typeName string
+	value    string
+}
+
 // scanStaleLinkFilter is the shared predicate selecting a staged media's tag
 // links that the scanner owns and that are absent from the staged desired set.
 // Non-scanner types (user tags, cover/scrape properties, scraper-exclusive
@@ -712,16 +722,6 @@ func invalidateCanonicalTagVocabStampIfDeleted(ctx context.Context, db sqlQuerya
 	}
 }
 
-type canonicalTypeRow struct {
-	name        string
-	isExclusive bool
-}
-
-type canonicalTagRow struct {
-	typeName string
-	value    string
-}
-
 // sqlSeedCanonicalTags ensures every canonical tag type and value exists,
 // set-based: one anti-joined insert for types, then chunked anti-joined inserts
 // for values. Replaces the per-row ScanState-driven seeding. A DBConfig stamp
@@ -791,10 +791,8 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 	}
 	//nolint:gosec // Only "(?,?)" placeholder groups are interpolated.
 	query := fmt.Sprintf(`
-		WITH v(Type, IsExclusive) AS (VALUES %s)
-		INSERT INTO TagTypes (Type, IsExclusive)
-		SELECT v.Type, v.IsExclusive FROM v
-		WHERE NOT EXISTS (SELECT 1 FROM TagTypes tt WHERE tt.Type = v.Type)`, sb.String())
+		INSERT INTO TagTypes (Type, IsExclusive) VALUES %s
+		ON CONFLICT(Type) DO UPDATE SET IsExclusive = excluded.IsExclusive`, sb.String())
 	if _, err := db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to seed canonical tag types: %w", err)
 	}

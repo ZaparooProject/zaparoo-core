@@ -73,7 +73,7 @@ func TestSlugCacheDropTombstonesSystemEverywhere(t *testing.T) {
 	dropped := cache.withoutSystems([]string{"NES"})
 
 	// Arrays are shared, not copied.
-	assert.Equal(t, &cache.slugData[0], &dropped.slugData[0], "entry arrays must be shared")
+	assert.Same(t, &cache.slugData[0], &dropped.slugData[0], "entry arrays must be shared")
 	assert.Equal(t, cache.entryCount, dropped.entryCount)
 
 	// Unfiltered trigram search: NES titles gone, others intact.
@@ -174,7 +174,11 @@ func TestSlugCacheSweepMatchesFreshBuild(t *testing.T) {
 			entries = append(entries, e)
 		}
 	}
-	cache := buildTestCache(entries, systemNames)
+	staleEntries := append([]entry(nil), entries...)
+	for i := range staleEntries {
+		staleEntries[i].titleDBID += 1_000_000
+	}
+	cache := buildTestCache(staleEntries, systemNames)
 	cache.complete = true
 
 	evolved := cache
@@ -202,6 +206,27 @@ func TestSlugCacheSweepMatchesFreshBuild(t *testing.T) {
 			evolved.Search([]int64{int64(s)}, nil),
 			"system %d", s)
 	}
+
+	// RandomEntry must skip the fully tombstoned original block and weight
+	// across the appended live block exactly as a fresh cache does.
+	require.Equal(t, [][2]int{{len(entries), len(entries) * 2}}, evolved.liveEntries)
+	validIDs := make(map[int64]struct{}, len(entries))
+	for _, id := range fresh.Search(nil, nil) {
+		validIDs[id] = struct{}{}
+	}
+	seenSystems := make(map[int64]struct{}, systems)
+	for range 500 {
+		freshID, freshOK := fresh.RandomEntry(nil)
+		require.True(t, freshOK)
+		require.Contains(t, validIDs, freshID)
+
+		evolvedID, evolvedOK := evolved.RandomEntry(nil)
+		require.True(t, evolvedOK)
+		require.Contains(t, validIDs, evolvedID)
+		seenSystems[evolvedID/1000] = struct{}{}
+	}
+	assert.Contains(t, seenSystems, int64(1), "weighted selection must reach the appended block head")
+	assert.Contains(t, seenSystems, int64(systems), "weighted selection must reach the appended block tail")
 }
 
 // TestSlugCacheConcurrentReadersDuringSweep runs continuous readers against

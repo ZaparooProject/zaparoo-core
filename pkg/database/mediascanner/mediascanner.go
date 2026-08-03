@@ -65,6 +65,10 @@ const (
 	// parallel directory walk checks the pauser. Short enough that a throttled
 	// walk still yields promptly even on a directory with few matched files.
 	walkEntryWaitInterval = 200
+	// rootValidationConcurrency bounds the goroutines probing root folders in
+	// parallel. Probes are independent metadata reads; running a few at once
+	// hides the per-root latency of cold or slow storage without stampeding it.
+	rootValidationConcurrency = 4
 )
 
 // batchCommitLimit returns the file-count threshold for committing an
@@ -375,11 +379,6 @@ func GetSystemPaths(
 
 	return getSystemPathsForLauncherCache(ctx, rootFolders, systems, launcherCache)
 }
-
-// rootValidationConcurrency bounds the goroutines probing root folders in
-// parallel. Probes are independent metadata reads; running a few at once
-// hides the per-root latency of cold or slow storage without stampeding it.
-const rootValidationConcurrency = 4
 
 func getSystemPathsForLauncherCache(
 	ctx context.Context,

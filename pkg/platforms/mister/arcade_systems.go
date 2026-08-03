@@ -164,6 +164,7 @@ func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) 
 		setName, ok := c.cachedSetName(cached, files[i].Path)
 		if ok {
 			cacheHits++
+			fresh[files[i].Path] = cached[files[i].Path]
 		} else {
 			parsed++
 			var parseOK bool
@@ -171,16 +172,16 @@ func (c *arcadeSystemCache) classify(ctx context.Context, cfg *config.Instance) 
 			if !parseOK {
 				parseFailures++
 			}
-		}
-		if entry, statOK := statCacheEntry(files[i].Path, setName); statOK {
-			fresh[files[i].Path] = entry
+			if entry, statOK := statCacheEntry(files[i].Path, setName); statOK {
+				fresh[files[i].Path] = entry
+			}
 		}
 		if systemID := setSystems[strings.ToLower(setName)]; systemID != "" {
 			classified[systemID] = append(classified[systemID], files[i])
 		}
 	}
 
-	if parsed > 0 || len(fresh) != len(cached) {
+	if mraCount > 0 && (parsed > 0 || len(fresh) != len(cached)) {
 		if saveErr := saveArcadeClassCache(c.persistPath, fresh); saveErr != nil {
 			log.Warn().Err(saveErr).Msg("failed to persist arcade classification cache")
 		}
