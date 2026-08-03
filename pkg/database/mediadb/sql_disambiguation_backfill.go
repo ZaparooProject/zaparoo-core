@@ -24,6 +24,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -93,6 +95,63 @@ func sqlAllSystemDBIDs(ctx context.Context, db sqlQueryable) ([]int64, error) {
 	return ids, nil
 }
 
+// disambiguationBackfillAfterSystem is a test seam invoked after each system's
+// recompute and checkpoint have committed, so tests can interrupt the walk at
+// an exact system boundary. Production leaves it nil.
+var disambiguationBackfillAfterSystem func(systemDBID int64)
+
+// The backfill checkpoint records the last system whose recompute committed,
+// qualified by algorithm version so a cursor left by an older algorithm's
+// interrupted walk never truncates a newer one. Each system's recompute can
+// take minutes on slow storage, and short power sessions would otherwise
+// restart the walk from the first system on every boot.
+
+func sqlGetDisambiguationBackfillCursor(ctx context.Context, db sqlQueryable) (int64, error) {
+	var raw string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigDisambiguationBackfillCursor,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to read disambiguation backfill cursor: %w", err)
+	}
+	version, dbidRaw, found := strings.Cut(raw, ":")
+	if !found || version != disambiguationAlgoVersion {
+		return 0, nil
+	}
+	dbid, parseErr := strconv.ParseInt(dbidRaw, 10, 64)
+	if parseErr != nil {
+		// A malformed cursor only costs re-walking already-committed systems.
+		log.Warn().Str("cursor", raw).Msg("ignoring malformed disambiguation backfill cursor")
+		dbid = 0
+	}
+	return dbid, nil
+}
+
+func sqlSetDisambiguationBackfillCursor(ctx context.Context, db sqlQueryable, systemDBID int64) error {
+	if _, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigDisambiguationBackfillCursor,
+		disambiguationAlgoVersion+":"+strconv.FormatInt(systemDBID, 10),
+	); err != nil {
+		return fmt.Errorf("failed to set disambiguation backfill cursor: %w", err)
+	}
+	return nil
+}
+
+func sqlClearDisambiguationBackfillCursor(ctx context.Context, db sqlQueryable) error {
+	if _, err := db.ExecContext(ctx,
+		"DELETE FROM DBConfig WHERE Name = ?",
+		DBConfigDisambiguationBackfillCursor,
+	); err != nil {
+		return fmt.Errorf("failed to clear disambiguation backfill cursor: %w", err)
+	}
+	return nil
+}
+
 // disambiguationBackfillPending reports whether stored DisambiguationTypes were
 // computed by an older algorithm and need a one-time recompute. An empty database
 // has nothing to backfill, so it is stamped current immediately — the first index
@@ -122,7 +181,9 @@ func (db *MediaDB) disambiguationBackfillPending(ctx context.Context) (bool, err
 // the stored values predate the current algorithm, then stamps the version. It
 // walks systems one at a time — the same granularity indexing used when it
 // recomputed per system on every run — so each write transaction stays short and
-// the pauser can interleave while a game is running.
+// the pauser can interleave while a game is running. Progress is checkpointed
+// per system, so an interrupted walk resumes where it stopped instead of
+// restarting from the first system.
 func (db *MediaDB) runDisambiguationBackfill(ctx context.Context, pauser *syncutil.Pauser) error {
 	pending, err := db.disambiguationBackfillPending(ctx)
 	if err != nil {
@@ -138,10 +199,28 @@ func (db *MediaDB) runDisambiguationBackfill(ctx context.Context, pauser *syncut
 		return err
 	}
 
+	cursor, err := sqlGetDisambiguationBackfillCursor(ctx, db.sql.Load())
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read disambiguation backfill checkpoint; starting from the first system")
+		cursor = 0
+	}
+
 	started := time.Now()
-	log.Info().Int("systems", len(systemDBIDs)).Msg("disambiguation backfill started")
+	remaining := 0
+	for _, systemDBID := range systemDBIDs {
+		if systemDBID > cursor {
+			remaining++
+		}
+	}
+	log.Info().Int("systems", len(systemDBIDs)).Int("remaining", remaining).Int64("cursor", cursor).
+		Msg("disambiguation backfill started")
 
 	for _, systemDBID := range systemDBIDs {
+		// sqlAllSystemDBIDs orders by DBID, so everything at or below the
+		// checkpoint already committed in a previous walk.
+		if systemDBID <= cursor {
+			continue
+		}
 		if waitErr := pauser.Wait(ctx); waitErr != nil {
 			return fmt.Errorf("disambiguation backfill paused: %w", waitErr)
 		}
@@ -150,14 +229,26 @@ func (db *MediaDB) runDisambiguationBackfill(ctx context.Context, pauser *syncut
 		); recomputeErr != nil {
 			return fmt.Errorf("disambiguation backfill for system %d: %w", systemDBID, recomputeErr)
 		}
+		if checkpointErr := sqlSetDisambiguationBackfillCursor(ctx, db.sql.Load(), systemDBID); checkpointErr != nil {
+			// Progress durability only; the walk itself can continue.
+			log.Warn().Err(checkpointErr).Int64("systemDBID", systemDBID).
+				Msg("failed to checkpoint disambiguation backfill progress")
+		}
+		if disambiguationBackfillAfterSystem != nil {
+			disambiguationBackfillAfterSystem(systemDBID)
+		}
 	}
 
 	if err := sqlMarkDisambiguationVersionCurrent(ctx, db.sql.Load()); err != nil {
 		return err
 	}
+	if err := sqlClearDisambiguationBackfillCursor(ctx, db.sql.Load()); err != nil {
+		log.Warn().Err(err).Msg("failed to clear disambiguation backfill cursor after completion")
+	}
 
 	log.Info().
 		Int("systems", len(systemDBIDs)).
+		Int("processed", remaining).
 		Dur("elapsed", time.Since(started)).
 		Msg("disambiguation backfill completed")
 	return nil

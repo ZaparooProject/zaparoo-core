@@ -1183,6 +1183,14 @@ func (db *MediaDB) MigrateUp() error {
 	if err := sqlSeedPlannerStats(db.ctx, db.sql.Load()); err != nil {
 		log.Warn().Err(err).Msg("failed to seed planner statistics")
 	}
+	// Best-effort: stamp the disambiguation version on a database with no
+	// titles before the first index writes any. The pending check performs the
+	// stamp as a side effect; without this, the check first runs during
+	// post-index optimization — after titles exist — and a fresh install pays
+	// a full backfill over values the index just computed.
+	if _, err := db.disambiguationBackfillPending(db.ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to check disambiguation backfill state after migration")
+	}
 	return nil
 }
 
@@ -3448,8 +3456,8 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// page_prefetch so the user-visible browse fix lands before the expensive
 	// planner/buffer housekeeping and survives interruption of those later steps.
 	// disambiguation_backfill is a one-time stamp-gated repair (a no-op once
-	// current) and only affects display/ZapScript hints, so it yields to the
-	// browse fix but still lands before the housekeeping steps. WAL checkpoint
+	// current) whose per-system recompute leans heavily on the query planner, so
+	// it runs after pragma_optimize has refreshed statistics. WAL checkpoint
 	// follows as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
@@ -3467,14 +3475,14 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			maxRetries: 0, retryDelay: rd,
 		},
 		optimizationStep{
+			name: "pragma_optimize", fn: db.AnalyzeApproximate,
+			maxRetries: 2, retryDelay: rd,
+		},
+		optimizationStep{
 			name: "disambiguation_backfill", fn: func() error {
 				return db.runDisambiguationBackfill(db.ctx, pauser)
 			},
 			maxRetries: 0, retryDelay: rd,
-		},
-		optimizationStep{
-			name: "pragma_optimize", fn: db.AnalyzeApproximate,
-			maxRetries: 2, retryDelay: rd,
 		},
 		optimizationStep{
 			name: "page_prefetch", fn: func() error {
