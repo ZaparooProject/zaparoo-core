@@ -24,10 +24,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -248,6 +250,17 @@ func incompleteIndexedSystems(systems []systemdefs.System, completedSystems map[
 //   - Windows: Handles 8.3 short names (PROGRA~1) via fallback to os.Stat
 //   - All platforms: Works with symlinks, UNC paths, network drives
 func FindPath(ctx context.Context, path string) (string, error) {
+	return findPathWithReadDir(ctx, path, readDirWithContext)
+}
+
+// findPathWithReadDir is FindPath's implementation with the directory-listing
+// function injected, so a discovery pass can share memoized listings across
+// many probes (see pathResolver) while one-off callers read directly.
+func findPathWithReadDir(
+	ctx context.Context,
+	path string,
+	readDir func(ctx context.Context, path string) ([]os.DirEntry, error),
+) (string, error) {
 	// Check if path exists first
 	if _, err := statWithContext(ctx, path); err != nil {
 		return "", fmt.Errorf("path does not exist: %s", path)
@@ -299,7 +312,7 @@ func FindPath(ctx context.Context, path string) (string, error) {
 			continue
 		}
 
-		entries, err := readDirWithContext(ctx, currentPath)
+		entries, err := readDir(ctx, currentPath)
 		if err != nil {
 			return "", fmt.Errorf("failed to read directory %s: %w", currentPath, err)
 		}
@@ -363,6 +376,11 @@ func GetSystemPaths(
 	return getSystemPathsForLauncherCache(ctx, rootFolders, systems, launcherCache)
 }
 
+// rootValidationConcurrency bounds the goroutines probing root folders in
+// parallel. Probes are independent metadata reads; running a few at once
+// hides the per-root latency of cold or slow storage without stampeding it.
+const rootValidationConcurrency = 4
+
 func getSystemPathsForLauncherCache(
 	ctx context.Context,
 	rootFolders []string,
@@ -376,12 +394,31 @@ func getSystemPathsForLauncherCache(
 		Int("systems", len(systems)).
 		Msg("starting path discovery")
 
+	// One resolver for the whole pass: root validation and every system-folder
+	// probe below share directory listings, so large parents (e.g. the SD
+	// root) are read once instead of once per probe.
+	resolver := newPathResolver()
+
 	// Validate root folders ONCE before iterating systems
 	// This prevents logging the same error 200+ times (once per system)
+	resolvedRoots := make([]string, len(rootFolders))
+	rootErrs := make([]error, len(rootFolders))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, rootValidationConcurrency)
+	for i, folder := range rootFolders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			resolvedRoots[i], rootErrs[i] = resolver.findPath(ctx, folder)
+		}()
+	}
+	wg.Wait()
+
 	validRootFolders := make([]string, 0, len(rootFolders))
-	for _, folder := range rootFolders {
-		gf, err := FindPath(ctx, folder)
-		if err != nil {
+	for i, folder := range rootFolders {
+		if err := rootErrs[i]; err != nil {
 			switch {
 			case errors.Is(err, ErrFsTimeout):
 				log.Warn().Str("path", folder).Dur("timeout", defaultFsTimeout).
@@ -394,7 +431,7 @@ func getSystemPathsForLauncherCache(
 			}
 			continue
 		}
-		validRootFolders = append(validRootFolders, gf)
+		validRootFolders = append(validRootFolders, resolvedRoots[i])
 	}
 
 	log.Info().
@@ -446,7 +483,7 @@ func getSystemPathsForLauncherCache(
 				}
 
 				systemFolder := filepath.Join(gf, folder)
-				path, err := FindPath(ctx, systemFolder)
+				path, err := resolver.findPath(ctx, systemFolder)
 				if err != nil {
 					if ctx.Err() != nil {
 						return matches
@@ -466,7 +503,7 @@ func getSystemPathsForLauncherCache(
 				continue
 			}
 
-			path, err := FindPath(ctx, folder)
+			path, err := resolver.findPath(ctx, folder)
 			if err != nil {
 				if ctx.Err() != nil {
 					return matches
