@@ -208,6 +208,199 @@ func TestDisambiguationBackfill_EmptyDatabaseStampsWithoutWork(t *testing.T) {
 		"the empty-database check must stamp so later titles indexed under the current algorithm stay stamped")
 }
 
+// TestDisambiguationBackfill_ResumesFromCheckpoint verifies an interrupted
+// backfill does not restart from the first system: systems at or below the
+// persisted cursor are skipped, and completion stamps the version and clears
+// the cursor. Restart-from-scratch is what wedged devices with short power
+// sessions in an endless minutes-per-system walk.
+func TestDisambiguationBackfill_ResumesFromCheckpoint(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	firstSystemDBID, firstTitleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+	})
+	_, secondTitleDBID, _ := setupDisambTitle(t, mediaDB, "SNES", "Mario", []disambTitleMedia{
+		{path: browseTestPath("roms", "snes", "mario-usa.sfc"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "snes", "mario-jpn.sfc"), tags: map[string]string{"release": "Japan"}},
+	})
+
+	// Simulate a previous walk interrupted after the first system committed.
+	require.NoError(t, sqlSetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load(), firstSystemDBID))
+
+	require.NoError(t, mediaDB.runDisambiguationBackfill(ctx, nil))
+
+	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, firstTitleDBID),
+		"systems at or below the checkpoint must not be recomputed again")
+	assert.Equal(t, "release", titleDisambiguationTypes(t, mediaDB, secondTitleDBID),
+		"systems past the checkpoint must be recomputed")
+
+	pending, err := mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending, "a resumed walk that reaches the end must stamp the version")
+
+	cursor, err := sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Zero(t, cursor, "completion must clear the checkpoint")
+}
+
+// TestDisambiguationBackfill_InterruptionPersistsProgress is the regression
+// test for devices wedged in an endless backfill: an interruption mid-walk
+// must leave a durable checkpoint for the completed system, and the next run
+// must resume past it instead of restarting from the first system.
+//
+// Not parallel: it mutates the package-level disambiguationBackfillAfterSystem
+// test seam. Sequential tests run while parallel tests are paused, so the
+// mutation cannot race their reads.
+func TestDisambiguationBackfill_InterruptionPersistsProgress(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	firstSystemDBID, firstTitleDBID, _ := setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+	})
+	secondSystemDBID, secondTitleDBID, _ := setupDisambTitle(t, mediaDB, "SNES", "Mario", []disambTitleMedia{
+		{path: browseTestPath("roms", "snes", "mario-usa.sfc"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "snes", "mario-jpn.sfc"), tags: map[string]string{"release": "Japan"}},
+	})
+	require.Less(t, firstSystemDBID, secondSystemDBID,
+		"the walk visits systems in DBID order; the test relies on NES running first")
+
+	// Cancel as soon as the first system commits, as a power-off would.
+	interruptCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	disambiguationBackfillAfterSystem = func(int64) { cancel() }
+	defer func() { disambiguationBackfillAfterSystem = nil }()
+
+	ctx := context.Background()
+	require.Error(t, mediaDB.runDisambiguationBackfill(interruptCtx, nil),
+		"an interrupted walk must report the cancellation")
+
+	cursor, err := sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Equal(t, firstSystemDBID, cursor, "the completed system must be checkpointed durably")
+	assert.Equal(t, "release", titleDisambiguationTypes(t, mediaDB, firstTitleDBID),
+		"the system completed before the interruption keeps its recomputed value")
+	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, secondTitleDBID),
+		"the interrupted walk must not have reached the second system")
+
+	pending, err := mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.True(t, pending, "an interrupted walk must not stamp the version")
+
+	// Blank the first system's value: the resumed walk must skip it, so the
+	// blank surviving the resume proves it was not recomputed again.
+	_, err = mediaDB.sql.Load().ExecContext(ctx,
+		"UPDATE MediaTitles SET DisambiguationTypes = '' WHERE DBID = ?", firstTitleDBID)
+	require.NoError(t, err)
+
+	disambiguationBackfillAfterSystem = nil
+	require.NoError(t, mediaDB.runDisambiguationBackfill(ctx, nil))
+
+	assert.Empty(t, titleDisambiguationTypes(t, mediaDB, firstTitleDBID),
+		"resume must skip the checkpointed system instead of restarting from the first")
+	assert.Equal(t, "release", titleDisambiguationTypes(t, mediaDB, secondTitleDBID),
+		"resume must recompute the remaining systems")
+
+	pending, err = mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending, "the resumed walk must stamp the version on completion")
+
+	cursor, err = sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Zero(t, cursor, "completion must clear the checkpoint")
+}
+
+func TestDisambiguationBackfillCursor_Roundtrip(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	cursor, err := sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Zero(t, cursor, "missing cursor reads as zero")
+
+	require.NoError(t, sqlSetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load(), 42))
+	cursor, err = sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), cursor)
+
+	require.NoError(t, sqlClearDisambiguationBackfillCursor(ctx, mediaDB.sql.Load()))
+	cursor, err = sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Zero(t, cursor, "cleared cursor reads as zero")
+}
+
+// TestDisambiguationBackfillCursor_IgnoresOtherAlgoVersions verifies a cursor
+// persisted by a different algorithm version never truncates the current
+// walk: a new algorithm must revisit every system.
+func TestDisambiguationBackfillCursor_IgnoresOtherAlgoVersions(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, raw := range []string{"0:42", "999:42", "garbage", "1:notanumber"} {
+		_, err := mediaDB.sql.Load().ExecContext(ctx,
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+			DBConfigDisambiguationBackfillCursor, raw,
+		)
+		require.NoError(t, err)
+
+		cursor, err := sqlGetDisambiguationBackfillCursor(ctx, mediaDB.sql.Load())
+		require.NoError(t, err)
+		assert.Zero(t, cursor, "cursor %q must be ignored", raw)
+	}
+}
+
+// TestMigrateUp_StampsEmptyDatabase verifies the boot path stamps a database
+// with no titles before the first index writes any. Without this, the stamp
+// check first runs during post-index optimization — after titles exist — and
+// a fresh install pays a full pointless backfill over values the index just
+// computed.
+func TestMigrateUp_StampsEmptyDatabase(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.MigrateUp())
+
+	var version string
+	err := mediaDB.sql.Load().QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigDisambiguationVersion,
+	).Scan(&version)
+	require.NoError(t, err)
+	assert.Equal(t, disambiguationAlgoVersion, version)
+}
+
+// TestMigrateUp_LegacyDatabaseStaysPending verifies the boot-time stamp check
+// never stamps a database that already holds titles: those may carry values
+// from an older algorithm and must keep the backfill pending.
+func TestMigrateUp_LegacyDatabaseStaysPending(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	setupDisambTitle(t, mediaDB, "NES", "Sonic", []disambTitleMedia{
+		{path: browseTestPath("roms", "nes", "sonic-usa.nes"), tags: map[string]string{"release": "USA"}},
+		{path: browseTestPath("roms", "nes", "sonic-eur.nes"), tags: map[string]string{"release": "Europe"}},
+	})
+
+	require.NoError(t, mediaDB.MigrateUp())
+
+	pending, err := mediaDB.disambiguationBackfillPending(ctx)
+	require.NoError(t, err)
+	assert.True(t, pending, "a database with titles must not be stamped by the boot check")
+}
+
 func TestRecomputeSystemDisambiguation_IdenticalTagsDoNotDisambiguate(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)

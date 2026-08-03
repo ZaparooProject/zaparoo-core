@@ -49,6 +49,7 @@ const (
 	DBConfigIndexResumeAttempts             = "IndexResumeAttempts"
 	DBConfigIndexResumeCheckpoint           = "IndexResumeCheckpoint"
 	DBConfigDisambiguationVersion           = "DisambiguationVersion"
+	DBConfigDisambiguationBackfillCursor    = "DisambiguationBackfillCursor"
 
 	temporaryRepairParentDirVersion = "1"
 
