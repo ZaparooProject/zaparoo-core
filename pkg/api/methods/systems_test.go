@@ -147,7 +147,7 @@ func TestHandleSystemFavorites_ReturnsFavoritedSystemsUnique(t *testing.T) {
 			}
 			return assert.Equal(t, systemdefs.AllSystems(), filters.Systems)
 		}),
-	).Return([]string{"NES", "SNES"}, nil)
+	).Return([]string{"NES", "SNES", "UNKNOWN"}, nil)
 
 	env := requests.RequestEnv{
 		Context: context.Background(),
@@ -172,6 +172,8 @@ func TestHandleSystemFavorites_ReturnsFavoritedSystemsUnique(t *testing.T) {
 
 	assert.Contains(t, ids, "NES")
 	assert.Contains(t, ids, "SNES")
+	assert.NotContains(t, ids, "UNKNOWN")
+
 	// Ensure NES only appears once
 	countNES := 0
 	for _, s := range resp.Systems {

@@ -838,6 +838,7 @@ func sqlSearchMediaWithFilters(
 
 	systemCondition := ""
 	if !skipSystemFilter {
+		//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 		systemCondition = `Systems.SystemID IN (` +
 			prepareVariadic("?", ",", len(systems)) + `) AND `
 	}
