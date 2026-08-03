@@ -39,7 +39,14 @@ import (
 const (
 	mediaHistoryUpdateInterval = 15 * time.Second
 	activePlaySyncInterval     = 5 * time.Minute
+	mediaIdentityLookupTimeout = 2 * time.Second
 )
+
+var mediaIdentityRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
+
+type mediaIdentityLookupFunc func(
+	context.Context, database.MediaDBI, string, string,
+) (database.MediaIdentity, bool, error)
 
 // mediaHistoryTracker encapsulates the state and logic for tracking media history.
 // It coordinates between the notification listener and the periodic PlayTime updater.
@@ -218,22 +225,93 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 	}
 }
 
+// lookupMediaIdentityWithRetry distinguishes a definitive unindexed path from
+// transient MediaDB failures. retryDelays bounds attempts to len(delays)+1.
+func lookupMediaIdentityWithRetry(
+	ctx context.Context,
+	mediaDB database.MediaDBI,
+	systemID string,
+	path string,
+	attemptTimeout time.Duration,
+	retryDelays []time.Duration,
+	lookup mediaIdentityLookupFunc,
+) (database.MediaIdentity, bool, error) {
+	if lookup == nil {
+		lookup = database.LookupMediaIdentity
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if err := ctx.Err(); err != nil {
+			return database.MediaIdentity{}, false, err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		identity, found, err := lookup(attemptCtx, mediaDB, systemID, path)
+		cancel()
+		if err == nil {
+			return identity, found, nil
+		}
+		lastErr = err
+		if attempt == len(retryDelays) {
+			break
+		}
+
+		timer := time.NewTimer(retryDelays[attempt])
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return database.MediaIdentity{}, false, ctx.Err()
+		}
+	}
+	return database.MediaIdentity{}, false, lastErr
+}
+
 // lookupMediaIdentity snapshots scanner-derived identity for launched media.
-// Best effort with a short timeout: a launch outside the index has no snapshot.
-func (t *mediaHistoryTracker) lookupMediaIdentity(systemID, path string) (database.MediaIdentity, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return database.LookupMediaIdentity(ctx, t.db.MediaDB, systemID, path)
+// A launch outside the index has no snapshot; transient failures retry within
+// a small bound without blocking notifications.
+func (t *mediaHistoryTracker) lookupMediaIdentity(
+	ctx context.Context, systemID, path string,
+) (database.MediaIdentity, bool, error) {
+	return lookupMediaIdentityWithRetry(
+		ctx,
+		t.db.MediaDB,
+		systemID,
+		path,
+		mediaIdentityLookupTimeout,
+		mediaIdentityRetryDelays,
+		database.LookupMediaIdentity,
+	)
 }
 
 // snapshotMediaHistoryIdentity enriches a persisted entry without blocking notifications.
 func (t *mediaHistoryTracker) snapshotMediaHistoryIdentity(dbid int64, systemID, path string) {
-	identity, found := t.lookupMediaIdentity(systemID, path)
+	ctx := context.Background()
+	if t.st != nil {
+		ctx = t.st.GetContext()
+	}
+	identity, found, lookupErr := t.lookupMediaIdentity(ctx, systemID, path)
+	if lookupErr != nil {
+		if ctx.Err() == nil {
+			log.Warn().Err(lookupErr).Int64("dbid", dbid).Msg("failed to resolve media history identity")
+		}
+		return
+	}
 	if !found {
 		return
 	}
-	if err := t.db.UserDB.UpdateMediaHistoryIdentity(dbid, identity); err != nil {
+	updated, err := t.db.UserDB.UpdateMediaHistoryIdentity(dbid, &identity)
+	if err != nil {
 		log.Warn().Err(err).Int64("dbid", dbid).Msg("failed to store media history identity")
+		return
+	}
+	if updated && t.requestPlaySync != nil {
+		t.requestPlaySync()
 	}
 }
 

@@ -107,9 +107,6 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		return db, err
 	}
 
-	// Best-effort, idempotent backfill must not delay database initialization.
-	go backfillMediaHistoryUUIDs(userDB)
-
 	// migrate old boltdb mappings if required
 	log.Debug().Msg("checking for boltdb migration")
 	err = boltmigration.MaybeMigrate(pl, userDB)
@@ -128,9 +125,9 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 // backfillMediaHistoryUUIDs assigns stable IDs to history written by older
 // versions. Best-effort and idempotent: failure is retried at next startup.
-func backfillMediaHistoryUUIDs(userDB database.UserDBI) {
+func backfillMediaHistoryUUIDs(userDB database.UserDBI) int64 {
 	if userDB == nil {
-		return
+		return 0
 	}
 
 	startedAt := time.Now()
@@ -138,14 +135,15 @@ func backfillMediaHistoryUUIDs(userDB database.UserDBI) {
 	duration := time.Since(startedAt)
 	if err != nil {
 		log.Error().Err(err).Dur("duration", duration).Msg("failed to backfill media history UUIDs")
-		return
+		return 0
 	}
 	if backfilled > 0 {
 		log.Info().Int64("backfilled", backfilled).Dur("duration", duration).
 			Msg("backfilled media history UUIDs")
-		return
+		return backfilled
 	}
 	log.Debug().Dur("duration", duration).Msg("media history UUID backfill completed")
+	return 0
 }
 
 // backfillMediaUserData seeds UserDB from favourites/launcher overrides that older

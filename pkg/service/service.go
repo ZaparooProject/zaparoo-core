@@ -618,6 +618,11 @@ func Start(
 		default:
 		}
 	}
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		watchMediaHistoryBackfill(st.GetContext(), notifBroker, db, indexPauser, requestPlaySync)
+	}()
 	startRemoteBackupScheduler(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
 	)

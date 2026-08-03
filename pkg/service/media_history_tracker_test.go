@@ -136,10 +136,12 @@ func TestMediaHistoryTracker_Listen_StartedResolvesIdentityAsynchronously(t *tes
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockMediaDB := testhelpers.NewMockMediaDBI()
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	syncRequests := make(chan struct{}, 2)
 	tracker := &mediaHistoryTracker{
-		st:    st,
-		db:    &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
-		clock: clockwork.NewFakeClock(),
+		st:              st,
+		db:              &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		clock:           clockwork.NewFakeClock(),
+		requestPlaySync: func() { syncRequests <- struct{}{} },
 	}
 	activeMedia := &models.ActiveMedia{
 		Started: tracker.clock.Now(), SystemID: "NES", SystemName: "Nintendo Entertainment System",
@@ -159,14 +161,20 @@ func TestMediaHistoryTracker_Listen_StartedResolvesIdentityAsynchronously(t *tes
 			close(lookupStarted)
 			<-releaseLookup
 		}).
-		Return([]database.SearchResult{{MediaID: 7, Name: "Indexed Name"}}, nil).Once()
+		Return([]database.SearchResult{{
+			SystemID: "NES", MediaID: 7, Name: "Indexed Name", Slug: "indexedname",
+		}}, nil).Once()
 	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(7)).
 		Return([]database.TagInfo(nil), nil).Once()
-	mockUserDB.On("UpdateMediaHistoryIdentity", int64(42), database.MediaIdentity{
-		Name: "Indexed Name",
-		Tags: []string{},
-	}).
-		Run(func(_ mock.Arguments) { close(identityUpdated) }).Return(nil).Once()
+	mockUserDB.On("UpdateMediaHistoryIdentity", int64(42), mock.MatchedBy(
+		func(identity *database.MediaIdentity) bool {
+			return identity != nil && identity.CanonicalSystemID == "NES" &&
+				identity.DisplayName == "Indexed Name" &&
+				identity.CoreSlug == "indexedname" &&
+				identity.PolicyVersion == database.CurrentMediaIdentityPolicyVersion &&
+				len(identity.Tags) == 0 && identity.ObservationFingerprint != ""
+		},
+	)).Run(func(_ mock.Arguments) { close(identityUpdated) }).Return(true, nil).Once()
 
 	notifChan := make(chan models.Notification, 1)
 	notifChan <- models.Notification{Method: models.NotificationStarted}
@@ -191,6 +199,12 @@ func TestMediaHistoryTracker_Listen_StartedResolvesIdentityAsynchronously(t *tes
 		<-listenDone
 		t.Fatal("notification processing blocked on identity lookup")
 	}
+	select {
+	case <-syncRequests:
+		// Initial now-playing upload remains immediate.
+	case <-time.After(time.Second):
+		t.Fatal("initial play sync was not requested")
+	}
 
 	// Mutating current state cannot retarget the already captured launch identity.
 	activeMedia.SystemID = "SNES"
@@ -201,8 +215,105 @@ func TestMediaHistoryTracker_Listen_StartedResolvesIdentityAsynchronously(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("resolved identity was not persisted")
 	}
+	select {
+	case <-syncRequests:
+		// Enrichment must re-upload a session initially synced without identity.
+	case <-time.After(time.Second):
+		t.Fatal("identity enrichment did not request play sync")
+	}
 	mockUserDB.AssertExpectations(t)
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestLookupMediaIdentityWithRetry_BoundsTransientFailures(t *testing.T) {
+	t.Parallel()
+
+	identity := database.MediaIdentity{
+		MediaType: "Game", CanonicalSystemID: "NES", DisplayName: "Game", CoreSlug: "game",
+		ObservationFingerprint: "sha256:test", PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
+	t.Run("transient then success", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		lookup := func(
+			context.Context, database.MediaDBI, string, string,
+		) (database.MediaIdentity, bool, error) {
+			calls++
+			if calls == 1 {
+				return database.MediaIdentity{}, false, errors.New("database busy")
+			}
+			return identity, true, nil
+		}
+
+		got, found, err := lookupMediaIdentityWithRetry(
+			context.Background(), nil, "NES", filepath.Join("games", "Game.nes"),
+			time.Second, []time.Duration{0, 0}, lookup,
+		)
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, identity, got)
+		assert.Equal(t, 2, calls)
+	})
+
+	t.Run("exhausted", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		lookup := func(
+			context.Context, database.MediaDBI, string, string,
+		) (database.MediaIdentity, bool, error) {
+			calls++
+			return database.MediaIdentity{}, false, errors.New("database busy")
+		}
+
+		got, found, err := lookupMediaIdentityWithRetry(
+			context.Background(), nil, "NES", filepath.Join("games", "Game.nes"),
+			time.Second, []time.Duration{0, 0}, lookup,
+		)
+		require.Error(t, err)
+		assert.False(t, found)
+		assert.Empty(t, got)
+		assert.Equal(t, 3, calls)
+	})
+
+	t.Run("unindexed is definitive", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		lookup := func(
+			context.Context, database.MediaDBI, string, string,
+		) (database.MediaIdentity, bool, error) {
+			calls++
+			return database.MediaIdentity{}, false, nil
+		}
+
+		_, found, err := lookupMediaIdentityWithRetry(
+			context.Background(), nil, "NES", filepath.Join("games", "Missing.nes"),
+			time.Second, []time.Duration{0, 0}, lookup,
+		)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Equal(t, 1, calls)
+	})
+}
+
+func TestMediaHistoryTracker_SnapshotIdentity_UnindexedLaunchKeepsFallback(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("outside-index", "Game.nes")
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+		Return([]database.SearchResult{}, nil).Once()
+	syncRequests := 0
+	tracker := &mediaHistoryTracker{
+		db:              &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		requestPlaySync: func() { syncRequests++ },
+	}
+
+	tracker.snapshotMediaHistoryIdentity(42, "NES", path)
+
+	mockUserDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+	assert.Zero(t, syncRequests)
 }
 
 func TestMediaHistoryTracker_Listen_Started_NoActiveMedia(t *testing.T) {

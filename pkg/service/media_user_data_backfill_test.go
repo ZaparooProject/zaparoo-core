@@ -37,7 +37,7 @@ func TestBackfillMediaHistoryUUIDsAtStartup(t *testing.T) {
 	userDB := testhelpers.NewMockUserDBI()
 	userDB.On("BackfillMediaHistoryUUIDs").Return(int64(3), nil).Once()
 
-	backfillMediaHistoryUUIDs(userDB)
+	assert.Equal(t, int64(3), backfillMediaHistoryUUIDs(userDB))
 
 	userDB.AssertExpectations(t)
 }

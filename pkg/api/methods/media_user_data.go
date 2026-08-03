@@ -52,19 +52,25 @@ func setMediaUserLauncherOverride(env *requests.RequestEnv, systemID, path, laun
 	return nil
 }
 
-// snapshotMediaUserIdentity best-effort captures the scanner's identity
-// (display name + disambiguating tags) onto the user-data row just written.
+// snapshotMediaUserIdentity best-effort captures the scanner's display name
+// and complete canonical file-tag snapshot onto the user-data row just written.
 // MediaDB is disposable, so this is the only durable record of what the path
 // identified when the user marked it. Failures are logged, never surfaced:
 // user intent was already recorded.
 func snapshotMediaUserIdentity(env *requests.RequestEnv, systemID, path string) {
 	ctx, cancel := context.WithTimeout(env.Context, 2*time.Second)
 	defer cancel()
-	identity, found := database.LookupMediaIdentity(ctx, env.Database.MediaDB, systemID, path)
+	identity, found, lookupErr := database.LookupMediaIdentity(ctx, env.Database.MediaDB, systemID, path)
+	if lookupErr != nil {
+		log.Debug().Err(lookupErr).Str("path", path).Msg("failed to resolve media user identity snapshot")
+		return
+	}
 	if !found {
 		return
 	}
-	if err := env.Database.UserDB.SetMediaUserSnapshot(systemID, path, identity.Name, identity.Tags); err != nil {
+	if err := env.Database.UserDB.SetMediaUserSnapshot(
+		systemID, path, identity.DisplayName, identity.LegacyTags(),
+	); err != nil {
 		log.Warn().Err(err).Str("path", path).Msg("failed to store media user identity snapshot")
 	}
 }

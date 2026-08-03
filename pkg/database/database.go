@@ -68,30 +68,31 @@ type HistoryEntry struct {
 }
 
 type MediaHistoryEntry struct {
-	StartTime      time.Time  `json:"startTime"`
-	UpdatedAt      time.Time  `json:"updatedAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt,omitempty"`
-	EndTime        *time.Time `json:"endTime,omitempty"`
-	SyncedAt       *time.Time `json:"syncedAt,omitempty"`
-	DeviceID       *string    `json:"deviceId,omitempty"`
-	ProfileID      *string    `json:"profileId,omitempty"`
-	BootUUID       string     `json:"bootUuid,omitempty"`
-	ClockSource    string     `json:"clockSource,omitempty"`
-	SystemID       string     `json:"systemId"`
-	ID             string     `json:"uuid,omitempty"`
-	LauncherID     string     `json:"launcherId"`
-	SystemName     string     `json:"systemName"`
-	MediaPath      string     `json:"mediaPath"`
-	MediaName      string     `json:"mediaName"`
-	Tags           []string   `json:"tags,omitempty"`
-	DBID           int64      `db:"DBID" json:"id"`
-	WallDuration   int        `json:"wallDuration"`
-	DurationSec    int        `json:"durationSec"`
-	MonotonicStart int64      `json:"monotonicStart,omitempty"`
-	PlayTime       int        `json:"playTime"`
-	TimeSkewFlag   bool       `json:"timeSkewFlag"`
-	ClockReliable  bool       `json:"clockReliable"`
-	IsDeleted      bool       `json:"isDeleted,omitempty"`
+	StartTime      time.Time      `json:"startTime"`
+	UpdatedAt      time.Time      `json:"updatedAt,omitempty"`
+	CreatedAt      time.Time      `json:"createdAt,omitempty"`
+	EndTime        *time.Time     `json:"endTime,omitempty"`
+	SyncedAt       *time.Time     `json:"syncedAt,omitempty"`
+	DeviceID       *string        `json:"deviceId,omitempty"`
+	ProfileID      *string        `json:"profileId,omitempty"`
+	MediaIdentity  *MediaIdentity `json:"mediaIdentity,omitempty"`
+	BootUUID       string         `json:"bootUuid,omitempty"`
+	ClockSource    string         `json:"clockSource,omitempty"`
+	SystemID       string         `json:"systemId"`
+	ID             string         `json:"uuid,omitempty"`
+	LauncherID     string         `json:"launcherId"`
+	SystemName     string         `json:"systemName"`
+	MediaPath      string         `json:"mediaPath"`
+	MediaName      string         `json:"mediaName"`
+	Tags           []string       `json:"tags,omitempty"`
+	DBID           int64          `db:"DBID" json:"id"`
+	WallDuration   int            `json:"wallDuration"`
+	DurationSec    int            `json:"durationSec"`
+	MonotonicStart int64          `json:"monotonicStart,omitempty"`
+	PlayTime       int            `json:"playTime"`
+	TimeSkewFlag   bool           `json:"timeSkewFlag"`
+	ClockReliable  bool           `json:"clockReliable"`
+	IsDeleted      bool           `json:"isDeleted,omitempty"`
 }
 
 // MediaHistorySyncRef identifies the exact local version acknowledged by a
@@ -155,6 +156,13 @@ type Profile struct {
 // DeviceStateKeyActiveProfile is the DeviceState key holding the
 // ProfileID of the device's active profile.
 const DeviceStateKeyActiveProfile = "active_profile_id"
+
+// DeviceStateKeyMediaHistoryIdentitySweep is the DeviceState key recording
+// the last completed media history identity backfill sweep, as
+// "<policy version>:<media LastGeneratedAt unix>". A matching value means no
+// history row below the current policy version can newly resolve, so sweeps
+// skip the table walk entirely.
+const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
 
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).
@@ -220,7 +228,7 @@ type MediaUserData struct {
 	Path             string
 	LauncherOverride string
 	// MediaName and Tags snapshot the scanner's identity for this path at
-	// write time (display name + disambiguating type:value tags), so the
+	// write time (display name + complete canonical type:value tags), so the
 	// row stays matchable to a canonical game after MediaDB is rebuilt or
 	// the file disappears. Empty when no scanner entry existed.
 	MediaName  string
@@ -310,6 +318,7 @@ type SearchResult struct {
 	SystemID string
 	Name     string
 	Path     string
+	Slug     string
 	MediaID  int64
 }
 
@@ -808,7 +817,7 @@ type UserDBI interface {
 	CleanupHistory(retentionDays int) (int64, error)
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
-	UpdateMediaHistoryIdentity(dbid int64, identity MediaIdentity) error
+	UpdateMediaHistoryIdentity(dbid int64, identity *MediaIdentity) (bool, error)
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
 	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
@@ -816,6 +825,9 @@ type UserDBI interface {
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int, requireSynced bool) (int64, error)
 	BackfillMediaHistoryUUIDs() (int64, error)
+	GetMediaHistoryIdentityBackfillBatch(
+		afterDBID int64, policyVersion int, limit int,
+	) ([]MediaHistoryEntry, error)
 	ResetMediaHistorySyncAfter(watermark *time.Time) error
 	GetMediaHistorySyncBatch(after time.Time, afterDBID int64, limit int) ([]MediaHistoryEntry, error)
 	MarkMediaHistorySynced(refs []MediaHistorySyncRef, syncedAt time.Time) error

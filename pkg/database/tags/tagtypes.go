@@ -19,6 +19,8 @@
 
 package tags
 
+import "strings"
+
 // CanonicalIsExclusive maps each canonical tag type to its IsExclusive flag.
 //
 // IsExclusive = true  → single-value per entity; scrapers perform delete-then-insert.
@@ -79,4 +81,18 @@ func IsExclusiveType(t TagType) bool {
 // Scanner reconciliation must preserve these even when generated metadata changes.
 func IsUserOwnedType(t TagType) bool {
 	return t == TagTypeUser
+}
+
+// IsScannerOwnedType reports whether a file-level tag is produced and
+// reconciled by media scanning. User intent, scraped metadata, properties, and
+// scraper bookkeeping are excluded from scanner-derived identity snapshots.
+func IsScannerOwnedType(t TagType) bool {
+	if t == TagTypeUser || t == TagTypeProperty || t == TagTypeRating ||
+		t == TagTypeGenre || t == TagTypeGameFamily {
+		return false
+	}
+
+	tagType := string(t)
+	return !strings.HasPrefix(tagType, string(ScraperType(""))) &&
+		!strings.HasPrefix(tagType, string(ScraperRunType("")))
 }

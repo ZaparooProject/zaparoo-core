@@ -239,15 +239,17 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 			SystemID: "test-system",
 			Name:     "Test Game",
 			Path:     "/games/test.rom",
+			Slug:     "testgame",
 			MediaID:  42,
 		},
 	}
 
-	rows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+	rows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "Slug", "DBID"}).
 		AddRow(
 			expectedResults[0].SystemID,
 			expectedResults[0].Name,
 			expectedResults[0].Path,
+			expectedResults[0].Slug,
 			expectedResults[0].MediaID,
 		)
 
@@ -263,6 +265,7 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	assert.Equal(t, expectedResults[0].SystemID, result[0].SystemID)
 	assert.Equal(t, expectedResults[0].Name, result[0].Name)
 	assert.Equal(t, expectedResults[0].Path, result[0].Path)
+	assert.Equal(t, expectedResults[0].Slug, result[0].Slug)
 	assert.Equal(t, expectedResults[0].MediaID, result[0].MediaID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
