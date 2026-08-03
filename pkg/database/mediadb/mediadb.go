@@ -2310,6 +2310,28 @@ func (db *MediaDB) SearchMediaWithFilters(
 			return []database.SearchResultWithCursor{}, nil
 		}
 
+		_, tagFilterArgs := BuildTagFilterSQL(filters.Tags)
+		_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+		totalParams := len(candidateIDs) + len(tagFilterArgs) + len(letterArgs)
+		if filters.Cursor != nil {
+			totalParams++
+		}
+		if filters.Limit > 0 {
+			totalParams++
+		}
+		if totalParams > sqliteMaxParams {
+			log.Debug().
+				Int("candidateTitleDBIDs", len(candidateIDs)).
+				Int("tagArgs", len(tagFilterArgs)).
+				Int("letterArgs", len(letterArgs)).
+				Bool("hasCursor", filters.Cursor != nil).
+				Int("limit", filters.Limit).
+				Msg("slug-cache candidate set too large for titleDBIDs IN search; falling back to SQL LIKE search")
+			return sqlSearchMediaWithFilters(
+				ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
+				filters.Letter, filters.Cursor, filters.Limit, includeName)
+		}
+
 		return sqlSearchMediaByTitleDBIDs(
 			ctx, db.sql.Load(), candidateIDs, filters.Tags,
 			filters.Letter, filters.Cursor, filters.Limit)
@@ -2403,6 +2425,20 @@ func (db *MediaDB) SearchMediaWithFiltersCount(
 		}())
 		if len(candidateIDs) == 0 {
 			return 0, nil
+		}
+
+		_, tagFilterArgs := BuildTagFilterSQL(filters.Tags)
+		_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+		totalParams := len(candidateIDs) + len(tagFilterArgs) + len(letterArgs)
+		if totalParams > sqliteMaxParams {
+			log.Debug().
+				Int("candidateTitleDBIDs", len(candidateIDs)).
+				Int("tagArgs", len(tagFilterArgs)).
+				Int("letterArgs", len(letterArgs)).
+				Msg("slug-cache candidate set too large for titleDBIDs IN count; falling back to SQL LIKE count")
+			return sqlSearchMediaWithFiltersCount(
+				ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
+				filters.Letter, includeName)
 		}
 
 		return sqlSearchMediaByTitleDBIDsCount(ctx, db.sql.Load(), candidateIDs, filters.Tags, filters.Letter)

@@ -997,7 +997,7 @@ func sqlSearchMediaWithFiltersSystemIDs(
 		results = append(results, systemID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to iterate system IDs rows: %w", err)
 	}
 
 	return results, nil
