@@ -21,9 +21,13 @@ package mediadb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -665,30 +669,115 @@ func sqlReadScanTouchedTitles(ctx context.Context, db sqlQueryable) ([]int64, er
 	return ids, nil
 }
 
+// canonicalTagVocabHash returns a digest of the compiled-in canonical tag
+// vocabulary: every type row and value row that sqlSeedCanonicalTags would
+// insert, sorted for determinism (the rows are built from map iteration).
+// Stored in DBConfig after a successful seed so later index runs can skip
+// re-proving ~1,400 rows exist — a cost of a minute or more on slow storage.
+func canonicalTagVocabHash(typeRows []canonicalTypeRow, tagRows []canonicalTagRow) string {
+	lines := make([]string, 0, len(typeRows)+len(tagRows))
+	for _, row := range typeRows {
+		lines = append(lines, "t\x00"+row.name+"\x00"+strconv.FormatBool(row.isExclusive))
+	}
+	for _, row := range tagRows {
+		lines = append(lines, "v\x00"+row.typeName+"\x00"+row.value)
+	}
+	sort.Strings(lines)
+	h := sha256.New()
+	for _, line := range lines {
+		_, _ = h.Write([]byte(line))
+		_, _ = h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// invalidateCanonicalTagVocabStampIfDeleted clears the vocabulary seeding
+// stamp after an orphan-tag cleanup that actually removed rows: canonical
+// vocabulary rows may have been among them, so the next index run must seed
+// again. res may be nil when the caller's driver returned none.
+func invalidateCanonicalTagVocabStampIfDeleted(ctx context.Context, db sqlQueryable, res sql.Result) {
+	if res == nil {
+		return
+	}
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read orphan tag cleanup row count; clearing vocabulary stamp")
+	} else if deleted == 0 {
+		return
+	}
+	if _, err := db.ExecContext(ctx,
+		"DELETE FROM DBConfig WHERE Name = ?", DBConfigCanonicalTagVocabHash,
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to clear canonical tag vocabulary stamp after tag cleanup")
+	}
+}
+
+type canonicalTypeRow struct {
+	name        string
+	isExclusive bool
+}
+
+type canonicalTagRow struct {
+	typeName string
+	value    string
+}
+
 // sqlSeedCanonicalTags ensures every canonical tag type and value exists,
 // set-based: one anti-joined insert for types, then chunked anti-joined inserts
-// for values. Replaces the per-row ScanState-driven seeding.
+// for values. Replaces the per-row ScanState-driven seeding. A DBConfig stamp
+// of the vocabulary hash short-circuits the whole pass when a previous run
+// already seeded this exact vocabulary.
 func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
-	type typeRow struct {
-		name        string
-		isExclusive bool
-	}
 	// Dedupe within the statement: the NOT EXISTS anti-join only sees rows
 	// already in the table, not other rows of the same INSERT ... SELECT.
 	seenTypes := map[string]struct{}{}
-	typeRows := make([]typeRow, 0, len(tags.CanonicalTagDefinitions)+2)
+	typeRows := make([]canonicalTypeRow, 0, len(tags.CanonicalTagDefinitions)+2)
 	addType := func(tagType tags.TagType) {
 		name := string(tagType)
 		if _, ok := seenTypes[name]; ok {
 			return
 		}
 		seenTypes[name] = struct{}{}
-		typeRows = append(typeRows, typeRow{name, tags.IsExclusiveType(tagType)})
+		typeRows = append(typeRows, canonicalTypeRow{name, tags.IsExclusiveType(tagType)})
 	}
 	addType(tags.TagTypeUnknown)
 	addType(tags.TagTypeExtension)
 	for tagType := range tags.CanonicalTagDefinitions {
 		addType(tagType)
+	}
+
+	seenTags := map[string]struct{}{}
+	tagRows := make([]canonicalTagRow, 0, 1400)
+	addTag := func(typeName, value string) {
+		key := typeName + "\x00" + value
+		if _, ok := seenTags[key]; ok {
+			return
+		}
+		seenTags[key] = struct{}{}
+		tagRows = append(tagRows, canonicalTagRow{typeName: typeName, value: value})
+	}
+	addTag(string(tags.TagTypeUnknown), "unknown")
+	for tagType, values := range tags.CanonicalTagDefinitions {
+		for _, value := range values {
+			addTag(string(tagType), tags.PadTagValue(strings.ToLower(string(value))))
+		}
+	}
+
+	// The vocabulary is compiled into the binary, so once a run has seeded it
+	// the anti-joined inserts are guaranteed no-ops until a release changes the
+	// tags package. Skip them entirely when the stored stamp matches; a stamp
+	// read failure just means seeding runs as it always has.
+	vocabHash := canonicalTagVocabHash(typeRows, tagRows)
+	var storedHash string
+	stampErr := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?", DBConfigCanonicalTagVocabHash,
+	).Scan(&storedHash)
+	if stampErr == nil && storedHash == vocabHash {
+		log.Debug().Msg("canonical tag vocabulary already seeded, skipping")
+		return nil
+	}
+	if stampErr != nil && !errors.Is(stampErr, sql.ErrNoRows) {
+		log.Warn().Err(stampErr).Msg("failed to read canonical tag vocabulary stamp, seeding anyway")
 	}
 
 	var sb strings.Builder
@@ -708,27 +797,6 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		WHERE NOT EXISTS (SELECT 1 FROM TagTypes tt WHERE tt.Type = v.Type)`, sb.String())
 	if _, err := db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to seed canonical tag types: %w", err)
-	}
-
-	type tagRow struct {
-		typeName string
-		value    string
-	}
-	seenTags := map[string]struct{}{}
-	tagRows := make([]tagRow, 0, 1400)
-	addTag := func(typeName, value string) {
-		key := typeName + "\x00" + value
-		if _, ok := seenTags[key]; ok {
-			return
-		}
-		seenTags[key] = struct{}{}
-		tagRows = append(tagRows, tagRow{typeName: typeName, value: value})
-	}
-	addTag(string(tags.TagTypeUnknown), "unknown")
-	for tagType, values := range tags.CanonicalTagDefinitions {
-		for _, value := range values {
-			addTag(string(tagType), tags.PadTagValue(strings.ToLower(string(value))))
-		}
 	}
 
 	const chunkSize = 400
@@ -756,6 +824,14 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("failed to seed canonical tags: %w", err)
 		}
+	}
+
+	// Non-fatal: a missed stamp only means the next run seeds again.
+	if _, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigCanonicalTagVocabHash, vocabHash,
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to write canonical tag vocabulary stamp")
 	}
 	return nil
 }

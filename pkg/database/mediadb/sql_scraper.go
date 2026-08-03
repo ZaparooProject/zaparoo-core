@@ -662,13 +662,15 @@ func clearMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64
 		return fmt.Errorf("failed to delete media tag links: %w", err)
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
-	if _, err := db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, `
 		DELETE FROM Tags
 		WHERE DBID IN (`+placeholders+`)
 		  AND NOT EXISTS (SELECT 1 FROM MediaTags WHERE MediaTags.TagDBID = Tags.DBID)
-	`, args...); err != nil {
+	`, args...)
+	if err != nil {
 		return fmt.Errorf("failed to delete unreferenced tags: %w", err)
 	}
+	invalidateCanonicalTagVocabStampIfDeleted(ctx, db, res)
 	return nil
 }
 

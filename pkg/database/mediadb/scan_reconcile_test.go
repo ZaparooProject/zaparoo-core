@@ -185,3 +185,49 @@ func TestSeedCanonicalTagDefinitions_IdempotentNoDuplicates(t *testing.T) {
 	assert.Equal(t, typesAfterFirst, typesAfterSecond)
 	assert.Equal(t, tagsAfterFirst, tagsAfterSecond)
 }
+
+// TestSeedCanonicalTagDefinitions_VocabStampSkipsReseed pins the DBConfig
+// vocabulary stamp: a matching stamp skips the seeding statements entirely,
+// and a stale stamp reruns them.
+func TestSeedCanonicalTagDefinitions_VocabStampSkipsReseed(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	conn := mediaDB.UnsafeGetSQLDb()
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+
+	var stamp string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?", mediadb.DBConfigCanonicalTagVocabHash).Scan(&stamp))
+	assert.Len(t, stamp, 64, "stamp is a hex sha256 of the vocabulary")
+
+	// Remove a seeded row, then seed again with the stamp current: the pass
+	// must be skipped, so the row stays gone.
+	res, err := conn.ExecContext(ctx, "DELETE FROM Tags WHERE Tag = 'world'")
+	require.NoError(t, err)
+	deleted, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	var worldCount int
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM Tags WHERE Tag = 'world'").Scan(&worldCount))
+	assert.Zero(t, worldCount, "matching stamp must skip the seeding statements")
+
+	// A stale stamp (vocabulary changed in a newer build) forces a re-seed
+	// which restores the row and rewrites the stamp.
+	_, err = conn.ExecContext(ctx,
+		"UPDATE DBConfig SET Value = 'stale' WHERE Name = ?", mediadb.DBConfigCanonicalTagVocabHash)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.SeedCanonicalTagDefinitions(ctx))
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM Tags WHERE Tag = 'world'").Scan(&worldCount))
+	assert.Equal(t, 1, worldCount)
+	var restamped string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?", mediadb.DBConfigCanonicalTagVocabHash).Scan(&restamped))
+	assert.Equal(t, stamp, restamped)
+}
