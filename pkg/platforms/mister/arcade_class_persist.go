@@ -79,6 +79,20 @@ func loadArcadeClassCache(path string) map[string]arcadeClassCacheEntry {
 	}
 	defer func() { _ = f.Close() }()
 
+	info, err := f.Stat()
+	if err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("failed to stat arcade classification cache")
+		return map[string]arcadeClassCacheEntry{}
+	}
+	if info.Size() > arcadeClassCacheMaxBytes {
+		log.Warn().
+			Str("path", path).
+			Int64("size", info.Size()).
+			Int64("maxBytes", arcadeClassCacheMaxBytes).
+			Msg("arcade classification cache too large, re-parsing MRA files")
+		return map[string]arcadeClassCacheEntry{}
+	}
+
 	var stored persistedArcadeClassCache
 	if decErr := gob.NewDecoder(io.LimitReader(f, arcadeClassCacheMaxBytes)).Decode(&stored); decErr != nil {
 		log.Warn().Err(decErr).Str("path", path).Msg("arcade classification cache unreadable, re-parsing MRA files")
