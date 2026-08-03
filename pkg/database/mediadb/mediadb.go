@@ -2278,9 +2278,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 			variants = variants[:maxVariantsPerWord]
 		}
 
-		if len(variants) > 0 {
-			variantGroups = append(variantGroups, variants)
-		}
+		variantGroups = append(variantGroups, variants)
 	}
 
 	// Try in-memory cache path when we have slug variants and no Name fallback
@@ -2373,9 +2371,7 @@ func (db *MediaDB) SearchMediaWithFiltersCount(
 			variants = variants[:maxVariantsPerWord]
 		}
 
-		if len(variants) > 0 {
-			variantGroups = append(variantGroups, variants)
-		}
+		variantGroups = append(variantGroups, variants)
 	}
 
 	cache := db.slugSearchCache.Load()

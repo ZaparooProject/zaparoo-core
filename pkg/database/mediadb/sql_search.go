@@ -783,10 +783,6 @@ func sqlSearchMediaWithFilters(
 	variantArgs := make([]any, 0, len(variantGroups)*4) // Estimate: ~4 variants per word
 
 	for wordIdx, variants := range variantGroups {
-		if len(variants) == 0 {
-			continue
-		}
-
 		orConditions := make([]string, 0, len(variants)*2+1)
 
 		// Add OR conditions for each slug variant
@@ -968,6 +964,7 @@ func sqlSearchMediaWithFiltersSystemIDs(
 		systemCondition = `Systems.SystemID IN (` + prepareVariadic("?", ",", len(systems)) + `) AND `
 	}
 
+	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 	query := `
 		SELECT DISTINCT Systems.SystemID
 		FROM Systems
@@ -1034,10 +1031,6 @@ func sqlSearchMediaWithFiltersCount(
 	variantArgs := make([]any, 0, len(variantGroups)*4)
 
 	for wordIdx, variants := range variantGroups {
-		if len(variants) == 0 {
-			continue
-		}
-
 		orConditions := make([]string, 0, len(variants)*2+1)
 
 		for _, variant := range variants {
