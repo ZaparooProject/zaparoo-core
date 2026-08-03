@@ -313,6 +313,14 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 		// — the latter tells "Jackal (W)" apart from "Jackal (W) [bl]". Types are stored
 		// comma-joined in alphabetical order; read paths reorder them by display rank.
 		// The IS NOT guard skips rows already holding the computed value.
+		//
+		// tot and mvs use CROSS JOIN (SQLite's manual join-order override) so the
+		// scoped title set always drives the lookups through
+		// media_title_present_idx and the MediaTags primary key. Left to the
+		// planner, databases without fresh statistics instead sweep all of
+		// Media/MediaTags on every call, making a single-system recompute cost as
+		// much as a whole-database one — ~3 minutes per system on a large library
+		// on SD-card storage, repeated for every system.
 		//nolint:gosec // filterCol is a trusted constant; values are parameterized.
 		setQuery := fmt.Sprintf(`
 			WITH scope AS MATERIALIZED (
@@ -320,8 +328,8 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 			),
 			tot AS MATERIALIZED (
 				SELECT m.MediaTitleDBID AS tid, COUNT(*) AS tm
-				FROM Media m
-				JOIN scope ON scope.tid = m.MediaTitleDBID
+				FROM scope
+				CROSS JOIN Media m ON m.MediaTitleDBID = scope.tid
 				WHERE m.IsMissing = 0
 				GROUP BY m.MediaTitleDBID
 				HAVING COUNT(*) > 1
@@ -331,10 +339,10 @@ func sqlRecomputeDisambiguation(ctx context.Context, db sqlQueryable, filterCol 
 				FROM (
 					SELECT DISTINCT m.MediaTitleDBID AS tid, tt.Type AS typ, m.DBID AS mid, t.Tag AS tag
 					FROM tot
-					JOIN Media m ON m.MediaTitleDBID = tot.tid
-					JOIN MediaTags x ON x.MediaDBID = m.DBID
-					JOIN Tags t ON t.DBID = x.TagDBID
-					JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+					CROSS JOIN Media m ON m.MediaTitleDBID = tot.tid
+					CROSS JOIN MediaTags x ON x.MediaDBID = m.DBID
+					CROSS JOIN Tags t ON t.DBID = x.TagDBID
+					CROSS JOIN TagTypes tt ON tt.DBID = t.TypeDBID
 					WHERE m.IsMissing = 0%s
 				)
 				GROUP BY tid, typ, mid

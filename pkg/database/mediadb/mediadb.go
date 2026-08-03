@@ -162,6 +162,7 @@ type MediaDB struct {
 	browseCacheRebuilding   atomic.Bool
 	needsIndexRebuild       atomic.Bool
 	isOptimizing            atomic.Bool
+	indexingCacheBoost      atomic.Bool
 	inTransaction           bool
 	browseCacheDirty        bool
 	utilityTagCacheDirty    bool
@@ -387,18 +388,18 @@ func (db *MediaDB) GetDBPath() string {
 // Also switches temp_store to MEMORY for the duration: the GROUP BY temp B-trees
 // built by the post-indexing cache population are only a few MB, and the default
 // temp_store=FILE writes them to slow storage (SD card) on embedded devices.
+//
+// Both pragmas are per-connection, and the pool exec below only reaches
+// whichever connection happens to be free — not necessarily the one the bulk
+// writer's transaction will pin. BeginTransaction therefore re-applies the
+// current settings on its own connection, which is where the boost matters.
 func (db *MediaDB) SetIndexingCacheSize(enable bool) {
+	db.indexingCacheBoost.Store(enable)
 	if db.sql.Load() == nil {
 		return
 	}
 
-	cacheSize := "-8192" // 8MB default
-	tempStore := "FILE"
-	if enable {
-		cacheSize = "-32768" // 32MB for indexing
-		tempStore = "MEMORY"
-	}
-
+	cacheSize, tempStore := db.connPragmaValues()
 	_, err := db.sql.Load().ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
 	if err != nil {
 		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing cache size")
@@ -406,6 +407,30 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	_, err = db.sql.Load().ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore)
 	if err != nil {
 		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing temp_store")
+	}
+}
+
+// connPragmaValues returns the cache_size and temp_store settings matching the
+// current indexing state: 32MB/MEMORY while the indexing boost is active,
+// 8MB/FILE steady state (mirroring the connection-string defaults).
+func (db *MediaDB) connPragmaValues() (cacheSize, tempStore string) {
+	if db.indexingCacheBoost.Load() {
+		return "-32768", "MEMORY"
+	}
+	return "-8192", "FILE"
+}
+
+// applyConnPragmas sets the per-connection pragmas on the connection a
+// transaction has pinned, making the indexing cache boost deterministic for
+// the writer regardless of which pooled connection the earlier pool-level
+// exec happened to land on.
+func (db *MediaDB) applyConnPragmas(tx *sql.Tx) {
+	cacheSize, tempStore := db.connPragmaValues()
+	if _, err := tx.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize); err != nil {
+		log.Warn().Err(err).Msg("failed to set transaction connection cache size")
+	}
+	if _, err := tx.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore); err != nil {
+		log.Warn().Err(err).Msg("failed to set transaction connection temp_store")
 	}
 }
 
@@ -1655,6 +1680,11 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	db.tx = tx
+	// The transaction has now pinned a connection; apply the per-connection
+	// pragmas here so the bulk writer actually runs with the indexing cache
+	// boost (temp tables from prior pooled use are already released, so the
+	// temp_store change is safe at this point).
+	db.applyConnPragmas(tx)
 
 	// Use batch inserters if enabled, otherwise use prepared statements
 	if batchEnabled {

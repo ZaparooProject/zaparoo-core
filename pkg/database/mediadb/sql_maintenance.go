@@ -215,15 +215,17 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	// for O(log n) lookups rather than a full-table scan.
 	// IMPORTANT: TagTypes are deliberately NOT deleted — they are global infrastructure shared
 	// across all systems; deleting them would break remaining systems' tag references.
-	if _, err = conn.ExecContext(ctx, `
+	tagCleanupRes, err := conn.ExecContext(ctx, `
 		DELETE FROM Tags
 		    WHERE DBID IN (SELECT DBID FROM _tts_candidate_tags)
 		      AND NOT EXISTS (SELECT 1 FROM MediaTags            WHERE TagDBID     = Tags.DBID)
 		      AND NOT EXISTS (SELECT 1 FROM MediaTitleTags       WHERE TagDBID     = Tags.DBID)
 		      AND NOT EXISTS (SELECT 1 FROM MediaTitleProperties WHERE TypeTagDBID = Tags.DBID)
-		      AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)`); err != nil {
+		      AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)`)
+	if err != nil {
 		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
 	}
+	invalidateCanonicalTagVocabStampIfDeleted(ctx, conn, tagCleanupRes)
 
 	// Cache invalidation — not FK-dependent, so these run after PRAGMA FK ON restores.
 	if _, err = conn.ExecContext(ctx, "DELETE FROM MediaCountCache"); err != nil {
@@ -388,16 +390,18 @@ func sqlCleanMediaOrphans(ctx context.Context, db *sql.DB) (int64, error) {
 	// existing indexes for O(log n) checks rather than full-table scans.
 	// TagTypes are deliberately preserved — they are global infrastructure
 	// shared across all systems.
-	if _, err = conn.ExecContext(ctx, `
+	tagCleanupRes, err := conn.ExecContext(ctx, `
 		DELETE FROM Tags
 		WHERE DBID IN (SELECT DBID FROM _cmo_candidate_tags)
 		  AND NOT EXISTS (SELECT 1 FROM MediaTags            WHERE TagDBID     = Tags.DBID)
 		  AND NOT EXISTS (SELECT 1 FROM MediaTitleTags       WHERE TagDBID     = Tags.DBID)
 		  AND NOT EXISTS (SELECT 1 FROM MediaTitleProperties WHERE TypeTagDBID = Tags.DBID)
 		  AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)`,
-	); err != nil {
+	)
+	if err != nil {
 		return 0, fmt.Errorf("failed to clean up orphaned tags: %w", err)
 	}
+	invalidateCanonicalTagVocabStampIfDeleted(ctx, conn, tagCleanupRes)
 
 	return deleted, nil
 }

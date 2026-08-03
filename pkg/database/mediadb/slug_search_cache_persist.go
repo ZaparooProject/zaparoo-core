@@ -161,6 +161,14 @@ func (db *MediaDB) PersistSlugSearchCache() error {
 	if cache == nil || cache.entryCount == 0 {
 		return removePersistedCacheFile(path, slugSearchCacheKind)
 	}
+	// Mid-scan tombstones and trigram delta layers have no on-disk
+	// representation; persisting the raw arrays would resurrect dropped
+	// entries on load. Drop any stale file instead — the next boot rebuilds
+	// from SQL, and the end-of-index full rebuild persists a clean cache.
+	if cache.hasMidScanState() {
+		log.Debug().Msg("skipping slug search cache persist: cache carries mid-scan state")
+		return removePersistedCacheFile(path, slugSearchCacheKind)
+	}
 	gen, err := db.IndexGeneration()
 	if err != nil {
 		return fmt.Errorf("failed to read index generation: %w", err)

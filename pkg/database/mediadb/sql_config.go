@@ -50,6 +50,7 @@ const (
 	DBConfigIndexResumeCheckpoint           = "IndexResumeCheckpoint"
 	DBConfigDisambiguationVersion           = "DisambiguationVersion"
 	DBConfigDisambiguationBackfillCursor    = "DisambiguationBackfillCursor"
+	DBConfigCanonicalTagVocabHash           = "CanonicalTagVocabHash"
 
 	temporaryRepairParentDirVersion = "1"
 

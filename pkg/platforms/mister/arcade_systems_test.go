@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +56,60 @@ func TestArcadeSetSystemsMapsCuratedPlatforms(t *testing.T) {
 	assert.NotContains(t, setSystems, "unknown")
 }
 
+// newTestArcadeSystemCache builds a cache with persistence pointed at a
+// temp file so tests never touch the real data directory.
+func newTestArcadeSystemCache(t *testing.T) *arcadeSystemCache {
+	t.Helper()
+	cache := newArcadeSystemCache(NewPlatform())
+	cache.persistPath = filepath.Join(t.TempDir(), arcadeClassCacheFileName)
+	return cache
+}
+
+func TestLoadArcadeClassCacheRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), arcadeClassCacheFileName)
+	require.NoError(t, saveArcadeClassCache(path, map[string]arcadeClassCacheEntry{
+		"oversized.mra": {SetName: "oversized", Size: 1, MtimeNs: 1},
+	}))
+	encodedInfo, err := os.Stat(path)
+	require.NoError(t, err)
+
+	previousMax := arcadeClassCacheMaxBytes
+	arcadeClassCacheMaxBytes = encodedInfo.Size()
+	t.Cleanup(func() { arcadeClassCacheMaxBytes = previousMax })
+
+	paddingFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // path is under t.TempDir
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = paddingFile.Close() })
+	_, err = paddingFile.Write(make([]byte, 64))
+	require.NoError(t, err)
+	require.NoError(t, paddingFile.Close())
+
+	oversizedInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Greater(t, oversizedInfo.Size(), arcadeClassCacheMaxBytes)
+	assert.Empty(t, loadArcadeClassCache(path))
+}
+
+func TestArcadeSystemCacheEmptyScanPreservesPersistedCache(t *testing.T) {
+	t.Parallel()
+
+	cache := newTestArcadeSystemCache(t)
+	persisted := map[string]arcadeClassCacheEntry{
+		"existing.mra": {SetName: "existing", Size: 10, MtimeNs: 20},
+	}
+	require.NoError(t, saveArcadeClassCache(cache.persistPath, persisted))
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return nil, nil
+	}
+
+	_, err := cache.captureScanner(
+		context.Background(), &config.Instance{}, systemdefs.SystemArcade, nil,
+	)
+	require.NoError(t, err)
+	require.NoError(t, cache.classify(context.Background(), &config.Instance{}))
+	assert.Equal(t, persisted, loadArcadeClassCache(cache.persistPath))
+}
+
 func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	t.Parallel()
 
@@ -67,11 +123,17 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	mglPath := filepath.Join(dir, "shortcut.mgl")
 	require.NoError(t, os.WriteFile(mglPath, []byte("ignored"), 0o600))
 
-	cache := newArcadeSystemCache(NewPlatform())
+	cache := newTestArcadeSystemCache(t)
 	readCalls := 0
 	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
 		readCalls++
 		return []arcadedb.ArcadeDbEntry{{Setname: "cps1game", Platform: "Capcom CPS-1"}}, nil
+	}
+	mraReads := 0
+	baseReadMRA := cache.readMRA
+	cache.readMRA = func(path string) (mgls.MRA, error) {
+		mraReads++
+		return baseReadMRA(path)
 	}
 	input := []platforms.ScanResult{
 		{Path: classifiedPath, Name: "Classified"},
@@ -83,6 +145,8 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	unchanged, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, input)
 	require.NoError(t, err)
 	assert.Equal(t, inputBefore, unchanged)
+	assert.Zero(t, mraReads, "capture must not read MRA contents")
+	assert.Zero(t, readCalls, "capture must not read the arcade DB")
 
 	results, err := cache.scanner(systemdefs.SystemCPS1)(
 		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
@@ -90,6 +154,7 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []platforms.ScanResult{{Path: classifiedPath, Name: "Classified"}}, results)
 	assert.Equal(t, 1, readCalls)
+	assert.Equal(t, 2, mraReads, "both .mra files parsed once, .mgl skipped")
 
 	results[0].Path = "mutated"
 	results, err = cache.scanner(systemdefs.SystemCPS1)(
@@ -97,12 +162,80 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, classifiedPath, results[0].Path)
+	assert.Equal(t, 2, mraReads, "second demand serves from memory")
+}
+
+func TestArcadeSystemCachePersistedCacheSkipsUnchangedMRAReads(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cps1Path := filepath.Join(dir, "game.mra")
+	require.NoError(t, os.WriteFile(cps1Path, []byte(
+		"<misterromdescription><setname>CPS1GAME</setname></misterromdescription>",
+	), 0o600))
+	malformedPath := filepath.Join(dir, "malformed.mra")
+	require.NoError(t, os.WriteFile(malformedPath, []byte("<invalid>"), 0o600))
+	persistPath := filepath.Join(t.TempDir(), arcadeClassCacheFileName)
+	input := []platforms.ScanResult{{Path: cps1Path}, {Path: malformedPath}}
+	arcadeEntries := []arcadedb.ArcadeDbEntry{{Setname: "cps1game", Platform: "Capcom CPS-1"}}
+
+	makeCache := func(mraReads *int) *arcadeSystemCache {
+		cache := newArcadeSystemCache(NewPlatform())
+		cache.persistPath = persistPath
+		cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+			return arcadeEntries, nil
+		}
+		baseReadMRA := cache.readMRA
+		cache.readMRA = func(path string) (mgls.MRA, error) {
+			*mraReads++
+			return baseReadMRA(path)
+		}
+		return cache
+	}
+	classify := func(cache *arcadeSystemCache) []platforms.ScanResult {
+		_, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, input)
+		require.NoError(t, err)
+		results, err := cache.scanner(systemdefs.SystemCPS1)(
+			context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+		)
+		require.NoError(t, err)
+		return results
+	}
+
+	firstReads := 0
+	first := classify(makeCache(&firstReads))
+	assert.Equal(t, []platforms.ScanResult{{Path: cps1Path}}, first)
+	assert.Equal(t, 2, firstReads, "cold cache parses every MRA, including the malformed one")
+
+	// A fresh cache instance (new process) with the persisted file must not
+	// re-read unchanged MRAs — including the one that failed to parse.
+	secondReads := 0
+	second := classify(makeCache(&secondReads))
+	assert.Equal(t, first, second)
+	assert.Zero(t, secondReads)
+
+	// Rewriting a file with new content (and mtime) invalidates its entry.
+	require.NoError(t, os.WriteFile(cps1Path, []byte(
+		"<misterromdescription><setname>other</setname></misterromdescription>",
+	), 0o600))
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(cps1Path, future, future))
+	thirdReads := 0
+	third := classify(makeCache(&thirdReads))
+	assert.Empty(t, third, "setname no longer maps to CPS1")
+	assert.Equal(t, 1, thirdReads, "only the changed file is re-read")
+
+	// A corrupt persisted cache falls back to a full parse.
+	require.NoError(t, os.WriteFile(persistPath, []byte("not a gob"), 0o600))
+	fourthReads := 0
+	classify(makeCache(&fourthReads))
+	assert.Equal(t, 2, fourthReads)
 }
 
 func TestArcadeSystemCacheRetriesAfterCancelledScan(t *testing.T) {
 	t.Parallel()
 
-	cache := newArcadeSystemCache(NewPlatform())
+	cache := newTestArcadeSystemCache(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := cache.scanFiles(ctx, &config.Instance{})
@@ -117,7 +250,11 @@ func TestArcadeSystemCacheRetriesAfterCancelledScan(t *testing.T) {
 		return nil, nil
 	}
 
-	_, err = cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, nil)
+	// No capture happened (Arcade wasn't scanned), so classification walks the
+	// filesystem itself; a cancelled walk must not be cached as a result.
+	_, err = cache.scanner(systemdefs.SystemCPS1)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+	)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, cache.loaded)
 	assert.Empty(t, cache.results)
@@ -127,6 +264,41 @@ func TestArcadeSystemCacheRetriesAfterCancelledScan(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
+}
+
+func TestArcadeSystemCacheRecaptureInvalidatesClassification(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.mra")
+	require.NoError(t, os.WriteFile(firstPath, []byte(
+		"<misterromdescription><setname>CPS1GAME</setname></misterromdescription>",
+	), 0o600))
+	secondPath := filepath.Join(dir, "second.mra")
+	require.NoError(t, os.WriteFile(secondPath, []byte(
+		"<misterromdescription><setname>CPS1GAME</setname></misterromdescription>",
+	), 0o600))
+
+	cache := newTestArcadeSystemCache(t)
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return []arcadedb.ArcadeDbEntry{{Setname: "cps1game", Platform: "Capcom CPS-1"}}, nil
+	}
+
+	scan := cache.scanner(systemdefs.SystemCPS1)
+	_, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade,
+		[]platforms.ScanResult{{Path: firstPath}})
+	require.NoError(t, err)
+	results, err := scan(context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.ScanResult{{Path: firstPath}}, results)
+
+	// A new Arcade walk replaces the captured list; classification must follow.
+	_, err = cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade,
+		[]platforms.ScanResult{{Path: secondPath}})
+	require.NoError(t, err)
+	results, err = scan(context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.ScanResult{{Path: secondPath}}, results)
 }
 
 func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {

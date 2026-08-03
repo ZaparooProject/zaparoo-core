@@ -252,19 +252,31 @@ func TestPersistSlugSearchCache_RemovesStaleFileWhenEmpty(t *testing.T) {
 
 // TestPersistedSlugSearchCacheMirrorsCacheStruct guards against drift
 // between SlugSearchCache and persistedSlugSearchCache. The persisted
-// struct must hold every in-memory field plus the three header fields;
-// if a field is added to SlugSearchCache but not mirrored here, the
+// struct must hold every in-memory field plus the three header fields —
+// except the transient mid-scan fields, which are never persisted:
+// PersistSlugSearchCache refuses caches where hasMidScanState is true.
+// If a field is added to SlugSearchCache but not mirrored here, the
 // round-trip silently drops data.
 func TestPersistedSlugSearchCacheMirrorsCacheStruct(t *testing.T) {
 	t.Parallel()
 	cacheT := reflect.TypeOf(SlugSearchCache{})
 	persistedT := reflect.TypeOf(persistedSlugSearchCache{})
 	headerT := reflect.TypeOf(persistedHeader{})
+
+	// Mid-scan state with no on-disk representation; each must exist on the
+	// struct so renames keep this list honest.
+	transientFields := []string{"trigramDeltas", "droppedRanges", "liveEntries"}
+	for _, name := range transientFields {
+		_, ok := cacheT.FieldByName(name)
+		require.True(t, ok, "transient field %s missing from SlugSearchCache; update this list", name)
+	}
+
 	require.Equal(t,
-		cacheT.NumField()+headerT.NumField(),
+		cacheT.NumField()-len(transientFields)+headerT.NumField(),
 		persistedT.NumField(),
 		"persistedSlugSearchCache field count drifted from SlugSearchCache; "+
 			"update the persisted struct, the load->cache copy in LoadCachedSlugSearchCache, "+
-			"and the cache->persisted copy in PersistSlugSearchCache",
+			"and the cache->persisted copy in PersistSlugSearchCache (or the "+
+			"transient-fields list in this test for fields that must never persist)",
 	)
 }

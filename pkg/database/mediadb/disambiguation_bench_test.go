@@ -50,6 +50,76 @@ func BenchmarkRecomputeDisambiguation_System(b *testing.B) {
 	}
 }
 
+// BenchmarkRecomputeDisambiguation_SystemInLargeDB measures recomputing ONE
+// small system while the database holds many other systems' rows — the shape of
+// the per-system backfill and index-time reconcile in the field. The database
+// deliberately has no ANALYZE statistics: field databases can lack or trail
+// them, and the recompute must stay scoped to the target system's rows rather
+// than sweeping all Media/MediaTags regardless of statistics.
+func BenchmarkRecomputeDisambiguation_SystemInLargeDB(b *testing.B) {
+	for _, systems := range []int{25, 100} {
+		b.Run(fmt.Sprintf("systems_%d_titles_each_2000", systems), func(b *testing.B) {
+			b.ReportAllocs()
+			mediaDB, cleanup := setupBenchDisambMultiSystemDB(b, systems, 2000)
+			defer cleanup()
+			ctx := context.Background()
+			for b.Loop() {
+				if err := mediaDB.RecomputeSystemDisambiguation(ctx, []int64{1}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// setupBenchDisambMultiSystemDB seeds `systems` systems with `titlesPerSystem`
+// titles each, two media per title (all sharing region:world, evens adding
+// language:en so presence/absence disambiguation fires). No ANALYZE is run.
+func setupBenchDisambMultiSystemDB(b *testing.B, systems, titlesPerSystem int) (mediaDB *MediaDB, cleanup func()) {
+	b.Helper()
+	tempDir, err := os.MkdirTemp("", "zaparoo-bench-disamb-multi-*")
+	require.NoError(b, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: tempDir})
+
+	mediaDB, err = OpenMediaDB(context.Background(), mockPlatform)
+	require.NoError(b, err)
+	cleanup = func() {
+		if mediaDB != nil {
+			_ = mediaDB.Close()
+		}
+		_ = os.RemoveAll(tempDir)
+	}
+
+	ctx := context.Background()
+	conn := mediaDB.sql.Load()
+
+	_, err = conn.ExecContext(ctx, fmt.Sprintf(`
+		WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM seq WHERE i < %d)
+		INSERT INTO Systems (DBID, SystemID, Name) SELECT i, 'Bench' || i, 'Bench ' || i FROM seq;
+		INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES (1, 'region', 0), (2, 'language', 0);
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (1, 1, 'world'), (2, 2, 'en');
+	`, systems))
+	require.NoError(b, err)
+
+	titles := systems * titlesPerSystem
+	_, err = conn.ExecContext(ctx, fmt.Sprintf(`
+		WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM seq WHERE i < %d)
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name)
+			SELECT i, ((i-1)/%d)+1, 'game-' || i, 'Game ' || i FROM seq;
+		WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM seq WHERE i < %d)
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, IsMissing)
+			SELECT (i-1)*2 + j, i, ((i-1)/%d)+1, 'game-' || i || '-' || j, 0
+			FROM seq, (SELECT 1 AS j UNION SELECT 2);
+		INSERT INTO MediaTags (MediaDBID, TagDBID) SELECT DBID, 1 FROM Media;
+		INSERT INTO MediaTags (MediaDBID, TagDBID) SELECT DBID, 2 FROM Media WHERE (DBID %% 2) = 0;
+	`, titles, titlesPerSystem, titles, titlesPerSystem))
+	require.NoError(b, err)
+
+	return mediaDB, cleanup
+}
+
 // setupBenchDisambDB seeds a MediaDB with `titles` multi-media titles in one system. Each
 // title has three media: all share region:world, the second adds input:joystick:rotary,
 // the third adds unlicensed:bootleg — so every title disambiguates via presence/absence.
