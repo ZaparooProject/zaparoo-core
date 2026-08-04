@@ -97,6 +97,55 @@ func TestQueuePlaylistUpdateReturnsWhenServiceContextCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestQueuePlaylistUpdate_HoldTokenAssignment(t *testing.T) {
+	t.Parallel()
+
+	owner := &tokens.Token{
+		UID:      "playlist-card",
+		Text:     "**playlist.next",
+		Source:   tokens.SourceReader,
+		ReaderID: "reader-1",
+	}
+	staleOwner := &tokens.Token{UID: "stale-card"}
+
+	tests := []struct {
+		owner       *tokens.Token
+		name        string
+		slot        string
+		expectOwner bool
+	}{
+		{name: "primary copies owner", slot: mediaslot.Primary, owner: owner, expectOwner: true},
+		{name: "background clears owner", slot: mediaslot.Background, owner: owner},
+		{name: "primary without owner stays clear", slot: mediaslot.Primary},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			queue := make(chan *playlists.Playlist, 1)
+			playlist := &playlists.Playlist{Slot: tt.slot, HoldToken: staleOwner}
+			env := platforms.CmdEnv{
+				Playlist: playlists.PlaylistController{HoldToken: tt.owner, Queue: queue},
+			}
+
+			err := queuePlaylistUpdate(&env, playlist)
+			require.NoError(t, err)
+			queued := <-queue
+
+			if !tt.expectOwner {
+				assert.Nil(t, queued.HoldToken)
+				return
+			}
+			require.NotNil(t, queued.HoldToken)
+			assert.NotSame(t, owner, queued.HoldToken)
+			assert.True(t, helpers.TokensEqual(owner, queued.HoldToken))
+			assert.Equal(t, owner.ReaderID, queued.HoldToken.ReaderID)
+			assert.Equal(t, owner.Source, queued.HoldToken.Source)
+		})
+	}
+}
+
 func TestReadPlsFile(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

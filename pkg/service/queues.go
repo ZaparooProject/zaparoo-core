@@ -110,6 +110,7 @@ func runTokenZapScript(
 		return nil
 	}
 
+	originToken := token
 	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
 	if hasMapping {
 		log.Info().Msgf("found mapping: %s", mappedValue)
@@ -129,6 +130,15 @@ func runTokenZapScript(
 	currentPlaylist := plsc.Current
 	if currentPlaylist == nil {
 		currentPlaylist = currentPrimary
+	}
+
+	switch {
+	case originToken.ReaderID != "":
+		plsc.HoldToken = &originToken
+	case token.Source == tokens.SourcePlaylist && currentPrimary != nil:
+		plsc.HoldToken = currentPrimary.HoldToken
+	default:
+		plsc.HoldToken = nil
 	}
 
 	cmds := script.Cmds
@@ -187,6 +197,7 @@ func runTokenZapScript(
 				Active:     currentPrimary,
 				Background: currentBackground,
 				Current:    currentPlaylist,
+				HoldToken:  plsc.HoldToken,
 				Queue:      plsc.Queue,
 			},
 			token,
@@ -222,14 +233,21 @@ func runTokenZapScript(
 			}
 		}
 
-		if primaryMediaChanged && token.ReaderID != "" {
-			r, ok := svc.State.GetReader(token.ReaderID)
-			if ok && readers.HasCapability(r, readers.CapabilityRemovable) {
-				log.Debug().Any("token", token).Msg("media changed, updating software token")
-				select {
-				case svc.LaunchSoftwareQueue <- &token:
-				case <-svc.State.GetContext().Done():
-					return errors.New("service shutting down")
+		if primaryMediaChanged {
+			holdToken := &originToken
+			if token.Source == tokens.SourcePlaylist {
+				holdToken = plsc.HoldToken
+			}
+			if holdToken != nil && holdToken.ReaderID != "" {
+				r, ok := svc.State.GetReader(holdToken.ReaderID)
+				if ok && readers.HasCapability(r, readers.CapabilityRemovable) {
+					softwareToken := *holdToken
+					log.Debug().Msg("media changed, updating hold owner")
+					select {
+					case svc.LaunchSoftwareQueue <- &softwareToken:
+					case <-svc.State.GetContext().Done():
+						return errors.New("service shutting down")
+					}
 				}
 			}
 		}
@@ -384,6 +402,7 @@ func launchPlaylistMedia(
 		Active:     svc.State.GetActivePlaylist(),
 		Background: svc.State.GetBackgroundPlaylist(),
 		Current:    pls,
+		HoldToken:  pls.HoldToken,
 		Queue:      svc.PlaylistQueue,
 	}
 	if pls.Slot == mediaslot.Background {

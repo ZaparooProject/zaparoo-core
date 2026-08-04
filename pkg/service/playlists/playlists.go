@@ -19,7 +19,10 @@
 
 package playlists
 
-import "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+import (
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+)
 
 type PlaylistItem struct {
 	ZapScript string
@@ -27,19 +30,23 @@ type PlaylistItem struct {
 }
 
 type Playlist struct {
-	ID      string
-	Name    string
-	Slot    string
-	Items   []PlaylistItem
-	Index   int
-	Playing bool
-	Clear   bool // signals the queue handler to remove the active playlist for this slot
-	// Loop and LoopOne control end-of-playlist behaviour set at load time.
+	// HoldToken is internal runtime ownership for primary hold-mode playback.
+	// It is not part of playlist persistence or API responses.
+	HoldToken *tokens.Token
+	ID        string
+	Name      string
+	Slot      string
+	Items     []PlaylistItem
+	Index     int
+	Playing   bool
+	// Clear signals the queue handler to remove the active playlist for this slot.
+	Clear bool
+	// Loop and LoopOne control end-of-playlist behavior set at load time.
 	// Loop wraps back to the start; LoopOne repeats the current track.
 	Loop    bool
 	LoopOne bool
-	// ForceRelaunch bypasses the playlistNeedsUpdate dedup so the same track can be
-	// relaunched (needed for LoopOne and single-item Loop).
+	// ForceRelaunch bypasses playlistNeedsUpdate dedup so the same track can be
+	// relaunched for LoopOne and single-item Loop.
 	ForceRelaunch bool
 }
 
@@ -60,14 +67,15 @@ func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immu
 		idx = 0
 	}
 	return &Playlist{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   p.Items,
-		Index:   idx,
-		Playing: p.Playing,
-		Loop:    p.Loop,
-		LoopOne: p.LoopOne,
+		ID:        p.ID,
+		Name:      p.Name,
+		Slot:      p.Slot,
+		Items:     p.Items,
+		Index:     idx,
+		Playing:   p.Playing,
+		Loop:      p.Loop,
+		LoopOne:   p.LoopOne,
+		HoldToken: p.HoldToken,
 	}
 }
 
@@ -77,14 +85,15 @@ func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves 
 		idx = len(p.Items) - 1
 	}
 	return &Playlist{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   p.Items,
-		Index:   idx,
-		Playing: p.Playing,
-		Loop:    p.Loop,
-		LoopOne: p.LoopOne,
+		ID:        p.ID,
+		Name:      p.Name,
+		Slot:      p.Slot,
+		Items:     p.Items,
+		Index:     idx,
+		Playing:   p.Playing,
+		Loop:      p.Loop,
+		LoopOne:   p.LoopOne,
+		HoldToken: p.HoldToken,
 	}
 }
 
@@ -99,40 +108,43 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 		idx = 0
 	}
 	return &Playlist{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   p.Items,
-		Index:   idx,
-		Playing: p.Playing,
-		Loop:    p.Loop,
-		LoopOne: p.LoopOne,
+		ID:        p.ID,
+		Name:      p.Name,
+		Slot:      p.Slot,
+		Items:     p.Items,
+		Index:     idx,
+		Playing:   p.Playing,
+		Loop:      p.Loop,
+		LoopOne:   p.LoopOne,
+		HoldToken: p.HoldToken,
 	}
 }
 
 func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	return &Playlist{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   p.Items,
-		Index:   p.Index,
-		Playing: true,
-		Loop:    p.Loop,
-		LoopOne: p.LoopOne,
+		ID:        p.ID,
+		Name:      p.Name,
+		Slot:      p.Slot,
+		Items:     p.Items,
+		Index:     p.Index,
+		Playing:   true,
+		Loop:      p.Loop,
+		LoopOne:   p.LoopOne,
+		HoldToken: p.HoldToken,
 	}
 }
 
 func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	return &Playlist{
-		ID:      p.ID,
-		Name:    p.Name,
-		Slot:    p.Slot,
-		Items:   p.Items,
-		Index:   p.Index,
-		Playing: false,
-		Loop:    p.Loop,
-		LoopOne: p.LoopOne,
+		ID:        p.ID,
+		Name:      p.Name,
+		Slot:      p.Slot,
+		Items:     p.Items,
+		Index:     p.Index,
+		Playing:   false,
+		Loop:      p.Loop,
+		LoopOne:   p.LoopOne,
+		HoldToken: p.HoldToken,
 	}
 }
 
@@ -156,5 +168,6 @@ type PlaylistController struct {
 	Active     *Playlist
 	Background *Playlist
 	Current    *Playlist
+	HoldToken  *tokens.Token
 	Queue      chan<- *Playlist
 }
