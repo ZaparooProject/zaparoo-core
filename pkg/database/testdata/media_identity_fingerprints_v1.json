@@ -62,6 +62,21 @@
       "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"SNES\",\"core_slug\":\"supermarioworld\",\"tags\":[{\"type\":\"extension\",\"value\":\"zip\",\"role\":\"context\"},{\"type\":\"region\",\"value\":\"us\",\"role\":\"identity\"}],\"policy_version\":1}"
     },
     {
+      "name": "U+2028 and U+2029 line separators are always \\u-escaped",
+      "identity": {
+        "media_type": "Game",
+        "canonical_system_id": "PSX",
+        "display_name": "Line Separator Game",
+        "core_slug": "lineseparatorgame",
+        "observation_fingerprint": "sha256:9457c0b1449894c1d610b72893a162923e55e6c2db8aea292c9a53597e587bfa",
+        "tags": [
+          {"type": "publisher", "value": "line and break", "role": "identity"}
+        ],
+        "policy_version": 1
+      },
+      "canonical_payload": "{\"media_type\":\"Game\",\"canonical_system_id\":\"PSX\",\"core_slug\":\"lineseparatorgame\",\"tags\":[{\"type\":\"publisher\",\"value\":\"line\\u2028and\\u2029break\",\"role\":\"identity\"}],\"policy_version\":1}"
+    },
+    {
       "name": "ampersand tag value is not HTML-escaped",
       "identity": {
         "media_type": "Game",

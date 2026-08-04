@@ -93,6 +93,6 @@ func IsScannerOwnedType(t TagType) bool {
 	}
 
 	tagType := string(t)
-	return !strings.HasPrefix(tagType, string(ScraperType(""))) &&
-		!strings.HasPrefix(tagType, string(ScraperRunType("")))
+	return !strings.HasPrefix(tagType, ScraperTypePrefix) &&
+		!strings.HasPrefix(tagType, ScraperRunTypePrefix)
 }

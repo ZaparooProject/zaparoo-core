@@ -66,9 +66,16 @@ func PropertyTypeTag(value TagValue) string {
 	return string(TagTypeProperty) + ":" + string(value)
 }
 
+// Dynamic scraper tag-type prefixes. IsScannerOwnedType matches on these, so
+// they are named rather than reconstructed from empty-ID type calls.
+const (
+	ScraperTypePrefix    = "scraper."
+	ScraperRunTypePrefix = "scraper-run."
+)
+
 // ScraperType returns the dynamic tag type used by a scraper's sentinel tag.
 func ScraperType(scraperID string) TagType {
-	return TagType("scraper." + scraperID)
+	return TagType(ScraperTypePrefix + scraperID)
 }
 
 // ScraperTypeTag returns the full sentinel TypeTag string for a scraper.
@@ -79,7 +86,7 @@ func ScraperTypeTag(scraperID string) string {
 // ScraperRunType returns the dynamic tag type used to mark media completed
 // during one persisted scraper run.
 func ScraperRunType(scraperID string) TagType {
-	return TagType("scraper-run." + scraperID)
+	return TagType(ScraperRunTypePrefix + scraperID)
 }
 
 // ScraperRunTypeTag returns the full run marker TypeTag string for a scraper run.

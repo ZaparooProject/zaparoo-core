@@ -202,8 +202,12 @@ func MediaIdentityFingerprintPayload(identity *MediaIdentity) ([]byte, error) {
 	}
 	// Plain JSON without Go's HTML escaping (& < > as \u00XX): the canonical
 	// payload is a cross-service contract and other languages' encoders do
-	// not HTML-escape by default. Changing this encoding after release would
-	// require a new identity policy version.
+	// not HTML-escape by default. Go's encoder still ALWAYS escapes U+2028
+	// and U+2029 as "\u2028"/"\u2029" even with HTML escaping off — non-Go
+	// implementations must replicate that (JavaScript's JSON.stringify and
+	// Python's json.dumps do not, by default); the shared test vectors pin
+	// this case. Changing this encoding after release would require a new
+	// identity policy version.
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)

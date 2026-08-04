@@ -38,6 +38,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testRetryDelays matches the production retry count with negligible waits so
+// failing-retry sweeps don't burn real time in tests.
+var testRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+
 // stubSettledMediaDB makes the mock report an idle media database whose last
 // completed index finished at lastGenerated.
 func stubSettledMediaDB(mediaDB *testhelpers.MockMediaDBI, lastGenerated time.Time) {
@@ -91,6 +95,7 @@ func TestMediaHistoryIdentitySweep_EnrichesAndCompletesDespiteUnresolvableRows(t
 		nil,
 		func() { syncRequests++ },
 		0,
+		testRetryDelays,
 	)
 
 	assert.Equal(t, 1, syncRequests, "sync requested once per batch, not per row")
@@ -109,7 +114,7 @@ func TestMediaHistoryIdentitySweep_SkipsTableWalkWhenMarkerCurrent(t *testing.T)
 		Return(mediaHistoryIdentitySweepMarker(mediaDB), true, nil).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0,
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
@@ -130,7 +135,7 @@ func TestMediaHistoryIdentitySweep_DefersWhileMediaUpdating(t *testing.T) {
 		Return("", false, nil).Once()
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0,
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
@@ -158,13 +163,61 @@ func TestMediaHistoryIdentitySweep_TransientFailureAbortsWithoutMarker(t *testin
 	// trigger retries, and must not stamp the completion marker.
 	mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
 		Return([]database.SearchResult(nil), errors.New("database busy")).
-		Times(len(mediaIdentityRetryDelays) + 1)
+		Times(len(testRetryDelays) + 1)
 
 	runMediaHistoryIdentitySweep(
-		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0,
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
 	)
 
 	userDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", mock.Anything, mock.Anything)
+	userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+	userDB.AssertExpectations(t)
+	mediaDB.AssertExpectations(t)
+}
+
+func TestMediaHistoryIdentitySweep_AbortAfterUpdateStillRequestsSync(t *testing.T) {
+	t.Parallel()
+
+	updatedPath := filepath.Join("roms", "NES", "Updated.nes")
+	flakyPath := filepath.Join("roms", "NES", "Flaky.nes")
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil).Once()
+	userDB.On(
+		"GetMediaHistoryIdentityBackfillBatch",
+		int64(0), database.CurrentMediaIdentityPolicyVersion, mediaHistoryIdentityBackfillBatchSize,
+	).Return([]database.MediaHistoryEntry{
+		{DBID: 30, SystemID: "NES", MediaPath: updatedPath},
+		{DBID: 31, SystemID: "NES", MediaPath: flakyPath},
+	}, nil).Once()
+	mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, updatedPath).
+		Return([]database.SearchResult{{
+			SystemID: "NES", Name: "Updated", Path: updatedPath, Slug: "updated", MediaID: 8,
+		}}, nil).Once()
+	mediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(8)).
+		Return([]database.TagInfo{}, nil).Once()
+	userDB.On("UpdateMediaHistoryIdentity", int64(30), mock.Anything).Return(true, nil).Once()
+	// The second row fails every bounded retry, aborting the sweep mid-batch.
+	// The already-enriched first row has SyncedAt cleared, so the abort path
+	// must still flush the pending play-sync request on the way out.
+	mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, flakyPath).
+		Return([]database.SearchResult(nil), errors.New("database busy")).
+		Times(len(testRetryDelays) + 1)
+	syncRequests := 0
+
+	runMediaHistoryIdentitySweep(
+		context.Background(),
+		&database.Database{UserDB: userDB, MediaDB: mediaDB},
+		nil,
+		func() { syncRequests++ },
+		0,
+		testRetryDelays,
+	)
+
+	assert.Equal(t, 1, syncRequests,
+		"abort after a successful update must still request a play sync")
 	userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
 	userDB.AssertExpectations(t)
 	mediaDB.AssertExpectations(t)

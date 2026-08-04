@@ -77,8 +77,11 @@ func playSyncTestEntry(dbid int64, id, mediaName string, updatedAt time.Time) da
 		PlayTime:      1800,
 		ClockReliable: true,
 		ClockSource:   "system",
-		Tags:          []string{"region:us", "ext:sfc"},
-		UpdatedAt:     updatedAt,
+		// Matches identity.LegacyTags(): enrichment rewrites the legacy tags
+		// column from the identity snapshot, so a row carrying an identity
+		// always has this exact derived form.
+		Tags:      []string{"extension:sfc", "region:us"},
+		UpdatedAt: updatedAt,
 	}
 }
 
@@ -196,7 +199,7 @@ func TestSyncPlayHistory_BulkImport(t *testing.T) {
 	assert.Equal(t, 1800, uploaded[0].PlayTimeSecs)
 	assert.True(t, first.UpdatedAt.Equal(uploaded[0].CoreUpdatedAt))
 	assert.True(t, uploaded[0].ClockReliable)
-	assert.Equal(t, []string{"region:us", "ext:sfc"}, uploaded[0].Tags,
+	assert.Equal(t, []string{"extension:sfc", "region:us"}, uploaded[0].Tags,
 		"complete canonical tags travel with the compatibility session fields")
 	require.NotNil(t, uploaded[0].MediaIdentity)
 	assert.Equal(t, first.MediaIdentity, uploaded[0].MediaIdentity)

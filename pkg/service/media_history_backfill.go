@@ -100,14 +100,14 @@ func watchMediaHistoryBackfillAtInterval(
 		case <-ctx.Done():
 			return
 		case <-startupTimer.C:
-			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay)
+			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 		case _, ok := <-notifChan:
 			if !ok {
 				return
 			}
-			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay)
+			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 		case <-ticker.C:
-			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay)
+			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 		}
 	}
 }
@@ -166,6 +166,7 @@ func runMediaHistoryIdentitySweep(
 	pauser *syncutil.Pauser,
 	requestPlaySync func(),
 	batchDelay time.Duration,
+	retryDelays []time.Duration,
 ) {
 	marker := mediaHistoryIdentitySweepMarker(db.MediaDB)
 	stored, found, err := db.UserDB.GetDeviceState(database.DeviceStateKeyMediaHistoryIdentitySweep)
@@ -181,6 +182,19 @@ func runMediaHistoryIdentitySweep(
 	log.Info().Str("marker", marker).Msg("starting media history identity sweep")
 	var afterDBID int64
 	var updatedRows, skippedRows int
+	// Enriched rows already have SyncedAt cleared, so an abort after one or
+	// more successful updates must still request a play sync on the way out —
+	// otherwise those rows wait for the next unrelated sync trigger. The
+	// deferred flush covers every early return; the per-batch flush keeps
+	// uploads starting while later batches are still being swept.
+	pendingSync := false
+	flushPlaySync := func() {
+		if pendingSync && requestPlaySync != nil {
+			requestPlaySync()
+		}
+		pendingSync = false
+	}
+	defer flushPlaySync()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -209,7 +223,6 @@ func runMediaHistoryIdentitySweep(
 			break
 		}
 
-		updatedInBatch := false
 		for i := range batch {
 			afterDBID = batch[i].DBID
 			if ctx.Err() != nil {
@@ -221,7 +234,7 @@ func runMediaHistoryIdentitySweep(
 				batch[i].SystemID,
 				batch[i].MediaPath,
 				mediaIdentityLookupTimeout,
-				mediaIdentityRetryDelays,
+				retryDelays,
 				database.LookupMediaIdentity,
 			)
 			if lookupErr != nil {
@@ -243,12 +256,10 @@ func runMediaHistoryIdentitySweep(
 			}
 			if updated {
 				updatedRows++
-				updatedInBatch = true
+				pendingSync = true
 			}
 		}
-		if updatedInBatch && requestPlaySync != nil {
-			requestPlaySync()
-		}
+		flushPlaySync()
 		if len(batch) < mediaHistoryIdentityBackfillBatchSize {
 			break
 		}
