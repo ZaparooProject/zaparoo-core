@@ -66,95 +66,98 @@ func (pm *PictureManager) GetPictureForSystem(systemID string) (string, error) {
 		return "", errors.New("empty system ID")
 	}
 
-	// Map system ID to picture name
 	pictureName := mapSystemToPicture(systemID)
 	if pictureName == "" {
 		return "", fmt.Errorf("no picture mapping available for system: %s", systemID)
 	}
 
-	// Select variant (base or alternative)
+	return pm.getPictureByName(pictureName)
+}
+
+func (pm *PictureManager) getPictureByName(pictureName string) (string, error) {
+	if err := validatePictureName(pictureName); err != nil {
+		return "", err
+	}
+
 	selectedVariant := selectPictureVariant(pictureName)
-
 	log.Debug().
-		Str("system", systemID).
-		Str("mapped_picture", pictureName).
+		Str("picture", pictureName).
 		Str("selected_variant", selectedVariant).
-		Msg("mapped system to picture")
+		Msg("selected tty2oled picture")
 
-	// Ensure cache directory exists
 	if err := pm.ensureCacheDir(); err != nil {
 		return "", fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	// Try to find picture in order of preference
 	for _, format := range PictureFormats {
 		picturePath, err := pm.findPicture(selectedVariant, format)
 		if err == nil && picturePath != "" {
-			// Verify file exists and is readable
 			if _, err := os.Stat(picturePath); err == nil {
 				log.Debug().
-					Str("system", systemID).
+					Str("picture", pictureName).
 					Str("variant", selectedVariant).
 					Str("format", format).
 					Str("path", picturePath).
-					Msg("found picture for system")
+					Msg("found tty2oled picture")
 				return picturePath, nil
 			}
 		}
 	}
 
-	// No picture found, try to download
-	return pm.downloadPictureForSystem(selectedVariant)
+	return pm.downloadPictureByName(selectedVariant)
 }
 
 // FindPictureOnDisk checks if a picture is immediately available on disk without downloading
 func (pm *PictureManager) FindPictureOnDisk(systemID string) (string, bool) {
-	log.Debug().Str("system", systemID).Msg("FindPictureOnDisk: starting")
-
 	if systemID == "" {
 		return "", false
 	}
 
-	// Map system ID to picture name
-	log.Debug().Str("system", systemID).Msg("FindPictureOnDisk: mapping system to picture")
 	pictureName := mapSystemToPicture(systemID)
-	log.Debug().Str("system", systemID).Str("picture", pictureName).Msg("FindPictureOnDisk: mapped to picture")
 	if pictureName == "" {
 		log.Debug().Str("system", systemID).Msg("no picture mapping available for system")
 		return "", false
 	}
 
-	// Select variant (base or alternative) - same selection logic as GetPictureForSystem
-	log.Debug().Str("system", systemID).Str("picture", pictureName).Msg("FindPictureOnDisk: selecting variant")
-	selectedVariant := selectPictureVariant(pictureName)
-	log.Debug().
-		Str("system", systemID).
-		Str("selected_variant", selectedVariant).
-		Msg("FindPictureOnDisk: variant selected")
+	return pm.findPictureByNameOnDisk(pictureName)
+}
 
-	// Ensure cache directory exists
+func (pm *PictureManager) findPictureByNameOnDisk(pictureName string) (string, bool) {
+	if err := validatePictureName(pictureName); err != nil {
+		return "", false
+	}
+
+	selectedVariant := selectPictureVariant(pictureName)
 	if err := pm.ensureCacheDir(); err != nil {
 		return "", false
 	}
 
-	// Try to find picture in order of preference
 	for _, format := range PictureFormats {
 		picturePath, err := pm.findPicture(selectedVariant, format)
 		if err == nil && picturePath != "" {
-			// Verify file exists and is readable
 			if _, err := os.Stat(picturePath); err == nil {
 				log.Debug().
-					Str("system", systemID).
+					Str("picture", pictureName).
 					Str("variant", selectedVariant).
 					Str("format", format).
 					Str("path", picturePath).
-					Msg("found picture on disk for system")
+					Msg("found tty2oled picture on disk")
 				return picturePath, true
 			}
 		}
 	}
 
 	return "", false
+}
+
+func validatePictureName(pictureName string) error {
+	if pictureName == "" {
+		return errors.New("empty picture name")
+	}
+	if pictureName == "." || pictureName == ".." || strings.ContainsAny(pictureName, `/\\`) {
+		return fmt.Errorf("invalid picture name: %q", pictureName)
+	}
+	return nil
 }
 
 // findPicture looks for a picture file in the cache directory
@@ -171,9 +174,8 @@ func (pm *PictureManager) findPicture(pictureName, format string) (string, error
 	return "", fmt.Errorf("picture not found: %s in format %s", pictureName, format)
 }
 
-// downloadPictureForSystem attempts to download a picture for the given picture name
-// Note: systemID is now the already-mapped picture name (e.g., "AO486", "Genesis", etc.)
-func (pm *PictureManager) downloadPictureForSystem(pictureName string) (string, error) {
+// downloadPictureByName attempts to download a picture with the exact upstream name.
+func (pm *PictureManager) downloadPictureByName(pictureName string) (string, error) {
 	log.Info().Str("picture", pictureName).Msg("attempting to download picture")
 
 	var lastErr error
