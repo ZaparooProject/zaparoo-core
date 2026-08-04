@@ -54,13 +54,15 @@ func TestPlaytimeBaseURLDefaultPersistence(t *testing.T) {
 
 	assert.Empty(t, BaseDefaults.Playtime.BaseURL)
 	assert.Empty(t, cfg.vals.Playtime.BaseURL)
-	assert.Empty(t, readPersistedPlaytimeBaseURL(t, cfg))
+	_, exists := readPersistedPlaytimeBaseURL(t, cfg)
+	assert.False(t, exists)
 	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
 
 	require.NoError(t, cfg.Save())
 	require.NoError(t, cfg.Load())
 	assert.Empty(t, cfg.vals.Playtime.BaseURL)
-	assert.Empty(t, readPersistedPlaytimeBaseURL(t, cfg))
+	_, exists = readPersistedPlaytimeBaseURL(t, cfg)
+	assert.False(t, exists)
 	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
 }
 
@@ -85,7 +87,8 @@ base_url = %q
 	require.NoError(t, cfg.Save())
 	require.NoError(t, cfg.Load())
 	assert.Empty(t, cfg.vals.Playtime.BaseURL)
-	assert.Empty(t, readPersistedPlaytimeBaseURL(t, cfg))
+	_, exists := readPersistedPlaytimeBaseURL(t, cfg)
+	assert.False(t, exists)
 	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
 }
 
@@ -104,18 +107,30 @@ func TestSetPlaytimeBaseURL(t *testing.T) {
 	require.NoError(t, cfg.Save())
 	require.NoError(t, cfg.Load())
 	assert.Equal(t, "https://playtime.example.com/api", cfg.vals.Playtime.BaseURL)
-	assert.Equal(t, "https://playtime.example.com/api", readPersistedPlaytimeBaseURL(t, cfg))
+	persistedBaseURL, exists := readPersistedPlaytimeBaseURL(t, cfg)
+	assert.True(t, exists)
+	assert.Equal(t, "https://playtime.example.com/api", persistedBaseURL)
 	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
 }
 
-func readPersistedPlaytimeBaseURL(t *testing.T, cfg *Instance) string {
+func readPersistedPlaytimeBaseURL(t *testing.T, cfg *Instance) (string, bool) {
 	t.Helper()
 
 	data, err := afero.ReadFile(cfg.getFs(), cfg.cfgPath)
 	require.NoError(t, err)
-	var values Values
+	var values map[string]any
 	require.NoError(t, toml.Unmarshal(data, &values))
-	return values.Playtime.BaseURL
+	playtime, ok := values["playtime"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	rawBaseURL, exists := playtime["base_url"]
+	if !exists {
+		return "", false
+	}
+	baseURL, ok := rawBaseURL.(string)
+	require.True(t, ok)
+	return baseURL, true
 }
 
 func TestPlaytimeSyncEnabled(t *testing.T) {

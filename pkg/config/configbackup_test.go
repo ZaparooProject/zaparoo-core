@@ -32,14 +32,17 @@ import (
 
 func TestBackupDefaults(t *testing.T) {
 	t.Parallel()
-	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
 	require.NoError(t, err)
 
 	assert.Empty(t, cfg.BackupLocalDir())
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.Empty(t, BaseDefaults.Backup.Remote.BaseURL)
 	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
-	assert.Empty(t, readPersistedBackupBaseURL(t, cfg))
+	_, exists := readPersistedBackupBaseURL(t, cfg)
+	assert.False(t, exists)
 	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
 	assert.Equal(t, DefaultBackupRemoteSchedule, cfg.BackupRemoteSchedule())
 	assert.Equal(t, BackupScopePlatform, cfg.BackupScope())
@@ -47,7 +50,8 @@ func TestBackupDefaults(t *testing.T) {
 	require.NoError(t, cfg.Save())
 	require.NoError(t, cfg.Load())
 	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
-	assert.Empty(t, readPersistedBackupBaseURL(t, cfg))
+	_, exists = readPersistedBackupBaseURL(t, cfg)
+	assert.False(t, exists)
 	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
 }
 
@@ -72,7 +76,8 @@ base_url = %q
 	require.NoError(t, cfg.Save())
 	require.NoError(t, cfg.Load())
 	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
-	assert.Empty(t, readPersistedBackupBaseURL(t, cfg))
+	_, exists := readPersistedBackupBaseURL(t, cfg)
+	assert.False(t, exists)
 	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
 }
 
@@ -147,16 +152,32 @@ func TestSetBackupRemoteBaseURLNormalizes(t *testing.T) {
 	require.NoError(t, cfg.Save())
 	require.NoError(t, cfg.Load())
 	assert.Equal(t, "https://example.com/backups", cfg.vals.Backup.Remote.BaseURL)
-	assert.Equal(t, "https://example.com/backups", readPersistedBackupBaseURL(t, cfg))
+	persistedBaseURL, exists := readPersistedBackupBaseURL(t, cfg)
+	assert.True(t, exists)
+	assert.Equal(t, "https://example.com/backups", persistedBaseURL)
 	assert.Equal(t, "https://example.com/backups", cfg.BackupRemoteBaseURL())
 }
 
-func readPersistedBackupBaseURL(t *testing.T, cfg *Instance) string {
+func readPersistedBackupBaseURL(t *testing.T, cfg *Instance) (string, bool) {
 	t.Helper()
 
 	data, err := afero.ReadFile(cfg.getFs(), cfg.cfgPath)
 	require.NoError(t, err)
-	var values Values
+	var values map[string]any
 	require.NoError(t, toml.Unmarshal(data, &values))
-	return values.Backup.Remote.BaseURL
+	backup, ok := values["backup"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	remote, ok := backup["remote"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	rawBaseURL, exists := remote["base_url"]
+	if !exists {
+		return "", false
+	}
+	baseURL, ok := rawBaseURL.(string)
+	require.True(t, ok)
+	return baseURL, true
 }
