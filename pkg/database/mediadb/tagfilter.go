@@ -75,7 +75,7 @@ func expandCreditFilters(filters []zapscript.TagFilter) []zapscript.TagFilter {
 // BuildTagFilterSQL constructs SQL WHERE clauses and arguments for tag filtering
 // using a hybrid strategy optimized for SQLite performance:
 //   - AND filters: INTERSECT pattern
-//   - NOT filters: NOT EXISTS pattern
+//   - NOT filters: forward NOT IN anti-set
 //   - OR filters: EXISTS with OR conditions
 //
 // Returns a slice of WHERE clause strings and corresponding arguments.
@@ -161,22 +161,22 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 		args = append(args, val, devType, pubType, credType, val, devType, pubType, credType)
 	}
 
-	// Build NOT EXISTS clauses for NOT filters
-	// Each NOT filter excludes media that has the specified tag at either level
+	// Build forward anti-set clauses for NOT filters. Resolving matching media IDs
+	// once lets SQLite use the reverse tag indexes instead of repeating correlated
+	// tag joins for every candidate media row.
 	for _, f := range notFilters {
 		typ, val := resolveFilter(f.Type, f.Value)
-		clause := `NOT EXISTS (
-			SELECT 1 FROM MediaTags
+		clause := `Media.DBID NOT IN (
+			SELECT MediaDBID FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE MediaTags.MediaDBID = Media.DBID
-			AND TagTypes.Type = ? AND Tags.Tag = ?
-		) AND NOT EXISTS (
-			SELECT 1 FROM MediaTitleTags
-			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			UNION ALL
+			SELECT m.DBID AS MediaDBID FROM Media m
+			JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags ON mtt.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
-			AND TagTypes.Type = ? AND Tags.Tag = ?
+			WHERE TagTypes.Type = ? AND Tags.Tag = ?
 		)`
 		clauses = append(clauses, clause)
 		args = append(args, typ, val, typ, val)
