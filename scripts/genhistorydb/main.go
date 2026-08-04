@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -55,6 +56,11 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// missingMediaRoot is the device-side games root fabricated paths hang off.
+// Built with path.Join, never filepath.Join: these are target-device paths and
+// must keep Linux separators even when generated on another OS.
+const missingMediaRoot = "/media/fat/games"
 
 // say prints progress to stdout; a dev tool ignores print errors.
 func say(format string, a ...any) {
@@ -89,6 +95,20 @@ func run(
 	out string, rows int, mediaDBPath string,
 	resolvable, noUUID float64, spanDays int, seed int64,
 ) error {
+	// Checked before anything is generated: a non-positive span panics in
+	// rng.Intn, and out-of-range fractions silently produce a mix nobody asked
+	// for after minutes of writing rows.
+	switch {
+	case rows < 0:
+		return fmt.Errorf("-rows must not be negative, got %d", rows)
+	case spanDays < 1:
+		return fmt.Errorf("-span-days must be at least 1, got %d", spanDays)
+	case resolvable < 0 || resolvable > 1:
+		return fmt.Errorf("-resolvable must be a fraction between 0 and 1, got %g", resolvable)
+	case noUUID < 0 || noUUID > 1:
+		return fmt.Errorf("-nouuid must be a fraction between 0 and 1, got %g", noUUID)
+	}
+
 	rng := rand.New(rand.NewSource(seed)) //nolint:gosec // Deterministic test data, not crypto.
 
 	absOut, err := filepath.Abs(out)
@@ -143,10 +163,11 @@ func run(
 			resolvableRows++
 		} else {
 			system := systems[rng.Intn(len(systems))]
+			name := fmt.Sprintf("Missing Game %06d", i)
 			ref = mediaRef{
 				systemID: system,
-				path:     fmt.Sprintf("/media/fat/games/%s/Missing Game %06d.bin", system, i),
-				name:     fmt.Sprintf("Missing Game %06d", i),
+				path:     path.Join(missingMediaRoot, system, name+".bin"),
+				name:     name,
 			}
 			unresolvableRows++
 		}
@@ -207,8 +228,8 @@ func run(
 // loadIndexedMedia reads (system, path, name) for every present media entry.
 // Read-only access to a copy of the device's media.db; the query mirrors the
 // join used by SearchMediaPathExact so sampled rows resolve identically.
-func loadIndexedMedia(path string) ([]mediaRef, error) {
-	mdb, err := sql.Open("sqlite3", "file:"+path+"?mode=ro")
+func loadIndexedMedia(dbPath string) ([]mediaRef, error) {
+	mdb, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open media db: %w", err)
 	}
