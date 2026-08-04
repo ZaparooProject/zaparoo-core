@@ -753,6 +753,89 @@ func TestMediaDB_RandomGameWithQuery_PathPrefixIntegration(t *testing.T) {
 	assert.Equal(t, matchingMediaID, result.MediaID)
 }
 
+func TestMediaDB_RandomGameWithQuery_NegativeTagIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+
+	europeFilePath := filepath.Join("roms", "nes", "europe-file.nes")
+	europeTitlePath := filepath.Join("roms", "nes", "europe-title.nes")
+	untaggedPath := filepath.Join("roms", "nes", "untagged.nes")
+	var europeTitleID int64
+	for i, game := range []struct {
+		path           string
+		europeFileTag  bool
+		europeTitleTag bool
+	}{
+		{path: europeFilePath, europeFileTag: true},
+		{path: europeTitlePath, europeTitleTag: true},
+		{path: untaggedPath},
+	} {
+		name := fmt.Sprintf("Game %d", i+1)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, name),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		insertedMedia, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSystem.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           game.path,
+		})
+		require.NoError(t, mediaErr)
+		if game.europeTitleTag {
+			europeTitleID = insertedTitle.DBID
+		}
+		if !game.europeFileTag {
+			continue
+		}
+		europeTag, tagErr := mediaDB.FindOrInsertTag(database.Tag{
+			TypeDBID: regionTagType.DBID,
+			Tag:      "eu",
+		})
+		require.NoError(t, tagErr)
+		_, tagErr = mediaDB.InsertMediaTag(database.MediaTag{
+			MediaDBID: insertedMedia.DBID,
+			TagDBID:   europeTag.DBID,
+		})
+		require.NoError(t, tagErr)
+	}
+
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(context.Background(), europeTitleID, []database.TagInfo{{
+		Type: "region",
+		Tag:  "eu",
+	}}))
+
+	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+		Systems: []string{nesSystem.ID},
+		Tags: []zapscript.TagFilter{{
+			Type:     "region",
+			Value:    "eu",
+			Operator: zapscript.TagOperatorNOT,
+		}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, nesSystem.ID, result.SystemID)
+	assert.Equal(t, untaggedPath, result.Path)
+}
+
 func TestMediaDB_LookupsRespectCanceledContext(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

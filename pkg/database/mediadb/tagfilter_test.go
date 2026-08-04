@@ -103,10 +103,13 @@ func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 		require.Len(t, clauses, 1)
 		require.Len(t, args, 4) // 1 filter * 4 args (MediaTags + MediaTitleTags)
 
-		// Should use NOT EXISTS pattern for both tag sources
-		assert.Contains(t, clauses[0], "NOT EXISTS (")
-		assert.Contains(t, clauses[0], "MediaTags.MediaDBID = Media.DBID")
-		assert.Contains(t, clauses[0], "MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID")
+		// Should build one indexed anti-set across both tag sources.
+		assert.Contains(t, clauses[0], "Media.DBID NOT IN (")
+		assert.Contains(t, clauses[0], "SELECT MediaDBID FROM MediaTags")
+		assert.Contains(t, clauses[0], "SELECT m.DBID AS MediaDBID FROM Media m")
+		assert.Contains(t, clauses[0], "JOIN MediaTitleTags")
+		assert.Contains(t, clauses[0], "UNION ALL")
+		assert.NotContains(t, clauses[0], "NOT EXISTS")
 		assert.Equal(t, "unfinished", args[0])
 		assert.Equal(t, "demo", args[1])
 		assert.Equal(t, "unfinished", args[2])
@@ -123,9 +126,9 @@ func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 		require.Len(t, clauses, 2) // Each NOT filter gets its own clause
 		require.Len(t, args, 8)    // 2 filters * 4 args each
 
-		// Both should use NOT EXISTS for both tag sources
-		assert.Contains(t, clauses[0], "NOT EXISTS")
-		assert.Contains(t, clauses[1], "NOT EXISTS")
+		// Both should build independent anti-sets across both tag sources.
+		assert.Contains(t, clauses[0], "Media.DBID NOT IN (")
+		assert.Contains(t, clauses[1], "Media.DBID NOT IN (")
 	})
 }
 
@@ -176,8 +179,8 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 		// First clause should be INTERSECT (or IN for single)
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
 
-		// Second clause should be NOT EXISTS
-		assert.Contains(t, clauses[1], "NOT EXISTS")
+		// Second clause should be a forward anti-set.
+		assert.Contains(t, clauses[1], "Media.DBID NOT IN (")
 	})
 
 	t.Run("AND + OR", func(t *testing.T) {
@@ -209,8 +212,8 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 		require.Len(t, clauses, 2) // One for NOT, one for OR group
 		require.Len(t, args, 12)   // 1 NOT*4 + 2 OR*4
 
-		// First clause should be NOT EXISTS
-		assert.Contains(t, clauses[0], "NOT EXISTS")
+		// First clause should be a forward anti-set.
+		assert.Contains(t, clauses[0], "Media.DBID NOT IN (")
 
 		// Second clause should be EXISTS with OR
 		assert.Contains(t, clauses[1], "EXISTS (")
@@ -234,9 +237,9 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
 		assert.Contains(t, clauses[0], "INTERSECT")
 
-		// Next two clauses: NOT EXISTS
-		assert.Contains(t, clauses[1], "NOT EXISTS")
-		assert.Contains(t, clauses[2], "NOT EXISTS")
+		// Next two clauses: forward anti-sets.
+		assert.Contains(t, clauses[1], "Media.DBID NOT IN (")
+		assert.Contains(t, clauses[2], "Media.DBID NOT IN (")
 
 		// Last clause: EXISTS with OR
 		assert.Contains(t, clauses[3], "EXISTS (")
@@ -537,7 +540,7 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 		assert.Contains(t, clauses[0], "MediaTitleTags")
 	})
 
-	t.Run("NOT filters use NOT EXISTS pattern with both tag sources", func(t *testing.T) {
+	t.Run("NOT filters use indexed anti-set with both tag sources", func(t *testing.T) {
 		filters := []zapscript.TagFilter{
 			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 		}
@@ -545,10 +548,10 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 		clauses, _ := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
 
-		// Should contain NOT EXISTS for both MediaTags and MediaTitleTags
-		assert.Contains(t, clauses[0], "NOT EXISTS")
-		assert.Contains(t, clauses[0], "MediaTags.MediaDBID = Media.DBID")
-		assert.Contains(t, clauses[0], "MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID")
+		assert.Contains(t, clauses[0], "Media.DBID NOT IN (")
+		assert.Contains(t, clauses[0], "SELECT MediaDBID FROM MediaTags")
+		assert.Contains(t, clauses[0], "JOIN MediaTitleTags")
+		assert.NotContains(t, clauses[0], "NOT EXISTS")
 	})
 
 	t.Run("OR filters use EXISTS with OR pattern for both tag sources", func(t *testing.T) {
