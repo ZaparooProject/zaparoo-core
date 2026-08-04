@@ -82,10 +82,28 @@ func watchMediaHistoryBackfillAtInterval(
 		return
 	}
 
-	// UUID assignment is UserDB-only, one cheap idempotent transaction, and
-	// rows without a UUID are ineligible for sync — run it before any sweep.
-	if backfilled := backfillMediaHistoryUUIDs(db.UserDB); backfilled > 0 && requestPlaySync != nil {
-		requestPlaySync()
+	// UUID assignment is UserDB-only, one idempotent transaction, and rows
+	// without a UUID are ineligible for sync — ensure it before every sweep,
+	// retrying until one clean success. It must NOT run at watcher start:
+	// that lands in the boot burst, where it systematically loses a write
+	// race against the idle scheduler's history-retention cleanup (observed
+	// on MiSTer: "database is locked" after the full busy timeout), and a
+	// single boot-time attempt would then leave UUID-less rows unsyncable
+	// until the next restart. Deferring to the first trigger sidesteps the
+	// boot window; retrying converts any remaining loss into a bounded delay.
+	uuidBackfillDone := false
+	ensureUUIDBackfill := func() {
+		if uuidBackfillDone {
+			return
+		}
+		backfilled, err := backfillMediaHistoryUUIDs(db.UserDB)
+		if err != nil {
+			return
+		}
+		uuidBackfillDone = true
+		if backfilled > 0 && requestPlaySync != nil {
+			requestPlaySync()
+		}
 	}
 
 	notifChan, subID := b.Subscribe(32, models.NotificationMediaIndexing)
@@ -100,15 +118,14 @@ func watchMediaHistoryBackfillAtInterval(
 		case <-ctx.Done():
 			return
 		case <-startupTimer.C:
-			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 		case _, ok := <-notifChan:
 			if !ok {
 				return
 			}
-			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 		case <-ticker.C:
-			runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 		}
+		ensureUUIDBackfill()
+		runMediaHistoryIdentitySweep(ctx, db, pauser, requestPlaySync, batchDelay, mediaIdentityRetryDelays)
 	}
 }
 
@@ -181,7 +198,7 @@ func runMediaHistoryIdentitySweep(
 
 	log.Info().Str("marker", marker).Msg("starting media history identity sweep")
 	var afterDBID int64
-	var updatedRows, skippedRows int
+	var updatedRows, skippedRows, batches int
 	// Enriched rows already have SyncedAt cleared, so an abort after one or
 	// more successful updates must still request a play sync on the way out —
 	// otherwise those rows wait for the next unrelated sync trigger. The
@@ -260,6 +277,14 @@ func runMediaHistoryIdentitySweep(
 			}
 		}
 		flushPlaySync()
+		// A large legacy history sweeps for the better part of an hour on
+		// device-class hardware (deliberately trickled); periodic progress
+		// keeps it distinguishable from a hang.
+		batches++
+		if batches%50 == 0 {
+			log.Info().Int64("cursor", afterDBID).Int("updated", updatedRows).
+				Int("unresolved", skippedRows).Msg("media history identity sweep progress")
+		}
 		if len(batch) < mediaHistoryIdentityBackfillBatchSize {
 			break
 		}

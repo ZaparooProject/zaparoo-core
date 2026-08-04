@@ -32,12 +32,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBackfillMediaHistoryUUIDsAtStartup(t *testing.T) {
+func TestBackfillMediaHistoryUUIDs(t *testing.T) {
 	t.Parallel()
 	userDB := testhelpers.NewMockUserDBI()
 	userDB.On("BackfillMediaHistoryUUIDs").Return(int64(3), nil).Once()
 
-	assert.Equal(t, int64(3), backfillMediaHistoryUUIDs(userDB))
+	backfilled, err := backfillMediaHistoryUUIDs(userDB)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), backfilled)
 
 	userDB.AssertExpectations(t)
 }

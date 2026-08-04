@@ -340,3 +340,63 @@ func TestWatchMediaHistoryBackfill_StartupSweepAndUUIDBackfillSync(t *testing.T)
 		t.Fatal("watcher did not exit after context cancellation")
 	}
 }
+
+func TestWatchMediaHistoryBackfill_RetriesUUIDBackfillUntilSuccess(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	// First attempt loses a write race (observed on device: retention cleanup
+	// holds the lock during the boot window); the next trigger must retry
+	// rather than leaving UUID-less rows unsyncable until a restart.
+	userDB.On("BackfillMediaHistoryUUIDs").
+		Return(int64(0), errors.New("database is locked")).Once()
+	userDB.On("BackfillMediaHistoryUUIDs").Return(int64(5), nil).Once()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	// Marker current: sweeps are cheap no-ops so the test isolates the
+	// UUID backfill behavior.
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return(mediaHistoryIdentitySweepMarker(mediaDB), true, nil)
+	syncRequests := make(chan struct{}, 4)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	source := make(chan models.Notification, 10)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	done := make(chan struct{})
+	go func() {
+		watchMediaHistoryBackfillAtInterval(
+			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			nil, func() { syncRequests <- struct{}{} }, time.Hour, time.Hour, 0,
+		)
+		close(done)
+	}()
+
+	// Publish triggers until the retry succeeds and requests the upload of
+	// the newly UUID-assigned rows.
+	require.Eventually(t, func() bool {
+		select {
+		case source <- models.Notification{Method: models.NotificationMediaIndexing}:
+		default:
+		}
+		select {
+		case <-syncRequests:
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not exit after context cancellation")
+	}
+	userDB.AssertExpectations(t)
+	assert.Empty(t, syncRequests,
+		"exactly one sync request: the succeeded backfill must not re-run on later triggers")
+}

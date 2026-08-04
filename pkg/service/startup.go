@@ -124,10 +124,11 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 }
 
 // backfillMediaHistoryUUIDs assigns stable IDs to history written by older
-// versions. Best-effort and idempotent: failure is retried at next startup.
-func backfillMediaHistoryUUIDs(userDB database.UserDBI) int64 {
+// versions. Idempotent; the caller retries on error (the backfill watcher
+// re-attempts on every sweep trigger until one clean success).
+func backfillMediaHistoryUUIDs(userDB database.UserDBI) (int64, error) {
 	if userDB == nil {
-		return 0
+		return 0, nil
 	}
 
 	startedAt := time.Now()
@@ -135,15 +136,15 @@ func backfillMediaHistoryUUIDs(userDB database.UserDBI) int64 {
 	duration := time.Since(startedAt)
 	if err != nil {
 		log.Error().Err(err).Dur("duration", duration).Msg("failed to backfill media history UUIDs")
-		return 0
+		return 0, fmt.Errorf("backfill media history UUIDs: %w", err)
 	}
 	if backfilled > 0 {
 		log.Info().Int64("backfilled", backfilled).Dur("duration", duration).
 			Msg("backfilled media history UUIDs")
-		return backfilled
+		return backfilled, nil
 	}
 	log.Debug().Dur("duration", duration).Msg("media history UUID backfill completed")
-	return 0
+	return 0, nil
 }
 
 // backfillMediaUserData seeds UserDB from favourites/launcher overrides that older
