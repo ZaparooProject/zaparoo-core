@@ -66,7 +66,7 @@ func TestShouldDisableZapScriptInMainTUI(t *testing.T) {
 	})
 }
 
-func TestBuildMainAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
+func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
 	originalDisableZapScript := disableZapScript
 	t.Cleanup(func() {
 		disableZapScript = originalDisableZapScript
@@ -91,7 +91,7 @@ func TestBuildMainAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
 				}
 			}
 
-			err := BuildMainAndRetry(cfg, pl, func() (*tview.Application, error) {
+			err := BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
 				assert.Equal(t, shouldDisable, disabled)
 				return nil, buildErr
 			})
@@ -103,7 +103,7 @@ func TestBuildMainAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
 	}
 }
 
-func TestBuildMainAndRetry_RestoresZapScriptAfterSuccessfulRun(t *testing.T) {
+func TestBuildAndRetry_RestoresZapScriptAfterSuccessfulRun(t *testing.T) {
 	originalDisableZapScript := disableZapScript
 	t.Cleanup(func() {
 		disableZapScript = originalDisableZapScript
@@ -143,12 +143,30 @@ func TestBuildMainAndRetry_RestoresZapScriptAfterSuccessfulRun(t *testing.T) {
 		app.Stop()
 	}()
 
-	require.NoError(t, BuildMainAndRetry(cfg, pl, func() (*tview.Application, error) {
+	require.NoError(t, BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
 		assert.True(t, disabled, "ZapScript must be disabled before building main TUI")
 		return app, nil
 	}))
 	assert.False(t, disabled, "ZapScript must be restored after main TUI exits")
 	pl.AssertExpectations(t)
+}
+
+func TestBuildWidgetAndRetry_DoesNotDisableZapScript(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	disableZapScript = func(*config.Instance) func() {
+		t.Fatal("utility widget must not disable ZapScript")
+		return func() {}
+	}
+
+	buildErr := errors.New("build failed")
+	err := BuildWidgetAndRetry(func() (*tview.Application, error) {
+		return nil, buildErr
+	})
+	require.ErrorIs(t, err, buildErr)
 }
 
 func TestCenterWidget(t *testing.T) {

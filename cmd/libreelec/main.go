@@ -99,7 +99,7 @@ func run() error {
 	}
 
 	// display main info gui
-	err = tui.BuildMainAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
 		logDestinationPath := path.Join("/storage", config.LogFile)
 		isRunning := func() bool {
 			running, runningErr := svc.Running()

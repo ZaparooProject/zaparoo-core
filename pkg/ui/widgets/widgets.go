@@ -329,7 +329,7 @@ func buildNoticeUI(
 
 // NoticeUI displays a message with an optional loading spinner.
 func NoticeUI(cfg *config.Instance, pl platforms.Platform, argsPath string, loader bool) error {
-	return runNoticeUI(cfg, pl, argsPath, loader, tui.BuildAndRetry)
+	return runNoticeUI(cfg, pl, argsPath, loader, tui.BuildWidgetAndRetry)
 }
 
 func runNoticeUI(
@@ -576,7 +576,7 @@ func buildPickerUI(
 
 // PickerUI displays a list picker of ZapScript commands to run.
 func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
-	return runPickerUI(cfg, pl, argsPath, tui.BuildAndRetry)
+	return runPickerUI(cfg, pl, argsPath, tui.BuildWidgetAndRetry)
 }
 
 func runPickerUI(
