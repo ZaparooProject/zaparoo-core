@@ -914,10 +914,11 @@ type MediaDBI interface {
 	NoteCorruption(err error) bool
 	Recreate(keepBackup bool) error
 
-	// On-disk persistence for the rebuilt caches. Persist* writes the
-	// current in-memory cache atomically; LoadCached* reads it back at
-	// startup and returns (false, nil) on missing/stale/version-mismatch
-	// so the caller can fall through to a SQL rebuild.
+	// On-disk persistence for rebuilt caches. Persist* writes the current
+	// in-memory cache atomically; LoadCached* reads it back at startup and
+	// returns (false, nil) when a SQL rebuild is still required. A valid
+	// selective slug cache may be installed while returning false so covered
+	// systems remain searchable during the complete rebuild.
 	PersistTagCache() error
 	LoadCachedTagCache() (bool, error)
 	PersistSlugSearchCache() error

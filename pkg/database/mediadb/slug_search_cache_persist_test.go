@@ -110,6 +110,31 @@ func TestPersistAndLoadSlugSearchCache_RoundTrip(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestLoadCachedSlugSearchCache_IncompleteCacheRequestsRebuild(t *testing.T) {
+	t.Parallel()
+	mediaDB, mock, _ := newPersistTestDB(t)
+
+	selective := fakeSlugCache()
+	selective.complete = false
+	mediaDB.slugSearchCache.Store(selective)
+
+	expectIndexGenerationReadOnce(t, mock, 42)
+	require.NoError(t, mediaDB.PersistSlugSearchCache())
+
+	mediaDB.slugSearchCache.Store(nil)
+
+	expectIndexGenerationReadOnce(t, mock, 42)
+	complete, err := mediaDB.LoadCachedSlugSearchCache()
+	require.NoError(t, err)
+	assert.False(t, complete, "selective cache should request a complete startup rebuild")
+
+	loaded := mediaDB.slugSearchCache.Load()
+	require.NotNil(t, loaded, "selective cache should remain available during the rebuild")
+	assert.False(t, loaded.complete)
+	assert.True(t, loaded.CanServeSystems([]string{"nes"}))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestLoadCachedSlugSearchCache_GenerationMismatch(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, _ := newPersistTestDB(t)
