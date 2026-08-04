@@ -92,6 +92,30 @@ func TestHandleStopWaitsForLaunchAndMediaReadiness(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestHandleStopCanceledWhileLaunchInFlight(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	defer st.StopService()
+
+	releaseLaunch, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	defer releaseLaunch()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	value, err := HandleStop(requests.RequestEnv{
+		Context:  ctx,
+		Platform: mockPlatform,
+		State:    st,
+	})
+
+	assert.Nil(t, value)
+	require.ErrorIs(t, err, context.Canceled)
+	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForMenu)
+}
+
 func TestHandleStopWithoutActiveMedia(t *testing.T) {
 	t.Parallel()
 

@@ -159,6 +159,11 @@ func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
 
 	releaseLaunch, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
+	defer func() {
+		if releaseLaunch != nil {
+			releaseLaunch()
+		}
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -166,11 +171,33 @@ func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
 	assert.Nil(t, releaseStop)
 	require.ErrorIs(t, err, context.Canceled)
 
+	replacementResult := make(chan struct {
+		release func()
+		err     error
+	}, 1)
+	go func() {
+		release, acquireErr := st.AcquireMediaLaunch()
+		replacementResult <- struct {
+			release func()
+			err     error
+		}{release: release, err: acquireErr}
+	}()
+
+	select {
+	case result := <-replacementResult:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.release)
+		result.release()
+	case <-time.After(time.Second):
+		t.Fatal("canceled media stop kept a replacement launch blocked")
+	}
+
 	releaseLaunch()
+	releaseLaunch = nil
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
 	defer cleanupCancel()
 	releaseStop, err = st.AcquireMediaStop(cleanupCtx)
-	require.NoError(t, err, "canceled waiter must release the stop gate after the launch finishes")
+	require.NoError(t, err)
 	releaseStop()
 }
 

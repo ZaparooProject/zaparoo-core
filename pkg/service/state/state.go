@@ -525,23 +525,28 @@ func (s *State) AcquireMediaLaunch() (func(), error) {
 // AcquireMediaStop waits for in-flight media launches, then prevents another
 // launch from starting until the returned release function is called.
 func (s *State) AcquireMediaStop(ctx context.Context) (func(), error) {
-	acquired := make(chan struct{})
-	abandoned := make(chan struct{})
-	go func() {
-		s.mediaLaunchMu.Lock()
-		select {
-		case acquired <- struct{}{}:
-		case <-abandoned:
-			s.mediaLaunchMu.Unlock()
-		}
-	}()
+	const retryInterval = 5 * time.Millisecond
 
-	select {
-	case <-acquired:
-		return s.mediaLaunchMu.Unlock, nil
-	case <-ctx.Done():
-		close(abandoned)
-		return nil, ctx.Err()
+	retry := time.NewTicker(retryInterval)
+	defer retry.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		// TryLock avoids registering a writer that would keep blocking new
+		// launches after this request is canceled.
+		if s.mediaLaunchMu.TryLock() {
+			return s.mediaLaunchMu.Unlock, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-retry.C:
+		}
 	}
 }
 
