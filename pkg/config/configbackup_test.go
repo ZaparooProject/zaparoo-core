@@ -20,8 +20,12 @@
 package config
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 
+	toml "github.com/pelletier/go-toml/v2"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,9 +37,43 @@ func TestBackupDefaults(t *testing.T) {
 
 	assert.Empty(t, cfg.BackupLocalDir())
 	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.Empty(t, BaseDefaults.Backup.Remote.BaseURL)
+	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
+	assert.Empty(t, readPersistedBackupBaseURL(t, cfg))
 	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
 	assert.Equal(t, DefaultBackupRemoteSchedule, cfg.BackupRemoteSchedule())
 	assert.Equal(t, BackupScopePlatform, cfg.BackupScope())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
+	assert.Empty(t, readPersistedBackupBaseURL(t, cfg))
+	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
+}
+
+func TestBackupRemoteBaseURLMigratesLegacyDefault(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	configDir := t.TempDir()
+	require.NoError(t, fs.MkdirAll(configDir, 0o750))
+	legacyConfig := fmt.Sprintf(`config_schema = %d
+
+[backup.remote]
+base_url = %q
+`, SchemaVersion, DefaultBackupRemoteBaseURL)
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(configDir, CfgFile), []byte(legacyConfig), 0o600))
+
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, fs)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
+	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	assert.Empty(t, cfg.vals.Backup.Remote.BaseURL)
+	assert.Empty(t, readPersistedBackupBaseURL(t, cfg))
+	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
 }
 
 func TestBackupScope(t *testing.T) {
@@ -105,4 +143,20 @@ func TestSetBackupRemoteBaseURLNormalizes(t *testing.T) {
 
 	require.NoError(t, cfg.SetBackupRemoteBaseURL("https://example.com/backups/"))
 	assert.Equal(t, "https://example.com/backups", cfg.BackupRemoteBaseURL())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	assert.Equal(t, "https://example.com/backups", cfg.vals.Backup.Remote.BaseURL)
+	assert.Equal(t, "https://example.com/backups", readPersistedBackupBaseURL(t, cfg))
+	assert.Equal(t, "https://example.com/backups", cfg.BackupRemoteBaseURL())
+}
+
+func readPersistedBackupBaseURL(t *testing.T, cfg *Instance) string {
+	t.Helper()
+
+	data, err := afero.ReadFile(cfg.getFs(), cfg.cfgPath)
+	require.NoError(t, err)
+	var values Values
+	require.NoError(t, toml.Unmarshal(data, &values))
+	return values.Backup.Remote.BaseURL
 }

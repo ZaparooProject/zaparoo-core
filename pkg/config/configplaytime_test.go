@@ -20,9 +20,13 @@
 package config
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
+	toml "github.com/pelletier/go-toml/v2"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,22 +35,87 @@ func TestPlaytimeBaseURL(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
+	assert.Empty(t, cfg.vals.Playtime.BaseURL)
 	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
 
 	require.NoError(t, cfg.LoadTOML(`[playtime]
 base_url = "https://playtime.example.com/api"
 `))
+	assert.Equal(t, "https://playtime.example.com/api", cfg.vals.Playtime.BaseURL)
 	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
+}
+
+func TestPlaytimeBaseURLDefaultPersistence(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
+	require.NoError(t, err)
+
+	assert.Empty(t, BaseDefaults.Playtime.BaseURL)
+	assert.Empty(t, cfg.vals.Playtime.BaseURL)
+	assert.Empty(t, readPersistedPlaytimeBaseURL(t, cfg))
+	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	assert.Empty(t, cfg.vals.Playtime.BaseURL)
+	assert.Empty(t, readPersistedPlaytimeBaseURL(t, cfg))
+	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
+}
+
+func TestPlaytimeBaseURLMigratesLegacyDefault(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	configDir := t.TempDir()
+	require.NoError(t, fs.MkdirAll(configDir, 0o750))
+	legacyConfig := fmt.Sprintf(`config_schema = %d
+
+[playtime]
+base_url = %q
+`, SchemaVersion, DefaultPlaytimeBaseURL)
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(configDir, CfgFile), []byte(legacyConfig), 0o600))
+
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, fs)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.vals.Playtime.BaseURL)
+	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	assert.Empty(t, cfg.vals.Playtime.BaseURL)
+	assert.Empty(t, readPersistedPlaytimeBaseURL(t, cfg))
+	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
 }
 
 func TestSetPlaytimeBaseURL(t *testing.T) {
 	t.Parallel()
 
-	cfg := &Instance{}
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
+	require.NoError(t, err)
+
 	require.NoError(t, cfg.SetPlaytimeBaseURL("https://playtime.example.com/api/"))
 	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
 	require.Error(t, cfg.SetPlaytimeBaseURL("http://example.com"))
 	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+	assert.Equal(t, "https://playtime.example.com/api", cfg.vals.Playtime.BaseURL)
+	assert.Equal(t, "https://playtime.example.com/api", readPersistedPlaytimeBaseURL(t, cfg))
+	assert.Equal(t, "https://playtime.example.com/api", cfg.PlaytimeBaseURL())
+}
+
+func readPersistedPlaytimeBaseURL(t *testing.T, cfg *Instance) string {
+	t.Helper()
+
+	data, err := afero.ReadFile(cfg.getFs(), cfg.cfgPath)
+	require.NoError(t, err)
+	var values Values
+	require.NoError(t, toml.Unmarshal(data, &values))
+	return values.Playtime.BaseURL
 }
 
 func TestPlaytimeSyncEnabled(t *testing.T) {
