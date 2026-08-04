@@ -576,6 +576,46 @@ func TestScanBehavior_HoldImmediate_ManualExitThenRemoveNoReload(t *testing.T) {
 // Hold mode delayed tests
 // ============================================================================
 
+func TestScanBehavior_HoldDelayedOnRemove_ReinsertCancelsHookWithoutRelaunch(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**delay:10s||**input.keyboard:{escape}'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.sendRemoval()
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForActiveCard(t, "game1")
+
+	env.expectNoLaunch(t)
+	env.expectNoStop(t)
+	select {
+	case key := <-env.keyboardCh:
+		t.Fatalf("unexpected delayed on_remove keyboard command: %s", key)
+	case <-time.After(noEventWait):
+	}
+}
+
+func TestScanBehavior_HoldDelayedOnRemove_AbsentTokenCompletesHookAndExit(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**delay:10||**input.keyboard:{escape}'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.sendRemoval()
+	require.Equal(t, "{escape}", env.waitForKeyboard(t))
+	env.waitForStop(t)
+}
+
 func TestScanBehavior_HoldDelayed_RemovalClosesAfterDelay(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)

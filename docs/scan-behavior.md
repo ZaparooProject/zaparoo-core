@@ -35,6 +35,7 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is l
 
 - [ ] Removing the card from the reader will close the game after **N seconds**.
 - [ ] Removing the card and reinserting it before the N-second countdown ends will not interrupt the ongoing game.
+- [ ] When `on_remove` contains a `delay` command, reinserting the removed card during that delay cancels the remaining hook commands without relaunching the game.
 - [ ] Removing the card and tapping a different game card will immediately launch the other game.
 - [ ] Removing the launch card and tapping a command card will execute the command without resetting or transferring the countdown. Removing the command card will not trigger another exit.
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
