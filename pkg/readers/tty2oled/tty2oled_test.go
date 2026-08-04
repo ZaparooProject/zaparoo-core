@@ -34,6 +34,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type pictureNameMockPlatform struct {
+	*mocks.MockPlatform
+	pictureName string
+}
+
+func (p *pictureNameMockPlatform) TTY2OLEDPictureName(*models.ActiveMedia) string {
+	return p.pictureName
+}
+
 func TestNewReader(t *testing.T) {
 	t.Parallel()
 
@@ -52,6 +61,32 @@ func TestNewReader(t *testing.T) {
 	assert.NotNil(t, reader.pictureManager)
 	assert.NotNil(t, reader.operationQueue)
 	assert.Equal(t, StateDisconnected, reader.stateManager.GetState())
+}
+
+func TestPictureNamesForMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	reader := &Reader{
+		platform: &pictureNameMockPlatform{
+			MockPlatform: mockPlatform,
+			pictureName:  "bubbles",
+		},
+	}
+
+	pictureNames := reader.pictureNamesForMedia(&models.ActiveMedia{SystemID: "Arcade"})
+
+	assert.Equal(t, []string{"bubbles", "Arcade"}, pictureNames)
+}
+
+func TestPictureNamesForMediaWithoutPlatformOverride(t *testing.T) {
+	t.Parallel()
+
+	reader := &Reader{}
+
+	pictureNames := reader.pictureNamesForMedia(&models.ActiveMedia{SystemID: "NES"})
+
+	assert.Equal(t, []string{"NES"}, pictureNames)
 }
 
 func TestMetadata(t *testing.T) {

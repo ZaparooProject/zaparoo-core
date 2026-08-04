@@ -37,6 +37,7 @@ func TestMapSystemToPicture(t *testing.T) {
 		{"SNES", "SNES"},
 		{"PSX", "PSX"},
 		{"Dreamcast", "Dreamcast"},
+		{"Arcade", "Arcade"},
 		{"DOS", "AO486"},
 		{"PC", "AO486"},
 		{"AdventureVision", "AVision"},

@@ -83,6 +83,7 @@ var systemToPicture = map[string]string{
 	"PC":              "AO486", // PC games run on AO486 core
 
 	// Additional mappings based on picture repository structure
+	"Arcade":        "Arcade",
 	"Arcadia":       "Arcadia",
 	"Astrocade":     "Astrocade",
 	"ColecoVision":  "ColecoVision",

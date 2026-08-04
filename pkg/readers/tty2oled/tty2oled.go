@@ -49,6 +49,10 @@ type MediaOperation struct {
 	timestamp time.Time
 }
 
+type pictureNameProvider interface {
+	TTY2OLEDPictureName(*models.ActiveMedia) string
+}
+
 // Reader represents a tty2oled display reader
 type Reader struct {
 	port                  serial.Port
@@ -727,6 +731,26 @@ func (r *Reader) clearDisplay() error {
 	return r.sendCommand(CmdClearShow)
 }
 
+func (r *Reader) pictureNamesForMedia(media *models.ActiveMedia) []string {
+	if media == nil {
+		return nil
+	}
+
+	pictureNames := make([]string, 0, 2)
+	if provider, ok := r.platform.(pictureNameProvider); ok {
+		if pictureName := strings.TrimSpace(provider.TTY2OLEDPictureName(media)); pictureName != "" {
+			pictureNames = append(pictureNames, pictureName)
+		}
+	}
+
+	mappedPicture := mapSystemToPicture(media.SystemID)
+	if mappedPicture != "" && (len(pictureNames) == 0 || pictureNames[0] != mappedPicture) {
+		pictureNames = append(pictureNames, mappedPicture)
+	}
+
+	return pictureNames
+}
+
 func (r *Reader) displayMedia(media *models.ActiveMedia) error {
 	if media == nil || media.SystemID == "" {
 		return r.clearDisplay()
@@ -745,46 +769,61 @@ func (r *Reader) displayMedia(media *models.ActiveMedia) error {
 		r.mu.Unlock()
 	}()
 
-	// Check if picture is immediately available on disk (no download delay)
-	log.Debug().Str("system", media.SystemID).Msg("displayMedia: checking picture manager")
 	if r.pictureManager == nil {
 		return errors.New("picture manager is nil")
 	}
 
-	log.Debug().Str("system", media.SystemID).Msg("displayMedia: calling FindPictureOnDisk")
-	picturePath, foundOnDisk := r.pictureManager.FindPictureOnDisk(media.SystemID)
-	if foundOnDisk {
-		log.Debug().
-			Str("system", media.SystemID).
-			Str("path", picturePath).
-			Msg("picture found on disk, replacing text with image")
-		return r.displayPicture(picturePath)
+	pictureNames := r.pictureNamesForMedia(media)
+	fallbackPath := ""
+	fallbackIndex := -1
+	for i, pictureName := range pictureNames {
+		picturePath, foundOnDisk := r.pictureManager.findPictureByNameOnDisk(pictureName)
+		if !foundOnDisk {
+			continue
+		}
+		if i == 0 {
+			log.Debug().
+				Str("system", media.SystemID).
+				Str("picture", pictureName).
+				Str("path", picturePath).
+				Msg("preferred picture found on disk")
+			return r.displayPicture(picturePath)
+		}
+		fallbackPath = picturePath
+		fallbackIndex = i
+		break
 	}
 
-	// Show text immediately for instant feedback
-	if err := r.displaySystemName(media.SystemID); err != nil {
+	if fallbackPath != "" {
+		if err := r.displayPicture(fallbackPath); err != nil {
+			return err
+		}
+	} else if err := r.displaySystemName(media.SystemID); err != nil {
 		return fmt.Errorf("failed to display system name: %w", err)
 	}
 
-	// Try to download picture if not on disk
-	log.Debug().
-		Str("system", media.SystemID).
-		Msg("picture not on disk, attempting download")
-
-	picturePath, err := r.pictureManager.GetPictureForSystem(media.SystemID)
-	if err != nil {
-		log.Info().
+	downloadCount := len(pictureNames)
+	if fallbackIndex >= 0 {
+		downloadCount = fallbackIndex
+	}
+	for _, pictureName := range pictureNames[:downloadCount] {
+		picturePath, err := r.pictureManager.getPictureByName(pictureName)
+		if err != nil {
+			continue
+		}
+		log.Debug().
 			Str("system", media.SystemID).
-			Msg("picture download failed, keeping text display")
-		return nil // Text is already showing, no error
+			Str("picture", pictureName).
+			Str("path", picturePath).
+			Msg("picture downloaded successfully, replacing fallback")
+		return r.displayPicture(picturePath)
 	}
 
-	// Picture downloaded successfully, replace text with image
-	log.Debug().
+	log.Info().
 		Str("system", media.SystemID).
-		Str("path", picturePath).
-		Msg("picture downloaded successfully, replacing text with image")
-	return r.displayPicture(picturePath)
+		Strs("pictures", pictureNames).
+		Msg("picture download failed, keeping fallback display")
+	return nil
 }
 
 // displaySystemName shows the system name as text on the display
