@@ -133,7 +133,12 @@ func run(
 	}
 	if len(indexed) == 0 {
 		resolvable = 0
-		say("no media.db provided: every row will be unresolvable (skip-path stress only)")
+		if mediaDBPath == "" {
+			say("no media.db provided: every row will be unresolvable (skip-path stress only)")
+		} else {
+			say("%s has no present indexed media: every row will be unresolvable (skip-path stress only)",
+				mediaDBPath)
+		}
 	}
 
 	pl := mocks.NewMockPlatform()
