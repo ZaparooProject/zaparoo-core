@@ -522,7 +522,7 @@ func TestScanBehavior_HoldImmediate_UtilityRemovalDoesNotCloseGame(t *testing.T)
 	env.waitForLaunch(t)
 	env.waitForSoftwareTokenUID(t, "game1")
 
-	env.sendCommandScan("keyboard", "**input.keyboard:coin")
+	env.sendCommandScan("keyboard", "**input.keyboard:{f2}")
 	env.waitForKeyboard(t)
 	env.sendRemoval()
 
@@ -636,12 +636,12 @@ func TestScanBehavior_HoldDelayed_CommandDoesNotResetCountdown(t *testing.T) {
 
 	env.sendRemoval()
 
-	env.sendCommandScan("cmd1", "**input.keyboard:coin")
+	env.sendCommandScan("cmd1", "**input.keyboard:{f2}")
 	env.waitForKeyboard(t)
 	env.clock.Advance(4 * time.Second)
 	env.expectNoStop(t)
 
-	env.sendCommandScan("cmd2", "**input.keyboard:start")
+	env.sendCommandScan("cmd2", "**input.keyboard:{f3}")
 	env.waitForKeyboard(t)
 	env.clock.Advance(time.Second)
 	env.waitForStop(t)
