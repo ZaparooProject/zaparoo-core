@@ -365,7 +365,7 @@ func TestCmdDelay_GoDuration(t *testing.T) {
 func TestCmdDelay_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	for _, delay := range []string{"10000", "10s"} {
+	for _, delay := range []string{"0", "0s", "10000", "10s"} {
 		t.Run(delay, func(t *testing.T) {
 			t.Parallel()
 

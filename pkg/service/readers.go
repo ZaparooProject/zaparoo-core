@@ -104,6 +104,39 @@ func hookHasDelayCommand(scriptText string) bool {
 	return false
 }
 
+func startDelayedRemovalHook(
+	ctx context.Context,
+	svc *ServiceContext,
+	script string,
+	token *tokens.Token,
+	generation uint64,
+	results chan<- removalHookResult,
+) *pendingRemovalHook {
+	tokenCopy := *token
+	cancelReady := make(chan context.CancelFunc, 1)
+	go func() {
+		hookCtx, hookCancel := context.WithCancel(ctx)
+		defer hookCancel()
+		cancelReady <- hookCancel
+
+		err := runHookWithContext(hookCtx, svc, "on_remove", script, nil, nil)
+		select {
+		case results <- removalHookResult{
+			err:        err,
+			token:      tokenCopy,
+			generation: generation,
+		}:
+		case <-ctx.Done():
+		}
+	}()
+
+	return &pendingRemovalHook{
+		cancel:     <-cancelReady,
+		token:      tokenCopy,
+		generation: generation,
+	}
+}
+
 // isPathConnected checks if any connected reader is using the given path.
 func isPathConnected(rs []readers.Reader, path string) bool {
 	for _, r := range rs {
@@ -943,28 +976,14 @@ preprocessing:
 						activeRemovalHook.cancel()
 					}
 					removalHookGeneration++
-					// Cancellation is retained by activeRemovalHook; goroutine also guarantees cleanup.
-					//nolint:gosec // G118 cannot track stored cancel funcs.
-					hookCtx, hookCancel := context.WithCancel(svc.State.GetContext())
-					tokenCopy := *removedToken
-					generation := removalHookGeneration
-					activeRemovalHook = &pendingRemovalHook{
-						cancel:     hookCancel,
-						token:      tokenCopy,
-						generation: generation,
-					}
-					go func() {
-						defer hookCancel()
-						err := runHookWithContext(hookCtx, svc, "on_remove", onRemoveScript, nil, nil)
-						select {
-						case removalHookResults <- removalHookResult{
-							err:        err,
-							token:      tokenCopy,
-							generation: generation,
-						}:
-						case <-svc.State.GetContext().Done():
-						}
-					}()
+					activeRemovalHook = startDelayedRemovalHook(
+						svc.State.GetContext(),
+						svc,
+						onRemoveScript,
+						removedToken,
+						removalHookGeneration,
+						removalHookResults,
+					)
 					continue preprocessing
 				}
 				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
@@ -977,6 +996,12 @@ preprocessing:
 				scheduleHoldRemoval(removedToken)
 			}
 		}
+	}
+
+	if activeRemovalHook != nil {
+		activeRemovalHook.cancel()
+		activeRemovalHook = nil
+		log.Debug().Msg("cancelled delayed on_remove hook during reader manager shutdown")
 	}
 
 	// daemon shutdown

@@ -83,6 +83,9 @@ func waitForDelay(ctx context.Context, delay time.Duration) error {
 
 	select {
 	case <-timer.C:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
