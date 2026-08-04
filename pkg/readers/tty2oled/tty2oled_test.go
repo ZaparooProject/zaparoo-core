@@ -20,19 +20,86 @@
 package tty2oled
 
 import (
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.bug.st/serial"
 )
+
+type recordingSerialPort struct {
+	*testutils.MockSerialPort
+	writes [][]byte
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newRecordingSerialPort() *recordingSerialPort {
+	return &recordingSerialPort{MockSerialPort: testutils.NewMockSerialPort()}
+}
+
+func (*recordingSerialPort) SetMode(*serial.Mode) error {
+	return nil
+}
+
+func (p *recordingSerialPort) Write(data []byte) (int, error) {
+	p.writes = append(p.writes, append([]byte(nil), data...))
+	return len(data), nil
+}
+
+func (*recordingSerialPort) Drain() error {
+	return nil
+}
+
+func (*recordingSerialPort) ResetInputBuffer() error {
+	return nil
+}
+
+func (*recordingSerialPort) ResetOutputBuffer() error {
+	return nil
+}
+
+func (*recordingSerialPort) SetDTR(bool) error {
+	return nil
+}
+
+func (*recordingSerialPort) SetRTS(bool) error {
+	return nil
+}
+
+func (*recordingSerialPort) GetModemStatusBits() (*serial.ModemStatusBits, error) {
+	return &serial.ModemStatusBits{}, nil
+}
+
+func (*recordingSerialPort) Break(time.Duration) error {
+	return nil
+}
+
+func testPictureContent() string {
+	return "//\n//\nconst unsigned char bits[] = {\n" + strings.Repeat("0X00,", 2048) + "\n};\n"
+}
+
+func writeTestPicture(t *testing.T, path string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, os.WriteFile(path, []byte(testPictureContent()), 0o600))
+}
 
 type pictureNameMockPlatform struct {
 	*mocks.MockPlatform
@@ -87,6 +154,98 @@ func TestPictureNamesForMediaWithoutPlatformOverride(t *testing.T) {
 	pictureNames := reader.pictureNamesForMedia(&models.ActiveMedia{SystemID: "NES"})
 
 	assert.Equal(t, []string{"NES"}, pictureNames)
+}
+
+func TestDisplayMediaUsesPreferredPictureOnDisk(t *testing.T) {
+	t.Parallel()
+
+	cacheDir := t.TempDir()
+	picturePath := filepath.Join(cacheDir, "GSC", "bubbles.gsc")
+	writeTestPicture(t, picturePath)
+	port := newRecordingSerialPort()
+	reader := &Reader{
+		platform: &pictureNameMockPlatform{
+			MockPlatform: mocks.NewMockPlatform(),
+			pictureName:  "bubbles",
+		},
+		pictureManager: &PictureManager{cacheDir: cacheDir},
+		port:           port,
+	}
+
+	err := reader.displayMedia(&models.ActiveMedia{SystemID: "Arcade", Name: "Bubbles"})
+
+	require.NoError(t, err)
+	require.Len(t, port.writes, 2)
+	assert.Equal(t, CmdCore+",bubbles,"+DefaultTransition+CommandTerminator, string(port.writes[0]))
+	assert.Len(t, port.writes[1], 2048)
+	assert.False(t, reader.operationInProgress)
+}
+
+func TestDisplayMediaKeepsGenericPictureWhenPreferredDownloadFails(t *testing.T) {
+	t.Parallel()
+
+	cacheDir := t.TempDir()
+	picturePath := filepath.Join(cacheDir, "GSC", "Arcade.gsc")
+	writeTestPicture(t, picturePath)
+	port := newRecordingSerialPort()
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	reader := &Reader{
+		platform: &pictureNameMockPlatform{
+			MockPlatform: mocks.NewMockPlatform(),
+			pictureName:  "bubbles",
+		},
+		pictureManager: &PictureManager{cacheDir: cacheDir, httpClient: client},
+		port:           port,
+	}
+
+	err := reader.displayMedia(&models.ActiveMedia{SystemID: "Arcade", Name: "Bubbles"})
+
+	require.NoError(t, err)
+	require.Len(t, port.writes, 2)
+	assert.Equal(t, CmdCore+",Arcade,"+DefaultTransition+CommandTerminator, string(port.writes[0]))
+	assert.Len(t, port.writes[1], 2048)
+}
+
+func TestDisplayMediaDownloadsPreferredPictureAfterTextFallback(t *testing.T) {
+	t.Parallel()
+
+	cacheDir := t.TempDir()
+	port := newRecordingSerialPort()
+	requestedPath := ""
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requestedPath = req.URL.Path
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testPictureContent())),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	reader := &Reader{
+		platform: &pictureNameMockPlatform{
+			MockPlatform: mocks.NewMockPlatform(),
+			pictureName:  "bubbles",
+		},
+		pictureManager: &PictureManager{cacheDir: cacheDir, httpClient: client},
+		port:           port,
+	}
+
+	err := reader.displayMedia(&models.ActiveMedia{SystemID: "Arcade", Name: "Bubbles"})
+
+	require.NoError(t, err)
+	require.Len(t, port.writes, 4)
+	assert.Equal(t, CmdClearShow+CommandTerminator, string(port.writes[0]))
+	assert.Equal(t, "Arcade"+CommandTerminator, string(port.writes[1]))
+	assert.Equal(t, CmdCore+",bubbles,"+DefaultTransition+CommandTerminator, string(port.writes[2]))
+	assert.Len(t, port.writes[3], 2048)
+	assert.True(t, strings.HasSuffix(requestedPath, "/Pictures/GSC_US/bubbles.gsc"))
 }
 
 func TestMetadata(t *testing.T) {

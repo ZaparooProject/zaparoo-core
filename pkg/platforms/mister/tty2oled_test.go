@@ -76,6 +76,27 @@ func TestTTY2OLEDPictureNameIgnoresNonArcadeMedia(t *testing.T) {
 	assert.Empty(t, platform.TTY2OLEDPictureName(media))
 }
 
+func TestTTY2OLEDPictureNameReturnsEmptyForMissingMediaPath(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+	media := &models.ActiveMedia{SystemID: systemdefs.SystemArcade}
+
+	assert.Empty(t, platform.TTY2OLEDPictureName(media))
+}
+
+func TestTTY2OLEDPictureNameReturnsEmptyWhenMRAIsUnreadable(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+	media := &models.ActiveMedia{
+		SystemID: systemdefs.SystemArcade,
+		Path:     filepath.Join(t.TempDir(), "missing.mra"),
+	}
+
+	assert.Empty(t, platform.TTY2OLEDPictureName(media))
+}
+
 func TestTTY2OLEDPictureNameRejectsArcadeFilePathWithoutSetname(t *testing.T) {
 	t.Parallel()
 

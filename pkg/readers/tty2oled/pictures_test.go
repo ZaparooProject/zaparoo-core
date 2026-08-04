@@ -55,8 +55,11 @@ func TestFindArcadeFallbackOnDisk(t *testing.T) {
 	manager := &PictureManager{cacheDir: cacheDir}
 
 	got, found := manager.FindPictureOnDisk("Arcade")
-
 	assert.True(t, found)
+	assert.Equal(t, picturePath, got)
+
+	got, err := manager.GetPictureForSystem("Arcade")
+	require.NoError(t, err)
 	assert.Equal(t, picturePath, got)
 }
 
@@ -65,7 +68,25 @@ func TestPictureNameRejectsPaths(t *testing.T) {
 
 	manager := &PictureManager{cacheDir: t.TempDir()}
 
-	_, found := manager.findPictureByNameOnDisk(filepath.Join("..", "bubbles"))
-
+	invalidName := filepath.Join("..", "bubbles")
+	_, found := manager.findPictureByNameOnDisk(invalidName)
 	assert.False(t, found)
+
+	_, err := manager.getPictureByName(invalidName)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid picture name")
+}
+
+func TestGetPictureForSystemRejectsEmptyOrUnmappedSystem(t *testing.T) {
+	t.Parallel()
+
+	manager := &PictureManager{cacheDir: t.TempDir()}
+
+	_, err := manager.GetPictureForSystem("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty system ID")
+
+	_, err = manager.GetPictureForSystem("UnknownSystem")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no picture mapping")
 }
