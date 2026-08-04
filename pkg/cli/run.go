@@ -288,7 +288,7 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 			return fmt.Errorf("error getting user home directory: %w", err)
 		}
 
-		err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+		err = tui.BuildMainAndRetry(cfg, pl, func() (*tview.Application, error) {
 			return tui.BuildMain(
 				cfg, pl,
 				func() bool { return client.IsServiceRunning(cfg) },

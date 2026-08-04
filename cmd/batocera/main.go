@@ -163,7 +163,7 @@ func run() error {
 	}
 
 	// start the tui
-	err = tui.BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err = tui.BuildMainAndRetry(cfg, pl, func() (*tview.Application, error) {
 		return tui.BuildMain(
 			cfg, pl,
 			isRunning,

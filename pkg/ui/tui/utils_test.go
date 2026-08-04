@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldDisableZapScriptInTUI(t *testing.T) {
+func TestShouldDisableZapScriptInMainTUI(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -43,30 +43,30 @@ func TestShouldDisableZapScriptInTUI(t *testing.T) {
 	t.Run("nil config", func(t *testing.T) {
 		t.Parallel()
 		pl := testingmocks.NewMockPlatform()
-		assert.False(t, shouldDisableZapScriptInTUI(nil, pl))
+		assert.False(t, shouldDisableZapScriptInMainTUI(nil, pl))
 	})
 
 	t.Run("nil platform", func(t *testing.T) {
 		t.Parallel()
-		assert.False(t, shouldDisableZapScriptInTUI(cfg, nil))
+		assert.False(t, shouldDisableZapScriptInMainTUI(cfg, nil))
 	})
 
 	t.Run("concurrent TUI", func(t *testing.T) {
 		t.Parallel()
 		pl := testingmocks.NewMockPlatform()
 		pl.On("Settings").Return(platforms.Settings{})
-		assert.False(t, shouldDisableZapScriptInTUI(cfg, pl))
+		assert.False(t, shouldDisableZapScriptInMainTUI(cfg, pl))
 	})
 
 	t.Run("exclusive TUI", func(t *testing.T) {
 		t.Parallel()
 		pl := testingmocks.NewMockPlatform()
 		pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true})
-		assert.True(t, shouldDisableZapScriptInTUI(cfg, pl))
+		assert.True(t, shouldDisableZapScriptInMainTUI(cfg, pl))
 	})
 }
 
-func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
+func TestBuildMainAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
 	originalDisableZapScript := disableZapScript
 	t.Cleanup(func() {
 		disableZapScript = originalDisableZapScript
@@ -91,7 +91,7 @@ func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
 				}
 			}
 
-			err := BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+			err := BuildMainAndRetry(cfg, pl, func() (*tview.Application, error) {
 				assert.Equal(t, shouldDisable, disabled)
 				return nil, buildErr
 			})

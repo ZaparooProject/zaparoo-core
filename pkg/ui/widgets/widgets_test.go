@@ -81,10 +81,11 @@ func waitForWidgetExit(t *testing.T, done <-chan error) {
 	}
 }
 
-func TestWidgetUIPassesPlatformPolicyToBuildAndRetry(t *testing.T) {
+func TestWidgetUIUsesUnsuppressedBuildAndRetry(t *testing.T) {
 	t.Setenv("ZAPAROO_RUN_SCRIPT", "")
 
 	cfg := &config.Instance{}
+	pl := testingmocks.NewMockPlatform()
 	widgets := []struct {
 		run  func(*config.Instance, platforms.Platform, buildAndRetryFunc) error
 		name string
@@ -104,33 +105,17 @@ func TestWidgetUIPassesPlatformPolicyToBuildAndRetry(t *testing.T) {
 	}
 
 	for _, widget := range widgets {
-		for _, disableZapScript := range []bool{false, true} {
-			name := fmt.Sprintf("%s/disable=%t", widget.name, disableZapScript)
-			t.Run(name, func(t *testing.T) {
-				pl := testingmocks.NewMockPlatform()
-				pl.On("Settings").Return(platforms.Settings{
-					DisableZapScriptInTUI: disableZapScript,
-				}).Once()
+		t.Run(widget.name, func(t *testing.T) {
+			called := false
+			buildAndRetry := func(builder func() (*tview.Application, error)) error {
+				called = true
+				assert.NotNil(t, builder)
+				return nil
+			}
 
-				called := false
-				buildAndRetry := func(
-					gotCfg *config.Instance,
-					gotPl platforms.Platform,
-					builder func() (*tview.Application, error),
-				) error {
-					called = true
-					assert.Same(t, cfg, gotCfg)
-					assert.Same(t, pl, gotPl)
-					assert.Equal(t, disableZapScript, gotPl.Settings().DisableZapScriptInTUI)
-					assert.NotNil(t, builder)
-					return nil
-				}
-
-				require.NoError(t, widget.run(cfg, pl, buildAndRetry))
-				assert.True(t, called)
-				pl.AssertExpectations(t)
-			})
-		}
+			require.NoError(t, widget.run(cfg, pl, buildAndRetry))
+			assert.True(t, called)
+		})
 	}
 }
 

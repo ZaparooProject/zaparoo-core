@@ -54,11 +54,7 @@ const (
 
 type localClientFunc func(context.Context, *config.Instance, string, string) (string, error)
 
-type buildAndRetryFunc func(
-	*config.Instance,
-	platforms.Platform,
-	func() (*tview.Application, error),
-) error
+type buildAndRetryFunc func(func() (*tview.Application, error)) error
 
 func runningFromZapScript() bool {
 	return os.Getenv("ZAPAROO_RUN_SCRIPT") == "2"
@@ -383,7 +379,7 @@ func runNoticeUI(
 		}()
 	}
 
-	err := buildAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err := buildAndRetry(func() (*tview.Application, error) {
 		return NoticeUIBuilder(cfg, pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
@@ -629,7 +625,7 @@ func runPickerUI(
 		}()
 	}
 
-	err := buildAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err := buildAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")

@@ -483,28 +483,33 @@ type PrimitiveWithSetBorder interface {
 	SetBorder(arg bool) *tview.Box
 }
 
-func shouldDisableZapScriptInTUI(cfg *config.Instance, pl platforms.Platform) bool {
+func shouldDisableZapScriptInMainTUI(cfg *config.Instance, pl platforms.Platform) bool {
 	return cfg != nil && pl != nil && pl.Settings().DisableZapScriptInTUI
 }
 
-// BuildAndRetry attempts to build and display a TUI dialog, retrying with
-// alternate settings on error.
-// It's used to work around issues on MiSTer, which has an unusual setup for
-// showing TUI applications. ZapScript is disabled only on platforms whose TUI
-// occupies the primary display and cannot run alongside launched media.
-func BuildAndRetry(
-	cfg *config.Instance,
-	pl platforms.Platform,
-	builder func() (*tview.Application, error),
-) error {
-	if shouldDisableZapScriptInTUI(cfg, pl) {
-		enableZapScript := disableZapScript(cfg)
-		defer enableZapScript()
-	}
-
+// BuildAndRetry attempts to build and display a TUI application, retrying with
+// alternate settings on error. Utility widgets must use this function so they
+// do not disable ZapScript actions triggered by their own controls.
+func BuildAndRetry(builder func() (*tview.Application, error)) error {
 	app, err := builder()
 	if err != nil {
 		return err
 	}
 	return tryRunApp(app, builder)
+}
+
+// BuildMainAndRetry applies the platform's ZapScript policy while displaying
+// the main TUI. It is separate from BuildAndRetry because utility widgets can
+// legitimately trigger ZapScript while they are open.
+func BuildMainAndRetry(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	builder func() (*tview.Application, error),
+) error {
+	if shouldDisableZapScriptInMainTUI(cfg, pl) {
+		enableZapScript := disableZapScript(cfg)
+		defer enableZapScript()
+	}
+
+	return BuildAndRetry(builder)
 }
