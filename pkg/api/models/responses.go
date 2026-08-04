@@ -453,19 +453,28 @@ type ScrapersResponse struct {
 	Scrapers []ScraperInfo `json:"scrapers"`
 }
 
+type MediaPlaybackState string
+
+const (
+	MediaPlaybackStatePlaying MediaPlaybackState = "playing"
+	MediaPlaybackStatePaused  MediaPlaybackState = "paused"
+	MediaPlaybackStateStopped MediaPlaybackState = "stopped"
+)
+
 type ActiveMedia struct {
-	Started          time.Time `json:"started"`
-	RelPath          *string   `json:"relativePath,omitempty"`
-	PositionMs       *int64    `json:"positionMs,omitempty"`
-	DurationMs       *int64    `json:"durationMs,omitempty"`
-	LauncherID       string    `json:"launcherId"`
-	SystemID         string    `json:"systemId"`
-	SystemName       string    `json:"systemName"`
-	Path             string    `json:"mediaPath"`
-	Name             string    `json:"mediaName"`
-	Slot             string    `json:"slot,omitempty"`
-	LauncherControls []string  `json:"launcherControls,omitempty"`
-	MediaID          int64     `json:"mediaId,omitempty"`
+	Started          time.Time          `json:"started"`
+	RelPath          *string            `json:"relativePath,omitempty"`
+	PositionMs       *int64             `json:"positionMs,omitempty"`
+	DurationMs       *int64             `json:"durationMs,omitempty"`
+	PlaybackState    MediaPlaybackState `json:"playbackState,omitempty"`
+	LauncherID       string             `json:"launcherId"`
+	SystemID         string             `json:"systemId"`
+	SystemName       string             `json:"systemName"`
+	Path             string             `json:"mediaPath"`
+	Name             string             `json:"mediaName"`
+	Slot             string             `json:"slot,omitempty"`
+	LauncherControls []string           `json:"launcherControls,omitempty"`
+	MediaID          int64              `json:"mediaId,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.

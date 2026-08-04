@@ -140,62 +140,88 @@ func TestToPlaylistState_EmptyItems(t *testing.T) {
 	assert.Equal(t, 0, state.Total)
 }
 
-// ----- enrichPlaybackPosition tests -----
+// ----- enrichPlaybackState tests -----
 
-func TestEnrichPlaybackPosition_NilManagerLeavesFieldsNil(t *testing.T) {
+func TestEnrichPlaybackState_NilManagerLeavesFieldsNil(t *testing.T) {
 	t.Parallel()
 	env := &requests.RequestEnv{PlaybackManager: nil}
 	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
-	enrichPlaybackPosition(env, entry, mediaslot.Primary)
+	enrichPlaybackState(env, entry, mediaslot.Primary)
 	assert.Nil(t, entry.PositionMs)
 	assert.Nil(t, entry.DurationMs)
+	assert.Empty(t, entry.PlaybackState)
 }
 
-func TestEnrichPlaybackPosition_NonNativeLauncherLeavesFieldsNil(t *testing.T) {
+func TestEnrichPlaybackState_NonNativeLauncherLeavesFieldsNil(t *testing.T) {
 	t.Parallel()
 	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
 		Position: 30 * time.Second,
 		Duration: 3 * time.Minute,
+		Playing:  true,
 	})
 	env := &requests.RequestEnv{PlaybackManager: mgr}
 	entry := &models.ActiveMedia{LauncherID: "mister"}
-	enrichPlaybackPosition(env, entry, mediaslot.Primary)
+	enrichPlaybackState(env, entry, mediaslot.Primary)
 	assert.Nil(t, entry.PositionMs)
 	assert.Nil(t, entry.DurationMs)
+	assert.Empty(t, entry.PlaybackState)
 }
 
-func TestEnrichPlaybackPosition_NativeAudioFillsPositionAndDuration(t *testing.T) {
+func TestEnrichPlaybackState_NativeAudioFillsPlayingState(t *testing.T) {
 	t.Parallel()
 	pos := 45 * time.Second
 	dur := 3 * time.Minute
 	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
 		Position: pos,
 		Duration: dur,
+		Playing:  true,
 	})
 	env := &requests.RequestEnv{PlaybackManager: mgr}
 	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
-	enrichPlaybackPosition(env, entry, mediaslot.Primary)
+	enrichPlaybackState(env, entry, mediaslot.Primary)
 	require.NotNil(t, entry.PositionMs)
 	require.NotNil(t, entry.DurationMs)
 	assert.Equal(t, pos.Milliseconds(), *entry.PositionMs)
 	assert.Equal(t, dur.Milliseconds(), *entry.DurationMs)
+	assert.Equal(t, models.MediaPlaybackStatePlaying, entry.PlaybackState)
 }
 
-func TestEnrichPlaybackPosition_BackgroundSlotUsesBackgroundState(t *testing.T) {
+func TestEnrichPlaybackState_BackgroundSlotUsesPausedState(t *testing.T) {
 	t.Parallel()
 	bgPos := 10 * time.Second
 	bgDur := 2 * time.Minute
 	mgr := &stubPlaybackManager{states: map[string]audio.PlaybackState{
-		mediaslot.Primary:    {Position: 999 * time.Second, Duration: 999 * time.Second},
-		mediaslot.Background: {Position: bgPos, Duration: bgDur},
+		mediaslot.Primary: {
+			Position: 999 * time.Second,
+			Duration: 999 * time.Second,
+			Playing:  true,
+		},
+		mediaslot.Background: {
+			Position: bgPos,
+			Duration: bgDur,
+			Paused:   true,
+		},
 	}}
 	env := &requests.RequestEnv{PlaybackManager: mgr}
 	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
-	enrichPlaybackPosition(env, entry, mediaslot.Background)
+	enrichPlaybackState(env, entry, mediaslot.Background)
 	require.NotNil(t, entry.PositionMs)
 	require.NotNil(t, entry.DurationMs)
 	assert.Equal(t, bgPos.Milliseconds(), *entry.PositionMs)
 	assert.Equal(t, bgDur.Milliseconds(), *entry.DurationMs)
+	assert.Equal(t, models.MediaPlaybackStatePaused, entry.PlaybackState)
+}
+
+func TestEnrichPlaybackState_StoppedState(t *testing.T) {
+	t.Parallel()
+
+	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{})
+	env := &requests.RequestEnv{PlaybackManager: mgr}
+	entry := &models.ActiveMedia{LauncherID: platforms.NativeAudioLauncherID}
+
+	enrichPlaybackState(env, entry, mediaslot.Primary)
+
+	assert.Equal(t, models.MediaPlaybackStateStopped, entry.PlaybackState)
 }
 
 func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {

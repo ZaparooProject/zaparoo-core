@@ -479,6 +479,10 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	relPath := "music/song.mp3"
 	background.RelPath = &relPath
 	st.SetBackgroundMedia(background)
+	st.SetBackgroundPlaylist(&playlists.Playlist{
+		Slot:    mediaslot.Background,
+		Playing: true,
+	})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
@@ -490,6 +494,11 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 		Context:  context.Background(),
 		State:    st,
 		Database: &database.Database{MediaDB: mockMediaDB},
+		PlaybackManager: newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{
+			Position: 20 * time.Second,
+			Duration: 3 * time.Minute,
+			Paused:   true,
+		}),
 	}
 
 	result, err := HandleMedia(env)
@@ -504,6 +513,9 @@ func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
 	assert.Equal(t, "song.mp3", resp.Active[0].Path)
 	assert.Equal(t, "Song", resp.Active[0].Name)
 	assert.Equal(t, "@Audio/Song", resp.Active[0].ZapScript)
+	assert.Equal(t, models.MediaPlaybackStatePaused, resp.Active[0].PlaybackState)
+	require.Len(t, resp.Playlists, 1)
+	assert.True(t, resp.Playlists[0].Playing, "playlist scheduler remains active while audio is auto-paused")
 
 	mockMediaDB.AssertExpectations(t)
 }
@@ -563,6 +575,9 @@ func TestHandleActiveMedia_BackgroundSlotParam(t *testing.T) {
 		State:    st,
 		Database: &database.Database{MediaDB: helpers.NewMockMediaDBI()},
 		Params:   json.RawMessage(params),
+		PlaybackManager: newStubPlaybackManager(mediaslot.Background, audio.PlaybackState{
+			Paused: true,
+		}),
 	}
 
 	result, err := HandleActiveMedia(env)
@@ -574,6 +589,7 @@ func TestHandleActiveMedia_BackgroundSlotParam(t *testing.T) {
 	assert.Equal(t, mediaslot.Background, resp.Slot)
 	assert.Equal(t, "song.mp3", resp.Path)
 	assert.Equal(t, "Song", resp.Name)
+	assert.Equal(t, models.MediaPlaybackStatePaused, resp.PlaybackState)
 }
 
 // TestHandleActiveMedia_BackgroundSlotReturnsNilWhenNoneActive verifies that
@@ -600,9 +616,9 @@ func TestHandleActiveMedia_BackgroundSlotReturnsNilWhenNoneActive(t *testing.T) 
 	assert.Nil(t, result)
 }
 
-// TestHandleActiveMedia_NativeAudioCarriesPosition verifies that
-// positionMs/durationMs are populated for native-audio entries.
-func TestHandleActiveMedia_NativeAudioCarriesPosition(t *testing.T) {
+// TestHandleActiveMedia_NativeAudioCarriesPlaybackState verifies that
+// playback details are populated for native-audio entries.
+func TestHandleActiveMedia_NativeAudioCarriesPlaybackState(t *testing.T) {
 	t.Parallel()
 
 	pl := mocks.NewMockPlatform()
@@ -616,6 +632,7 @@ func TestHandleActiveMedia_NativeAudioCarriesPosition(t *testing.T) {
 	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
 		Position: 30 * time.Second,
 		Duration: 3 * time.Minute,
+		Playing:  true,
 	})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
@@ -641,11 +658,12 @@ func TestHandleActiveMedia_NativeAudioCarriesPosition(t *testing.T) {
 	require.NotNil(t, resp.DurationMs)
 	assert.Equal(t, (30 * time.Second).Milliseconds(), *resp.PositionMs)
 	assert.Equal(t, (3 * time.Minute).Milliseconds(), *resp.DurationMs)
+	assert.Equal(t, models.MediaPlaybackStatePlaying, resp.PlaybackState)
 }
 
-// TestHandleActiveMedia_NonNativeLauncherOmitsPosition verifies that
-// positionMs/durationMs are absent for non-native-audio launchers.
-func TestHandleActiveMedia_NonNativeLauncherOmitsPosition(t *testing.T) {
+// TestHandleActiveMedia_NonNativeLauncherOmitsPlaybackState verifies that
+// playback details are absent for non-native-audio launchers.
+func TestHandleActiveMedia_NonNativeLauncherOmitsPlaybackState(t *testing.T) {
 	t.Parallel()
 
 	pl := mocks.NewMockPlatform()
@@ -683,6 +701,7 @@ func TestHandleActiveMedia_NonNativeLauncherOmitsPosition(t *testing.T) {
 	require.True(t, ok)
 	assert.Nil(t, resp.PositionMs, "non-native-audio launcher must not expose position")
 	assert.Nil(t, resp.DurationMs, "non-native-audio launcher must not expose duration")
+	assert.Empty(t, resp.PlaybackState, "non-native-audio launcher must not expose playback state")
 }
 
 // TestHandleMedia_PlaylistsIncludedInResponse verifies that active playlists for
@@ -788,9 +807,9 @@ func TestHandleMedia_EmptyPlaylistsOmittedFromResponse(t *testing.T) {
 	assert.Empty(t, resp.Playlists)
 }
 
-// TestHandleMedia_NativeAudioActiveEntryCarriesPosition verifies that the active[]
-// entry for native-audio primary media includes positionMs/durationMs.
-func TestHandleMedia_NativeAudioActiveEntryCarriesPosition(t *testing.T) {
+// TestHandleMedia_NativeAudioActiveEntryCarriesPlaybackState verifies that the active[]
+// entry for native-audio primary media includes playback details.
+func TestHandleMedia_NativeAudioActiveEntryCarriesPlaybackState(t *testing.T) {
 	t.Parallel()
 
 	pl := mocks.NewMockPlatform()
@@ -804,6 +823,7 @@ func TestHandleMedia_NativeAudioActiveEntryCarriesPosition(t *testing.T) {
 	mgr := newStubPlaybackManager(mediaslot.Primary, audio.PlaybackState{
 		Position: 15 * time.Second,
 		Duration: 4 * time.Minute,
+		Playing:  true,
 	})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
@@ -833,6 +853,7 @@ func TestHandleMedia_NativeAudioActiveEntryCarriesPosition(t *testing.T) {
 	require.NotNil(t, resp.Active[0].DurationMs)
 	assert.Equal(t, (15 * time.Second).Milliseconds(), *resp.Active[0].PositionMs)
 	assert.Equal(t, (4 * time.Minute).Milliseconds(), *resp.Active[0].DurationMs)
+	assert.Equal(t, models.MediaPlaybackStatePlaying, resp.Active[0].PlaybackState)
 }
 
 func TestHandleUpdateActiveMedia_ClearMedia(t *testing.T) {

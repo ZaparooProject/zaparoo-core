@@ -301,7 +301,9 @@ func TestHandlePlaylist_BackgroundPausePausesPlayback(t *testing.T) {
 	t.Parallel()
 
 	svc := setupPlaylistTestEnv(t)
-	recorder := &servicePlaybackRecorder{}
+	recorder := &servicePlaybackRecorder{states: map[string]audio.PlaybackState{
+		mediaslot.Background: {Path: "track.mp3", Playing: true},
+	}}
 	svc.PlaybackManager = recorder
 	background := makeServicePlaylist()
 	background.Slot = mediaslot.Background
@@ -313,6 +315,25 @@ func TestHandlePlaylist_BackgroundPausePausesPlayback(t *testing.T) {
 
 	assert.Equal(t, []string{mediaslot.Background}, recorder.paused)
 	assert.False(t, svc.State.GetBackgroundPlaylist().Playing)
+}
+
+func TestHandlePlaylist_PrimaryPausePausesPlayback(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{states: map[string]audio.PlaybackState{
+		mediaslot.Primary: {Path: "track.mp3", Playing: true},
+	}}
+	svc.PlaybackManager = recorder
+	primary := makeServicePlaylist()
+	primary.Playing = true
+	svc.State.SetActivePlaylist(primary)
+
+	paused := playlists.Pause(*primary)
+	handlePlaylist(svc, paused, nil)
+
+	assert.Equal(t, []string{mediaslot.Primary}, recorder.paused)
+	assert.False(t, svc.State.GetActivePlaylist().Playing)
 }
 
 func TestHandlePlaylist_BackgroundPlayResumesPausedPlayback(t *testing.T) {
@@ -334,6 +355,26 @@ func TestHandlePlaylist_BackgroundPlayResumesPausedPlayback(t *testing.T) {
 	assert.Equal(t, []string{mediaslot.Background}, recorder.resumed)
 	assert.Empty(t, recorder.played)
 	assert.True(t, svc.State.GetBackgroundPlaylist().Playing)
+}
+
+func TestHandlePlaylist_PrimaryPlayResumesPausedPlayback(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{states: map[string]audio.PlaybackState{
+		mediaslot.Primary: {Path: "track.mp3", Paused: true},
+	}}
+	svc.PlaybackManager = recorder
+	primary := makeServicePlaylist()
+	primary.Playing = false
+	svc.State.SetActivePlaylist(primary)
+
+	playing := playlists.Play(*primary)
+	handlePlaylist(svc, playing, nil)
+
+	assert.Equal(t, []string{mediaslot.Primary}, recorder.resumed)
+	assert.Empty(t, recorder.played)
+	assert.True(t, svc.State.GetActivePlaylist().Playing)
 }
 
 func TestHandlePlaylist_BackgroundPlayRelaunchesWhenNoPlaybackSource(t *testing.T) {
@@ -371,6 +412,25 @@ func TestStopNativePlaybackBeforePrimaryCommandStopsAndClearsPrimaryNativeAudio(
 	require.NoError(t, err)
 	assert.Equal(t, []string{mediaslot.Primary}, recorder.stopped)
 	assert.Nil(t, svc.State.ActiveMedia())
+}
+
+func TestStopNativePlaybackBeforePrimaryCommandPreservesPrimaryPlaylistPause(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	svc.State.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+
+	err := stopNativePlaybackBeforePrimaryCommand(svc, gozapscript.Command{
+		Name: gozapscript.ZapScriptCmdPlaylistPause,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, recorder.stopped)
+	assert.NotNil(t, svc.State.ActiveMedia())
 }
 
 func TestStopNativePlaybackBeforePrimaryCommandStopsPrimaryPlaylistStop(t *testing.T) {

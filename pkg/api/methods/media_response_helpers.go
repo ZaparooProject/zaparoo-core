@@ -68,10 +68,10 @@ func optionalDBEnrichmentContext(parent context.Context) (context.Context, conte
 	return context.WithTimeout(parent, optionalDBEnrichmentTimeout)
 }
 
-// enrichPlaybackPosition fills PositionMs and DurationMs on an ActiveMedia entry
-// when the entry belongs to the native-audio launcher and a PlaybackManager is available.
-// slot is the normalized slot string ("primary" or "background").
-func enrichPlaybackPosition(env *requests.RequestEnv, entry *models.ActiveMedia, slot string) {
+// enrichPlaybackState fills playback details on an ActiveMedia entry when the entry
+// belongs to the native-audio launcher and a PlaybackManager is available. slot is
+// the normalized slot string ("primary" or "background").
+func enrichPlaybackState(env *requests.RequestEnv, entry *models.ActiveMedia, slot string) {
 	if env.PlaybackManager == nil {
 		return
 	}
@@ -83,6 +83,14 @@ func enrichPlaybackPosition(env *requests.RequestEnv, entry *models.ActiveMedia,
 	durMs := state.Duration.Milliseconds()
 	entry.PositionMs = &posMs
 	entry.DurationMs = &durMs
+	switch {
+	case state.Paused:
+		entry.PlaybackState = models.MediaPlaybackStatePaused
+	case state.Playing:
+		entry.PlaybackState = models.MediaPlaybackStatePlaying
+	default:
+		entry.PlaybackState = models.MediaPlaybackStateStopped
+	}
 }
 
 // toPlaylistState converts the internal Playlist representation to the API model.

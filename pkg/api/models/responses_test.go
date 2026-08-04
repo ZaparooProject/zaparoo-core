@@ -236,6 +236,23 @@ func TestActiveMedia_Equal(t *testing.T) {
 	}
 }
 
+func TestActiveMedia_PlaybackStateJSON(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(ActiveMedia{PlaybackState: MediaPlaybackStatePaused})
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, "paused", got["playbackState"])
+
+	raw, err = json.Marshal(ActiveMedia{})
+	require.NoError(t, err)
+	got = nil
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.NotContains(t, got, "playbackState")
+}
+
 // TestPairedClient_JSONShape pins the wire shape of the PairedClient
 // type returned by the `clients` RPC method. This test exists to catch a
 // future regression where someone embeds *database.Client (which contains

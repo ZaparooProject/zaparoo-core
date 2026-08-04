@@ -415,8 +415,9 @@ None.
 | systemName       | string   | Yes      | Display name of the system.                |
 | mediaPath        | string   | Yes      | Path to the media file.                    |
 | relativePath     | string   | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
-| positionMs       | number   | No       | Current playback position in milliseconds for native audio media. |
-| durationMs       | number   | No       | Total playback duration in milliseconds for native audio media. |
+| positionMs       | number   | No       | Current playback position in milliseconds when reported by the launcher. Currently available for native audio. |
+| durationMs       | number   | No       | Total playback duration in milliseconds when reported by the launcher. Currently available for native audio. |
+| playbackState    | string   | No       | Launcher-reported playback state: `playing`, `paused`, or `stopped`. Currently available for native audio; omitted when unavailable. |
 | mediaName        | string   | Yes      | Display name of the media.                 |
 | slot             | string   | No       | Media slot for the item. Omitted or `primary` is foreground media; `background` is background audio. |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |

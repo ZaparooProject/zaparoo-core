@@ -1097,7 +1097,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			Slot:             mediaslot.Primary,
 			LauncherControls: activeMedia.LauncherControls,
 		}
-		enrichPlaybackPosition(&env, &primaryEntry, mediaslot.Primary)
+		enrichPlaybackState(&env, &primaryEntry, mediaslot.Primary)
 		resp.Active = append(resp.Active, models.ActiveMediaResponse{
 			ActiveMedia: primaryEntry,
 			ZapScript:   zapScript,
@@ -1117,7 +1117,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			Slot:             mediaslot.Background,
 			LauncherControls: backgroundMedia.LauncherControls,
 		}
-		enrichPlaybackPosition(&env, &bgEntry, mediaslot.Background)
+		enrichPlaybackState(&env, &bgEntry, mediaslot.Background)
 		resp.Active = append(resp.Active, models.ActiveMediaResponse{
 			ActiveMedia: bgEntry,
 			ZapScript:   database.BuildTitleZapScript(backgroundMedia.SystemID, backgroundMedia.Name, nil),
@@ -1328,7 +1328,7 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		entry.MediaID = mediaIDs[ref]
 	}
 
-	enrichPlaybackPosition(&env, &entry, slot)
+	enrichPlaybackState(&env, &entry, slot)
 
 	return models.ActiveMediaResponse{
 		ActiveMedia: entry,
