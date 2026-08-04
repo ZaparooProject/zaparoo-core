@@ -81,56 +81,57 @@ func waitForWidgetExit(t *testing.T, done <-chan error) {
 	}
 }
 
-func TestWidgetUIPassesPlatformPolicyToBuildAndRetry(t *testing.T) {
+func TestWidgetUIUsesUnsuppressedBuildAndRetry(t *testing.T) {
 	t.Setenv("ZAPAROO_RUN_SCRIPT", "")
 
 	cfg := &config.Instance{}
+	pl := testingmocks.NewMockPlatform()
 	widgets := []struct {
-		run  func(*config.Instance, platforms.Platform, buildAndRetryFunc) error
+		args any
+		run  func(*config.Instance, platforms.Platform, string, buildAndRetryFunc) error
 		name string
 	}{
 		{
 			name: "notice",
-			run: func(cfg *config.Instance, pl platforms.Platform, buildAndRetry buildAndRetryFunc) error {
-				return runNoticeUI(cfg, pl, "unused", false, buildAndRetry)
+			args: widgetmodels.NoticeArgs{Text: "Notice", Timeout: -1},
+			run: func(
+				cfg *config.Instance,
+				pl platforms.Platform,
+				argsPath string,
+				buildAndRetry buildAndRetryFunc,
+			) error {
+				return runNoticeUI(cfg, pl, argsPath, false, buildAndRetry)
 			},
 		},
 		{
 			name: "picker",
-			run: func(cfg *config.Instance, pl platforms.Platform, buildAndRetry buildAndRetryFunc) error {
-				return runPickerUI(cfg, pl, "unused", buildAndRetry)
+			args: widgetmodels.PickerArgs{
+				Items:   []widgetmodels.PickerItem{{Name: "Game", ZapScript: "game.zip"}},
+				Timeout: -1,
 			},
+			run: runPickerUI,
 		},
 	}
 
 	for _, widget := range widgets {
-		for _, disableZapScript := range []bool{false, true} {
-			name := fmt.Sprintf("%s/disable=%t", widget.name, disableZapScript)
-			t.Run(name, func(t *testing.T) {
-				pl := testingmocks.NewMockPlatform()
-				pl.On("Settings").Return(platforms.Settings{
-					DisableZapScriptInTUI: disableZapScript,
-				}).Once()
+		t.Run(widget.name, func(t *testing.T) {
+			args, err := json.Marshal(widget.args)
+			require.NoError(t, err)
+			argsPath := filepath.Join(t.TempDir(), widget.name+".json")
+			require.NoError(t, afero.WriteFile(afero.NewOsFs(), argsPath, args, 0o600))
 
-				called := false
-				buildAndRetry := func(
-					gotCfg *config.Instance,
-					gotPl platforms.Platform,
-					builder func() (*tview.Application, error),
-				) error {
-					called = true
-					assert.Same(t, cfg, gotCfg)
-					assert.Same(t, pl, gotPl)
-					assert.Equal(t, disableZapScript, gotPl.Settings().DisableZapScriptInTUI)
-					assert.NotNil(t, builder)
-					return nil
-				}
+			called := false
+			buildAndRetry := func(builder func() (*tview.Application, error)) error {
+				called = true
+				app, buildErr := builder()
+				require.NoError(t, buildErr)
+				assert.NotNil(t, app)
+				return nil
+			}
 
-				require.NoError(t, widget.run(cfg, pl, buildAndRetry))
-				assert.True(t, called)
-				pl.AssertExpectations(t)
-			})
-		}
+			require.NoError(t, widget.run(cfg, pl, argsPath, buildAndRetry))
+			assert.True(t, called)
+		})
 	}
 }
 

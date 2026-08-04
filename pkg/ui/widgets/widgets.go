@@ -54,11 +54,7 @@ const (
 
 type localClientFunc func(context.Context, *config.Instance, string, string) (string, error)
 
-type buildAndRetryFunc func(
-	*config.Instance,
-	platforms.Platform,
-	func() (*tview.Application, error),
-) error
+type buildAndRetryFunc func(func() (*tview.Application, error)) error
 
 func runningFromZapScript() bool {
 	return os.Getenv("ZAPAROO_RUN_SCRIPT") == "2"
@@ -333,7 +329,7 @@ func buildNoticeUI(
 
 // NoticeUI displays a message with an optional loading spinner.
 func NoticeUI(cfg *config.Instance, pl platforms.Platform, argsPath string, loader bool) error {
-	return runNoticeUI(cfg, pl, argsPath, loader, tui.BuildAndRetry)
+	return runNoticeUI(cfg, pl, argsPath, loader, tui.BuildWidgetAndRetry)
 }
 
 func runNoticeUI(
@@ -383,7 +379,7 @@ func runNoticeUI(
 		}()
 	}
 
-	err := buildAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err := buildAndRetry(func() (*tview.Application, error) {
 		return NoticeUIBuilder(cfg, pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
@@ -580,7 +576,7 @@ func buildPickerUI(
 
 // PickerUI displays a list picker of ZapScript commands to run.
 func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
-	return runPickerUI(cfg, pl, argsPath, tui.BuildAndRetry)
+	return runPickerUI(cfg, pl, argsPath, tui.BuildWidgetAndRetry)
 }
 
 func runPickerUI(
@@ -629,7 +625,7 @@ func runPickerUI(
 		}()
 	}
 
-	err := buildAndRetry(cfg, pl, func() (*tview.Application, error) {
+	err := buildAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")

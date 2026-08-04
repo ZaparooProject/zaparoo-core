@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldDisableZapScriptInTUI(t *testing.T) {
+func TestShouldDisableZapScriptInMainTUI(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -43,26 +43,26 @@ func TestShouldDisableZapScriptInTUI(t *testing.T) {
 	t.Run("nil config", func(t *testing.T) {
 		t.Parallel()
 		pl := testingmocks.NewMockPlatform()
-		assert.False(t, shouldDisableZapScriptInTUI(nil, pl))
+		assert.False(t, shouldDisableZapScriptInMainTUI(nil, pl))
 	})
 
 	t.Run("nil platform", func(t *testing.T) {
 		t.Parallel()
-		assert.False(t, shouldDisableZapScriptInTUI(cfg, nil))
+		assert.False(t, shouldDisableZapScriptInMainTUI(cfg, nil))
 	})
 
 	t.Run("concurrent TUI", func(t *testing.T) {
 		t.Parallel()
 		pl := testingmocks.NewMockPlatform()
 		pl.On("Settings").Return(platforms.Settings{})
-		assert.False(t, shouldDisableZapScriptInTUI(cfg, pl))
+		assert.False(t, shouldDisableZapScriptInMainTUI(cfg, pl))
 	})
 
 	t.Run("exclusive TUI", func(t *testing.T) {
 		t.Parallel()
 		pl := testingmocks.NewMockPlatform()
 		pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true})
-		assert.True(t, shouldDisableZapScriptInTUI(cfg, pl))
+		assert.True(t, shouldDisableZapScriptInMainTUI(cfg, pl))
 	})
 }
 
@@ -101,6 +101,72 @@ func TestBuildAndRetry_AppliesPlatformZapScriptPolicy(t *testing.T) {
 			pl.AssertExpectations(t)
 		})
 	}
+}
+
+func TestBuildAndRetry_RestoresZapScriptAfterSuccessfulRun(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	cfg := &config.Instance{}
+	pl := testingmocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{DisableZapScriptInTUI: true}).Once()
+
+	disabled := false
+	disableZapScript = func(gotCfg *config.Instance) func() {
+		assert.Same(t, cfg, gotCfg)
+		disabled = true
+		return func() {
+			disabled = false
+		}
+	}
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	require.NoError(t, screen.Init())
+	screen.SetSize(80, 24)
+
+	appStarted := make(chan struct{}, 1)
+	app := tview.NewApplication().
+		SetScreen(screen).
+		SetRoot(tview.NewTextView().SetText("main TUI"), true).
+		SetBeforeDrawFunc(func(_ tcell.Screen) bool {
+			assert.True(t, disabled, "ZapScript must remain disabled while main TUI runs")
+			select {
+			case appStarted <- struct{}{}:
+			default:
+			}
+			return false
+		})
+	go func() {
+		<-appStarted
+		app.Stop()
+	}()
+
+	require.NoError(t, BuildAndRetry(cfg, pl, func() (*tview.Application, error) {
+		assert.True(t, disabled, "ZapScript must be disabled before building main TUI")
+		return app, nil
+	}))
+	assert.False(t, disabled, "ZapScript must be restored after main TUI exits")
+	pl.AssertExpectations(t)
+}
+
+func TestBuildWidgetAndRetry_DoesNotDisableZapScript(t *testing.T) {
+	originalDisableZapScript := disableZapScript
+	t.Cleanup(func() {
+		disableZapScript = originalDisableZapScript
+	})
+
+	disableZapScript = func(*config.Instance) func() {
+		t.Fatal("utility widget must not disable ZapScript")
+		return func() {}
+	}
+
+	buildErr := errors.New("build failed")
+	err := BuildWidgetAndRetry(func() (*tview.Application, error) {
+		return nil, buildErr
+	})
+	require.ErrorIs(t, err, buildErr)
 }
 
 func TestCenterWidget(t *testing.T) {
