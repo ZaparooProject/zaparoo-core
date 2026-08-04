@@ -362,6 +362,29 @@ func TestCmdDelay_GoDuration(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, time.Millisecond)
 }
 
+func TestCmdDelay_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	for _, delay := range []string{"0", "0s", "10000", "10s"} {
+		t.Run(delay, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			env := platforms.CmdEnv{
+				Cmd: zapscript.Command{
+					Name: "delay",
+					Args: []string{delay},
+				},
+				ServiceCtx: ctx,
+			}
+
+			_, err := cmdDelay(nil, env)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+}
+
 func TestCmdDelay_MediaReady(t *testing.T) {
 	t.Parallel()
 

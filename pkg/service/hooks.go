@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -33,6 +34,17 @@ import (
 // Returns error if the script fails (for blocking hooks) or nil on success.
 // The scanned/launching params provide optional context for the expression env.
 func runHook(
+	svc *ServiceContext,
+	hookName string,
+	script string,
+	scanned *gozapscript.ExprEnvScanned,
+	launching *gozapscript.ExprEnvLaunching,
+) error {
+	return runHookWithContext(svc.State.GetContext(), svc, hookName, script, scanned, launching)
+}
+
+func runHookWithContext(
+	ctx context.Context,
 	svc *ServiceContext,
 	hookName string,
 	script string,
@@ -53,5 +65,5 @@ func runHook(
 	}
 
 	hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, scanned, launching)
-	return runTokenZapScript(svc, t, plsc, &hookEnv, true)
+	return runTokenZapScriptWithContext(ctx, svc, t, plsc, &hookEnv, true)
 }

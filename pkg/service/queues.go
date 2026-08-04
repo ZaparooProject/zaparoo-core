@@ -105,6 +105,24 @@ func runTokenZapScript(
 	exprEnv *gozapscript.ArgExprEnv,
 	inHookContext bool,
 ) error {
+	return runTokenZapScriptWithContext(
+		svc.State.GetContext(),
+		svc,
+		token,
+		plsc,
+		exprEnv,
+		inHookContext,
+	)
+}
+
+func runTokenZapScriptWithContext(
+	runCtx context.Context,
+	svc *ServiceContext,
+	token tokens.Token, //nolint:gocritic // single-use parameter in service function
+	plsc playlists.PlaylistController,
+	exprEnv *gozapscript.ArgExprEnv,
+	inHookContext bool,
+) error {
 	if !svc.State.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
 		return nil
@@ -161,7 +179,7 @@ func runTokenZapScript(
 			}
 			launching := buildLaunchingContext(cmd)
 			hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, launching)
-			hookErr := runTokenZapScript(svc, hookToken, hookPlsc, &hookEnv, true)
+			hookErr := runTokenZapScriptWithContext(runCtx, svc, hookToken, hookPlsc, &hookEnv, true)
 			if hookErr != nil {
 				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
 			}
@@ -191,7 +209,7 @@ func runTokenZapScript(
 		}
 
 		result, err := zapscript.RunCommand(
-			svc.State.GetContext(),
+			runCtx,
 			svc.Platform, svc.Config,
 			playlists.PlaylistController{
 				Active:     currentPrimary,
