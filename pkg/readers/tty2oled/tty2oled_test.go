@@ -188,7 +188,11 @@ func TestDisplayMediaKeepsGenericPictureWhenPreferredDownloadFails(t *testing.T)
 	picturePath := filepath.Join(cacheDir, "GSC", "Arcade.gsc")
 	writeTestPicture(t, picturePath)
 	port := newRecordingSerialPort()
+	requestedPath := ""
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if requestedPath == "" {
+			requestedPath = req.URL.Path
+		}
 		return &http.Response{
 			StatusCode: http.StatusNotFound,
 			Body:       io.NopCloser(strings.NewReader("")),
@@ -208,6 +212,7 @@ func TestDisplayMediaKeepsGenericPictureWhenPreferredDownloadFails(t *testing.T)
 	err := reader.displayMedia(&models.ActiveMedia{SystemID: "Arcade", Name: "Bubbles"})
 
 	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(requestedPath, "/Pictures/GSC_US/bubbles.gsc"))
 	require.Len(t, port.writes, 2)
 	assert.Equal(t, CmdCore+",Arcade,"+DefaultTransition+CommandTerminator, string(port.writes[0]))
 	assert.Len(t, port.writes[1], 2048)
