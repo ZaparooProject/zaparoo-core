@@ -87,6 +87,7 @@ type State struct {
 	activeMediaReadyGen   uint64
 	mediaLaunchAccesses   int
 	mu                    syncutil.RWMutex
+	mediaLaunchMu         syncutil.RWMutex
 	mediaRestoreMu        syncutil.RWMutex
 	activeMediaReady      bool
 	stopService           bool
@@ -500,10 +501,15 @@ func (s *State) AcquireRestoreAccess() (func(), error) {
 }
 
 func (s *State) AcquireMediaLaunch() (func(), error) {
-	release, err := s.TryAcquireRestoreAccess()
+	releaseRestore, err := s.TryAcquireRestoreAccess()
 	if err != nil {
 		return nil, err
 	}
+
+	// Stop operations take the exclusive side of this gate. Holding the read
+	// side through Platform.LaunchMedia keeps stop requests behind platform
+	// launch settling and active-media readiness setup.
+	s.mediaLaunchMu.RLock()
 	s.mu.Lock()
 	s.mediaLaunchAccesses++
 	s.mu.Unlock()
@@ -511,8 +517,32 @@ func (s *State) AcquireMediaLaunch() (func(), error) {
 		s.mu.Lock()
 		s.mediaLaunchAccesses--
 		s.mu.Unlock()
-		release()
+		s.mediaLaunchMu.RUnlock()
+		releaseRestore()
 	}, nil
+}
+
+// AcquireMediaStop waits for in-flight media launches, then prevents another
+// launch from starting until the returned release function is called.
+func (s *State) AcquireMediaStop(ctx context.Context) (func(), error) {
+	acquired := make(chan struct{})
+	abandoned := make(chan struct{})
+	go func() {
+		s.mediaLaunchMu.Lock()
+		select {
+		case acquired <- struct{}{}:
+		case <-abandoned:
+			s.mediaLaunchMu.Unlock()
+		}
+	}()
+
+	select {
+	case <-acquired:
+		return s.mediaLaunchMu.Unlock, nil
+	case <-ctx.Done():
+		close(abandoned)
+		return nil, ctx.Err()
+	}
 }
 
 func (s *State) BeginRestoreGate() (func(bool), error) {

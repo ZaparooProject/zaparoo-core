@@ -82,6 +82,98 @@ func TestMediaRestoreGateMutualExclusion(t *testing.T) {
 	releaseLaunch()
 }
 
+func TestMediaStopGateWaitsForLaunchAndBlocksReplacement(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	releaseLaunch, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+
+	stopRelease := make(chan func(), 1)
+	stopErr := make(chan error, 1)
+	go func() {
+		release, acquireErr := st.AcquireMediaStop(context.Background())
+		if acquireErr != nil {
+			stopErr <- acquireErr
+			return
+		}
+		stopRelease <- release
+	}()
+
+	select {
+	case <-stopRelease:
+		t.Fatal("media stop gate acquired while launch was in flight")
+	case err := <-stopErr:
+		require.NoError(t, err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseLaunch()
+	var releaseStop func()
+	select {
+	case releaseStop = <-stopRelease:
+	case err := <-stopErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("media stop gate did not acquire after launch completed")
+	}
+
+	replacementResult := make(chan struct {
+		release func()
+		err     error
+	}, 1)
+	go func() {
+		release, acquireErr := st.AcquireMediaLaunch()
+		replacementResult <- struct {
+			release func()
+			err     error
+		}{release: release, err: acquireErr}
+	}()
+
+	select {
+	case result := <-replacementResult:
+		if result.release != nil {
+			result.release()
+		}
+		require.NoError(t, result.err)
+		t.Fatal("replacement launch started while media stop gate was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseStop()
+	select {
+	case result := <-replacementResult:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.release)
+		result.release()
+	case <-time.After(time.Second):
+		t.Fatal("replacement launch did not resume after media stop completed")
+	}
+}
+
+func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	releaseLaunch, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	releaseStop, err := st.AcquireMediaStop(ctx)
+	assert.Nil(t, releaseStop)
+	require.ErrorIs(t, err, context.Canceled)
+
+	releaseLaunch()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
+	defer cleanupCancel()
+	releaseStop, err = st.AcquireMediaStop(cleanupCtx)
+	require.NoError(t, err, "canceled waiter must release the stop gate after the launch finishes")
+	releaseStop()
+}
+
 func TestExternalActiveMediaCancelsRestoreBeforeUpdatingState(t *testing.T) {
 	t.Parallel()
 	st, _ := NewState(nil, "test-boot")

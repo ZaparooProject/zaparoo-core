@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -183,12 +184,41 @@ func HandleRunRest(
 	}
 }
 
+func waitForCurrentMediaReady(ctx context.Context, st *state.State) error {
+	for {
+		gen, active := st.ActiveMediaReadyGeneration()
+		if !active {
+			return nil
+		}
+
+		err := st.WaitForActiveMediaReady(ctx, gen)
+		switch {
+		case err == nil, errors.Is(err, state.ErrNoActiveMedia):
+			return nil
+		case errors.Is(err, state.ErrActiveMediaChanged):
+			continue
+		default:
+			return fmt.Errorf("wait for active media ready: %w", err)
+		}
+	}
+}
+
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
+
+	release, err := env.State.AcquireMediaStop(env.Context)
+	if err != nil {
+		return nil, fmt.Errorf("wait for in-flight media launch: %w", err)
+	}
+	defer release()
+
+	if err := waitForCurrentMediaReady(env.Context, env.State); err != nil {
+		return nil, err
+	}
+
 	// TODO: return an error when nothing is active, requires StopActiveLauncher
 	// to report whether anything was actually stopped
-	err := env.Platform.StopActiveLauncher(platforms.StopForMenu)
-	if err != nil {
+	if err := env.Platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return nil, fmt.Errorf("failed to stop active launcher: %w", err)
 	}
 	return NoContent{}, nil
