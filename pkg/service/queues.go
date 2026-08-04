@@ -321,8 +321,7 @@ func stopNativePlaybackBeforePrimaryCommand(
 		return nil
 	}
 	stopsPrimaryMedia := cmd.Name == gozapscript.ZapScriptCmdStop ||
-		cmd.Name == gozapscript.ZapScriptCmdPlaylistStop ||
-		cmd.Name == gozapscript.ZapScriptCmdPlaylistPause
+		cmd.Name == gozapscript.ZapScriptCmdPlaylistStop
 	if !zapscript.IsMediaLaunchingCommand(cmd.Name) && !stopsPrimaryMedia {
 		return nil
 	}
@@ -534,12 +533,14 @@ func handlePlaylist(
 			svc.State.SetActivePlaylist(pls)
 		}
 		if pls.Playing {
-			if slot == mediaslot.Background && !activePlaylist.Playing && pls.Current() == activePlaylist.Current() &&
-				svc.PlaybackManager != nil && svc.PlaybackManager.State(mediaslot.Background).Path != "" {
-				log.Info().Any("pls", playlistForLog(pls)).Msg("resuming background playlist playback")
-				svc.State.SetBackgroundAutoPaused(false)
-				if err := svc.PlaybackManager.Resume(mediaslot.Background); err != nil {
-					log.Warn().Err(err).Msg("failed to resume background playlist playback")
+			if !activePlaylist.Playing && pls.Current() == activePlaylist.Current() &&
+				svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != "" {
+				log.Info().Any("pls", playlistForLog(pls)).Str("slot", slot).Msg("resuming playlist playback")
+				if slot == mediaslot.Background {
+					svc.State.SetBackgroundAutoPaused(false)
+				}
+				if err := svc.PlaybackManager.Resume(slot); err != nil {
+					log.Warn().Err(err).Str("slot", slot).Msg("failed to resume playlist playback")
 				}
 				return
 			}
@@ -557,9 +558,9 @@ func handlePlaylist(
 				launchPlaylistMedia(svc, pls, player)
 			}()
 		} else {
-			if slot == mediaslot.Background && svc.PlaybackManager != nil {
-				if err := svc.PlaybackManager.Pause(mediaslot.Background); err != nil {
-					log.Warn().Err(err).Msg("failed to pause background playlist playback")
+			if svc.PlaybackManager != nil && svc.PlaybackManager.State(slot).Path != "" {
+				if err := svc.PlaybackManager.Pause(slot); err != nil {
+					log.Warn().Err(err).Str("slot", slot).Msg("failed to pause playlist playback")
 				}
 			}
 			log.Info().Any("pls", playlistForLog(pls)).Msg("updating playlist")

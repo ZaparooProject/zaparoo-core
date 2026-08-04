@@ -796,7 +796,8 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 		return platforms.CmdResult{}, err
 	}
 
-	if slot == mediaslot.Background {
+	if slot == mediaslot.Background ||
+		(env.PlaybackManager != nil && env.PlaybackManager.State(slot).Path != "") {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,

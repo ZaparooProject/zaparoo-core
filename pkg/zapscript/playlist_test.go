@@ -999,6 +999,46 @@ func TestCmdPlaylistPause_BackgroundSlot(t *testing.T) {
 	<-queue
 }
 
+func TestCmdPlaylistPause_PrimaryNativeAudioPreservesLauncher(t *testing.T) {
+	t.Parallel()
+
+	// StopActiveLauncher is NOT mocked — a call to it would panic the test.
+	mp := newPlaylistTestPlatform()
+	playback := &playlistPlaybackStub{state: audio.PlaybackState{
+		Path:    "track.mp3",
+		Playing: true,
+	}}
+	pls, queue := makePlaylistEnv()
+	pls.Playing = true
+
+	result, err := cmdPlaylistPause(mp, platforms.CmdEnv{
+		PlaybackManager: playback,
+		Playlist:        playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Playing)
+	<-queue
+}
+
+func TestCmdPlaylistPause_PrimaryNonAudioStopsLauncher(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	mp.On("StopActiveLauncher", platforms.StopForMenu).Return(nil).Once()
+	pls, queue := makePlaylistEnv()
+	pls.Playing = true
+
+	result, err := cmdPlaylistPause(mp, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	<-queue
+	mp.AssertExpectations(t)
+}
+
 // initTestLauncherCache seeds GlobalLauncherCache with a launcher that accepts
 // the given extensions (no folder restriction) and cleans up after the test.
 // Call from non-parallel tests only, since the cache is global.
