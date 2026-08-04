@@ -153,12 +153,8 @@ var BaseDefaults = Values{
 	},
 	Backup: Backup{
 		Remote: BackupRemote{
-			BaseURL:  DefaultBackupRemoteBaseURL,
 			Schedule: DefaultBackupRemoteSchedule,
 		},
-	},
-	Playtime: Playtime{
-		BaseURL: DefaultPlaytimeBaseURL,
 	},
 	Readers: Readers{
 		AutoDetect: true,
@@ -345,6 +341,15 @@ func (c *Instance) LoadTOML(data string) error {
 func (c *Instance) applyTOML(data string) error {
 	if err := toml.Unmarshal([]byte(data), &c.vals); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Older releases persisted runtime fallbacks as though they were user
+	// overrides. Treat only those exact legacy values as unset so future saves omit them.
+	if c.vals.Backup.Remote.BaseURL == DefaultBackupRemoteBaseURL {
+		c.vals.Backup.Remote.BaseURL = ""
+	}
+	if c.vals.Playtime.BaseURL == DefaultPlaytimeBaseURL {
+		c.vals.Playtime.BaseURL = ""
 	}
 
 	c.vals.Launchers.Custom = validateCustomLaunchers(
