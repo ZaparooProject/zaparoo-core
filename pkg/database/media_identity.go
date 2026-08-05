@@ -257,9 +257,8 @@ func normalizeMediaIdentityTags(
 		}
 		return tags[i].Role < tags[j].Role
 	})
-	if tags == nil {
-		return []MediaIdentityTag{}, nil
-	}
+	// Allocated with make above, so an empty tag set is an empty slice and
+	// never nil: the canonical payload must encode "tags":[], not null.
 	return tags, nil
 }
 
