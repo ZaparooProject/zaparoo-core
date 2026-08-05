@@ -52,3 +52,63 @@ func TestSQLMarkMediaHistorySynced_ChunksFullUploadBatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// The sweep reads an empty batch as "nothing left to backfill" and stamps its
+// marker, so every read fault here must surface as an error instead of an
+// empty page that would silently skip the rest of the history.
+func TestSQLGetMediaHistoryIdentityBackfillBatch_ReadFaultsAreErrors(t *testing.T) {
+	t.Parallel()
+
+	const query = `SELECT DBID, SystemID, MediaPath\s+FROM MediaHistory`
+	tests := []struct {
+		arrange func(mock sqlmock.Sqlmock)
+		name    string
+		wantErr string
+	}{
+		{
+			name: "query fails",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnError(sqlmock.ErrCancelled)
+			},
+			wantErr: "failed to query media history identity backfill batch",
+		},
+		{
+			name: "row does not scan",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(
+					sqlmock.NewRows([]string{"DBID", "SystemID", "MediaPath"}).
+						AddRow("not-a-dbid", "SNES", "/games/Game.sfc"),
+				)
+			},
+			wantErr: "failed to scan media history identity backfill row",
+		},
+		{
+			name: "iteration fails midway",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(
+					sqlmock.NewRows([]string{"DBID", "SystemID", "MediaPath"}).
+						AddRow(int64(1), "SNES", "/games/Game.sfc").
+						RowError(0, sqlmock.ErrCancelled),
+				)
+			},
+			wantErr: "error iterating media history identity backfill rows",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db, mock, err := testsqlmock.NewSQLMock()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+			tt.arrange(mock)
+
+			batch, err := sqlGetMediaHistoryIdentityBackfillBatch(
+				t.Context(), db, 0, database.CurrentMediaIdentityPolicyVersion, 10,
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Nil(t, batch)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

@@ -359,12 +359,13 @@ func (m *MockUserDBI) UpdateMediaHistoryTime(dbid int64, playTime int) error {
 	return nil
 }
 
-func (m *MockUserDBI) UpdateMediaHistoryIdentity(dbid int64, identity database.MediaIdentity) error {
+func (m *MockUserDBI) UpdateMediaHistoryIdentity(dbid int64, identity *database.MediaIdentity) (bool, error) {
 	args := m.Called(dbid, identity)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI update media history identity failed: %w", err)
+	updated := args.Bool(0)
+	if err := args.Error(1); err != nil {
+		return updated, fmt.Errorf("mock UserDBI update media history identity failed: %w", err)
 	}
-	return nil
+	return updated, nil
 }
 
 func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
@@ -454,6 +455,20 @@ func (m *MockUserDBI) BackfillMediaHistoryUUIDs() (int64, error) {
 		return backfilled, fmt.Errorf("mock UserDBI backfill media history uuids failed: %w", err)
 	}
 	return backfilled, nil
+}
+
+func (m *MockUserDBI) GetMediaHistoryIdentityBackfillBatch(
+	afterDBID int64, policyVersion int, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(afterDBID, policyVersion, limit)
+	entries, ok := args.Get(0).([]database.MediaHistoryEntry)
+	if !ok {
+		entries = nil
+	}
+	if err := args.Error(1); err != nil {
+		return entries, fmt.Errorf("mock UserDBI get media history identity backfill batch failed: %w", err)
+	}
+	return entries, nil
 }
 
 func (m *MockUserDBI) ResetMediaHistorySyncAfter(watermark *time.Time) error {

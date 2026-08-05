@@ -1,7 +1,7 @@
 -- +goose Up
 -- +goose StatementBegin
 
--- Snapshot disambiguating filename tags (type:value pairs from the media
+-- Snapshot complete canonical filename tags (type:value pairs from the media
 -- scanner, e.g. "region:us", "rev:1") onto the durable game-identity rows.
 -- MediaDB is disposable (rebuilt by rescan, never backed up), so tags for
 -- played/favorited items must be captured at record time or they are lost

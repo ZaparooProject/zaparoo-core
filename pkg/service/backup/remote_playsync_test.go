@@ -25,6 +25,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -50,6 +51,18 @@ func TestOnlineErrorClassifiers(t *testing.T) {
 // playSyncTestEntry builds one closed, syncable MediaHistory row.
 func playSyncTestEntry(dbid int64, id, mediaName string, updatedAt time.Time) database.MediaHistoryEntry {
 	endTime := updatedAt
+	identity := &database.MediaIdentity{
+		MediaType:              "Game",
+		CanonicalSystemID:      "SNES",
+		DisplayName:            mediaName,
+		CoreSlug:               "game",
+		ObservationFingerprint: "sha256:fixture",
+		Tags: []database.MediaIdentityTag{
+			{Type: "extension", Value: "sfc", Role: database.MediaIdentityTagRoleContext},
+			{Type: "region", Value: "us", Role: database.MediaIdentityTagRoleIdentity},
+		},
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
 	return database.MediaHistoryEntry{
 		DBID:          dbid,
 		ID:            id,
@@ -57,14 +70,18 @@ func playSyncTestEntry(dbid int64, id, mediaName string, updatedAt time.Time) da
 		EndTime:       &endTime,
 		SystemID:      "snes",
 		SystemName:    "Super Nintendo",
-		MediaPath:     "/games/" + mediaName + ".sfc",
+		MediaPath:     filepath.Join("games", mediaName+".sfc"),
 		MediaName:     mediaName,
+		MediaIdentity: identity,
 		LauncherID:    "test",
 		PlayTime:      1800,
 		ClockReliable: true,
 		ClockSource:   "system",
-		Tags:          []string{"region:us", "ext:sfc"},
-		UpdatedAt:     updatedAt,
+		// Matches identity.LegacyTags(): enrichment rewrites the legacy tags
+		// column from the identity snapshot, so a row carrying an identity
+		// always has this exact derived form.
+		Tags:      []string{"extension:sfc", "region:us"},
+		UpdatedAt: updatedAt,
 	}
 }
 
@@ -107,6 +124,45 @@ func configurePlaytimeTestAuth(t *testing.T, manager *Manager, baseURL string) {
 	t.Cleanup(config.ClearAuthCfgForTesting)
 }
 
+func TestMediaHistoryToRemote_AddsIdentityWithoutBreakingLegacyShape(t *testing.T) {
+	t.Parallel()
+
+	updatedAt := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	entry := playSyncTestEntry(
+		1, "11111111-1111-4111-8111-111111111111", "Game A", updatedAt,
+	)
+	item := mediaHistoryToRemote(&entry)
+	encoded, err := json.Marshal(item)
+	require.NoError(t, err)
+
+	//nolint:tagliatelle // Current remote API compatibility shape uses snake_case.
+	var legacy struct {
+		SessionUUID string   `json:"session_uuid"`
+		SystemID    string   `json:"system_id"`
+		MediaPath   string   `json:"media_path"`
+		MediaName   string   `json:"media_name"`
+		Tags        []string `json:"tags"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &legacy),
+		"current API receivers must ignore the additive media_identity object")
+	assert.Equal(t, entry.ID, legacy.SessionUUID)
+	assert.Equal(t, entry.SystemID, legacy.SystemID)
+	assert.Equal(t, entry.MediaPath, legacy.MediaPath)
+	assert.Equal(t, entry.MediaName, legacy.MediaName)
+	assert.Equal(t, entry.Tags, legacy.Tags)
+
+	var payload map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &payload))
+	assert.Contains(t, payload, "media_identity")
+
+	entry.MediaIdentity = nil
+	encoded, err = json.Marshal(mediaHistoryToRemote(&entry))
+	require.NoError(t, err)
+	payload = nil
+	require.NoError(t, json.Unmarshal(encoded, &payload))
+	assert.NotContains(t, payload, "media_identity", "legacy and unindexed rows omit identity")
+}
+
 func TestSyncPlayHistory_BulkImport(t *testing.T) {
 	// No t.Parallel(): configurePlaytimeTestAuth mutates the global auth config.
 	env := newBackupTestEnv(t, "mister")
@@ -143,8 +199,11 @@ func TestSyncPlayHistory_BulkImport(t *testing.T) {
 	assert.Equal(t, 1800, uploaded[0].PlayTimeSecs)
 	assert.True(t, first.UpdatedAt.Equal(uploaded[0].CoreUpdatedAt))
 	assert.True(t, uploaded[0].ClockReliable)
-	assert.Equal(t, []string{"region:us", "ext:sfc"}, uploaded[0].Tags,
-		"disambiguating tags travel with the session")
+	assert.Equal(t, []string{"extension:sfc", "region:us"}, uploaded[0].Tags,
+		"complete canonical tags travel with the compatibility session fields")
+	require.NotNil(t, uploaded[0].MediaIdentity)
+	assert.Equal(t, first.MediaIdentity, uploaded[0].MediaIdentity)
+	assert.Equal(t, "sha256:fixture", uploaded[0].MediaIdentity.ObservationFingerprint)
 }
 
 func TestSyncPlayHistory_UploadsActiveSession(t *testing.T) {

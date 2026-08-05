@@ -48,10 +48,11 @@ func (db *UserDB) UpdateMediaHistoryTime(dbid int64, playTime int) error {
 	return sqlUpdateMediaHistoryTime(db.ctx, db.sql.Load(), dbid, playTime)
 }
 
-// UpdateMediaHistoryIdentity stores the scanner-derived name and tags for a history entry.
-func (db *UserDB) UpdateMediaHistoryIdentity(dbid int64, identity database.MediaIdentity) error {
+// UpdateMediaHistoryIdentity stores a complete scanner identity snapshot and
+// reports whether this policy version changed the history row.
+func (db *UserDB) UpdateMediaHistoryIdentity(dbid int64, identity *database.MediaIdentity) (bool, error) {
 	if db.sql.Load() == nil {
-		return ErrNullSQL
+		return false, ErrNullSQL
 	}
 	return sqlUpdateMediaHistoryIdentity(db.ctx, db.sql.Load(), dbid, identity)
 }
@@ -150,8 +151,9 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		INSERT INTO MediaHistory(
 			ID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags,
+			MediaIdentity, MediaIdentityPolicyVersion
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare media history insert statement: %w", err)
@@ -169,6 +171,10 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 	var profileID any
 	if entry.ProfileID != nil {
 		profileID = *entry.ProfileID
+	}
+	identityPolicyVersion := 0
+	if entry.MediaIdentity != nil {
+		identityPolicyVersion = entry.MediaIdentity.PolicyVersion
 	}
 
 	result, err := stmt.ExecContext(ctx,
@@ -192,6 +198,8 @@ func sqlAddMediaHistory(ctx context.Context, db *sql.DB, entry *database.MediaHi
 		deviceID,
 		profileID,
 		database.EncodeTagStrings(entry.Tags),
+		database.EncodeMediaIdentity(entry.MediaIdentity),
+		identityPolicyVersion,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute media history insert: %w", err)
@@ -229,17 +237,38 @@ func sqlUpdateMediaHistoryTime(ctx context.Context, db *sql.DB, dbid int64, play
 }
 
 func sqlUpdateMediaHistoryIdentity(
-	ctx context.Context, db *sql.DB, dbid int64, identity database.MediaIdentity,
-) error {
-	_, err := db.ExecContext(ctx, `
-		UPDATE MediaHistory
-		SET MediaName = ?, Tags = ?, UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
-		WHERE DBID = ?;
-	`, identity.Name, database.EncodeTagStrings(identity.Tags), time.Now().Unix(), dbid)
-	if err != nil {
-		return fmt.Errorf("failed to execute media history identity update: %w", err)
+	ctx context.Context, db *sql.DB, dbid int64, identity *database.MediaIdentity,
+) (bool, error) {
+	if identity == nil {
+		return false, errors.New("media history identity is required")
 	}
-	return nil
+	result, err := db.ExecContext(ctx, `
+		UPDATE MediaHistory
+		SET MediaName = ?, Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
+		    UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
+		WHERE DBID = ?
+		  AND (
+		    MediaIdentityPolicyVersion < ? OR
+		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '')
+		  );
+	`,
+		identity.DisplayName,
+		database.EncodeTagStrings(identity.LegacyTags()),
+		database.EncodeMediaIdentity(identity),
+		identity.PolicyVersion,
+		time.Now().Unix(),
+		dbid,
+		identity.PolicyVersion,
+		identity.PolicyVersion,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute media history identity update: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to count media history identity update: %w", err)
+	}
+	return rows > 0, nil
 }
 
 func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime time.Time, playTime int) error {
@@ -318,7 +347,8 @@ func sqlGetMediaHistory(
 			DBID, ID, StartTime, EndTime, SystemID, SystemName,
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
-			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags
+			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID, Tags,
+			MediaIdentity
 		FROM MediaHistory
 		WHERE %s
 		ORDER BY DBID DESC
@@ -352,7 +382,7 @@ func sqlGetMediaHistory(
 		var createdAtUnix, updatedAtUnix int64
 		var id, clockSource sql.NullString
 		var deviceID, rowProfileID sql.NullString
-		var rawTags string
+		var rawTags, rawIdentity string
 
 		err = rows.Scan(
 			&entry.DBID,
@@ -377,6 +407,7 @@ func sqlGetMediaHistory(
 			&deviceID,
 			&rowProfileID,
 			&rawTags,
+			&rawIdentity,
 		)
 		if err != nil {
 			return list, fmt.Errorf("failed to scan media history row: %w", err)
@@ -397,6 +428,7 @@ func sqlGetMediaHistory(
 			entry.ProfileID = &profileStr
 		}
 		entry.Tags = database.DecodeTagStrings(rawTags)
+		entry.MediaIdentity = database.DecodeMediaIdentity(rawIdentity)
 
 		entry.StartTime = time.Unix(startTimeUnix, 0)
 		if endTimeUnix.Valid {

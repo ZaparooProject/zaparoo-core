@@ -20,6 +20,7 @@
 package userdb
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func addSyncTestEntry(t *testing.T, db *UserDB, id, mediaName string, updatedAt 
 		StartTime:     startTime,
 		SystemID:      "snes",
 		SystemName:    "Super Nintendo",
-		MediaPath:     "/games/" + mediaName + ".sfc",
+		MediaPath:     filepath.Join("games", mediaName+".sfc"),
 		MediaName:     mediaName,
 		LauncherID:    "test",
 		PlayTime:      1800,
@@ -50,6 +51,48 @@ func addSyncTestEntry(t *testing.T, db *UserDB, id, mediaName string, updatedAt 
 		CreatedAt:     startTime,
 		UpdatedAt:     updatedAt.Add(-time.Second),
 	})
+	require.NoError(t, err)
+	require.NoError(t, db.CloseMediaHistory(dbid, endTime, 1800))
+	return dbid
+}
+
+func mediaHistoryIdentityFixture(name string, policyVersion int) *database.MediaIdentity {
+	return &database.MediaIdentity{
+		MediaType:              "Game",
+		CanonicalSystemID:      "SNES",
+		DisplayName:            name,
+		CoreSlug:               "game",
+		ObservationFingerprint: "sha256:fixture",
+		Tags: []database.MediaIdentityTag{
+			{Type: "extension", Value: "sfc", Role: database.MediaIdentityTagRoleContext},
+			{Type: "region", Value: "us", Role: database.MediaIdentityTagRoleIdentity},
+		},
+		PolicyVersion: policyVersion,
+	}
+}
+
+func addIdentitySyncTestEntry(
+	t *testing.T,
+	db *UserDB,
+	id string,
+	mediaName string,
+	updatedAt time.Time,
+	identity *database.MediaIdentity,
+) int64 {
+	t.Helper()
+	startTime := updatedAt.Add(-30 * time.Minute)
+	endTime := updatedAt
+	entry := &database.MediaHistoryEntry{
+		ID: id, StartTime: startTime, SystemID: "SNES", SystemName: "Super Nintendo",
+		MediaPath: filepath.Join("games", mediaName+".sfc"), MediaName: mediaName,
+		LauncherID: "test", PlayTime: 1800, BootUUID: "boot-1", ClockReliable: true,
+		ClockSource: "system", CreatedAt: startTime, UpdatedAt: updatedAt.Add(-time.Second),
+		MediaIdentity: identity,
+	}
+	if identity != nil {
+		entry.Tags = identity.LegacyTags()
+	}
+	dbid, err := db.AddMediaHistory(entry)
 	require.NoError(t, err)
 	require.NoError(t, db.CloseMediaHistory(dbid, endTime, 1800))
 	return dbid
@@ -85,6 +128,152 @@ func TestBackfillMediaHistoryUUIDs_Integration(t *testing.T) {
 			assert.NotEmpty(t, entry.ID)
 		}
 	}
+}
+
+func TestMediaHistoryIdentityBackfillBatch_SelectsOnlyMissingOrOlderPolicy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	missingDBID := addIdentitySyncTestEntry(
+		t, userDB, "11111111-1111-4111-8111-111111111111", "Missing", base, nil,
+	)
+	olderDBID := addIdentitySyncTestEntry(
+		t, userDB, "22222222-2222-4222-8222-222222222222", "Older", base.Add(time.Minute),
+		mediaHistoryIdentityFixture("Older", 0),
+	)
+	addIdentitySyncTestEntry(
+		t, userDB, "33333333-3333-4333-8333-333333333333", "Current", base.Add(2*time.Minute),
+		mediaHistoryIdentityFixture("Current", database.CurrentMediaIdentityPolicyVersion),
+	)
+	futureDBID := addIdentitySyncTestEntry(
+		t, userDB, "44444444-4444-4444-8444-444444444444", "Future", base.Add(3*time.Minute),
+		mediaHistoryIdentityFixture("Future", database.CurrentMediaIdentityPolicyVersion+1),
+	)
+
+	batch, err := userDB.GetMediaHistoryIdentityBackfillBatch(
+		0, database.CurrentMediaIdentityPolicyVersion, 100,
+	)
+	require.NoError(t, err)
+	require.Len(t, batch, 2)
+	assert.Equal(t, missingDBID, batch[0].DBID)
+	assert.Equal(t, olderDBID, batch[1].DBID)
+
+	updated, err := userDB.UpdateMediaHistoryIdentity(
+		futureDBID, mediaHistoryIdentityFixture("Downgrade", database.CurrentMediaIdentityPolicyVersion),
+	)
+	require.NoError(t, err)
+	assert.False(t, updated, "current Core must never overwrite a future-policy snapshot")
+}
+
+// An empty batch is how the sweep learns it is finished, so a caller that
+// asks for a non-positive limit must get the default page rather than a false
+// "nothing left" that stamps the marker and skips every remaining row.
+func TestMediaHistoryIdentityBackfillBatch_ClampsNonPositiveLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	addIdentitySyncTestEntry(
+		t, userDB, "11111111-1111-4111-8111-111111111111", "First", base, nil,
+	)
+	addIdentitySyncTestEntry(
+		t, userDB, "22222222-2222-4222-8222-222222222222", "Second", base.Add(time.Minute), nil,
+	)
+
+	for _, limit := range []int{0, -1} {
+		batch, err := userDB.GetMediaHistoryIdentityBackfillBatch(
+			0, database.CurrentMediaIdentityPolicyVersion, limit,
+		)
+		require.NoError(t, err)
+		assert.Len(t, batch, 2, "limit %d must fall back to the default page size", limit)
+	}
+}
+
+func TestMediaHistoryIdentityMutation_RequeuesAfterStaleSyncAcknowledgement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	dbid := addIdentitySyncTestEntry(
+		t, userDB, "11111111-1111-4111-8111-111111111111", "Fallback Name", base, nil,
+	)
+	initial, err := userDB.GetMediaHistorySyncBatch(time.Time{}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, initial, 1)
+	staleRef := database.MediaHistorySyncRef{DBID: dbid, UpdatedAt: initial[0].UpdatedAt}
+	require.NoError(t, userDB.MarkMediaHistorySynced(
+		[]database.MediaHistorySyncRef{staleRef}, time.Now().Truncate(time.Second),
+	))
+
+	identity := mediaHistoryIdentityFixture("Indexed Name", database.CurrentMediaIdentityPolicyVersion)
+	updated, err := userDB.UpdateMediaHistoryIdentity(dbid, identity)
+	require.NoError(t, err)
+	require.True(t, updated)
+	// A sync response for the pre-enrichment row can arrive after the update.
+	require.NoError(t, userDB.MarkMediaHistorySynced(
+		[]database.MediaHistorySyncRef{staleRef}, time.Now().Truncate(time.Second),
+	))
+
+	batch, err := userDB.GetMediaHistorySyncBatch(time.Time{}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, batch, 1)
+	assert.Equal(t, "Indexed Name", batch[0].MediaName)
+	assert.Equal(t, identity.LegacyTags(), batch[0].Tags)
+	assert.Equal(t, identity, batch[0].MediaIdentity)
+	assert.Nil(t, batch[0].SyncedAt)
+	assert.True(t, batch[0].UpdatedAt.After(staleRef.UpdatedAt))
+
+	updated, err = userDB.UpdateMediaHistoryIdentity(dbid, identity)
+	require.NoError(t, err)
+	assert.False(t, updated, "same-policy live/backfill races must be idempotent")
+}
+
+func TestMediaHistoryCloseAndIdentityEnrichment_PreserveBothUpdates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	now := time.Now().Truncate(time.Second)
+	dbid, err := userDB.AddMediaHistory(&database.MediaHistoryEntry{
+		ID: "11111111-1111-4111-8111-111111111111", StartTime: now.Add(-time.Minute),
+		SystemID: "SNES", SystemName: "Super Nintendo", MediaPath: filepath.Join("games", "Game.sfc"),
+		MediaName: "Fallback", LauncherID: "test", BootUUID: "boot-1", ClockReliable: true,
+		ClockSource: "system", CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Second),
+	})
+	require.NoError(t, err)
+	identity := mediaHistoryIdentityFixture("Indexed", database.CurrentMediaIdentityPolicyVersion)
+
+	errCh := make(chan error, 2)
+	go func() {
+		_, updateErr := userDB.UpdateMediaHistoryIdentity(dbid, identity)
+		errCh <- updateErr
+	}()
+	go func() {
+		errCh <- userDB.CloseMediaHistory(dbid, now, 60)
+	}()
+	require.NoError(t, <-errCh)
+	require.NoError(t, <-errCh)
+
+	entries, err := userDB.GetMediaHistory(nil, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, identity, entries[0].MediaIdentity)
+	assert.Equal(t, "Indexed", entries[0].MediaName)
+	require.NotNil(t, entries[0].EndTime)
+	assert.Equal(t, now, *entries[0].EndTime)
+	assert.Equal(t, 60, entries[0].PlayTime)
 }
 
 func TestGetMediaHistorySyncBatch_CursorWalk_Integration(t *testing.T) {

@@ -564,6 +564,7 @@ func sqlSearchMediaPathExact(
 			Systems.SystemID,
 			MediaTitles.Name,
 			Media.Path,
+			MediaTitles.Slug,
 			Media.DBID
 		from Systems
 		inner join MediaTitles
@@ -603,6 +604,7 @@ func sqlSearchMediaPathExact(
 			&result.SystemID,
 			&result.Name,
 			&result.Path,
+			&result.Slug,
 			&result.MediaID,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)

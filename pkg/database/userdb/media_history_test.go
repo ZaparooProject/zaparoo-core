@@ -85,6 +85,8 @@ func TestSqlAddMediaHistory_Success(t *testing.T) {
 			nil,
 			nil,
 			database.EncodeTagStrings(entry.Tags),
+			"",
+			0,
 		).
 		WillReturnResult(sqlmock.NewResult(expectedDBID, 1))
 
@@ -144,6 +146,8 @@ func TestSqlAddMediaHistory_DatabaseError(t *testing.T) {
 			nil,
 			nil,
 			database.EncodeTagStrings(entry.Tags),
+			"",
+			0,
 		).
 		WillReturnError(sqlmock.ErrCancelled)
 
@@ -197,8 +201,16 @@ func TestSqlUpdateMediaHistoryIdentity(t *testing.T) {
 	t.Parallel()
 
 	identity := database.MediaIdentity{
-		Name: "Indexed Name",
-		Tags: []string{"region:us", "year:1990"},
+		MediaType:              "Game",
+		CanonicalSystemID:      "SNES",
+		DisplayName:            "Indexed Name",
+		CoreSlug:               "indexedname",
+		ObservationFingerprint: "sha256:test",
+		Tags: []database.MediaIdentityTag{
+			{Type: "region", Value: "us", Role: database.MediaIdentityTagRoleIdentity},
+			{Type: "year", Value: "1990", Role: database.MediaIdentityTagRoleIdentity},
+		},
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
 	}
 	tests := []struct {
 		execErr error
@@ -216,25 +228,75 @@ func TestSqlUpdateMediaHistoryIdentity(t *testing.T) {
 			defer func() { _ = db.Close() }()
 
 			expectation := mockDB.ExpectExec(
-				`UPDATE MediaHistory SET MediaName = \?, Tags = \?, `+
-					`UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), SyncedAt = NULL WHERE DBID = \?;`,
-			).WithArgs(identity.Name, database.EncodeTagStrings(identity.Tags), sqlmock.AnyArg(), int64(42))
+				`UPDATE MediaHistory SET MediaName = \?, Tags = \?, MediaIdentity = \?, `+
+					`MediaIdentityPolicyVersion = \?, UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), `+
+					`SyncedAt = NULL WHERE DBID = \?.*MediaIdentityPolicyVersion < \?`,
+			).WithArgs(
+				identity.DisplayName,
+				database.EncodeTagStrings(identity.LegacyTags()),
+				database.EncodeMediaIdentity(&identity),
+				identity.PolicyVersion,
+				sqlmock.AnyArg(),
+				int64(42),
+				identity.PolicyVersion,
+				identity.PolicyVersion,
+			)
 			if tt.execErr != nil {
 				expectation.WillReturnError(tt.execErr)
 			} else {
 				expectation.WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 
-			err = sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, identity)
+			updated, updateErr := sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, &identity)
 			if tt.execErr != nil {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "failed to execute media history identity update")
+				require.Error(t, updateErr)
+				assert.Contains(t, updateErr.Error(), "failed to execute media history identity update")
+				assert.False(t, updated)
 			} else {
-				require.NoError(t, err)
+				require.NoError(t, updateErr)
+				assert.True(t, updated)
 			}
 			assert.NoError(t, mockDB.ExpectationsWereMet())
 		})
 	}
+}
+
+// A nil identity would otherwise blank MediaName and Tags while stamping a
+// policy version, so the row reads as snapshotted with nothing in it.
+func TestSqlUpdateMediaHistoryIdentity_RejectsNilIdentity(t *testing.T) {
+	t.Parallel()
+	db, mockDB, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	updated, err := sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, nil)
+	require.Error(t, err)
+	assert.False(t, updated)
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "no statement may reach the database")
+}
+
+// A driver that cannot report affected rows must not be read as "row already
+// current": the sweep would take that as a clean skip and stamp its marker
+// over history it never enriched.
+func TestSqlUpdateMediaHistoryIdentity_ReportsUncountableUpdate(t *testing.T) {
+	t.Parallel()
+	db, mockDB, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mockDB.ExpectExec(`UPDATE MediaHistory SET MediaName`).
+		WillReturnResult(sqlmock.NewErrorResult(sqlmock.ErrCancelled))
+
+	identity := database.MediaIdentity{
+		MediaType: "Game", CanonicalSystemID: "SNES", DisplayName: "Game",
+		CoreSlug: "game", ObservationFingerprint: "sha256:test",
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
+	updated, err := sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, &identity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to count media history identity update")
+	assert.False(t, updated)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
 func TestSqlCloseMediaHistory_Success(t *testing.T) {
@@ -295,20 +357,21 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "nes", "Nintendo Entertainment System",
 			filepath.Join(string(filepath.Separator), "games", "mario.nes"),
 			"Super Mario Bros.", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, `["region:us"]`,
+			true, "system", startTime, startTime, nil, nil, `["region:us"]`, "",
 		).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "snes", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"),
 			"The Legend of Zelda", "retroarch", 7200,
 			"boot-1", int64(2000), 7200, 7200, false,
-			true, "system", startTime, startTime, nil, nil, "",
+			true, "system", startTime, startTime, nil, nil, "", "",
 		)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -340,6 +403,7 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	})
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -454,6 +518,7 @@ func TestSqlGetMediaHistory_SentinelUsesMaxInt64(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	})
 
 	// Verify that lastID=0 uses math.MaxInt64 as sentinel, not the old MaxInt32
@@ -483,11 +548,12 @@ func TestSqlGetMediaHistory_LargeLastID(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	}).AddRow(
 		int64(math.MaxInt32)+50, "uuid-1", time.Now().Unix(), nil, "nes", "NES",
 		filepath.Join(string(filepath.Separator), "games", "mario.nes"), "Mario", "retroarch", 100,
 		"boot-1", int64(1000), 100, 100, false,
-		true, "system", time.Now().Unix(), time.Now().Unix(), nil, nil, "",
+		true, "system", time.Now().Unix(), time.Now().Unix(), nil, nil, "", "",
 	)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -517,13 +583,14 @@ func TestSqlGetMediaHistory_SingleSystemFilter(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	}).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "SNES", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"),
 			"The Legend of Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, `["region:jp"]`,
+			true, "system", startTime, startTime, nil, nil, `["region:jp"]`, "",
 		)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*WHERE DBID < \? AND SystemID = \?.*ORDER BY DBID DESC LIMIT`).
@@ -554,18 +621,19 @@ func TestSqlGetMediaHistory_MultipleSystemIDs(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	}).
 		AddRow(
 			int64(2), "uuid-2", startTime, endTime, "SNES", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"), "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, "",
+			true, "system", startTime, startTime, nil, nil, "", "",
 		).
 		AddRow(
 			int64(1), "uuid-1", startTime, endTime, "NES", "NES",
 			filepath.Join(string(filepath.Separator), "games", "mario.nes"), "Mario", "retroarch", 1800,
 			"boot-1", int64(2000), 1800, 1800, false,
-			true, "system", startTime, startTime, nil, nil, "",
+			true, "system", startTime, startTime, nil, nil, "", "",
 		)
 
 	mock.ExpectPrepare(
@@ -598,12 +666,13 @@ func TestSqlGetMediaHistory_SystemFilterWithPagination(t *testing.T) {
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
 		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
 		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID", "ProfileID", "Tags",
+		"MediaIdentity",
 	}).
 		AddRow(
 			int64(8), "uuid-8", startTime, endTime, "SNES", "Super Nintendo",
 			filepath.Join(string(filepath.Separator), "games", "zelda.sfc"), "Zelda", "retroarch", 3600,
 			"boot-1", int64(1000), 3600, 3600, false,
-			true, "system", startTime, startTime, nil, nil, "",
+			true, "system", startTime, startTime, nil, nil, "", "",
 		)
 
 	// lastID=10 + SystemID filter — both conditions in WHERE clause

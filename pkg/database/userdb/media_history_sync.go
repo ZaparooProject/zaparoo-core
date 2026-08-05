@@ -48,6 +48,17 @@ func (db *UserDB) BackfillMediaHistoryUUIDs() (int64, error) {
 	return sqlBackfillMediaHistoryUUIDs(db.ctx, db.sql.Load())
 }
 
+// GetMediaHistoryIdentityBackfillBatch returns legacy history rows whose
+// scanner identity is absent or older than policyVersion. Future-policy rows
+// are never selected for downgrade.
+func (db *UserDB) GetMediaHistoryIdentityBackfillBatch(
+	afterDBID int64, policyVersion int, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	return sqlGetMediaHistoryIdentityBackfillBatch(
+		db.ctx, db.sql.Load(), afterDBID, policyVersion, limit,
+	)
+}
+
 // ResetMediaHistorySyncAfter clears local acknowledgements newer than the
 // server watermark so restored or reset server state is uploaded again. A nil
 // watermark means the server has no sessions and resets every local row.
@@ -150,6 +161,51 @@ func sqlBackfillMediaHistoryUUIDs(ctx context.Context, db *sql.DB) (backfilled i
 	return backfilled, nil
 }
 
+func sqlGetMediaHistoryIdentityBackfillBatch(
+	ctx context.Context,
+	db *sql.DB,
+	afterDBID int64,
+	policyVersion int,
+	limit int,
+) ([]database.MediaHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT DBID, SystemID, MediaPath
+		FROM MediaHistory
+		WHERE DBID > ?
+		  AND COALESCE(IsDeleted, 0) = 0
+		  AND (
+		    MediaIdentityPolicyVersion < ? OR
+		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '')
+		  )
+		ORDER BY DBID ASC
+		LIMIT ?;
+	`, afterDBID, policyVersion, policyVersion, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media history identity backfill batch: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close media history identity backfill rows")
+		}
+	}()
+
+	entries := make([]database.MediaHistoryEntry, 0, limit)
+	for rows.Next() {
+		var entry database.MediaHistoryEntry
+		if scanErr := rows.Scan(&entry.DBID, &entry.SystemID, &entry.MediaPath); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan media history identity backfill row: %w", scanErr)
+		}
+		entries = append(entries, entry)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("error iterating media history identity backfill rows: %w", rowsErr)
+	}
+	return entries, nil
+}
+
 func sqlResetMediaHistorySyncAfter(ctx context.Context, db *sql.DB, watermark *time.Time) error {
 	query := `UPDATE MediaHistory SET SyncedAt = NULL;`
 	var args []any
@@ -176,7 +232,7 @@ func sqlGetMediaHistorySyncBatch(
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
 			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID, ProfileID,
-			COALESCE(IsDeleted, 0), SyncedAt, Tags
+			COALESCE(IsDeleted, 0), SyncedAt, Tags, MediaIdentity
 		FROM MediaHistory
 		WHERE SyncedAt IS NULL
 		  AND (UpdatedAt > ? OR (UpdatedAt = ? AND DBID > ?))
@@ -214,7 +270,7 @@ func sqlGetMediaHistorySyncBatch(
 		var deviceID, rowProfileID sql.NullString
 		var isDeleted int64
 		var syncedAtUnix sql.NullInt64
-		var rawTags string
+		var rawTags, rawIdentity string
 
 		err = rows.Scan(
 			&entry.DBID,
@@ -241,6 +297,7 @@ func sqlGetMediaHistorySyncBatch(
 			&isDeleted,
 			&syncedAtUnix,
 			&rawTags,
+			&rawIdentity,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan media history sync row: %w", err)
@@ -273,6 +330,7 @@ func sqlGetMediaHistorySyncBatch(
 			entry.SyncedAt = &syncedAt
 		}
 		entry.Tags = database.DecodeTagStrings(rawTags)
+		entry.MediaIdentity = database.DecodeMediaIdentity(rawIdentity)
 
 		list = append(list, entry)
 	}

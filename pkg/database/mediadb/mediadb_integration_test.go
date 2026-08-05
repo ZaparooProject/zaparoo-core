@@ -617,6 +617,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Super Mario Bros", results[0].Name)
+	assert.Equal(t, "supermariobrothers", results[0].Slug)
 
 	// Test case-insensitive search - must match full path
 	results, err = mediaDB.SearchMediaPathExact(

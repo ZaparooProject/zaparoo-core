@@ -61,21 +61,22 @@ type PlaySyncInfo struct {
 
 //nolint:tagliatelle,govet // Remote API contract uses snake_case JSON fields.
 type remotePlaySessionItem struct {
-	ProfileID     *string    `json:"profile_id,omitempty"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	SessionUUID   string     `json:"session_uuid"`
-	SystemID      string     `json:"system_id"`
-	SystemName    string     `json:"system_name"`
-	LauncherID    string     `json:"launcher_id"`
-	MediaPath     string     `json:"media_path"`
-	MediaName     string     `json:"media_name"`
-	ClockSource   string     `json:"clock_source"`
-	Tags          []string   `json:"tags,omitempty"`
-	StartedAt     time.Time  `json:"started_at"`
-	CoreUpdatedAt time.Time  `json:"core_updated_at"`
-	PlayTimeSecs  int        `json:"play_time_secs"`
-	ClockReliable bool       `json:"clock_reliable"`
-	IsDeleted     bool       `json:"is_deleted"`
+	ProfileID     *string                 `json:"profile_id,omitempty"`
+	EndedAt       *time.Time              `json:"ended_at,omitempty"`
+	MediaIdentity *database.MediaIdentity `json:"media_identity,omitempty"`
+	SessionUUID   string                  `json:"session_uuid"`
+	SystemID      string                  `json:"system_id"`
+	SystemName    string                  `json:"system_name"`
+	LauncherID    string                  `json:"launcher_id"`
+	MediaPath     string                  `json:"media_path"`
+	MediaName     string                  `json:"media_name"`
+	ClockSource   string                  `json:"clock_source"`
+	Tags          []string                `json:"tags,omitempty"`
+	StartedAt     time.Time               `json:"started_at"`
+	CoreUpdatedAt time.Time               `json:"core_updated_at"`
+	PlayTimeSecs  int                     `json:"play_time_secs"`
+	ClockReliable bool                    `json:"clock_reliable"`
+	IsDeleted     bool                    `json:"is_deleted"`
 }
 
 type remotePlaySessionRequest struct {
@@ -96,6 +97,7 @@ func mediaHistoryToRemote(entry *database.MediaHistoryEntry) remotePlaySessionIt
 	return remotePlaySessionItem{
 		SessionUUID:   entry.ID,
 		ProfileID:     entry.ProfileID,
+		MediaIdentity: entry.MediaIdentity,
 		SystemID:      entry.SystemID,
 		SystemName:    entry.SystemName,
 		LauncherID:    entry.LauncherID,
