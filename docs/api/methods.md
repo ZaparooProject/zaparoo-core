@@ -2,9 +2,23 @@
 
 Methods are used to execute actions and request data back from the API.
 
+## Access
+
+Each method below identifies which clients may call it:
+
+- **All clients:** localhost, paired admin, paired member, and unpaired remote clients accepted by the API transport.
+- **`profiles.manage`:** localhost and clients with the `profiles.manage` capability. Paired admins have this capability; paired members do not. Unpaired remote clients retain it for backward compatibility when encryption is disabled.
+- **`settings.write`:** localhost and clients with the `settings.write` capability. Paired admins have this capability; paired members do not. Unpaired remote clients retain it for backward compatibility when encryption is disabled.
+- **Localhost or paired admin:** localhost and authenticated paired admins only. Paired members and unpaired remote clients are rejected.
+- **Localhost only:** requests originating from Core's device. All remote clients are rejected.
+
+Use [`clients.current`](#clientscurrent) to inspect current connection's paired role and effective capabilities. A method may also require a resource-specific credential, such as a profile PIN; those requirements are documented separately from connection access.
+
 ## Launching
 
 ### run
+
+**Access:** All clients. Deprecated alias `launch` has the same access.
 
 Emulate the scanning of a token.
 
@@ -58,6 +72,8 @@ Currently, it is not reported if the launched ZapScript encountered an error dur
 
 ### stop
 
+**Access:** All clients.
+
 Kill any active launcher, if possible.
 
 This method is highly dependant on the platform and specific launcher used. It's not guaranteed that a launcher is capable of killing the playing process.
@@ -95,6 +111,8 @@ Currently, it is not reported if a process was killed or not.
 ```
 
 ### confirm
+
+**Access:** All clients.
 
 Confirm and launch a staged token from the launch guard.
 
@@ -137,6 +155,8 @@ Core exposes transient UI requests so connected clients—and host platform when
 UI events are intended for small, non-sensitive interactions. They are broadcast to every permitted connected client. Never use them for PINs, passwords, recovery codes, or other secrets.
 
 ### ui
+
+**Access:** All clients.
 
 Returns authoritative UI event state. Clients should call this after connecting or reconnecting.
 
@@ -202,6 +222,8 @@ Choice IDs are presentation-safe. Executable ZapScript and private choice values
 
 ### ui.respond
 
+**Access:** All clients.
+
 Responds to active UI event. First valid response wins globally and closes host/client renderers.
 
 #### Parameters
@@ -256,6 +278,8 @@ Top-level `confirm` remains launch-guard-specific for compatibility. It cannot c
 ## Tokens
 
 ### tokens
+
+**Access:** All clients.
 
 Returns information about active and last scanned tokens.
 
@@ -313,6 +337,8 @@ None.
 ```
 
 ### tokens.history
+
+**Access:** All clients.
 
 Returns a list of the last recorded token launches.
 
@@ -373,6 +399,8 @@ None.
 ## Media
 
 ### media
+
+**Access:** All clients.
 
 Returns the current media database status and active media.
 
@@ -487,6 +515,8 @@ None.
 ```
 
 ### media.search
+
+**Access:** All clients.
 
 Query the media database and return all matching indexed media.
 
@@ -670,6 +700,8 @@ An object:
 
 ### media.browse
 
+**Access:** All clients.
+
 Browse indexed media content by directory, similar to navigating a file manager. Supports filesystem paths, virtual URI schemes (e.g. `mame-arcade://`), and paginated results.
 
 When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots. When `systems` is provided without `path`, returns populated launcher routes for those systems only. Pass the same `systems` filter when browsing a returned route to keep shared paths scoped to the selected systems.
@@ -830,6 +862,8 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 ### media.browse.index
 
+**Access:** All clients.
+
 Return the ordered first-character "jump to letter" buckets for a browse scope. Each bucket carries a count and a ready-to-use cursor that seeks `media.browse` to the start of that bucket, so a single round trip gives a client everything it needs to draw a section rail _and_ jump into the full ordered list. This avoids paging from the top to reach a distant section, which matters on constrained clients (e.g. MiSTer).
 
 The scope parameters mirror `media.browse` so the index describes the exact list `media.browse` would return for the same scope. The per-bucket `cursor` is an ordinary browse cursor: pass it to `media.browse` with the same `path`/`systems`/`sort` to get a normal page that begins at the bucket and continues into the next bucket as the user scrolls.
@@ -902,6 +936,8 @@ Clients should render `groups` exactly as received, in order, without assuming a
 To jump to "A", the client calls `media.browse` with that group's `cursor` and the same `path`/`sort`; the returned page begins at the first "A" title and continues into "B" as the user keeps scrolling.
 
 ### media.tags
+
+**Access:** All clients.
 
 Query the media database and return available tags for filtering.
 
@@ -979,6 +1015,8 @@ have finite vocabularies per system and are always returned in full without trun
 
 ### media.tags.update
 
+**Access:** All clients.
+
 Add or remove user tags for an indexed media item.
 
 The initial mutable tag is `user:favorite`. It appears in normal media tag results and can be queried with `media.search` tag filters such as `user:favorite`, `-user:favorite`, and `~user:favorite`.
@@ -1035,6 +1073,8 @@ Either `mediaId` or `system` plus `path` is required. At least one of `add` or `
 ```
 
 ### media.generate
+
+**Access:** All clients. Deprecated alias `media.index` has the same access.
 
 Create a new media database index.
 
@@ -1110,6 +1150,8 @@ Returns `null` on success. Indexing runs in the background after the response is
 
 ### media.generate.cancel
 
+**Access:** All clients.
+
 Cancel any currently running media database indexing operation.
 
 #### Parameters
@@ -1158,7 +1200,49 @@ None.
 }
 ```
 
+### media.generate.resume
+
+**Access:** All clients.
+
+Resume media database indexing paused by Core while media is active.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description |
+| :------ | :----- | :------- | :---------- |
+| message | string | Yes      | `Media indexing resumed` when a paused index resumes, or `Media indexing is not paused` when there is nothing to resume. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9a51f39f-7a5e-11ef-87ee-020304050607",
+  "method": "media.generate.resume"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9a51f39f-7a5e-11ef-87ee-020304050607",
+  "result": {
+    "message": "Media indexing resumed"
+  }
+}
+```
+
 ### media.active
+
+**Access:** All clients.
 
 Returns the currently active media.
 
@@ -1217,6 +1301,8 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
 
 ### media.active.update
 
+**Access:** All clients.
+
 Update the currently active media information.
 
 #### Parameters
@@ -1261,6 +1347,8 @@ Returns `null` on success.
 ```
 
 ### media.history.latest
+
+**Access:** All clients.
 
 Return the most recent played media entry from the user database only. This is intended for startup paths that need the last played game as quickly as possible, without media database enrichment.
 
@@ -1319,6 +1407,8 @@ None. Empty params may be omitted or sent as `{}`.
 ```
 
 ### media.history
+
+**Access:** All clients.
 
 Return paginated media play history.
 
@@ -1401,6 +1491,8 @@ Optionally, an object:
 
 ### media.history.top
 
+**Access:** All clients.
+
 Return aggregated media play history grouped by game, sorted by total play time descending. Useful for "most played" displays.
 
 #### Parameters
@@ -1475,6 +1567,8 @@ Optionally, an object:
 ```
 
 ### media.lookup
+
+**Access:** All clients.
 
 Resolve a game name and system to a media database match.
 
@@ -1574,6 +1668,8 @@ An object:
 ```
 
 ### media.meta
+
+**Access:** All clients.
 
 Return the full metadata graph for one indexed media row, including its title, system, tags, and scraped properties.
 
@@ -1715,6 +1811,8 @@ Property keys are canonical type tags such as `property:description`, `property:
 
 ### media.meta.update
 
+**Access:** All clients.
+
 Update writable metadata fields for one indexed media row, then return the same response shape as [`media.meta`](#mediameta).
 
 Use this to store a per-media launcher override. Core validates the launcher exists and supports the media row's system before saving it. Set `launcherOverride` to `null` to clear the override.
@@ -1786,6 +1884,8 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 ### media.image
 
+**Access:** All clients.
+
 Return the best matching image for one indexed media row as base64-encoded data.
 
 `media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
@@ -1850,6 +1950,8 @@ Resizing is intended for grid and preview views where transferring and holding f
 
 ### scrapers
 
+**Access:** All clients.
+
 List all registered metadata scrapers.
 
 #### Parameters
@@ -1902,6 +2004,8 @@ None.
 
 ### media.scrape
 
+**Access:** All clients.
+
 Start a metadata scraper run in the background.
 
 Scraping enriches existing MediaDB records only. It does not create media rows; run `media.generate` first so the filesystem scanner has indexed the library. Scraping and media indexing are mutually exclusive, and only one scraper can run at a time.
@@ -1950,6 +2054,8 @@ Returns `null` on success. The scraper continues after the response is sent.
 ```
 
 ### media.scrape.status
+
+**Access:** All clients.
 
 Return the latest known metadata scraper status.
 
@@ -2027,6 +2133,8 @@ None.
 
 ### media.scrape.cancel
 
+**Access:** All clients.
+
 Cancel the currently running metadata scraper operation.
 
 #### Parameters
@@ -2064,6 +2172,8 @@ None.
 ```
 
 ### media.scrape.resume
+
+**Access:** All clients.
 
 Resume a paused metadata scraper operation.
 
@@ -2105,6 +2215,8 @@ None.
 
 ### media.clean.orphans
 
+**Access:** All clients.
+
 Delete media rows marked missing and remove orphaned related data.
 
 This is intended for cleanup after files have been removed from disk and the media database has been refreshed. It removes missing `Media` rows, their tags and properties, and any titles that no longer have media rows. It does not run `VACUUM`; SQLite will reuse freed pages.
@@ -2144,6 +2256,8 @@ None.
 ```
 
 ### media.control
+
+**Access:** All clients.
 
 Send a control action to the active media's launcher.
 
@@ -2209,7 +2323,65 @@ Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`,
 }
 ```
 
+### media.title.parse
+
+**Access:** All clients.
+
+Preview title and slug generation for a media path without reading the filesystem or media database. This uses the same path parsing rules as media indexing.
+
+#### Parameters
+
+An object:
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| systemId | string | Yes      | System ID used to select game or media title-parsing rules. |
+| path     | string | Yes      | Media path to parse. |
+
+#### Result
+
+| Key          | Type             | Required | Description |
+| :----------- | :--------------- | :------- | :---------- |
+| name         | string           | Yes      | Parsed display title. |
+| slug         | string           | Yes      | Primary normalized title slug. |
+| secondarySlug | string          | No       | Secondary slug generated for a subtitle when present. |
+| slugLength   | number           | Yes      | Primary slug length in Unicode characters. |
+| slugWordCount | number          | Yes      | Number of words represented by primary slug. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c4e5f607-7a5d-11ef-9c7b-020304050607",
+  "method": "media.title.parse",
+  "params": {
+    "systemId": "NES",
+    "path": "roms/nes/Tetris.nes"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c4e5f607-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "name": "Tetris",
+    "slug": "tetris",
+    "slugLength": 6,
+    "slugWordCount": 1
+  }
+}
+```
+
 ### systems
+
+**Access:** All clients.
 
 List systems currently indexed or supported by an available launcher on the running platform. Virtual systems are also included.
 
@@ -2274,6 +2446,8 @@ See [System object](#system-object).
 ## Settings
 
 ### settings
+
+**Access:** All clients. `backupRemoteEnabled`, `backupRemoteSchedule`, `backupRemoteBaseUrl`, and `playtimeSyncEnabled` are returned only to localhost and paired admin clients.
 
 List currently set configuration settings.
 
@@ -2363,6 +2537,8 @@ None.
 
 ### settings.update
 
+**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup and play-history sync settings require localhost or paired admin, so unpaired remote clients cannot change them.
+
 Update one or more settings in-memory and save changes to disk.
 
 This method will only write values which are supplied. Existing values will not be modified.
@@ -2421,6 +2597,8 @@ Returns `null` on success.
 
 ### settings.reload
 
+**Access:** All clients.
+
 Reload settings and mappings from disk.
 
 #### Parameters
@@ -2454,6 +2632,8 @@ Returns `null` on success.
 ```
 
 ### settings.auth.claim
+
+**Access:** All clients.
 
 Redeem a claim token against a remote auth server and store the resulting credentials in `auth.toml`.
 
@@ -2507,6 +2687,8 @@ An object:
 
 ### settings.auth.status
 
+**Access:** All clients.
+
 Report whether Core holds a stored bearer credential for an auth server URL. The check is local only: the token is never validated against the server and no token material is returned.
 
 Status probes are only answered for official Zaparoo API hosts over HTTPS and for the configured remote backup base URL. Any other URL returns `linked: false` without revealing whether a credential exists.
@@ -2554,6 +2736,8 @@ An object:
 
 ### settings.auth.unlink
 
+**Access:** Localhost or paired admin.
+
 Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured remote backup server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup state is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups.
 
 Requires a localhost client or a paired admin client.
@@ -2593,6 +2777,8 @@ None.
 ```
 
 ### settings.auth.link
+
+**Access:** Localhost or paired admin.
 
 Start a reverse device link flow (device-authorization style): Core requests a link from the auth server, returns a user code and verification URLs to display, then polls in the background until the user approves the link in their account. On approval the resulting claim token is redeemed through the same pipeline as `settings.auth.claim` and the credential is stored in `auth.toml`.
 
@@ -2649,6 +2835,8 @@ A link status object:
 
 ### settings.auth.link.status
 
+**Access:** Localhost and paired admin clients receive full status. Unpaired remote clients receive redacted status. Paired members are rejected.
+
 Return the state of the active link flow as a link status object (see `settings.auth.link`). When no flow has been started, `status` is `none`.
 
 Access is tiered: localhost clients and paired admin clients receive the full object including `userCode` and verification URLs; unpaired remote clients receive only the redacted state; paired member clients are forbidden.
@@ -2687,6 +2875,8 @@ A link status object (see `settings.auth.link`).
 
 ### settings.auth.link.cancel
 
+**Access:** Localhost or paired admin.
+
 Cancel the pending link flow. Requires a localhost client or a paired admin client. Returns the terminal `cancelled` status object with user code and verification URLs omitted. When no flow is pending, returns an error (`no active link request`).
 
 #### Parameters
@@ -2722,6 +2912,8 @@ A link status object (see `settings.auth.link`) with `status` set to `cancelled`
 ```
 
 ### settings.logs.download
+
+**Access:** All clients.
 
 Download the current log file as base64-encoded content.
 
@@ -2763,29 +2955,480 @@ None.
 }
 ```
 
-### Device backup methods
+### Device backup response objects
 
-Backup methods operate on portable full-device ZIP snapshots. Authentication credentials are excluded from local and remote backups. Restoring a backup restarts Core while preserving the destination device's identity, encryption setting, paired clients, and stored authentication credentials. Mutating, listing, inspecting, and restoring methods require a localhost client or a paired admin client. Restore is refused while media is active.
+Backup methods use the following shared response objects. Authentication credentials are excluded from every backup. Restoring preserves the destination device's identity, encryption setting, paired clients, and stored credentials.
 
-| Method | Parameters | Result |
-| :----- | :--------- | :----- |
-| `settings.backup` | None | Creates a local ZIP and returns backup metadata. `integrity` is `valid` after creation. |
-| `settings.backup.list` | None | Lists local ZIP metadata without reading manifests. |
-| `settings.backup.inspect` | `{ "name": string }` | Reads manifest metadata. Payload `integrity` is `unchecked`; restore verifies every payload before mutation. |
-| `settings.backup.delete` | `{ "name": string }` | Deletes local ZIP and returns `null`. |
-| `settings.backup.restore` | `{ "name": string }` | Transactionally restores local ZIP, returns restore metadata, then restarts Core after response is written. |
-| `settings.backup.status` | None | Returns local and remote status, partial warnings, active operation, link state, linked device identity (`deviceName`, `linkedAt`), and Warp availability. Remote status distinguishes the latest successful run (`lastSuccessAt`) from the last stored content change (`lastSnapshotCreatedAt`); `lastRunNoChanges` identifies a successful unchanged run. A stale availability value triggers a background refresh, and the response never blocks on the remote API. |
-| `settings.backup.remote.run` | None | Creates a manual remote backup and returns uploaded/deduplicated file and pack counts, bytes, quota usage, warnings, skipped-file count, and `noChanges` when the server already holds an identical backup. |
-| `settings.backup.remote.list` | None | Lists remote backups. Backup and device IDs are opaque strings. |
-| `settings.backup.remote.restore` | `{ "id": string }` | Transactionally restores a remote backup, reports completion, then restarts Core. |
+#### Local backup object
 
-`backup.remote.enabled` enables automatic scheduling only. Linked devices may manually upload, list, and restore while scheduling is disabled. Warp availability gates upload and scheduling; listing and restoring existing backups remain available. A remote API `401` immediately marks the device unlinked until a fresh link succeeds.
+| Key        | Type                                    | Required | Description |
+| :--------- | :-------------------------------------- | :------- | :---------- |
+| name       | string                                  | Yes      | Backup ZIP filename. |
+| path       | string                                  | No       | Backup ZIP path on the device. |
+| createdAt  | string                                  | Yes      | Creation time in RFC 3339 format. |
+| size       | number                                  | Yes      | ZIP size in bytes. |
+| status     | string                                  | Yes      | `success` or `partial`. `partial` means one or more files were skipped. |
+| integrity  | string                                  | Yes      | `valid` after creation or restore validation; `unchecked` after metadata-only inspection. |
+| categories | object                                  | No       | Map from category name to [backup category status](#backup-category-status-object). |
+| warnings   | [BackupWarning](#backup-warning-object)[] | No       | Files omitted from backup. |
+| error      | string                                  | No       | Safe error summary when available. |
 
-Archives use known categories (`zaparoo`, `settings`, `inputs`, `saves`, and `savestates`), exact platform matching, SHA-256 payload verification, and fixed entry, path, and manifest limits. Local and remote restores stage and verify every payload before device mutation. Remote files that cannot fit in a 64 MiB transfer pack are skipped and reported; server quota is checked before upload. `partial` status means a backup completed but one or more unsafe, unavailable, or oversized source files were skipped. Structured `warnings` describe unsafe or unavailable paths, while `skippedFiles` also counts oversized remote files. Archives that fail ZIP header, manifest, or platform-policy validation return an RPC error without backup metadata. Successful inspection reports `unchecked` because payload hashes are verified during restore.
+##### Backup category status object
+
+| Key     | Type    | Required | Description |
+| :------ | :------ | :------- | :---------- |
+| files   | number  | Yes      | Number of included files. |
+| bytes   | number  | Yes      | Total uncompressed bytes. |
+| enabled | boolean | Yes      | Whether category is enabled in backup scope. |
+
+##### Backup warning object
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| category | string | Yes      | Backup category. |
+| path     | string | Yes      | Affected source path. |
+| reason   | string | Yes      | Why file was skipped. |
+
+#### Remote backup object
+
+| Key          | Type   | Required | Description |
+| :----------- | :----- | :------- | :---------- |
+| id           | string | Yes      | Opaque remote backup ID. |
+| backupType   | string | Yes      | Backup type, such as `manual` or `scheduled`. |
+| schemaVersion | number | Yes     | Remote backup schema version. |
+| createdAt    | string | Yes      | Creation time in RFC 3339 format. |
+| sizeBytes    | number | Yes      | Stored backup size in bytes. |
+| manifestHash | string | Yes      | Hash identifying snapshot contents. |
+| categories   | object | Yes      | Map from category name to `{ "files": number, "bytes": number }`. |
+| coreVersion  | string | No       | Core version that created backup. |
+| platform     | string | No       | Source platform ID. |
+| verifiedAt   | string | No       | Latest verification time in RFC 3339 format. |
+| restoredAt   | string | No       | Latest restore time in RFC 3339 format. |
+| sourceDevice | object | No       | Source device: `id`, `name`, `linked`, `current`, and optional `platform`. IDs are opaque. |
+| incompatible | boolean | No      | Whether backup uses a newer schema and cannot be restored by this Core version. |
+| manifest     | object | No       | Remote manifest when endpoint includes it. |
+
+Local backups are ZIP archives using known categories (`zaparoo`, `settings`, `inputs`, `saves`, and `savestates`), exact platform matching, SHA-256 payload verification, and fixed entry, path, and manifest limits. Restores stage and verify every payload before device mutation. Remote files larger than a 64 MiB transfer pack are skipped and reported, and server quota is checked before upload.
+
+### settings.backup
+
+**Access:** Localhost or paired admin.
+
+Create a local full-device ZIP backup.
+
+#### Parameters
+
+None.
+
+#### Result
+
+A [local backup object](#local-backup-object). Newly created backups report `integrity: "valid"`.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-create-1",
+  "method": "settings.backup"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-create-1",
+  "result": {
+    "name": "backup-20260710-120000-manual.zip",
+    "path": "/data/backups/backup-20260710-120000-manual.zip",
+    "createdAt": "2026-07-10T12:00:00Z",
+    "size": 1048576,
+    "status": "success",
+    "integrity": "valid",
+    "categories": {
+      "settings": {"files": 4, "bytes": 8192, "enabled": true}
+    }
+  }
+}
+```
+
+### settings.backup.list
+
+**Access:** Localhost or paired admin.
+
+List local backup ZIP metadata without reading archive manifests.
+
+#### Parameters
+
+None.
+
+#### Result
+
+An array of objects with `name`, `createdAt`, `size`, and optional device-local `path`.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-list-1",
+  "method": "settings.backup.list"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-list-1",
+  "result": [
+    {
+      "name": "backup-20260710-120000-manual.zip",
+      "path": "/data/backups/backup-20260710-120000-manual.zip",
+      "createdAt": "2026-07-10T12:00:00Z",
+      "size": 1048576
+    }
+  ]
+}
+```
+
+### settings.backup.inspect
+
+**Access:** Localhost or paired admin.
+
+Read and validate local backup manifest metadata without hashing every payload.
+
+#### Parameters
+
+| Key  | Type   | Required | Description |
+| :--- | :----- | :------- | :---------- |
+| name | string | Yes      | Local backup filename from `settings.backup.list`. |
+
+#### Result
+
+A [local backup object](#local-backup-object). Successful inspection reports `integrity: "unchecked"`; restore performs full payload verification before mutation.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-inspect-1",
+  "method": "settings.backup.inspect",
+  "params": {"name": "backup-20260710-120000-manual.zip"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-inspect-1",
+  "result": {
+    "name": "backup-20260710-120000-manual.zip",
+    "createdAt": "2026-07-10T12:00:00Z",
+    "size": 1048576,
+    "status": "success",
+    "integrity": "unchecked"
+  }
+}
+```
+
+### settings.backup.delete
+
+**Access:** Localhost or paired admin.
+
+Delete a local backup ZIP.
+
+#### Parameters
+
+| Key  | Type   | Required | Description |
+| :--- | :----- | :------- | :---------- |
+| name | string | Yes      | Local backup filename from `settings.backup.list`. |
+
+#### Result
+
+Returns an empty object `{}` on success.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-delete-1",
+  "method": "settings.backup.delete",
+  "params": {"name": "backup-20260710-120000-manual.zip"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-delete-1",
+  "result": {}
+}
+```
+
+### settings.backup.restore
+
+**Access:** Localhost or paired admin.
+
+Transactionally restore a local backup. Restore is rejected while media is active or launching. Core creates a pre-restore safety backup, writes the response, then restarts.
+
+#### Parameters
+
+| Key  | Type   | Required | Description |
+| :--- | :----- | :------- | :---------- |
+| name | string | Yes      | Local backup filename from `settings.backup.list`. |
+
+#### Result
+
+| Key             | Type                                      | Required | Description |
+| :-------------- | :---------------------------------------- | :------- | :---------- |
+| restoredFrom    | [LocalBackup](#local-backup-object)       | Yes      | Backup restored after full validation. |
+| preRestoreBackup | [LocalBackup](#local-backup-object)      | No       | Safety backup created before mutation. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-restore-1",
+  "method": "settings.backup.restore",
+  "params": {"name": "backup-20260710-120000-manual.zip"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-restore-1",
+  "result": {
+    "restoredFrom": {
+      "name": "backup-20260710-120000-manual.zip",
+      "createdAt": "2026-07-10T12:00:00Z",
+      "size": 1048576,
+      "status": "success",
+      "integrity": "valid"
+    }
+  }
+}
+```
+
+### settings.backup.status
+
+**Access:** All clients. Localhost and paired admin requests may trigger a background refresh of stale remote availability; response never waits for that network request.
+
+Return current local and remote backup state.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key             | Type   | Required | Description |
+| :-------------- | :----- | :------- | :---------- |
+| activeOperation | string | No       | Active operation, such as `local-create`, `remote-upload`, or `remote-restore`. |
+| activeSince     | string | No       | Operation start time in RFC 3339 format. |
+| local           | object | Yes      | Local [backup status entry](#backup-status-entry-object). |
+| remote          | object | Yes      | Remote [backup status entry](#backup-status-entry-object). |
+
+##### Backup status entry object
+
+| Key                   | Type    | Required | Description |
+| :-------------------- | :------ | :------- | :---------- |
+| enabled               | boolean | Yes      | Whether backup mode is enabled. |
+| lastStatus            | string  | Yes      | `never`, `running`, `success`, `partial`, or `failed`. |
+| lastBackupSize        | number  | Yes      | Latest backup size in bytes. |
+| lastRunAt             | string  | No       | Latest attempt time. |
+| lastSuccessAt         | string  | No       | Latest successful run time, including unchanged remote runs. |
+| lastSnapshotCreatedAt | string  | No       | Time remote stored content last changed. |
+| lastRunNoChanges      | boolean | No       | Latest remote run succeeded without creating new snapshot. |
+| lastError             | string  | No       | Safe latest failure summary. |
+| categories            | object  | No       | Category status map. |
+| warnings              | [BackupWarning](#backup-warning-object)[] | No | Files skipped by latest run. |
+| skippedFiles          | number  | No       | Number of skipped files. |
+| schedule              | string  | No       | Remote schedule: `daily`, `weekly`, or `manual`. |
+| linked                | boolean | No       | Whether device has usable remote credentials. |
+| deviceName            | string  | No       | Linked remote device name. |
+| linkedAt              | string  | No       | Device link time. |
+| availability          | string  | No       | Cached remote service availability. |
+| availabilityCheckedAt | string  | No       | Latest availability check time. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-status-1",
+  "method": "settings.backup.status"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-status-1",
+  "result": {
+    "local": {"enabled": true, "lastStatus": "success", "lastBackupSize": 1048576},
+    "remote": {"enabled": true, "linked": true, "schedule": "daily", "lastStatus": "success", "lastBackupSize": 1048576}
+  }
+}
+```
+
+### settings.backup.remote.run
+
+**Access:** Localhost or paired admin.
+
+Create a manual remote backup. Manual backups remain available when automatic scheduling is disabled. Upload and scheduling require remote service availability.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key               | Type                                            | Required | Description |
+| :---------------- | :---------------------------------------------- | :------- | :---------- |
+| backup            | [RemoteBackup](#remote-backup-object)           | Yes      | Stored remote snapshot metadata. |
+| categories        | object                                           | Yes      | Uploaded category summaries. |
+| uploadedFiles     | number                                           | Yes      | Files uploaded in this run. |
+| dedupedFiles      | number                                           | Yes      | Files already stored remotely. |
+| uploadedPacks     | number                                           | Yes      | Transfer packs uploaded. |
+| uploadedBytes     | number                                           | Yes      | Bytes uploaded. |
+| skippedFiles      | number                                           | No       | Unsafe, unavailable, or oversized files skipped. |
+| warnings          | [BackupWarning](#backup-warning-object)[]        | No       | Structured skipped-file details. |
+| storageUsedBytes  | number                                           | No       | Remote account storage used. |
+| storageQuotaBytes | number                                           | No       | Remote account storage quota. |
+| noChanges         | boolean                                          | No       | Server already held identical snapshot; run succeeded without new stored content. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-remote-run-1",
+  "method": "settings.backup.remote.run"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-remote-run-1",
+  "result": {
+    "backup": {
+      "id": "01J2BACKUP",
+      "backupType": "manual",
+      "schemaVersion": 1,
+      "createdAt": "2026-07-10T12:00:00Z",
+      "sizeBytes": 1048576,
+      "manifestHash": "sha256:example",
+      "categories": {}
+    },
+    "categories": {},
+    "uploadedFiles": 4,
+    "dedupedFiles": 20,
+    "uploadedPacks": 1,
+    "uploadedBytes": 8192
+  }
+}
+```
+
+### settings.backup.remote.list
+
+**Access:** Localhost or paired admin.
+
+List remote backups and account quota. Listing existing backups remains available when uploads are unavailable.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key               | Type                                      | Required | Description |
+| :---------------- | :---------------------------------------- | :------- | :---------- |
+| items             | [RemoteBackup](#remote-backup-object)[]   | Yes      | Remote backups. IDs are opaque. |
+| storageUsedBytes  | number                                     | Yes      | Remote account storage used. |
+| storageQuotaBytes | number                                     | Yes      | Remote account storage quota. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-remote-list-1",
+  "method": "settings.backup.remote.list"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-remote-list-1",
+  "result": {
+    "items": [],
+    "storageUsedBytes": 0,
+    "storageQuotaBytes": 1073741824
+  }
+}
+```
+
+### settings.backup.remote.restore
+
+**Access:** Localhost or paired admin.
+
+Transactionally restore an opaque remote backup ID. Listing and restoring existing backups remain available when uploads are unavailable. Restore is rejected while media is active or launching. Core writes response, then restarts.
+
+#### Parameters
+
+| Key | Type   | Required | Description |
+| :-- | :----- | :------- | :---------- |
+| id  | string | Yes      | Opaque backup ID from `settings.backup.remote.list`. |
+
+#### Result
+
+| Key             | Type                                      | Required | Description |
+| :-------------- | :---------------------------------------- | :------- | :---------- |
+| restoredFrom    | [RemoteBackup](#remote-backup-object)     | Yes      | Remote backup restored after full validation. |
+| preRestoreBackup | [LocalBackup](#local-backup-object)      | No       | Local safety backup created before mutation. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-remote-restore-1",
+  "method": "settings.backup.remote.restore",
+  "params": {"id": "01J2BACKUP"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "backup-remote-restore-1",
+  "result": {
+    "restoredFrom": {
+      "id": "01J2BACKUP",
+      "backupType": "manual",
+      "schemaVersion": 1,
+      "createdAt": "2026-07-10T12:00:00Z",
+      "sizeBytes": 1048576,
+      "manifestHash": "sha256:example",
+      "categories": {}
+    }
+  }
+}
+```
+
+A remote API `401` marks device unlinked until a fresh link succeeds. Archives that fail ZIP header, manifest, hash, schema, or platform-policy validation return an RPC error without backup metadata.
 
 ## Playtime
 
 ### playtime
+
+**Access:** All clients.
 
 Query current playtime session status and usage statistics.
 
@@ -2887,6 +3530,8 @@ None.
 
 ### settings.playtime.limits
 
+**Access:** All clients.
+
 Get current playtime limit configuration.
 
 Returns all configured playtime limits including daily limits, session limits, session reset timeout, warning intervals, and retention settings.
@@ -2936,6 +3581,8 @@ None.
 ```
 
 ### settings.playtime.limits.update
+
+**Access:** Requires `settings.write`.
 
 Update playtime limit settings.
 
@@ -2993,7 +3640,7 @@ Profiles are lightweight runtime identities: named buckets of preferences, limit
 
 When no personal profile is active the device is on the implicit **shared profile** — the device as it behaves when nobody is signed in. The shared profile's playtime limits are the global config limits, its history is unattributed, and it owns everything the device did before profiles existed. Deactivating means switching to the shared profile. To stop the shared profile launching media (parking the device until someone identifies themselves), enable the `profilesRequireForLaunch` setting (see [settings](#settings)).
 
-A profile's **switch ID is a bearer credential**: presenting it — by scanning the card it is written on, or by sending it over the API — authorizes switching to that profile with no PIN, on every path. Switch IDs are therefore only returned to privileged clients (local connections and admin-role paired clients) for card-writing; member clients never see them. The optional 4-8 digit **PIN** protects the remaining path: switching by `profileId` picked from the visible profile list. Leaving a profile is always free — PINs gate entry only.
+A profile's **switch ID is a bearer credential**: presenting it — by scanning the card it is written on, or by sending it over the API — authorizes switching to that profile with no PIN, on every path. Switch IDs are therefore only returned to clients with `profiles.manage` for card-writing. This includes localhost, paired admins, and legacy unpaired remote clients when encryption is disabled; paired members never see them. The optional 4-8 digit **PIN** protects the remaining path: switching by `profileId` picked from the visible profile list. Leaving a profile is always free — PINs gate entry only.
 
 **Data swapping.** On supported platforms (currently MiSTer), profile-owned platform data follows the active profile. This includes saved progress and supported account-specific settings; exact items depend on the platform and installed integrations. The shared profile continues to use the platform's existing data, and creating profiles does not move that data. Device-owned settings remain shared across profiles.
 
@@ -3008,7 +3655,7 @@ A swap requested while media is running is deferred until it stops, so the runni
 | profileId     | string  | Yes      | Unique identifier of the profile.                                                                        |
 | name          | string  | Yes      | Display name, e.g. "Dad" or "Kid A".                                                                     |
 | role          | string  | Yes      | `admin` or `member`. Admin profiles may authorize local management and must have a PIN.                     |
-| switchId      | string  | No       | Word phrase written to profile switch cards, e.g. `corn-arm-truck`. A bearer credential: presenting it switches to the profile with no PIN. Returned to local callers and admin clients; omitted for remote member clients. |
+| switchId      | string  | No       | Word phrase written to profile switch cards, e.g. `corn-arm-truck`. A bearer credential: presenting it switches to profile with no PIN. Returned only to clients with `profiles.manage`. |
 | hasPin        | boolean | Yes      | True when the profile has a PIN set. The PIN itself is never returned.                                   |
 | limitsEnabled | boolean | No       | Playtime limits enabled override. Omitted = inherit the global setting.                                  |
 | dailyLimit    | string  | No       | Daily playtime limit override as a duration string (e.g. `2h30m`). Omitted = inherit; `0` = unlimited.   |
@@ -3018,6 +3665,8 @@ A swap requested while media is running is deferred until it stops, so the runni
 | lastUpdatedAt | number  | Yes      | Unix timestamp of last modification.                                                                     |
 
 ### profiles
+
+**Access:** All clients. `switchId` is returned only to clients with `profiles.manage`.
 
 List all profiles.
 
@@ -3033,7 +3682,9 @@ None.
 
 ### profiles.new
 
-Create a new profile. Remote callers require an admin client; local UIs may use `profiles.verify` as a nuisance gate. The switch ID is generated automatically; write it to a card as `**profile:<switchId>`.
+**Access:** Requires `profiles.manage`.
+
+Create a new profile. Local UIs may use `profiles.verify` as a nuisance gate. The switch ID is generated automatically; write it to a card as `**profile:<switchId>`.
 
 #### Parameters
 
@@ -3052,7 +3703,9 @@ The created [profile object](#profile-object).
 
 ### profiles.update
 
-Update a profile. Remote callers require an admin client; local UIs may gate this action with `profiles.verify`. Migrated profiles without an administrator may still be recovered locally. Omitted fields are unchanged. If the updated profile is currently active, its limit changes apply immediately (without resetting the running session).
+**Access:** Requires `profiles.manage`.
+
+Update a profile. Local UIs may gate this action with `profiles.verify`. Migrated profiles without an administrator may still be recovered locally. Omitted fields are unchanged. If the updated profile is currently active, its limit changes apply immediately (without resetting the running session).
 
 #### Parameters
 
@@ -3075,7 +3728,9 @@ The updated [profile object](#profile-object).
 
 ### profiles.delete
 
-Delete a profile. Remote callers require an admin client; local UIs may gate this action with `profiles.verify`. The final admin profile cannot be deleted. If it is active, the device switches to the shared profile. Past play history keeps its attribution.
+**Access:** Requires `profiles.manage`.
+
+Delete a profile. Local UIs may gate this action with `profiles.verify`. The final admin profile cannot be deleted. If it is active, the device switches to the shared profile. Past play history keeps its attribution.
 
 #### Parameters
 
@@ -3089,6 +3744,8 @@ Null.
 
 ### profiles.active
 
+**Access:** All clients.
+
 Get the device's currently active profile.
 
 #### Parameters
@@ -3100,6 +3757,8 @@ None.
 The active profile (a subset of the [profile object](#profile-object) without `switchId` and timestamps), or null when no profile is active.
 
 ### profiles.switch
+
+**Access:** All clients. Profile PIN or switch ID may still be required.
 
 Switch the device's active profile. Switching by `profileId` requires the profile's PIN when one is set. Switching by `switchId` never requires a PIN: the switch ID is a bearer credential, and presenting it is equivalent to scanning the profile's card. Calling with neither `profileId` nor `switchId` switches to the shared profile (deactivates), which never requires a PIN. Providing both is an error.
 
@@ -3118,6 +3777,8 @@ If a game is running when the profile changes, its playtime keeps counting again
 The new active profile, or null when deactivated (shared profile).
 
 ### profiles.verify
+
+**Access:** All clients. Requires valid profile PIN or switch ID.
 
 Verify a profile credential **without switching**: either a profile ID plus its PIN, or a switch ID (a bearer credential — resolving it is the verification, same as scanning the card). Success returns the profile's identity and changes nothing on the device: no session, no active-profile change, no server-side grant of any kind. Clients use this to gate their own ad-hoc UI items behind a credential — e.g. a kiosk frontend requiring a parent's PIN before opening its settings screen. The security of whatever the client unlocks is entirely the client's responsibility.
 
@@ -3149,6 +3810,8 @@ Verification failure (wrong PIN, unknown profile or switch ID, rate limited) ret
 Mappings are used to modify the contents of tokens before they're launched, based on different types of matching parameters. Stored mappings are queried before every launch and applied to the token if there's a match. This allows, for example, adding ZapScript to a read-only NFC tag based on its UID.
 
 ### mappings
+
+**Access:** All clients.
 
 List all mappings.
 
@@ -3214,6 +3877,8 @@ None.
 
 ### mappings.new
 
+**Access:** All clients.
+
 Create a new mapping.
 
 #### Parameters
@@ -3265,6 +3930,8 @@ Returns an empty object `{}` on success.
 
 ### mappings.delete
 
+**Access:** All clients.
+
 Delete an existing mapping.
 
 #### Parameters
@@ -3305,6 +3972,8 @@ Returns `null` on success.
 ```
 
 ### mappings.update
+
+**Access:** All clients.
 
 Change an existing mapping.
 
@@ -3356,6 +4025,8 @@ Returns `null` on success.
 
 ### mappings.reload
 
+**Access:** All clients.
+
 Reload mappings from the configuration file.
 
 #### Parameters
@@ -3391,6 +4062,8 @@ Returns `null` on success.
 ## Readers
 
 ### readers
+
+**Access:** All clients.
 
 List all currently connected readers and their capabilities.
 
@@ -3450,6 +4123,8 @@ None.
 
 ### readers.write
 
+**Access:** All clients.
+
 Attempt to write given text to the first available write-capable reader, if possible.
 
 #### Parameters
@@ -3492,6 +4167,8 @@ Returns `null` on success.
 
 ### readers.write.cancel
 
+**Access:** All clients.
+
 Cancel any ongoing write operation.
 
 #### Parameters
@@ -3531,6 +4208,8 @@ Returns `null` on success.
 ## Launchers
 
 ### launchers
+
+**Access:** All clients.
 
 List all launchers known to the running service. Suitable for populating a UI launcher picker (for example, when assigning a per-system default via [settings.update](#settingsupdate)).
 
@@ -3592,6 +4271,8 @@ None.
 
 ### launchers.refresh
 
+**Access:** All clients.
+
 Refresh internal launcher cache, forcing reload of launcher configurations and supported platform launcher dependencies. On MiSTer, this forces an RBF filesystem rescan and rewrites the persisted RBF cache.
 
 #### Parameters
@@ -3627,6 +4308,8 @@ Returns `null` on success.
 ## Service
 
 ### version
+
+**Access:** All clients.
 
 Return server's current version and platform.
 
@@ -3667,6 +4350,8 @@ None.
 ```
 
 ### health
+
+**Access:** All clients.
 
 Simple health check to verify the server is running and responding.
 
@@ -3709,6 +4394,8 @@ None.
 Inbox messages are system notifications stored on the server, typically used to inform the user of events like update availability, errors, or other important information.
 
 ### inbox
+
+**Access:** All clients.
 
 List all inbox messages.
 
@@ -3769,6 +4456,8 @@ None.
 
 ### inbox.delete
 
+**Access:** All clients.
+
 Delete a specific inbox message by ID.
 
 #### Parameters
@@ -3810,6 +4499,8 @@ Returns `null` on success.
 
 ### inbox.clear
 
+**Access:** All clients.
+
 
 Delete all inbox messages.
 
@@ -3845,7 +4536,63 @@ Returns `null` on success.
 
 ## Clients
 
+### clients
+
+**Access:** Localhost only.
+
+List paired API clients. Pairing secrets and authentication tokens are never returned.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key    | Type                                      | Required | Description |
+| :----- | :---------------------------------------- | :------- | :---------- |
+| clients | [PairedClient](#paired-client-object)[]  | Yes      | Paired client metadata. |
+
+##### Paired client object
+
+| Key       | Type   | Required | Description |
+| :-------- | :----- | :------- | :---------- |
+| clientId  | string | Yes      | Opaque client ID. |
+| clientName | string | Yes     | Name supplied by client during pairing. |
+| role      | string | Yes      | Paired role: `admin` or `member`. |
+| createdAt | number | Yes      | Pairing time as Unix seconds. |
+| lastSeenAt | number | Yes     | Latest recorded activity as Unix seconds. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-list-1",
+  "method": "clients"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-list-1",
+  "result": {
+    "clients": [
+      {
+        "clientId": "client-01J2",
+        "clientName": "Zaparoo App",
+        "role": "admin",
+        "createdAt": 1783684800,
+        "lastSeenAt": 1783688400
+      }
+    ]
+  }
+}
+```
+
 ### clients.current
+
+**Access:** All clients.
 
 Return pairing status, authenticated role, and effective capabilities for the current connection. This method is available to every connection accepted by the API transport.
 
@@ -3889,6 +4636,118 @@ None.
 }
 ```
 
+### clients.delete
+
+**Access:** Localhost only.
+
+Revoke a paired client. Existing encrypted sessions remain active until they disconnect; future sessions cannot authenticate.
+
+#### Parameters
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| clientId | string | Yes      | Opaque client ID from `clients`. |
+
+#### Result
+
+Returns an empty object `{}` on success.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-delete-1",
+  "method": "clients.delete",
+  "params": {"clientId": "client-01J2"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-delete-1",
+  "result": {}
+}
+```
+
+### clients.pair.start
+
+**Access:** Localhost only.
+
+Start a pairing approval window and return PIN for remote client. First paired client is always assigned `admin`; later clients default to `member` when `role` is omitted.
+
+#### Parameters
+
+An optional object:
+
+| Key  | Type   | Required | Description |
+| :--- | :----- | :------- | :---------- |
+| role | string | No       | Role granted after pairing: `admin` or `member`. Defaults to `member` after first client. |
+
+#### Result
+
+| Key      | Type   | Required | Description |
+| :------- | :----- | :------- | :---------- |
+| pin      | string | Yes      | Temporary pairing PIN for remote client. |
+| expiresAt | number | Yes     | PIN expiration time as Unix seconds. |
+
+See [encryption and pairing](./encryption) for remote pairing exchange.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-pair-start-1",
+  "method": "clients.pair.start",
+  "params": {"role": "member"}
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-pair-start-1",
+  "result": {
+    "pin": "123456",
+    "expiresAt": 1783685100
+  }
+}
+```
+
+### clients.pair.cancel
+
+**Access:** Localhost only.
+
+Cancel active pairing approval window.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns an empty object `{}` on success.
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-pair-cancel-1",
+  "method": "clients.pair.cancel"
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "clients-pair-cancel-1",
+  "result": {}
+}
+```
+
 ## Input
 
 Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely: no hooks, history, or sound effects are triggered.
@@ -3896,6 +4755,8 @@ Direct platform input control for remote control use cases. These methods bypass
 The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character.
 
 ### input.keyboard
+
+**Access:** All clients.
 
 Press keyboard keys using the ZapScript input macro format.
 
@@ -3937,6 +4798,8 @@ Returns `null` on success.
 ```
 
 ### input.gamepad
+
+**Access:** All clients.
 
 Press gamepad buttons using the ZapScript input macro format.
 
@@ -3980,6 +4843,8 @@ Returns `null` on success.
 ## Screenshot
 
 ### screenshot
+
+**Access:** All clients.
 
 Capture a screenshot of the current platform display. Returns the image as base64-encoded data and the path where it was saved on disk.
 
@@ -4027,6 +4892,8 @@ None.
 
 ### update.check
 
+**Access:** All clients.
+
 Check if a newer version of Zaparoo Core is available. Returns version information and release notes. On development builds, always returns `updateAvailable: false`.
 
 #### Parameters
@@ -4070,6 +4937,8 @@ None.
 ```
 
 ### update.apply
+
+**Access:** All clients.
 
 Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs. Returns an error if media indexing is in progress or if running a development build.
 
