@@ -61,7 +61,7 @@ func TestMetadata(t *testing.T) {
 	assert.Equal(t, "opticaldrive", metadata.ID)
 	assert.Equal(t, "Optical drive CD/DVD reader", metadata.Description)
 	assert.True(t, metadata.DefaultEnabled)
-	assert.True(t, metadata.DefaultAutoDetect)
+	assert.False(t, metadata.DefaultAutoDetect)
 }
 
 func TestIDs(t *testing.T) {
