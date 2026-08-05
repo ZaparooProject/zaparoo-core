@@ -34,6 +34,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type fixture struct {
+	path    string
+	region  string
+	titleID int64
+	title   bool
+}
+
 func TestBuildCandidateTagFilterSQL(t *testing.T) {
 	t.Parallel()
 
@@ -148,12 +155,6 @@ func TestSqlSearchMediaByTitleDBIDs_CandidateTagFilterSemantics(t *testing.T) {
 	system, err := mediaDB.InsertSystem(database.System{SystemID: nes.ID, Name: nes.ID})
 	require.NoError(t, err)
 
-	type fixture struct {
-		path    string
-		region  string
-		titleID int64
-		title   bool
-	}
 	fixtures := []fixture{
 		{path: filepath.Join("games", "us-file.nes"), region: "us"},
 		{path: filepath.Join("games", "us-title.nes"), region: "us", title: true},
