@@ -779,10 +779,6 @@ func sqlSearchMediaWithFilters(
 	variantArgs := make([]any, 0, len(variantGroups)*4) // Estimate: ~4 variants per word
 
 	for wordIdx, variants := range variantGroups {
-		if len(variants) == 0 {
-			continue
-		}
-
 		orConditions := make([]string, 0, len(variants)*2+1)
 
 		// Add OR conditions for each slug variant
@@ -801,8 +797,10 @@ func sqlSearchMediaWithFilters(
 			variantArgs = append(variantArgs, "%"+rawWords[wordIdx]+"%")
 		}
 
-		// Combine OR conditions for this word into a group
-		groupClauses = append(groupClauses, "("+strings.Join(orConditions, " OR ")+")")
+		if len(orConditions) > 0 {
+			// Combine OR conditions for this word into a group
+			groupClauses = append(groupClauses, "("+strings.Join(orConditions, " OR ")+")")
+		}
 	}
 
 	// If no variant groups (empty query), search for anything
@@ -838,12 +836,9 @@ func sqlSearchMediaWithFilters(
 			prepareVariadic("?", ",", len(systems)) + `) AND `
 	}
 
-	orderCondition := ""
-	if skipSystemFilter {
-		// The tag-driven plan iterates Media rowids from the IN-list; make the
-		// cursor pagination order explicit rather than relying on scan order.
-		orderCondition = ` ORDER BY Media.DBID ASC`
-	}
+	// Every query must use cursor order because media-type-scoped searches are
+	// merged in Go before applying the page limit.
+	orderCondition := ` ORDER BY Media.DBID ASC`
 
 	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 	mediaQuery := `
@@ -955,7 +950,7 @@ func sqlSearchMediaByTitleDBIDs(
 		extraArgs = append(extraArgs, *cursor)
 	}
 
-	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	tagFilterClauses, tagFilterArgs := buildCandidateTagFilterSQL(tags)
 	extraConditions = append(extraConditions, tagFilterClauses...)
 	extraArgs = append(extraArgs, tagFilterArgs...)
 
