@@ -1,8 +1,6 @@
 # Core API
 
-:::warning
-This API is not finalized. A version 1 release will be announced when it is ready for production. You're welcome to use the API as is, but be aware that breaking changes may still happen.
-:::
+The **Core API** is stable and ready for third-party integrations. The published `/api/v0.1` contract will receive backward-compatible, additive changes only. Any future breaking changes will use a new versioned endpoint.
 
 The **Core API** is available on and published by every device running the [Zaparoo Core](../../core) software. This API allows management of all Zaparoo features locally and remotely. The [Zaparoo](https://zaparoo.app/) app uses this API for all communication with Zaparoo devices, as do most of the flags when Zaparoo is run via the command line.
 
@@ -210,6 +208,17 @@ Anonymous cleartext access is, generally, allowed when an API connection is made
 
 This access is also allowed when a connection is made over a WebSocket Secure (wss) connection.
 
+### Permissions
+
+Core evaluates permissions for each request from connection locality and paired-client role:
+
+- **Localhost** requests originate from Core's device and have full access.
+- Paired **admin** clients have the `profiles.manage` and `settings.write` capabilities.
+- Paired **member** clients can use day-to-day methods, but cannot manage profiles or change protected settings.
+- **Unpaired remote** clients are possible only when encryption is disabled. For backward compatibility they receive admin capabilities, but methods explicitly restricted to localhost or to a paired admin still reject them.
+
+Call [`clients.current`](./methods.md#clientscurrent) to inspect current connection's role and capabilities. Every method in [API Methods](./methods) states its access requirements. Some read methods return additional sensitive fields to privileged clients; those fields are identified in their result contracts.
+
 ### Heartbeat
 
 If sent the bytes `ping`, the API will immediately respond with the bytes `pong`. This feature can be used by heartbeat functions in WebSocket libraries.
@@ -240,75 +249,98 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. These API docs cover **65 methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods execute actions and return data from Core. This catalog documents **88 non-deprecated registered methods**. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or paired admin; **Tiered** means fields or availability vary by client and are detailed in method reference.
 
-| ID                              | Description                                                                           |
-| :------------------------------ | :------------------------------------------------------------------------------------ |
-| launch                          | **Deprecated.** Alias for `run`.                                                      |
-| run                             | Run supplied ZapScript.                                                               |
-| stop                            | Kill any active launcher, if possible.                                                |
-| confirm                         | Confirm and launch the currently staged token.                                        |
-| ui                              | Return authoritative global UI event state.                                           |
-| ui.respond                      | Respond to active global UI event.                                                     |
-| tokens                          | List active tokens.                                                                   |
-| tokens.history                  | Return a list of the latest token launches.                                           |
-| media                           | Return status and statistics about media database.                                    |
-| media.active                    | Return the currently active (now playing) media.                                      |
-| media.active.update             | Update the currently active media information.                                        |
-| media.search                    | Query the media database and return all matching indexed media.                       |
-| media.tags                      | Query available tags for filtering media search results.                              |
-| media.tags.update               | Add or remove user tags for indexed media.                                            |
-| media.generate                  | Start a new media database index.                                                     |
-| media.generate.cancel           | Cancel any currently running media database indexing operation.                       |
-| media.generate.resume           | Resume paused media database indexing.                                                |
-| media.index                     | **Deprecated.** Alias for `media.generate`.                                           |
-| media.browse                    | Browse indexed media in a directory-style hierarchy.                                  |
-| media.browse.index              | Return first-character jump-to-letter buckets and seek cursors for a browse scope.    |
-| media.lookup                    | Resolve a game name and system to a media database match.                             |
-| media.meta                      | Return metadata for a specific indexed media row.                                     |
-| media.meta.update               | Update writable metadata fields for a specific indexed media row.                     |
-| media.image                     | Return the best matching image for a specific indexed media row.                      |
-| media.clean.orphans             | Remove orphaned media database rows.                                                  |
-| scrapers                        | List available metadata scrapers.                                                     |
-| media.scrape                    | Start metadata scraping for indexed media.                                            |
-| media.scrape.status             | Return the latest metadata scraping status.                                           |
-| media.scrape.cancel             | Cancel any currently running metadata scrape.                                         |
-| media.scrape.resume             | Resume paused metadata scraping.                                                      |
-| media.history                   | Return paginated media play history.                                                  |
-| media.control                   | Send a control action to the active media's launcher.                                 |
-| media.history.top               | Return most-played media ranked by total play time.                                   |
-| playtime                        | Query current playtime session status and usage statistics.                           |
-| systems                         | List all currently indexed systems.                                                   |
-| settings                        | List current configuration settings.                                                  |
-| settings.update                 | Update one or more settings in-memory and save changes to disk.                       |
-| settings.reload                 | Reload settings from disk.                                                            |
-| settings.auth.claim             | Claim API credentials from a remote server.                                           |
-| settings.logs.download          | Download the current log file as base64-encoded content.                              |
-| settings.playtime.limits        | Get current playtime limit configuration.                                             |
-| settings.playtime.limits.update | Update playtime limit settings.                                                       |
-| mappings                        | List all mappings.                                                                    |
-| mappings.new                    | Create a new mapping.                                                                 |
-| mappings.update                 | Change an existing mapping.                                                           |
-| mappings.delete                 | Delete an existing mapping.                                                           |
-| mappings.reload                 | Reload mappings from disk.                                                            |
-| readers                         | List all currently connected readers and their capabilities.                          |
-| readers.write                   | Attempt to write given text to the first available write-capable reader, if possible. |
-| readers.write.cancel            | Cancel any active write operation.                                                    |
-| launchers                       | List all launchers known to the running service.                                       |
-| launchers.refresh               | Refresh the internal launcher cache, forcing a reload of launcher configurations.     |
-| version                         | Return server's current version and platform.                                         |
-| health                          | Simple health check to verify the server is running and responding.                   |
-| inbox                           | List all inbox messages.                                                              |
-| inbox.delete                    | Delete a specific inbox message by ID.                                                |
-| inbox.clear                     | Delete all inbox messages.                                                            |
-| clients                         | List paired API clients.                                                              |
-| clients.current                 | Return current connection role and effective capabilities.                            |
-| clients.delete                  | Delete a paired API client.                                                           |
-| input.keyboard                  | Send a keyboard input sequence.                                                       |
-| input.gamepad                   | Send a gamepad input sequence.                                                        |
-| screenshot                      | Capture a screenshot of the current platform display.                                 |
-| update.check                    | Check if a newer version is available.                                                |
-| update.apply                    | Download and apply the latest update with graceful restart.                           |
+| ID                              | Description                                                                           | Access |
+| :------------------------------ | :------------------------------------------------------------------------------------ | :----- |
+| run                             | Run supplied ZapScript.                                                               | All clients |
+| stop                            | Kill any active launcher, if possible.                                                | All clients |
+| confirm                         | Confirm and launch the currently staged token.                                        | All clients |
+| ui                              | Return authoritative global UI event state.                                           | All clients |
+| ui.respond                      | Respond to active global UI event.                                                     | All clients |
+| tokens                          | List active tokens.                                                                   | All clients |
+| tokens.history                  | Return latest token launches.                                                         | All clients |
+| media                           | Return media database status and active media.                                        | All clients |
+| media.generate                  | Start a media database index.                                                         | All clients |
+| media.generate.cancel           | Cancel active media database indexing.                                                | All clients |
+| media.generate.resume           | Resume paused media database indexing.                                                | All clients |
+| media.search                    | Search indexed media.                                                                 | All clients |
+| media.browse                    | Browse indexed media in a directory hierarchy.                                        | All clients |
+| media.browse.index              | Return jump-to-letter buckets and seek cursors for browsing.                          | All clients |
+| media.tags                      | Query tags available for media filtering.                                             | All clients |
+| media.tags.update               | Add or remove user tags for indexed media.                                            | All clients |
+| media.meta.update               | Update writable metadata for indexed media.                                           | All clients |
+| media.active                    | Return currently active media.                                                        | All clients |
+| media.active.update             | Update currently active media information.                                            | All clients |
+| media.clean.orphans             | Remove orphaned media database rows.                                                  | All clients |
+| media.history                   | Return paginated media play history.                                                  | All clients |
+| media.history.latest            | Return latest media play history entries.                                             | All clients |
+| media.history.top               | Return most-played media ranked by play time.                                         | All clients |
+| media.lookup                    | Resolve game name and system to indexed media.                                        | All clients |
+| media.meta                      | Return metadata for indexed media.                                                    | All clients |
+| media.image                     | Return best matching image for indexed media.                                         | All clients |
+| scrapers                        | List available metadata scrapers.                                                     | All clients |
+| media.scrape                    | Start metadata scraping.                                                              | All clients |
+| media.scrape.status             | Return latest metadata scraping status.                                               | All clients |
+| media.scrape.cancel             | Cancel active metadata scraping.                                                      | All clients |
+| media.scrape.resume             | Resume paused metadata scraping.                                                      | All clients |
+| media.control                   | Send control action to active media launcher.                                         | All clients |
+| media.title.parse               | Preview media title and slug parsing.                                                  | All clients |
+| settings                        | List current configuration settings.                                                  | Tiered |
+| settings.update                 | Update and save configuration settings.                                               | `settings.write` |
+| settings.reload                 | Reload settings from disk.                                                            | All clients |
+| settings.logs.download          | Download current log file.                                                            | All clients |
+| settings.backup                 | Create local device backup.                                                           | Local/admin |
+| settings.backup.list            | List local device backups.                                                            | Local/admin |
+| settings.backup.inspect         | Inspect local device backup.                                                          | Local/admin |
+| settings.backup.delete          | Delete local device backup.                                                           | Local/admin |
+| settings.backup.restore         | Restore local device backup.                                                          | Local/admin |
+| settings.backup.status          | Return local and remote backup status.                                                | All clients |
+| settings.backup.remote.run      | Create remote device backup.                                                          | Local/admin |
+| settings.backup.remote.list     | List remote device backups.                                                           | Local/admin |
+| settings.backup.remote.restore  | Restore remote device backup.                                                         | Local/admin |
+| settings.playtime.limits        | Return playtime limit configuration.                                                  | All clients |
+| settings.playtime.limits.update | Update playtime limits.                                                               | `settings.write` |
+| playtime                        | Return playtime session status and usage.                                             | All clients |
+| systems                         | List indexed or supported systems.                                                    | All clients |
+| launchers                       | List launchers known to running service.                                              | All clients |
+| launchers.refresh               | Refresh launcher cache.                                                               | All clients |
+| mappings                        | List mappings.                                                                        | All clients |
+| mappings.new                    | Create mapping.                                                                       | All clients |
+| mappings.delete                 | Delete mapping.                                                                       | All clients |
+| mappings.update                 | Update mapping.                                                                       | All clients |
+| mappings.reload                 | Reload mappings from disk.                                                            | All clients |
+| readers                         | List connected readers and capabilities.                                              | All clients |
+| readers.write                   | Write text using available write-capable reader.                                      | All clients |
+| readers.write.cancel            | Cancel active reader write.                                                           | All clients |
+| input.keyboard                  | Send keyboard input sequence.                                                         | All clients |
+| input.gamepad                   | Send gamepad input sequence.                                                          | All clients |
+| screenshot                      | Capture platform display.                                                             | All clients |
+| version                         | Return Core version and platform.                                                     | All clients |
+| health                          | Check whether Core is responding.                                                     | All clients |
+| inbox                           | List inbox messages.                                                                  | All clients |
+| inbox.delete                    | Delete inbox message.                                                                 | All clients |
+| inbox.clear                     | Delete all inbox messages.                                                            | All clients |
+| clients                         | List paired clients.                                                                  | Localhost |
+| clients.current                 | Return current connection role and capabilities.                                      | All clients |
+| clients.delete                  | Revoke paired client.                                                                 | Localhost |
+| clients.pair.start              | Start pairing flow.                                                                   | Localhost |
+| clients.pair.cancel             | Cancel pairing flow.                                                                  | Localhost |
+| profiles                        | List profiles.                                                                        | Tiered |
+| profiles.new                    | Create profile.                                                                       | `profiles.manage` |
+| profiles.update                 | Update profile.                                                                       | `profiles.manage` |
+| profiles.delete                 | Delete profile.                                                                       | `profiles.manage` |
+| profiles.active                 | Return active profile.                                                                | All clients |
+| profiles.switch                 | Switch active profile.                                                                | All clients |
+| profiles.verify                 | Verify profile PIN.                                                                   | All clients |
+| settings.auth.claim             | Claim API credentials from remote server.                                             | All clients |
+| settings.auth.status            | Return credential link status.                                                        | All clients |
+| settings.auth.unlink            | Remove online account credentials.                                                    | Local/admin |
+| settings.auth.link              | Start online account link.                                                            | Local/admin |
+| settings.auth.link.status       | Return online account link flow status.                                               | Tiered |
+| settings.auth.link.cancel       | Cancel online account link flow.                                                      | Local/admin |
+| update.check                    | Check for newer Core version.                                                         | All clients |
+| update.apply                    | Apply latest update and restart gracefully.                                           | All clients |
 
 ## Notifications
 
