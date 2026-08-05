@@ -249,11 +249,10 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods execute actions and return data from Core. Core registers **90 methods**, including two deprecated aliases. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or paired admin; **Tiered** means fields or availability vary by client and are detailed in method reference.
+Methods execute actions and return data from Core. This catalog documents **88 public methods**. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or paired admin; **Tiered** means fields or availability vary by client and are detailed in method reference.
 
 | ID                              | Description                                                                           | Access |
 | :------------------------------ | :------------------------------------------------------------------------------------ | :----- |
-| launch                          | **Deprecated.** Alias for `run`.                                                      | All clients |
 | run                             | Run supplied ZapScript.                                                               | All clients |
 | stop                            | Kill any active launcher, if possible.                                                | All clients |
 | confirm                         | Confirm and launch the currently staged token.                                        | All clients |
@@ -265,7 +264,6 @@ Methods execute actions and return data from Core. Core registers **90 methods**
 | media.generate                  | Start a media database index.                                                         | All clients |
 | media.generate.cancel           | Cancel active media database indexing.                                                | All clients |
 | media.generate.resume           | Resume paused media database indexing.                                                | All clients |
-| media.index                     | **Deprecated.** Alias for `media.generate`.                                           | All clients |
 | media.search                    | Search indexed media.                                                                 | All clients |
 | media.browse                    | Browse indexed media in a directory hierarchy.                                        | All clients |
 | media.browse.index              | Return jump-to-letter buckets and seek cursors for browsing.                          | All clients |

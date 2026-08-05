@@ -18,7 +18,7 @@ Use [`clients.current`](#clientscurrent) to inspect current connection's paired 
 
 ### run
 
-**Access:** All clients. Deprecated alias `launch` has the same access.
+**Access:** All clients.
 
 Emulate the scanning of a token.
 
@@ -1074,7 +1074,7 @@ Either `mediaId` or `system` plus `path` is required. At least one of `add` or `
 
 ### media.generate
 
-**Access:** All clients. Deprecated alias `media.index` has the same access.
+**Access:** All clients.
 
 Create a new media database index.
 
