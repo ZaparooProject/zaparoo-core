@@ -194,6 +194,16 @@ func TestLaunchFileRejectsControlCharacters(t *testing.T) {
 	}
 }
 
+func TestLaunchFileRejectsMissingTarget(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "missing.mra")
+	err := launchFile(path)
+
+	require.ErrorContains(t, err, "launch file not accessible")
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
 	oldCache := cores.GlobalRBFCache
 	t.Cleanup(func() {

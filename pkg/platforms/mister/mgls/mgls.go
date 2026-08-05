@@ -160,14 +160,18 @@ func launchFile(path string) error {
 		return validationErr
 	}
 
-	_, err := os.Stat(misterconfig.CmdInterface)
-	if err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
-	}
-
 	lowerPath := s.ToLower(path)
 	if !s.HasSuffix(lowerPath, ".mgl") && !s.HasSuffix(lowerPath, ".mra") && !s.HasSuffix(lowerPath, ".rbf") {
 		return fmt.Errorf("not a valid launch file: %s", path)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("launch file not accessible: %w", err)
+	}
+
+	_, err := os.Stat(misterconfig.CmdInterface)
+	if err != nil {
+		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
 	log.Debug().Str("file", path).Msg("sending to command interface")
