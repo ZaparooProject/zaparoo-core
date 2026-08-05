@@ -72,6 +72,78 @@ func expandCreditFilters(filters []zapscript.TagFilter) []zapscript.TagFilter {
 	return expanded
 }
 
+func candidateTagExistsSQL(condition string) string {
+	return fmt.Sprintf(`(EXISTS (
+		SELECT 1 FROM MediaTags
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTags.MediaDBID = Media.DBID
+		AND %s
+	) OR EXISTS (
+		SELECT 1 FROM MediaTitleTags
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+		AND %s
+	))`, condition, condition)
+}
+
+// buildCandidateTagFilterSQL builds correlated tag filters for a bounded set of
+// title candidates. Probing tag indexes for each candidate avoids materializing
+// every media ID carrying a common tag across the full database.
+func buildCandidateTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []any) {
+	if len(filters) == 0 {
+		return nil, nil
+	}
+
+	filters = expandCreditFilters(filters)
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
+	clauses = make([]string, 0, len(filters))
+	args = make([]any, 0, len(filters)*4)
+
+	for _, f := range andFilters {
+		if f.Type == string(tags.TagTypeCredit) {
+			_, val := resolveFilter(f.Type, f.Value)
+			condition := "Tags.Tag = ? AND TagTypes.Type IN (?, ?, ?)"
+			clauses = append(clauses, candidateTagExistsSQL(condition))
+			devType := string(tags.TagTypeDeveloper)
+			pubType := string(tags.TagTypePublisher)
+			credType := string(tags.TagTypeCredit)
+			args = append(args, val, devType, pubType, credType, val, devType, pubType, credType)
+			continue
+		}
+
+		typ, val := resolveFilter(f.Type, f.Value)
+		clauses = append(clauses, candidateTagExistsSQL("TagTypes.Type = ? AND Tags.Tag = ?"))
+		args = append(args, typ, val, typ, val)
+	}
+
+	for _, f := range notFilters {
+		typ, val := resolveFilter(f.Type, f.Value)
+		clauses = append(clauses, "NOT "+candidateTagExistsSQL("TagTypes.Type = ? AND Tags.Tag = ?"))
+		args = append(args, typ, val, typ, val)
+	}
+
+	if len(orFilters) > 0 {
+		orConditions := make([]string, 0, len(orFilters))
+		orTypes := make([]string, 0, len(orFilters))
+		orValues := make([]string, 0, len(orFilters))
+		for _, f := range orFilters {
+			typ, val := resolveFilter(f.Type, f.Value)
+			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
+			orTypes = append(orTypes, typ)
+			orValues = append(orValues, val)
+			args = append(args, typ, val)
+		}
+		for i := range orTypes {
+			args = append(args, orTypes[i], orValues[i])
+		}
+		clauses = append(clauses, candidateTagExistsSQL("("+strings.Join(orConditions, " OR ")+")"))
+	}
+
+	return clauses, args
+}
+
 // BuildTagFilterSQL constructs SQL WHERE clauses and arguments for tag filtering
 // using a hybrid strategy optimized for SQLite performance:
 //   - AND filters: INTERSECT pattern

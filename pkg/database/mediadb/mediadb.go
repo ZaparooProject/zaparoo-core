@@ -2299,96 +2299,57 @@ func (db *MediaDB) SearchMediaWithFilters(
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 
-	// Collect unique MediaTypes from the systems being searched
-	uniqueMediaTypes := make(map[slugs.MediaType]struct{})
-	for _, system := range filters.Systems {
-		uniqueMediaTypes[system.GetMediaType()] = struct{}{}
-	}
-
-	// Generate slug variants for each query word based on the MediaTypes we're actually searching
 	qWords := strings.Fields(filters.Query)
-	variantGroups := make([][]string, 0, len(qWords))
-	includeName := false
-
-	for _, word := range qWords {
-		seenVariants := make(map[string]struct{})
-		variants := make([]string, 0, len(uniqueMediaTypes))
-
-		// Generate a slug variant for each MediaType present in the search
-		for mediaType := range uniqueMediaTypes {
-			slugVariant := slugs.Slugify(mediaType, word)
-			if slugVariant != "" {
-				if _, exists := seenVariants[slugVariant]; !exists {
-					variants = append(variants, slugVariant)
-					seenVariants[slugVariant] = struct{}{}
-				}
-			}
-		}
-
-		// If no variants were generated (e.g. pure punctuation), fall back to Name search
-		if len(variants) == 0 && word != "" {
-			includeName = true
-		}
-
-		// Cap variants per word to avoid SQLite param limit issues (999 params total)
-		// With max 10 words * 8 media types = 80 params for variants, plus systems/tags/etc, we're safe
-		const maxVariantsPerWord = 8
-		if len(variants) > maxVariantsPerWord {
-			variants = variants[:maxVariantsPerWord]
-		}
-
-		if len(variants) > 0 {
-			variantGroups = append(variantGroups, variants)
-		}
+	if len(qWords) == 0 || len(filters.Systems) == 0 {
+		return sqlSearchMediaWithFilters(
+			ctx, db.sql.Load(), filters.Systems, nil, qWords, filters.Tags,
+			filters.Letter, filters.Cursor, filters.Limit, false)
 	}
 
-	// Try in-memory cache path when we have slug variants and no Name fallback
-	cache := db.slugSearchCache.Load()
+	groups := buildMediaSearchTypeGroups(filters.Systems, qWords)
 	systemIDs := make([]string, len(filters.Systems))
-	for i, sys := range filters.Systems {
-		systemIDs[i] = sys.ID
+	for i := range filters.Systems {
+		systemIDs[i] = filters.Systems[i].ID
 	}
+
+	cache := db.slugSearchCache.Load()
 	cacheReady := cache != nil && cache.CanServeSystems(systemIDs)
-	if cacheReady && len(variantGroups) > 0 && !includeName {
-		log.Debug().
-			Strs("systems", systemIDs).
-			Int("variantGroups", len(variantGroups)).
-			Bool("includeName", includeName).
-			Msg("media search using in-memory slug cache")
-		systemDBIDs := cache.ResolveSystemDBIDs(systemIDs)
-
-		// Convert string variant groups to byte variant groups
-		byteGroups := make([][][]byte, len(variantGroups))
-		for i, group := range variantGroups {
-			byteGroups[i] = make([][]byte, len(group))
-			for j, v := range group {
-				byteGroups[i][j] = []byte(v)
-			}
-		}
-
-		candidateIDs := cache.Search(systemDBIDs, byteGroups)
+	cacheableGroups := mediaSearchTypeGroupsCacheable(groups)
+	if cacheReady && cacheableGroups {
+		candidateIDs := searchMediaTypeGroupsInCache(cache, groups)
 		if len(candidateIDs) == 0 {
 			return []database.SearchResultWithCursor{}, nil
 		}
 
-		return sqlSearchMediaByTitleDBIDs(
-			ctx, db.sql.Load(), candidateIDs, filters.Tags,
-			filters.Letter, filters.Cursor, filters.Limit)
+		queryParams := titleDBIDQueryParamCount(len(candidateIDs), filters)
+		if queryParams <= sqliteMaxParams {
+			log.Debug().
+				Strs("systems", systemIDs).
+				Int("mediaTypeGroups", len(groups)).
+				Int("candidates", len(candidateIDs)).
+				Msg("media search using in-memory slug cache")
+			return sqlSearchMediaByTitleDBIDs(
+				ctx, db.sql.Load(), candidateIDs, filters.Tags,
+				filters.Letter, filters.Cursor, filters.Limit)
+		}
+
+		log.Debug().
+			Int("candidates", len(candidateIDs)).
+			Int("queryParams", queryParams).
+			Int("maxQueryParams", sqliteMaxParams).
+			Msg("media search cache candidates exceed SQLite parameter budget")
 	}
 
-	// Fallback: SQL LIKE path (no cache, non-Latin query, or browse-only)
+	// Search each media type separately so one type's normalization does not
+	// broaden matches in unrelated systems.
 	log.Debug().
 		Strs("systems", systemIDs).
 		Bool("cachePresent", cache != nil).
 		Bool("cacheReady", cacheReady).
-		Int("variantGroups", len(variantGroups)).
-		Bool("includeName", includeName).
-		Msg("media search falling back to SQL LIKE path")
-	results, err := sqlSearchMediaWithFilters(
-		ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
-		filters.Letter, filters.Cursor, filters.Limit, includeName)
-
-	return results, err
+		Bool("cacheableGroups", cacheableGroups).
+		Int("mediaTypeGroups", len(groups)).
+		Msg("media search falling back to grouped SQL LIKE path")
+	return db.searchMediaTypeGroupsWithSQL(ctx, groups, qWords, filters)
 }
 
 // slugCacheSearch is a shared helper for slug-based search methods that use the
