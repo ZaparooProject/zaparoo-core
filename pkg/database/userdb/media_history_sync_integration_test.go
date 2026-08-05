@@ -169,6 +169,33 @@ func TestMediaHistoryIdentityBackfillBatch_SelectsOnlyMissingOrOlderPolicy(t *te
 	assert.False(t, updated, "current Core must never overwrite a future-policy snapshot")
 }
 
+// An empty batch is how the sweep learns it is finished, so a caller that
+// asks for a non-positive limit must get the default page rather than a false
+// "nothing left" that stamps the marker and skips every remaining row.
+func TestMediaHistoryIdentityBackfillBatch_ClampsNonPositiveLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	addIdentitySyncTestEntry(
+		t, userDB, "11111111-1111-4111-8111-111111111111", "First", base, nil,
+	)
+	addIdentitySyncTestEntry(
+		t, userDB, "22222222-2222-4222-8222-222222222222", "Second", base.Add(time.Minute), nil,
+	)
+
+	for _, limit := range []int{0, -1} {
+		batch, err := userDB.GetMediaHistoryIdentityBackfillBatch(
+			0, database.CurrentMediaIdentityPolicyVersion, limit,
+		)
+		require.NoError(t, err)
+		assert.Len(t, batch, 2, "limit %d must fall back to the default page size", limit)
+	}
+}
+
 func TestMediaHistoryIdentityMutation_RequeuesAfterStaleSyncAcknowledgement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

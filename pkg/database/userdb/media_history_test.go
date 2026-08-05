@@ -261,6 +261,44 @@ func TestSqlUpdateMediaHistoryIdentity(t *testing.T) {
 	}
 }
 
+// A nil identity would otherwise blank MediaName and Tags while stamping a
+// policy version, so the row reads as snapshotted with nothing in it.
+func TestSqlUpdateMediaHistoryIdentity_RejectsNilIdentity(t *testing.T) {
+	t.Parallel()
+	db, mockDB, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	updated, err := sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, nil)
+	require.Error(t, err)
+	assert.False(t, updated)
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "no statement may reach the database")
+}
+
+// A driver that cannot report affected rows must not be read as "row already
+// current": the sweep would take that as a clean skip and stamp its marker
+// over history it never enriched.
+func TestSqlUpdateMediaHistoryIdentity_ReportsUncountableUpdate(t *testing.T) {
+	t.Parallel()
+	db, mockDB, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mockDB.ExpectExec(`UPDATE MediaHistory SET MediaName`).
+		WillReturnResult(sqlmock.NewErrorResult(sqlmock.ErrCancelled))
+
+	identity := database.MediaIdentity{
+		MediaType: "Game", CanonicalSystemID: "SNES", DisplayName: "Game",
+		CoreSlug: "game", ObservationFingerprint: "sha256:test",
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
+	updated, err := sqlUpdateMediaHistoryIdentity(context.Background(), db, 42, &identity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to count media history identity update")
+	assert.False(t, updated)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
 func TestSqlCloseMediaHistory_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()

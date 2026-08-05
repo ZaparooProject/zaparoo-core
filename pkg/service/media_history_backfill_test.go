@@ -25,12 +25,14 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -48,6 +50,20 @@ func stubSettledMediaDB(mediaDB *testhelpers.MockMediaDBI, lastGenerated time.Ti
 	mediaDB.On("GetLastGenerated").Return(lastGenerated, nil)
 	mediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
 	mediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil)
+}
+
+// unresolvableBatch builds a full-size batch whose rows are all outside the
+// media index, so a sweep walks the whole batch without any enrichment work.
+func unresolvableBatch(size int) []database.MediaHistoryEntry {
+	batch := make([]database.MediaHistoryEntry, 0, size)
+	for i := range size {
+		batch = append(batch, database.MediaHistoryEntry{
+			DBID:      int64(i + 1),
+			SystemID:  "NES",
+			MediaPath: filepath.Join("outside-index", "Missing.nes"),
+		})
+	}
+	return batch
 }
 
 func TestMediaHistoryIdentitySweep_EnrichesAndCompletesDespiteUnresolvableRows(t *testing.T) {
@@ -144,6 +160,303 @@ func TestMediaHistoryIdentitySweep_DefersWhileMediaUpdating(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
+func TestMediaHistoryIdentitySweep_DefersWhileOptimizing(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetLastGenerated").Return(time.Unix(1754000000, 0), nil)
+	mediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	// Optimization runs the disambiguation backfill, which can still change
+	// what a row resolves to, so sweeping now would enrich rows twice.
+	mediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusPending, nil)
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil).Once()
+
+	runMediaHistoryIdentitySweep(
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+	)
+
+	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
+		mock.Anything, mock.Anything, mock.Anything)
+	userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+	userDB.AssertExpectations(t)
+}
+
+// A media database too busy to answer a status query is a media database too
+// busy to sweep: unreadable status must never be read as "idle".
+func TestMediaHistoryIdentitySweep_TreatsStatusReadFailuresAsUnsettled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		stub func(*testhelpers.MockMediaDBI)
+		name string
+	}{
+		{
+			name: "indexing status unreadable",
+			stub: func(mediaDB *testhelpers.MockMediaDBI) {
+				mediaDB.On("GetIndexingStatus").
+					Return(mediadb.IndexingStatusCompleted, errors.New("database busy"))
+			},
+		},
+		{
+			name: "optimization status unreadable",
+			stub: func(mediaDB *testhelpers.MockMediaDBI) {
+				mediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+				mediaDB.On("GetOptimizationStatus").
+					Return(mediadb.IndexingStatusCompleted, errors.New("database busy"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			userDB := testhelpers.NewMockUserDBI()
+			mediaDB := testhelpers.NewMockMediaDBI()
+			mediaDB.On("GetLastGenerated").Return(time.Unix(1754000000, 0), nil)
+			tt.stub(mediaDB)
+			userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+				Return("", false, nil).Once()
+
+			runMediaHistoryIdentitySweep(
+				context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB},
+				nil, nil, 0, testRetryDelays,
+			)
+
+			userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
+				mock.Anything, mock.Anything, mock.Anything)
+			userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+			userDB.AssertExpectations(t)
+		})
+	}
+}
+
+// An unreadable marker is not a current marker: the sweep must still run,
+// because skipping it would strand legacy rows until the next media index.
+func TestMediaHistoryIdentitySweep_SweepsWhenMarkerUnreadable(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, errors.New("database busy")).Once()
+	userDB.On("GetMediaHistoryIdentityBackfillBatch", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.MediaHistoryEntry{}, nil).Once()
+	userDB.On(
+		"SetDeviceState",
+		database.DeviceStateKeyMediaHistoryIdentitySweep, mediaHistoryIdentitySweepMarker(mediaDB),
+	).Return(nil).Once()
+
+	runMediaHistoryIdentitySweep(
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+	)
+
+	userDB.AssertExpectations(t)
+}
+
+// The marker pairs the policy version with the last completed index. A
+// missing or unreadable index time must still produce a stable marker,
+// otherwise every trigger would re-walk the whole table.
+func TestMediaHistoryIdentitySweepMarker_FallsBackWithoutIndexTime(t *testing.T) {
+	t.Parallel()
+
+	current := strconv.Itoa(database.CurrentMediaIdentityPolicyVersion)
+
+	unreadable := testhelpers.NewMockMediaDBI()
+	unreadable.On("GetLastGenerated").Return(time.Time{}, errors.New("database busy"))
+	assert.Equal(t, current+":0", mediaHistoryIdentitySweepMarker(unreadable))
+
+	neverIndexed := testhelpers.NewMockMediaDBI()
+	neverIndexed.On("GetLastGenerated").Return(time.Time{}, nil)
+	assert.Equal(t, current+":0", mediaHistoryIdentitySweepMarker(neverIndexed))
+
+	indexed := testhelpers.NewMockMediaDBI()
+	indexed.On("GetLastGenerated").Return(time.Unix(1754000000, 0), nil)
+	assert.Equal(t, current+":1754000000", mediaHistoryIdentitySweepMarker(indexed))
+}
+
+// Every failure that stops a pass short must leave the marker unwritten, so
+// the next trigger resumes instead of declaring the table swept.
+func TestMediaHistoryIdentitySweep_AbortsWithoutMarkerOnFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		stub func(*testhelpers.MockUserDBI, *testhelpers.MockMediaDBI)
+		name string
+	}{
+		{
+			name: "batch read fails",
+			stub: func(userDB *testhelpers.MockUserDBI, _ *testhelpers.MockMediaDBI) {
+				userDB.On("GetMediaHistoryIdentityBackfillBatch",
+					mock.Anything, mock.Anything, mock.Anything).
+					Return([]database.MediaHistoryEntry(nil), errors.New("database busy")).Once()
+			},
+		},
+		{
+			name: "identity write fails",
+			stub: func(userDB *testhelpers.MockUserDBI, mediaDB *testhelpers.MockMediaDBI) {
+				indexedPath := filepath.Join("roms", "NES", "Indexed.nes")
+				userDB.On("GetMediaHistoryIdentityBackfillBatch",
+					mock.Anything, mock.Anything, mock.Anything).
+					Return([]database.MediaHistoryEntry{
+						{DBID: 60, SystemID: "NES", MediaPath: indexedPath},
+					}, nil).Once()
+				mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, indexedPath).
+					Return([]database.SearchResult{{
+						SystemID: "NES", Name: "Indexed", Path: indexedPath, Slug: "indexed", MediaID: 9,
+					}}, nil).Once()
+				mediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(9)).
+					Return([]database.TagInfo{}, nil).Once()
+				userDB.On("UpdateMediaHistoryIdentity", int64(60), mock.Anything).
+					Return(false, errors.New("database is locked")).Once()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			userDB := testhelpers.NewMockUserDBI()
+			mediaDB := testhelpers.NewMockMediaDBI()
+			stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+			userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+				Return("", false, nil).Once()
+			tt.stub(userDB, mediaDB)
+
+			runMediaHistoryIdentitySweep(
+				context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB},
+				nil, nil, 0, testRetryDelays,
+			)
+
+			userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+			userDB.AssertExpectations(t)
+			mediaDB.AssertExpectations(t)
+		})
+	}
+}
+
+// An index or optimization starting mid-sweep must hand the media database
+// back immediately rather than finishing the walk alongside it.
+func TestMediaHistoryIdentitySweep_AbortsWhenMediaUpdateStartsMidSweep(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetLastGenerated").Return(time.Unix(1754000000, 0), nil)
+	// Settled for the pre-walk check and the first batch's re-check...
+	mediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
+	mediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
+	// ...then an index starts, so the second batch is never read.
+	mediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil).Once()
+	userDB.On("GetMediaHistoryIdentityBackfillBatch",
+		int64(0), database.CurrentMediaIdentityPolicyVersion, mediaHistoryIdentityBackfillBatchSize).
+		Return(unresolvableBatch(mediaHistoryIdentityBackfillBatchSize), nil).Once()
+	mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.SearchResult{}, nil)
+
+	runMediaHistoryIdentitySweep(
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+	)
+
+	userDB.AssertNumberOfCalls(t, "GetMediaHistoryIdentityBackfillBatch", 1)
+	userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+	userDB.AssertExpectations(t)
+	mediaDB.AssertExpectations(t)
+}
+
+// Shutdown must not wait out the trickle delay between batches, and must not
+// keep processing rows once the service context is gone.
+func TestMediaHistoryIdentitySweep_StopsPromptlyOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		batchSize   int
+		cancelAfter int
+		batchDelay  time.Duration
+	}{
+		// Cancelled with rows left in the batch: the remaining rows are not
+		// looked up.
+		{name: "mid batch", batchSize: 4, cancelAfter: 2, batchDelay: 0},
+		// A full batch reaches the inter-batch delay; a cancelled sweep must
+		// exit there instead of sleeping it out.
+		{
+			name:        "during batch delay",
+			batchSize:   mediaHistoryIdentityBackfillBatchSize,
+			cancelAfter: mediaHistoryIdentityBackfillBatchSize,
+			batchDelay:  time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			userDB := testhelpers.NewMockUserDBI()
+			mediaDB := testhelpers.NewMockMediaDBI()
+			stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+			userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+				Return("", false, nil).Once()
+			userDB.On("GetMediaHistoryIdentityBackfillBatch",
+				mock.Anything, mock.Anything, mock.Anything).
+				Return(unresolvableBatch(tt.batchSize), nil).Once()
+			lookups := 0
+			mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
+				Return([]database.SearchResult{}, nil).Run(func(mock.Arguments) {
+				lookups++
+				if lookups == tt.cancelAfter {
+					cancel()
+				}
+			})
+
+			done := make(chan struct{})
+			go func() {
+				runMediaHistoryIdentitySweep(
+					ctx, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+					nil, nil, tt.batchDelay, testRetryDelays,
+				)
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("sweep did not stop after context cancellation")
+			}
+			assert.Equal(t, tt.cancelAfter, lookups, "no rows looked up after cancellation")
+			userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+			userDB.AssertExpectations(t)
+		})
+	}
+}
+
+// Losing the marker write only costs a redundant pass later, so it must not
+// look like a failed sweep to the caller.
+func TestMediaHistoryIdentitySweep_ToleratesMarkerWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil).Once()
+	userDB.On("GetMediaHistoryIdentityBackfillBatch", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.MediaHistoryEntry{}, nil).Once()
+	userDB.On("SetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep, mock.Anything).
+		Return(errors.New("database is locked")).Once()
+
+	runMediaHistoryIdentitySweep(
+		context.Background(), &database.Database{UserDB: userDB, MediaDB: mediaDB}, nil, nil, 0, testRetryDelays,
+	)
+
+	userDB.AssertExpectations(t)
+}
+
 func TestMediaHistoryIdentitySweep_TransientFailureAbortsWithoutMarker(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +534,88 @@ func TestMediaHistoryIdentitySweep_AbortAfterUpdateStillRequestsSync(t *testing.
 	userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
 	userDB.AssertExpectations(t)
 	mediaDB.AssertExpectations(t)
+}
+
+// The watcher starts before the databases are guaranteed open, so a missing
+// one must end it quietly rather than panic a boot goroutine.
+func TestWatchMediaHistoryBackfill_ReturnsWithoutDatabases(t *testing.T) {
+	t.Parallel()
+
+	for name, db := range map[string]*database.Database{
+		"nil database": nil,
+		"nil user db":  {MediaDB: testhelpers.NewMockMediaDBI()},
+		"nil media db": {UserDB: testhelpers.NewMockUserDBI()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			done := make(chan struct{})
+			go func() {
+				watchMediaHistoryBackfillAtInterval(
+					context.Background(), nil, db, nil, nil, time.Hour, time.Hour, 0,
+				)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("watcher did not return without a usable database")
+			}
+		})
+	}
+}
+
+// The temporary-repair path starts optimization with no status callback and
+// emits no completion notification, so the poll fallback is the only trigger
+// that ever fires for those rows.
+func TestWatchMediaHistoryBackfill_SweepsOnPollInterval(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	userDB.On("BackfillMediaHistoryUUIDs").Return(int64(0), nil).Once()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil)
+	userDB.On("GetMediaHistoryIdentityBackfillBatch", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.MediaHistoryEntry{}, nil)
+	marked := make(chan struct{}, 1)
+	userDB.On("SetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep, mock.Anything).
+		Return(nil).Run(func(mock.Arguments) {
+		select {
+		case marked <- struct{}{}:
+		default:
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	source := make(chan models.Notification, 1)
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	t.Cleanup(b.Stop)
+
+	done := make(chan struct{})
+	go func() {
+		// No startup trigger and no notifications: only the ticker can fire.
+		watchMediaHistoryBackfillAtInterval(
+			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			nil, nil, time.Hour, 10*time.Millisecond, 0,
+		)
+		close(done)
+	}()
+
+	select {
+	case <-marked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll interval did not trigger a sweep")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not exit after context cancellation")
+	}
 }
 
 func TestWatchMediaHistoryBackfill_SweepsOnIndexingNotification(t *testing.T) {
@@ -399,4 +794,103 @@ func TestWatchMediaHistoryBackfill_RetriesUUIDBackfillUntilSuccess(t *testing.T)
 	userDB.AssertExpectations(t)
 	assert.Empty(t, syncRequests,
 		"exactly one sync request: the succeeded backfill must not re-run on later triggers")
+}
+
+// Gameplay pauses the sweep indefinitely, so shutdown has to break the pause
+// rather than wait it out — and a sweep that stops there has not finished,
+// so it must leave the marker alone for the next run.
+func TestMediaHistoryIdentitySweep_StopsWhilePausedForGameplay(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetLastGenerated").Return(time.Unix(1754000000, 0), nil)
+	mediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	mediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	// Shutdown lands after the sweep decides to run, while it is blocked on
+	// the gameplay pause.
+	mediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once().
+		Run(func(mock.Arguments) { cancel() })
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil).Once()
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runMediaHistoryIdentitySweep(
+			ctx, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			pauser, nil, 0, testRetryDelays,
+		)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweep did not stop while paused")
+	}
+
+	userDB.AssertNotCalled(t, "GetMediaHistoryIdentityBackfillBatch",
+		mock.Anything, mock.Anything, mock.Anything)
+	userDB.AssertNotCalled(t, "SetDeviceState", mock.Anything, mock.Anything)
+	userDB.AssertExpectations(t)
+	mediaDB.AssertExpectations(t)
+}
+
+// The watcher's only wake-up sources are the ticker and the indexing
+// notification channel. A closed channel is permanently ready, so a watcher
+// that kept selecting on it after broker shutdown would spin a core forever:
+// it has to exit instead.
+func TestWatchMediaHistoryBackfill_StopsWhenBrokerCloses(t *testing.T) {
+	t.Parallel()
+
+	userDB := testhelpers.NewMockUserDBI()
+	mediaDB := testhelpers.NewMockMediaDBI()
+	userDB.On("BackfillMediaHistoryUUIDs").Return(int64(0), nil).Once()
+	stubSettledMediaDB(mediaDB, time.Unix(1754000000, 0))
+	userDB.On("GetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep).
+		Return("", false, nil)
+	userDB.On("GetMediaHistoryIdentityBackfillBatch", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.MediaHistoryEntry{}, nil)
+	swept := make(chan struct{}, 1)
+	userDB.On("SetDeviceState", database.DeviceStateKeyMediaHistoryIdentitySweep, mock.Anything).
+		Return(nil).Run(func(mock.Arguments) {
+		select {
+		case swept <- struct{}{}:
+		default:
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	b := broker.NewBroker(ctx, make(chan models.Notification))
+	b.Start()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchMediaHistoryBackfillAtInterval(
+			ctx, b, &database.Database{UserDB: userDB, MediaDB: mediaDB},
+			nil, nil, time.Hour, 20*time.Millisecond, 0,
+		)
+	}()
+
+	// A completed poll proves the watcher reached its select loop, so it has
+	// already subscribed and the shutdown below cannot race ahead of it.
+	select {
+	case <-swept:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll interval did not trigger a sweep")
+	}
+
+	b.Stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher outlived the broker")
+	}
 }

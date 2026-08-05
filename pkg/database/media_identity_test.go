@@ -180,6 +180,56 @@ func TestLookupMediaIdentity_DistinguishesNotFoundAndFailure(t *testing.T) {
 		mediaDB.AssertExpectations(t)
 	})
 
+	// A path the scanner never indexes (unknown system, or no path at all)
+	// resolves to nothing without touching the media database.
+	t.Run("unqueryable input is unresolvable", func(t *testing.T) {
+		t.Parallel()
+		mediaDB := testhelpers.NewMockMediaDBI()
+
+		_, found, err := database.LookupMediaIdentity(
+			context.Background(), mediaDB, systemdefs.SystemNES, "",
+		)
+		require.NoError(t, err)
+		assert.False(t, found)
+
+		_, found, err = database.LookupMediaIdentity(context.Background(), nil, systemdefs.SystemNES, path)
+		require.NoError(t, err)
+		assert.False(t, found)
+
+		_, found, err = database.LookupMediaIdentity(
+			context.Background(), mediaDB, "NotARealSystem", path,
+		)
+		require.NoError(t, err)
+		assert.False(t, found)
+
+		mediaDB.AssertNotCalled(t, "SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	// Tags are part of the observation, so losing them is a transient failure
+	// to retry, not an unresolvable row to skip and fingerprint without them.
+	t.Run("tag load failure is transient", func(t *testing.T) {
+		t.Parallel()
+		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+			Return([]database.SearchResult{{
+				SystemID: systemdefs.SystemNES,
+				Name:     "Missing",
+				Path:     path,
+				Slug:     "missing",
+				MediaID:  46,
+			}}, nil).Once()
+		mediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(46)).
+			Return([]database.TagInfo(nil), errors.New("database busy")).Once()
+
+		identity, found, err := database.LookupMediaIdentity(
+			context.Background(), mediaDB, systemdefs.SystemNES, path,
+		)
+		require.Error(t, err)
+		assert.False(t, found)
+		assert.Empty(t, identity)
+		mediaDB.AssertExpectations(t)
+	})
+
 	t.Run("unbuildable identity is unresolvable", func(t *testing.T) {
 		t.Parallel()
 		mediaDB := testhelpers.NewMockMediaDBI()
@@ -361,4 +411,130 @@ func TestMediaIdentityEncoding_RoundTripsAndToleratesLegacyValues(t *testing.T) 
 	assert.Nil(t, database.DecodeMediaIdentity(""))
 	assert.Nil(t, database.DecodeMediaIdentity("{"))
 	assert.Empty(t, database.EncodeMediaIdentity(nil))
+}
+
+func TestTagStringsEncoding_RoundTripsAndToleratesLegacyValues(t *testing.T) {
+	t.Parallel()
+
+	tags := []string{"region:us", "extension:sfc"}
+	assert.Equal(t, tags, database.DecodeTagStrings(database.EncodeTagStrings(tags)))
+	assert.Empty(t, database.EncodeTagStrings(nil))
+	assert.Empty(t, database.EncodeTagStrings([]string{}))
+	assert.Nil(t, database.DecodeTagStrings(""))
+	// Snapshots are best-effort: a corrupt column must not fail a history read.
+	assert.Nil(t, database.DecodeTagStrings("not json"))
+}
+
+// An identity that cannot satisfy the fingerprint contract must fail loudly
+// rather than hash a partial observation: a fingerprint is only meaningful if
+// every field feeding it was present.
+func TestMediaIdentityFingerprint_RejectsIncompleteObservations(t *testing.T) {
+	t.Parallel()
+
+	complete := database.MediaIdentity{
+		MediaType:         "Game",
+		CanonicalSystemID: systemdefs.SystemSNES,
+		CoreSlug:          "supermarioworld",
+		Tags:              []database.MediaIdentityTag{{Type: "region", Value: "us"}},
+		PolicyVersion:     database.CurrentMediaIdentityPolicyVersion,
+	}
+	tests := []struct {
+		mutate func(*database.MediaIdentity)
+		name   string
+	}{
+		{name: "missing policy version", mutate: func(v *database.MediaIdentity) { v.PolicyVersion = 0 }},
+		{name: "negative policy version", mutate: func(v *database.MediaIdentity) { v.PolicyVersion = -1 }},
+		{name: "missing media type", mutate: func(v *database.MediaIdentity) { v.MediaType = "" }},
+		{name: "missing canonical system", mutate: func(v *database.MediaIdentity) { v.CanonicalSystemID = "" }},
+		{name: "missing Core slug", mutate: func(v *database.MediaIdentity) { v.CoreSlug = "" }},
+		// Tag roles are only defined by a known policy, so a tagged observation
+		// from a future policy cannot be fingerprinted by this build.
+		{name: "unknown policy version", mutate: func(v *database.MediaIdentity) {
+			v.PolicyVersion = database.CurrentMediaIdentityPolicyVersion + 1
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := complete
+			tt.mutate(&candidate)
+			_, err := database.ComputeMediaIdentityFingerprint(&candidate)
+			require.Error(t, err)
+		})
+	}
+
+	_, err := database.ComputeMediaIdentityFingerprint(nil)
+	require.Error(t, err)
+}
+
+func TestMediaIdentityFingerprint_NormalizesTagSet(t *testing.T) {
+	t.Parallel()
+
+	base := database.MediaIdentity{
+		MediaType:         "Game",
+		CanonicalSystemID: systemdefs.SystemSNES,
+		CoreSlug:          "multiregion",
+		Tags:              []database.MediaIdentityTag{{Type: "region", Value: "eu"}, {Type: "region", Value: "us"}},
+		PolicyVersion:     database.CurrentMediaIdentityPolicyVersion,
+	}
+	want, err := database.ComputeMediaIdentityFingerprint(&base)
+	require.NoError(t, err)
+
+	// Several values of one type sort by value, so scanner ordering can never
+	// change a fingerprint.
+	reordered := base
+	reordered.Tags = []database.MediaIdentityTag{{Type: "region", Value: "us"}, {Type: "region", Value: "eu"}}
+	got, err := database.ComputeMediaIdentityFingerprint(&reordered)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	// Half-populated tags carry no information and are dropped rather than
+	// hashed, so a scanner emitting one cannot fork a media's identity.
+	withEmpties := base
+	withEmpties.Tags = []database.MediaIdentityTag{
+		{Type: "region", Value: "eu"},
+		{Type: "", Value: "orphan"},
+		{Type: "lang", Value: ""},
+		{Type: "region", Value: "us"},
+	}
+	got, err = database.ComputeMediaIdentityFingerprint(&withEmpties)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// The cross-service payload must spell an absent tag set as [], never null:
+// non-Go decoders distinguish the two and would hash different bytes.
+func TestMediaIdentityFingerprintPayload_EmptyTagsEncodeAsArray(t *testing.T) {
+	t.Parallel()
+
+	identity := database.MediaIdentity{
+		MediaType:         "Game",
+		CanonicalSystemID: systemdefs.SystemNES,
+		CoreSlug:          "notags",
+		PolicyVersion:     database.CurrentMediaIdentityPolicyVersion,
+	}
+	payload, err := database.MediaIdentityFingerprintPayload(&identity)
+	require.NoError(t, err)
+	assert.Contains(t, string(payload), `"tags":[]`)
+
+	explicitlyEmpty := identity
+	explicitlyEmpty.Tags = []database.MediaIdentityTag{}
+	samePayload, err := database.MediaIdentityFingerprintPayload(&explicitlyEmpty)
+	require.NoError(t, err)
+	assert.Equal(t, string(payload), string(samePayload))
+}
+
+func TestLegacyTags(t *testing.T) {
+	t.Parallel()
+
+	identity := &database.MediaIdentity{
+		Tags: []database.MediaIdentityTag{
+			{Type: "extension", Value: "sfc", Role: database.MediaIdentityTagRoleContext},
+			{Type: "region", Value: "us", Role: database.MediaIdentityTagRoleIdentity},
+		},
+	}
+	assert.Equal(t, []string{"extension:sfc", "region:us"}, identity.LegacyTags())
+	assert.Nil(t, (&database.MediaIdentity{}).LegacyTags(), "no tags means no legacy column value")
+	assert.Nil(t, (*database.MediaIdentity)(nil).LegacyTags())
 }

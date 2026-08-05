@@ -275,6 +275,67 @@ func TestLookupMediaIdentityWithRetry_BoundsTransientFailures(t *testing.T) {
 		assert.Equal(t, 3, calls)
 	})
 
+	// Shutdown must stop the retry loop where it stands: neither a fresh
+	// attempt nor a pending backoff may outlive the context.
+	t.Run("cancelled before first attempt", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		calls := 0
+		lookup := func(
+			context.Context, database.MediaDBI, string, string,
+		) (database.MediaIdentity, bool, error) {
+			calls++
+			return identity, true, nil
+		}
+
+		_, found, err := lookupMediaIdentityWithRetry(
+			ctx, nil, "NES", filepath.Join("games", "Game.nes"),
+			time.Second, []time.Duration{0, 0}, lookup,
+		)
+		require.Error(t, err)
+		assert.False(t, found)
+		assert.Equal(t, 0, calls, "a cancelled context must not start a lookup")
+	})
+
+	t.Run("cancelled during retry delay", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		calls := 0
+		lookup := func(
+			context.Context, database.MediaDBI, string, string,
+		) (database.MediaIdentity, bool, error) {
+			calls++
+			cancel()
+			return database.MediaIdentity{}, false, errors.New("database busy")
+		}
+
+		// An hour of backoff the call must not wait out.
+		_, found, err := lookupMediaIdentityWithRetry(
+			ctx, nil, "NES", filepath.Join("games", "Game.nes"),
+			time.Second, []time.Duration{time.Hour}, lookup,
+		)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, found)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("nil lookup uses the production resolver", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join("games", "Game.nes")
+		mediaDB := testhelpers.NewMockMediaDBI()
+		mediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+			Return([]database.SearchResult{}, nil).Once()
+
+		_, found, err := lookupMediaIdentityWithRetry(
+			context.Background(), mediaDB, "NES", path, time.Second, nil, nil,
+		)
+		require.NoError(t, err)
+		assert.False(t, found)
+		mediaDB.AssertExpectations(t)
+	})
+
 	t.Run("unindexed is definitive", func(t *testing.T) {
 		t.Parallel()
 		calls := 0
@@ -314,6 +375,58 @@ func TestMediaHistoryTracker_SnapshotIdentity_UnindexedLaunchKeepsFallback(t *te
 	mockUserDB.AssertNotCalled(t, "UpdateMediaHistoryIdentity", mock.Anything, mock.Anything)
 	mockMediaDB.AssertExpectations(t)
 	assert.Zero(t, syncRequests)
+}
+
+// A snapshot only earns an upload when it actually changed the stored row:
+// relaunching unchanged media must not spend a sync, and a failed write must
+// not claim one either.
+func TestMediaHistoryTracker_SnapshotIdentity_SyncsOnlyOnStoredChange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		updateErr    error
+		name         string
+		updated      bool
+		wantRequests int
+	}{
+		{name: "stored change requests sync", updated: true, wantRequests: 1},
+		{name: "unchanged identity is not resynced", updated: false, wantRequests: 0},
+		{name: "write failure requests nothing", updateErr: errors.New("disk full"), wantRequests: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join("games", "NES", "Super Game.nes")
+			mockMediaDB := testhelpers.NewMockMediaDBI()
+			mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, path).
+				Return([]database.SearchResult{{
+					SystemID: "NES", Name: "Super Game", Path: path,
+					Slug: "supergame", MediaID: 7,
+				}}, nil).Once()
+			mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(7)).
+				Return([]database.TagInfo{{Tag: "us", Type: "region"}}, nil).Once()
+
+			mockUserDB := testhelpers.NewMockUserDBI()
+			mockUserDB.On("UpdateMediaHistoryIdentity", int64(42), mock.MatchedBy(
+				func(identity *database.MediaIdentity) bool {
+					return identity != nil && identity.CoreSlug == "supergame" &&
+						identity.CanonicalSystemID == "NES"
+				},
+			)).Return(tt.updated, tt.updateErr).Once()
+
+			syncRequests := 0
+			tracker := &mediaHistoryTracker{
+				db:              &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+				requestPlaySync: func() { syncRequests++ },
+			}
+
+			tracker.snapshotMediaHistoryIdentity(42, "NES", path)
+
+			assert.Equal(t, tt.wantRequests, syncRequests)
+			mockMediaDB.AssertExpectations(t)
+			mockUserDB.AssertExpectations(t)
+		})
+	}
 }
 
 func TestMediaHistoryTracker_Listen_Started_NoActiveMedia(t *testing.T) {
