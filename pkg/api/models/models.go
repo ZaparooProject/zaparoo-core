@@ -153,6 +153,7 @@ const (
 	MethodProfilesSwitch              = "profiles.switch"
 	MethodProfilesVerify              = "profiles.verify"
 	MethodSystems                     = "systems"
+	MethodSystemsFavorites            = "systems.favorites"
 	MethodLaunchers                   = "launchers"
 	MethodLaunchersRefresh            = "launchers.refresh"
 	MethodHistory                     = "tokens.history"

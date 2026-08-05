@@ -2337,9 +2337,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 			variants = variants[:maxVariantsPerWord]
 		}
 
-		if len(variants) > 0 {
-			variantGroups = append(variantGroups, variants)
-		}
+		variantGroups = append(variantGroups, variants)
 	}
 
 	// Try in-memory cache path when we have slug variants and no Name fallback
@@ -2371,6 +2369,28 @@ func (db *MediaDB) SearchMediaWithFilters(
 			return []database.SearchResultWithCursor{}, nil
 		}
 
+		_, tagFilterArgs := BuildTagFilterSQL(filters.Tags)
+		_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+		totalParams := len(candidateIDs) + len(tagFilterArgs) + len(letterArgs)
+		if filters.Cursor != nil {
+			totalParams++
+		}
+		if filters.Limit > 0 {
+			totalParams++
+		}
+		if totalParams > sqliteMaxParams {
+			log.Debug().
+				Int("candidateTitleDBIDs", len(candidateIDs)).
+				Int("tagArgs", len(tagFilterArgs)).
+				Int("letterArgs", len(letterArgs)).
+				Bool("hasCursor", filters.Cursor != nil).
+				Int("limit", filters.Limit).
+				Msg("slug-cache candidate set too large for titleDBIDs IN search; falling back to SQL LIKE search")
+			return sqlSearchMediaWithFilters(
+				ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
+				filters.Letter, filters.Cursor, filters.Limit, includeName)
+		}
+
 		return sqlSearchMediaByTitleDBIDs(
 			ctx, db.sql.Load(), candidateIDs, filters.Tags,
 			filters.Letter, filters.Cursor, filters.Limit)
@@ -2389,6 +2409,123 @@ func (db *MediaDB) SearchMediaWithFilters(
 		filters.Letter, filters.Cursor, filters.Limit, includeName)
 
 	return results, err
+}
+
+func (db *MediaDB) SearchMediaWithFiltersCount(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) (int, error) {
+	if db.sql.Load() == nil {
+		return 0, ErrNullSQL
+	}
+
+	// Collect unique MediaTypes from the systems being searched
+	uniqueMediaTypes := make(map[slugs.MediaType]struct{})
+	for _, system := range filters.Systems {
+		uniqueMediaTypes[system.GetMediaType()] = struct{}{}
+	}
+
+	qWords := strings.Fields(filters.Query)
+	variantGroups := make([][]string, 0, len(qWords))
+	includeName := false
+
+	for _, word := range qWords {
+		seenVariants := make(map[string]struct{})
+		variants := make([]string, 0, len(uniqueMediaTypes))
+
+		for mediaType := range uniqueMediaTypes {
+			slugVariant := slugs.Slugify(mediaType, word)
+			if slugVariant != "" {
+				if _, exists := seenVariants[slugVariant]; !exists {
+					variants = append(variants, slugVariant)
+					seenVariants[slugVariant] = struct{}{}
+				}
+			}
+		}
+
+		if len(variants) == 0 && word != "" {
+			includeName = true
+		}
+
+		const maxVariantsPerWord = 8
+		if len(variants) > maxVariantsPerWord {
+			variants = variants[:maxVariantsPerWord]
+		}
+
+		variantGroups = append(variantGroups, variants)
+	}
+
+	cache := db.slugSearchCache.Load()
+	systemIDs := make([]string, len(filters.Systems))
+	for i, sys := range filters.Systems {
+		systemIDs[i] = sys.ID
+	}
+	cacheReady := cache != nil && cache.CanServeSystems(systemIDs)
+	var systemDBIDs []int64
+	if cacheReady {
+		systemDBIDs = cache.ResolveSystemDBIDs(systemIDs)
+	}
+	if cacheReady && len(variantGroups) > 0 && !includeName {
+		log.Debug().
+			Strs("systems", systemIDs).
+			Int("variantGroups", len(variantGroups)).
+			Bool("includeName", includeName).
+			Msg("media search count using in-memory slug cache")
+
+		candidateIDs := cache.Search(systemDBIDs, func() [][][]byte {
+			byteGroups := make([][][]byte, len(variantGroups))
+			for i, group := range variantGroups {
+				byteGroups[i] = make([][]byte, len(group))
+				for j, v := range group {
+					byteGroups[i][j] = []byte(v)
+				}
+			}
+			return byteGroups
+		}())
+		if len(candidateIDs) == 0 {
+			return 0, nil
+		}
+
+		_, tagFilterArgs := BuildTagFilterSQL(filters.Tags)
+		_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+		totalParams := len(candidateIDs) + len(tagFilterArgs) + len(letterArgs)
+		if totalParams > sqliteMaxParams {
+			log.Debug().
+				Int("candidateTitleDBIDs", len(candidateIDs)).
+				Int("tagArgs", len(tagFilterArgs)).
+				Int("letterArgs", len(letterArgs)).
+				Msg("slug-cache candidate set too large for titleDBIDs IN count; falling back to SQL LIKE count")
+			return sqlSearchMediaWithFiltersCount(
+				ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
+				filters.Letter, includeName)
+		}
+
+		return sqlSearchMediaByTitleDBIDsCount(ctx, db.sql.Load(), candidateIDs, filters.Tags, filters.Letter)
+	}
+
+	log.Debug().
+		Strs("systems", systemIDs).
+		Bool("cachePresent", cache != nil).
+		Bool("cacheReady", cacheReady).
+		Int("variantGroups", len(variantGroups)).
+		Bool("includeName", includeName).
+		Msg("media search count falling back to SQL LIKE path")
+
+	return sqlSearchMediaWithFiltersCount(
+		ctx, db.sql.Load(), filters.Systems, variantGroups, qWords, filters.Tags,
+		filters.Letter, includeName)
+}
+
+func (db *MediaDB) SearchMediaWithFiltersSystemIDs(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]string, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+
+	return sqlSearchMediaWithFiltersSystemIDs(
+		ctx, db.sql.Load(), filters.Systems, filters.Tags)
 }
 
 // slugCacheSearch is a shared helper for slug-based search methods that use the

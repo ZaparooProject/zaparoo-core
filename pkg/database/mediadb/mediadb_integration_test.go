@@ -2838,6 +2838,49 @@ func TestMediaDB_RandomGameWithQuery_PartialSlugCacheFallsBackToSQL_Integration(
 	assert.True(t, seenSNES, "partial slug cache should not silently exclude uncached requested systems")
 }
 
+func TestMediaDB_SearchMediaWithFiltersCount_SlugCacheCandidateLimitFallsBackToSQL_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: nesSystem.ID, Name: nesSystem.ID})
+	require.NoError(t, err)
+
+	for i := range sqliteMaxParams + 2 {
+		titleName := fmt.Sprintf("Game %d", i)
+		insertedTitle, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(nesSystem.GetMediaType(), titleName),
+			Name:       titleName,
+		})
+		require.NoError(t, insertErr)
+		_, insertErr = mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSystem.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           filepath.Join("roms", "nes", fmt.Sprintf("game-%d.nes", i)),
+		})
+		require.NoError(t, insertErr)
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+
+	count, err := mediaDB.SearchMediaWithFiltersCount(context.Background(), &database.SearchFilters{
+		Query:   "game",
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sqliteMaxParams+2, count)
+}
+
 func TestMediaDB_CacheMediaStats_CanceledContextIsNonFatal_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

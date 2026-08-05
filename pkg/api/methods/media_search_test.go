@@ -142,7 +142,6 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 				len(filters.Tags) == 0 // No tags for this test
 		}),
 	).Return(expectedResults, nil)
-
 	// Create request without cursor (initial request)
 	query := "mario"
 	params := models.SearchParams{
@@ -171,8 +170,9 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	result, err := HandleMediaSearch(env)
 	require.NoError(t, err)
 
-	// Check if mocks were called at all
-	t.Logf("Mock calls made: %v", mockMediaDB.Calls)
+	// Verify SearchMediaWithFiltersCount was not called because the first page
+	// proved there are no more results.
+	mockMediaDB.AssertNotCalled(t, "SearchMediaWithFiltersCount", mock.Anything, mock.Anything)
 
 	// Verify response format with cursor-based pagination
 	searchResults, ok := result.(models.SearchResults)
@@ -229,6 +229,12 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 				len(filters.Systems) > 0 // Should have systems
 		}),
 	).Return(expectedResults, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "mario" && filters.Cursor == nil && len(filters.Tags) == 0
+		}),
+	).Return(3, nil)
 
 	// Create request with cursor
 	cursorStr, err := encodeCursor(50)
@@ -267,8 +273,7 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	require.True(t, ok, "Should return SearchResults")
 
 	assert.Len(t, searchResults.Results, 2, "Should return 2 results (maxResults)")
-	assert.Equal(t, len(searchResults.Results), searchResults.Total,
-		"Total should equal result count (deprecated field)")
+	assert.Equal(t, 3, searchResults.Total, "Total should report the full result count")
 	assert.NotNil(t, searchResults.Pagination, "Pagination should not be nil for cursor requests")
 
 	// Verify pagination info
@@ -432,9 +437,18 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 	// Test valid letter parameter
 	letter := "M"
 	query := "test"
-	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.MatchedBy(func(filters *database.SearchFilters) bool {
-		return filters.Letter != nil && *filters.Letter == letter
-	})).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Letter != nil && *filters.Letter == letter
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil).Once()
+	mockMediaDB.On("SearchMediaWithFiltersCount",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Letter != nil && *filters.Letter == letter && filters.Cursor == nil
+		}),
+	).Return(0, nil).Once()
 
 	// Create test parameters
 	params := models.SearchParams{
@@ -488,6 +502,12 @@ func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 				filters.Limit == 101
 		}),
 	).Return(expectedResults, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "" && filters.Cursor == nil
+		}),
+	).Return(len(expectedResults), nil)
 
 	// Create request with fully blank parameters
 	params := models.SearchParams{
@@ -555,6 +575,12 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 				len(filters.Systems) > 0 // Should have all systems
 		}),
 	).Return(expectedResults, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "" && filters.Cursor == nil && len(filters.Tags) == 1
+		}),
+	).Return(len(expectedResults), nil)
 
 	// Create request with tags only (no query or systems)
 	tags := []string{"genre:RPG"}
@@ -615,6 +641,7 @@ func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
 		mock.Anything, // context
 		mock.Anything, // filters
 	).Return(expectedResults, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount", mock.Anything, mock.Anything).Return(len(expectedResults), nil)
 
 	// Create request
 	query := "test"
@@ -725,6 +752,7 @@ func TestHandleMediaSearch_AcceptsFuzzySystem(t *testing.T) {
 			return len(filters.Systems) == 1 && filters.Systems[0].ID == "Genesis"
 		}),
 	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount", mock.Anything, mock.Anything).Return(0, nil)
 
 	query := "test"
 	fuzzyMatch := true
@@ -866,6 +894,7 @@ func TestHandleMediaSearch_DeduplicatesSystems(t *testing.T) {
 			return len(filters.Systems) == 1
 		}),
 	).Return([]database.SearchResultWithCursor{}, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount", mock.Anything, mock.Anything).Return(0, nil)
 
 	query := "test"
 	params := models.SearchParams{
@@ -1050,6 +1079,7 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 	).Return([]database.SearchResultWithCursor{
 		{SystemID: "NES", Name: "Mario Bros", Path: mediaPath, MediaID: 1},
 	}, nil)
+	mockMediaDB.On("SearchMediaWithFiltersCount", mock.Anything, mock.Anything).Return(1, nil)
 
 	query := "mario"
 	params := models.SearchParams{Query: &query}

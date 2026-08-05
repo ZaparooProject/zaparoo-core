@@ -38,6 +38,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const defaultSearchResultsCapacity = 16
+
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
 // Combines file-level (MediaTags) and title-level (MediaTitleTags) tags via UNION ALL
@@ -751,7 +753,11 @@ func sqlSearchMediaWithFilters(
 	limit int,
 	includeName bool,
 ) ([]database.SearchResultWithCursor, error) {
-	results := make([]database.SearchResultWithCursor, 0, limit)
+	initialCapacity := limit
+	if initialCapacity <= 0 {
+		initialCapacity = defaultSearchResultsCapacity
+	}
+	results := make([]database.SearchResultWithCursor, 0, initialCapacity)
 	if len(systems) == 0 {
 		return nil, errors.New("no systems provided for media search")
 	}
@@ -779,10 +785,6 @@ func sqlSearchMediaWithFilters(
 	variantArgs := make([]any, 0, len(variantGroups)*4) // Estimate: ~4 variants per word
 
 	for wordIdx, variants := range variantGroups {
-		if len(variants) == 0 {
-			continue
-		}
-
 		orConditions := make([]string, 0, len(variants)*2+1)
 
 		// Add OR conditions for each slug variant
@@ -834,6 +836,7 @@ func sqlSearchMediaWithFilters(
 
 	systemCondition := ""
 	if !skipSystemFilter {
+		//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 		systemCondition = `Systems.SystemID IN (` +
 			prepareVariadic("?", ",", len(systems)) + `) AND `
 	}
@@ -843,6 +846,11 @@ func sqlSearchMediaWithFilters(
 		// The tag-driven plan iterates Media rowids from the IN-list; make the
 		// cursor pagination order explicit rather than relying on scan order.
 		orderCondition = ` ORDER BY Media.DBID ASC`
+	}
+
+	limitClause := " LIMIT ?"
+	if limit <= 0 {
+		limitClause = ""
 	}
 
 	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
@@ -863,13 +871,15 @@ func sqlSearchMediaWithFilters(
 		tagFilterCondition +
 		letterFilterCondition +
 		orderCondition +
-		` LIMIT ?`
+		limitClause
 
 	// Assemble final args: systems → variants → tag filters → limit
 	mediaArgs := append([]any(nil), args...)        // System IDs
 	mediaArgs = append(mediaArgs, variantArgs...)   // Variant args (includes cursor, letter if present)
 	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
-	mediaArgs = append(mediaArgs, limit)
+	if limit > 0 {
+		mediaArgs = append(mediaArgs, limit)
+	}
 
 	queryStarted := time.Now()
 	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
@@ -926,6 +936,218 @@ func sqlSearchMediaWithFilters(
 	return results, nil
 }
 
+func sqlSearchMediaWithFiltersSystemIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
+) ([]string, error) {
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
+
+	skipSystemFilter := requestedAllSystems(systems)
+
+	args := make([]any, 0)
+	if !skipSystemFilter {
+		for _, sys := range systems {
+			args = append(args, sys.ID)
+		}
+	}
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	tagFilterCondition := ""
+	if len(tagFilterClauses) > 0 {
+		tagFilterCondition = " AND " + strings.Join(tagFilterClauses, " AND ")
+	}
+
+	systemCondition := ""
+	if !skipSystemFilter {
+		systemCondition = `Systems.SystemID IN (` + prepareVariadic("?", ",", len(systems)) + `) AND `
+	}
+
+	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
+	query := `
+		SELECT DISTINCT Systems.SystemID
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + systemCondition +
+		`Media.IsMissing = 0` +
+		tagFilterCondition +
+		` ORDER BY Systems.SystemID ASC`
+
+	finalArgs := append([]any(nil), args...)
+	finalArgs = append(finalArgs, tagFilterArgs...)
+
+	rows, err := db.QueryContext(ctx, query, finalArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute system IDs query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close system IDs rows")
+		}
+	}()
+
+	results := make([]string, 0)
+	for rows.Next() {
+		var systemID string
+		if scanErr := rows.Scan(&systemID); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan system ID: %w", scanErr)
+		}
+		results = append(results, systemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate system IDs rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func sqlSearchMediaWithFiltersCount(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+	variantGroups [][]string,
+	rawWords []string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	includeName bool,
+) (int, error) {
+	if len(systems) == 0 {
+		return 0, errors.New("no systems provided for media search")
+	}
+
+	skipSystemFilter := len(variantGroups) == 0 && !includeName && len(tags) > 0 &&
+		requestedAllSystems(systems)
+
+	args := make([]any, 0)
+	if !skipSystemFilter {
+		for _, sys := range systems {
+			args = append(args, sys.ID)
+		}
+	}
+
+	groupClauses := make([]string, 0, len(variantGroups))
+	variantArgs := make([]any, 0, len(variantGroups)*4)
+
+	for wordIdx, variants := range variantGroups {
+		orConditions := make([]string, 0, len(variants)*2+1)
+
+		for _, variant := range variants {
+			orConditions = append(orConditions, "MediaTitles.Slug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+			orConditions = append(orConditions, "MediaTitles.SecondarySlug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+		}
+
+		if includeName && wordIdx < len(rawWords) && rawWords[wordIdx] != "" {
+			orConditions = append(orConditions, "MediaTitles.Name LIKE ?")
+			variantArgs = append(variantArgs, "%"+rawWords[wordIdx]+"%")
+		}
+
+		groupClauses = append(groupClauses, "("+strings.Join(orConditions, " OR ")+")")
+	}
+
+	variantCondition := ""
+	if len(groupClauses) > 0 {
+		variantCondition = " AND " + strings.Join(groupClauses, " AND ")
+	}
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	tagFilterCondition := ""
+	if len(tagFilterClauses) > 0 {
+		tagFilterCondition = " AND " + strings.Join(tagFilterClauses, " AND ")
+	}
+
+	letterFilterCondition := ""
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	if len(letterClauses) > 0 {
+		letterFilterCondition = " AND " + strings.Join(letterClauses, " AND ")
+		variantArgs = append(variantArgs, letterArgs...)
+	}
+
+	systemCondition := ""
+	if !skipSystemFilter {
+		systemCondition = `Systems.SystemID IN (` + prepareVariadic("?", ",", len(systems)) + `) AND `
+	}
+
+	//nolint:gosec // Safe: WHERE clause is built from sanitized components and parameterized args.
+	query := `
+		SELECT COUNT(*)
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + systemCondition +
+		`Media.IsMissing = 0` +
+		variantCondition +
+		tagFilterCondition +
+		letterFilterCondition
+
+	finalArgs := append([]any(nil), args...)
+	finalArgs = append(finalArgs, variantArgs...)
+	finalArgs = append(finalArgs, tagFilterArgs...)
+
+	var count int
+	if err := db.QueryRowContext(ctx, query, finalArgs...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to execute media count query: %w", err)
+	}
+
+	return count, nil
+}
+
+func sqlSearchMediaByTitleDBIDsCount(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	tags []zapscript.TagFilter,
+	letter *string,
+) (int, error) {
+	if len(titleDBIDs) == 0 {
+		return 0, nil
+	}
+
+	args := make([]any, 0, len(titleDBIDs)+10)
+	for _, id := range titleDBIDs {
+		args = append(args, id)
+	}
+	titleCondition := "MediaTitles.DBID IN (" + prepareVariadic("?", ",", len(titleDBIDs)) + ")"
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	extraConditions := make([]string, 0, len(tagFilterClauses)+len(letterClauses))
+	extraArgs := make([]any, 0, len(tagFilterArgs)+len(letterArgs))
+	extraConditions = append(extraConditions, tagFilterClauses...)
+	extraArgs = append(extraArgs, tagFilterArgs...)
+	extraConditions = append(extraConditions, letterClauses...)
+	extraArgs = append(extraArgs, letterArgs...)
+
+	whereExtra := ""
+	if len(extraConditions) > 0 {
+		whereExtra = " AND " + strings.Join(extraConditions, " AND ")
+	}
+
+	//nolint:gosec // Safe: WHERE clause is built from sanitized components and parameterized args.
+	query := `
+		SELECT COUNT(*)
+		FROM MediaTitles
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + titleCondition + ` AND Media.IsMissing = 0` + whereExtra
+
+	finalArgs := make([]any, 0, len(args)+len(extraArgs))
+	finalArgs = append(finalArgs, args...)
+	finalArgs = append(finalArgs, extraArgs...)
+
+	var count int
+	if err := db.QueryRowContext(ctx, query, finalArgs...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to execute title DBIDs count query: %w", err)
+	}
+
+	return count, nil
+}
+
 func sqlSearchMediaByTitleDBIDs(
 	ctx context.Context,
 	db sqlQueryable,
@@ -968,6 +1190,11 @@ func sqlSearchMediaByTitleDBIDs(
 		whereExtra = " AND " + strings.Join(extraConditions, " AND ")
 	}
 
+	limitClause := "\n\t\tLIMIT ?"
+	if limit <= 0 {
+		limitClause = ""
+	}
+
 	//nolint:gosec // Safe: WHERE clause built from sanitized components
 	query := `
 		SELECT
@@ -980,13 +1207,14 @@ func sqlSearchMediaByTitleDBIDs(
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE ` + titleCondition + ` AND Media.IsMissing = 0` + whereExtra + `
-		ORDER BY Media.DBID ASC
-		LIMIT ?`
+		ORDER BY Media.DBID ASC` + limitClause
 
 	finalArgs := make([]any, 0, len(args)+len(extraArgs)+1)
 	finalArgs = append(finalArgs, args...)
 	finalArgs = append(finalArgs, extraArgs...)
-	finalArgs = append(finalArgs, limit)
+	if limit > 0 {
+		finalArgs = append(finalArgs, limit)
+	}
 
 	queryStarted := time.Now()
 	rows, err := db.QueryContext(ctx, query, finalArgs...)
@@ -995,7 +1223,11 @@ func sqlSearchMediaByTitleDBIDs(
 	}
 	defer func() { _ = rows.Close() }()
 
-	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
+	initialCapacity := min(limit, 100)
+	if initialCapacity <= 0 {
+		initialCapacity = defaultSearchResultsCapacity
+	}
+	results := make([]database.SearchResultWithCursor, 0, initialCapacity)
 	for rows.Next() {
 		var r database.SearchResultWithCursor
 		if scanErr := rows.Scan(
