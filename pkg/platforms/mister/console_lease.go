@@ -112,6 +112,11 @@ func (c *mainConsoleLeaseController) waitForState(ctx context.Context, expected,
 
 	for {
 		state, err := c.readState()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if err == nil && state.nonce == nonce {
 			switch state.state {
 			case expected:
