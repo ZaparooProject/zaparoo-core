@@ -122,7 +122,7 @@ type FileReader struct {
 }
 
 func NewReader(cfg *config.Instance) *FileReader {
-	return NewReaderWithDefaults(cfg, true, true)
+	return NewReaderWithDefaults(cfg, true, false)
 }
 
 func NewReaderWithDefaults(cfg *config.Instance, defaultEnabled, defaultAutoDetect bool) *FileReader {
