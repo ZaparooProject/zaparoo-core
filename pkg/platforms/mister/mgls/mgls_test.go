@@ -22,12 +22,14 @@
 package mgls
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -188,7 +190,8 @@ func TestLaunchFileRejectsControlCharacters(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 
-			err := launchFile(path)
+			var command bytes.Buffer
+			err := launchFile(afero.NewMemMapFs(), &command, path)
 			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
 		})
 	}
@@ -197,11 +200,19 @@ func TestLaunchFileRejectsControlCharacters(t *testing.T) {
 func TestLaunchFileRejectsMissingTarget(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "missing.mra")
-	err := launchFile(path)
+	for _, ext := range []string{".mra", ".mgl", ".rbf"} {
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
 
-	require.ErrorContains(t, err, "launch file not accessible")
-	require.ErrorIs(t, err, os.ErrNotExist)
+			path := filepath.Join(t.TempDir(), "missing"+ext)
+			var command bytes.Buffer
+			err := launchFile(afero.NewOsFs(), &command, path)
+
+			require.ErrorContains(t, err, "launch file not accessible")
+			require.ErrorIs(t, err, os.ErrNotExist)
+			require.Empty(t, command.String())
+		})
+	}
 }
 
 func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
