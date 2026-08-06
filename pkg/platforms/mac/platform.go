@@ -35,12 +35,37 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type browserCommandFactory func(context.Context, string, ...string) *exec.Cmd
+
 type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
 	steamTracker   *steamtracker.DarwinPlatformIntegration
 	processMu      syncutil.RWMutex
+}
+
+func openBrowserURL(path string, newCommand browserCommandFactory) error {
+	//nolint:gosec // G204: launcher only matches http and https URLs
+	cmd := newCommand(context.Background(), "open", path)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("start macOS browser command: %w", err)
+	}
+	return nil
+}
+
+func newWebBrowserLauncher(openURL func(string) error) platforms.Launcher {
+	return platforms.Launcher{
+		ID:        "WebBrowser",
+		Schemes:   []string{"http", "https"},
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			if err := openURL(path); err != nil {
+				return nil, fmt.Errorf("failed to open URL in browser: %w", err)
+			}
+			return nil, nil //nolint:nilnil // Browser launches don't return a process handle
+		},
+	}
 }
 
 func (*Platform) ID() string {
@@ -213,6 +238,9 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		steam.NewSteamLauncher(steam.DefaultDarwinOptions()),
+		newWebBrowserLauncher(func(path string) error {
+			return openBrowserURL(path, exec.CommandContext)
+		}),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
