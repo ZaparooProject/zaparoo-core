@@ -108,10 +108,10 @@ func TestMainConsoleLeaseController_AcquireCleansDelayedLeaseAfterContextFailure
 	defer cancel()
 	go func() {
 		fields := waitForLeaseCommand(fs, controller.commandPath, "acquire")
+		cancel()
 		if len(fields) < 3 {
 			return
 		}
-		cancel()
 		_ = writeConsoleLeaseState(fs, controller.statePath, "acquired", fields[2])
 		if len(waitForLeaseCommand(fs, controller.commandPath, "release")) >= 3 {
 			_ = writeConsoleLeaseState(fs, controller.statePath, "released", fields[2])
