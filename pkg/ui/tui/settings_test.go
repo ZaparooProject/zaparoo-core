@@ -1027,7 +1027,12 @@ func TestWaitForCoreRestart_DownThenUp_Integration(t *testing.T) {
 	runner.Draw()
 
 	mockSvc := NewMockSettingsService()
-	mockSvc.On("GetSettings", mock.Anything).Return(nil, errors.New("connection refused")).Twice()
+	releaseFirstPoll := make(chan struct{})
+	defer close(releaseFirstPoll)
+	mockSvc.On("GetSettings", mock.Anything).
+		Run(func(mock.Arguments) { <-releaseFirstPoll }).
+		Return(nil, errors.New("connection refused")).Once()
+	mockSvc.On("GetSettings", mock.Anything).Return(nil, errors.New("connection refused")).Once()
 	mockSvc.On("GetSettings", mock.Anything).Return(&models.SettingsResponse{}, nil)
 
 	done := make(chan struct{})
@@ -1037,6 +1042,7 @@ func TestWaitForCoreRestart_DownThenUp_Integration(t *testing.T) {
 	})
 
 	require.True(t, runner.WaitForText("Core is restarting.", 100*time.Millisecond))
+	releaseFirstPoll <- struct{}{}
 	require.True(t, runner.WaitForText("Core restarted", time.Second))
 	assert.False(t, runner.ContainsText("Core is restarting."))
 	select {
