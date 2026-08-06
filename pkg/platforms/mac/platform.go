@@ -35,6 +35,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type browserCommandFactory func(context.Context, string, ...string) *exec.Cmd
+
 type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
@@ -43,10 +45,10 @@ type Platform struct {
 	processMu      syncutil.RWMutex
 }
 
-func openBrowserURL(path string) error {
+func openBrowserURL(path string, newCommand browserCommandFactory) error {
 	//nolint:gosec // G204: launcher only matches http and https URLs
-	cmd := exec.CommandContext(context.Background(), "open", path)
-	if err := cmd.Start(); err != nil {
+	cmd := newCommand(context.Background(), "open", path)
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("start macOS browser command: %w", err)
 	}
 	return nil
@@ -236,7 +238,9 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		steam.NewSteamLauncher(steam.DefaultDarwinOptions()),
-		newWebBrowserLauncher(openBrowserURL),
+		newWebBrowserLauncher(func(path string) error {
+			return openBrowserURL(path, exec.CommandContext)
+		}),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

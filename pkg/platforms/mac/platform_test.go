@@ -22,6 +22,8 @@
 package mac
 
 import (
+	"context"
+	"os/exec"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -46,6 +48,41 @@ func TestLaunchersIncludesWebBrowser(t *testing.T) {
 	require.ElementsMatch(t, []string{"http", "https"}, browser.Schemes)
 	require.Equal(t, platforms.LifecycleFireAndForget, browser.Lifecycle)
 	require.NotNil(t, browser.Launch)
+}
+
+func TestOpenBrowserURL(t *testing.T) {
+	t.Parallel()
+
+	const url = "https://example.com/path"
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+
+		var commandName string
+		var commandArgs []string
+		err := openBrowserURL(url, func(_ context.Context, name string, args ...string) *exec.Cmd {
+			commandName = name
+			commandArgs = append(commandArgs, args...)
+			return exec.CommandContext(t.Context(), "sh", "-c", "exit 0")
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "open", commandName)
+		assert.Equal(t, []string{url}, commandArgs)
+	})
+
+	t.Run("non-zero exit", func(t *testing.T) {
+		t.Parallel()
+
+		err := openBrowserURL(url, func(_ context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(t.Context(), "sh", "-c", "exit 7")
+		})
+
+		require.ErrorContains(t, err, "start macOS browser command")
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		assert.Equal(t, 7, exitErr.ExitCode())
+	})
 }
 
 func TestWebBrowserLauncherLaunch(t *testing.T) {
