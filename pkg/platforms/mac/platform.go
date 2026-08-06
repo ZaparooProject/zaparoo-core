@@ -43,6 +43,29 @@ type Platform struct {
 	processMu      syncutil.RWMutex
 }
 
+func openBrowserURL(path string) error {
+	//nolint:gosec // G204: launcher only matches http and https URLs
+	cmd := exec.CommandContext(context.Background(), "open", path)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start macOS browser command: %w", err)
+	}
+	return nil
+}
+
+func newWebBrowserLauncher(openURL func(string) error) platforms.Launcher {
+	return platforms.Launcher{
+		ID:        "WebBrowser",
+		Schemes:   []string{"http", "https"},
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			if err := openURL(path); err != nil {
+				return nil, fmt.Errorf("failed to open URL in browser: %w", err)
+			}
+			return nil, nil //nolint:nilnil // Browser launches don't return a process handle
+		},
+	}
+}
+
 func (*Platform) ID() string {
 	return platformids.Mac
 }
@@ -213,6 +236,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		steam.NewSteamLauncher(steam.DefaultDarwinOptions()),
+		newWebBrowserLauncher(openBrowserURL),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
