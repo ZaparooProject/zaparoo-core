@@ -41,7 +41,9 @@ import (
 	"github.com/spf13/afero"
 )
 
-type commandInterfaceWriter struct{}
+type commandInterfaceWriter struct {
+	open func() (io.WriteCloser, error)
+}
 
 // MRA represents the structure of a MiSTer Arcade ROM file.
 type MRA struct {
@@ -51,8 +53,16 @@ type MRA struct {
 	Rbf     string   `xml:"rbf"`
 }
 
-func (commandInterfaceWriter) Write(p []byte) (int, error) {
-	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
+func newCommandInterfaceWriter(fs afero.Fs) commandInterfaceWriter {
+	return commandInterfaceWriter{
+		open: func() (io.WriteCloser, error) {
+			return fs.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
+		},
+	}
+}
+
+func (w commandInterfaceWriter) Write(p []byte) (int, error) {
+	cmd, err := w.open()
 	if err != nil {
 		return 0, fmt.Errorf("failed to open command interface: %w", err)
 	}
@@ -177,7 +187,8 @@ func validateLoadCorePath(path string) error {
 }
 
 func launchFileWithDefaults(path string) error {
-	return launchFile(afero.NewOsFs(), commandInterfaceWriter{}, path)
+	fs := afero.NewOsFs()
+	return launchFile(fs, newCommandInterfaceWriter(fs), path)
 }
 
 func launchFile(fs afero.Fs, commandWriter io.Writer, path string) error {
@@ -193,11 +204,6 @@ func launchFile(fs afero.Fs, commandWriter io.Writer, path string) error {
 
 	if _, err := fs.Stat(path); err != nil {
 		return fmt.Errorf("launch file not accessible: %w", err)
-	}
-
-	_, err := os.Stat(misterconfig.CmdInterface)
-	if err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
 	log.Debug().Str("file", path).Msg("sending to command interface")

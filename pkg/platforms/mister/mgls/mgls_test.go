@@ -24,15 +24,29 @@ package mgls
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type errorWriteCloser struct {
+	err error
+}
+
+func (w errorWriteCloser) Write(_ []byte) (int, error) {
+	return 0, w.err
+}
+
+func (errorWriteCloser) Close() error {
+	return nil
+}
 
 func TestReadMRA(t *testing.T) {
 	t.Parallel()
@@ -204,15 +218,83 @@ func TestLaunchFileRejectsMissingTarget(t *testing.T) {
 		t.Run(ext, func(t *testing.T) {
 			t.Parallel()
 
-			path := filepath.Join(t.TempDir(), "missing"+ext)
+			path := filepath.Join("media", "fat", "missing"+ext)
 			var command bytes.Buffer
-			err := launchFile(afero.NewOsFs(), &command, path)
+			err := launchFile(afero.NewMemMapFs(), &command, path)
 
 			require.ErrorContains(t, err, "launch file not accessible")
 			require.ErrorIs(t, err, os.ErrNotExist)
 			require.Empty(t, command.String())
 		})
 	}
+}
+
+func TestLaunchFileWritesCommand(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("media", "fat", "game.mgl")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, afero.WriteFile(fs, path, nil, 0o600))
+
+	var command bytes.Buffer
+	err := launchFile(fs, &command, path)
+
+	require.NoError(t, err)
+	require.Equal(t, "load_core "+path+"\n", command.String())
+}
+
+func TestCommandInterfaceWriter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful write", func(t *testing.T) {
+		t.Parallel()
+
+		fs := afero.NewMemMapFs()
+		require.NoError(t, fs.MkdirAll(filepath.Dir(misterconfig.CmdInterface), 0o755))
+		require.NoError(t, afero.WriteFile(fs, misterconfig.CmdInterface, nil, 0o600))
+		command := []byte("load_core " + filepath.Join("media", "fat", "game.mgl") + "\n")
+
+		n, err := newCommandInterfaceWriter(fs).Write(command)
+
+		require.NoError(t, err)
+		require.Equal(t, len(command), n)
+		got, err := afero.ReadFile(fs, misterconfig.CmdInterface)
+		require.NoError(t, err)
+		require.Equal(t, command, got)
+	})
+
+	t.Run("open failure", func(t *testing.T) {
+		t.Parallel()
+
+		writer := commandInterfaceWriter{
+			open: func() (io.WriteCloser, error) {
+				return nil, assert.AnError
+			},
+		}
+
+		n, err := writer.Write([]byte("command"))
+
+		require.Zero(t, n)
+		require.ErrorContains(t, err, "failed to open command interface")
+		require.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("write failure", func(t *testing.T) {
+		t.Parallel()
+
+		writer := commandInterfaceWriter{
+			open: func() (io.WriteCloser, error) {
+				return errorWriteCloser{err: assert.AnError}, nil
+			},
+		}
+
+		n, err := writer.Write([]byte("command"))
+
+		require.Zero(t, n)
+		require.ErrorContains(t, err, "write command interface")
+		require.ErrorIs(t, err, assert.AnError)
+	})
 }
 
 func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
