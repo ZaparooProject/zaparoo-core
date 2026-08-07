@@ -1027,7 +1027,7 @@ func TestWaitForCoreRestart_DownThenUp_Integration(t *testing.T) {
 	runner.Draw()
 
 	mockSvc := NewMockSettingsService()
-	releaseFirstPoll := make(chan struct{})
+	releaseFirstPoll := make(chan struct{}, 1)
 	defer close(releaseFirstPoll)
 	mockSvc.On("GetSettings", mock.Anything).
 		Run(func(mock.Arguments) { <-releaseFirstPoll }).
