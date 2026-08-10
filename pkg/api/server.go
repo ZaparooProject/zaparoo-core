@@ -312,6 +312,7 @@ func NewMethodMap() *MethodMap {
 				env.State.ListReaders(),
 				&ls,
 				env.State.SetWroteToken,
+				env.State.SetReaderWriteActive,
 			)
 		},
 		models.MethodReadersWriteCancel: func(env requests.RequestEnv) (any, error) {

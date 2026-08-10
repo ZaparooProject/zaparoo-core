@@ -60,41 +60,43 @@ type PendingWrite struct {
 }
 
 type State struct {
-	platform              platforms.Platform
-	ctx                   context.Context
-	ctxCancelFunc         context.CancelFunc
-	softwareToken         *tokens.Token
-	wroteToken            *tokens.Token
-	pendingLaunchOverride *PendingLaunchOverride
-	pendingWrite          *PendingWrite
-	readers               map[string]readers.Reader
-	Notifications         chan<- models.Notification
-	activeMedia           *models.ActiveMedia
-	backgroundMedia       *models.ActiveMedia
-	activeProfile         *models.ActiveProfile
-	activePlaylist        *playlists.Playlist
-	backgroundPlaylist    *playlists.Playlist
-	activeMediaReadyCh    chan struct{}
-	inbox                 *inbox.Service
-	onMediaStartHook      func(*models.ActiveMedia, uint64)
-	onMediaStopHook       func()
-	launcherManager       *LauncherManager
-	uiEvents              *uievents.Service
-	backupCoordinator     *backupcoordinator.Coordinator
-	bootUUID              string
-	lastScanned           tokens.Token
-	activeToken           tokens.Token
-	activeMediaReadyGen   uint64
-	mediaLaunchAccesses   int
-	mu                    syncutil.RWMutex
-	mediaLaunchMu         syncutil.RWMutex
-	mediaRestoreMu        syncutil.RWMutex
-	activeMediaReady      bool
-	stopService           bool
-	restartRequested      bool
-	restorePendingRestart bool
-	runZapScript          bool
-	backgroundAutoPaused  bool
+	platform                  platforms.Platform
+	ctx                       context.Context
+	launcherManager           *LauncherManager
+	uiEvents                  *uievents.Service
+	wroteToken                *tokens.Token
+	pendingLaunchOverride     *PendingLaunchOverride
+	pendingWrite              *PendingWrite
+	readers                   map[string]readers.Reader
+	Notifications             chan<- models.Notification
+	activeMedia               *models.ActiveMedia
+	backgroundMedia           *models.ActiveMedia
+	activeProfile             *models.ActiveProfile
+	activePlaylist            *playlists.Playlist
+	backgroundPlaylist        *playlists.Playlist
+	activeMediaReadyCh        chan struct{}
+	inbox                     *inbox.Service
+	onMediaStartHook          func(*models.ActiveMedia, uint64)
+	onMediaStopHook           func()
+	softwareToken             *tokens.Token
+	ctxCancelFunc             context.CancelFunc
+	backupCoordinator         *backupcoordinator.Coordinator
+	bootUUID                  string
+	lastScanned               tokens.Token
+	activeToken               tokens.Token
+	activeMediaReadyGen       uint64
+	mediaLaunchAccesses       int
+	readerWriteCount          int
+	mediaRestoreMu            syncutil.RWMutex
+	mu                        syncutil.RWMutex
+	mediaLaunchMu             syncutil.RWMutex
+	activeMediaReady          bool
+	restartRequested          bool
+	restorePendingRestart     bool
+	runZapScript              bool
+	backgroundAutoPaused      bool
+	stopService               bool
+	clearWroteTokenAfterWrite bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -385,6 +387,39 @@ func (s *State) GetSoftwareToken() *tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.softwareToken
+}
+
+func (s *State) SetReaderWriteActive(active bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if active {
+		s.readerWriteCount++
+		return
+	}
+	if s.readerWriteCount == 0 {
+		return
+	}
+	s.readerWriteCount--
+	if s.readerWriteCount == 0 && s.clearWroteTokenAfterWrite {
+		s.wroteToken = nil
+		s.clearWroteTokenAfterWrite = false
+	}
+}
+
+func (s *State) ReaderWriteActive() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readerWriteCount > 0
+}
+
+func (s *State) MarkWrittenTagRemoved() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readerWriteCount > 0 {
+		s.clearWroteTokenAfterWrite = true
+		return
+	}
+	s.wroteToken = nil
 }
 
 func (s *State) SetWroteToken(token *tokens.Token) {

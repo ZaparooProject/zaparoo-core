@@ -602,6 +602,7 @@ preprocessing:
 		var scanSource string
 		var scanProperties []readers.ScanProperty
 		var reinsertedDuringRemovalHook bool
+		var writtenTagRemoved bool
 
 		select {
 		case <-svc.State.GetContext().Done():
@@ -620,6 +621,7 @@ preprocessing:
 			readerError = t.ReaderError
 			scanSource = t.Source
 			scanProperties = t.Properties
+			writtenTagRemoved = t.WrittenTagRemoved
 		case hookResult := <-removalHookResults:
 			if activeRemovalHook == nil || hookResult.generation != activeRemovalHook.generation {
 				continue preprocessing
@@ -718,6 +720,11 @@ preprocessing:
 			path, enabled := svc.Config.ReadySoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.ReadySound, "ready")
 			continue preprocessing
+		}
+
+		if writtenTagRemoved {
+			log.Info().Msg("written tag removed, allowing next scan to launch")
+			svc.State.MarkWrittenTagRemoved()
 		}
 
 		if scan != nil && activeRemovalHook != nil &&
@@ -826,6 +833,13 @@ preprocessing:
 			}
 
 			log.Info().Msgf("new token scanned: %v", scan)
+
+			// A reader may report the tag while its write operation is reading or
+			// verifying NDEF. Never execute old, partial, or newly written content.
+			if svc.State.ReaderWriteActive() {
+				log.Info().Msg("suppressing token scan during reader write")
+				continue preprocessing
+			}
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
 			if onScanScript := svc.Config.ReadersScan().OnScan; onScanScript != "" {

@@ -281,25 +281,26 @@ func createVIDPIDBlocklist() []string {
 }
 
 type Reader struct {
-	session          PollingSession
-	writeCtx         context.Context
-	device           PN532Device
-	ctx              context.Context
-	writeCancel      context.CancelFunc
-	cfg              *config.Instance
-	lastToken        *tokens.Token
-	cancel           context.CancelFunc
-	realDevice       *pn532.Device
-	tagOps           *tagops.TagOperations
-	transportFactory TransportFactory
-	deviceFactory    DeviceFactory
-	sessionFactory   SessionFactory
-	deviceInfo       config.ReadersConnect
-	name             string
-	wg               sync.WaitGroup
-	mutex            syncutil.RWMutex
-	writeMutex       syncutil.Mutex
-	connected        bool
+	session                   PollingSession
+	writeCtx                  context.Context
+	device                    PN532Device
+	ctx                       context.Context
+	writeCancel               context.CancelFunc
+	cfg                       *config.Instance
+	lastToken                 *tokens.Token
+	cancel                    context.CancelFunc
+	realDevice                *pn532.Device
+	tagOps                    *tagops.TagOperations
+	transportFactory          TransportFactory
+	deviceFactory             DeviceFactory
+	sessionFactory            SessionFactory
+	deviceInfo                config.ReadersConnect
+	name                      string
+	wg                        sync.WaitGroup
+	mutex                     syncutil.RWMutex
+	writeMutex                syncutil.Mutex
+	connected                 bool
+	suppressScansUntilRemoval bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -473,17 +474,32 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 	return nil
 }
 
+func (r *Reader) suppressingTagScans() bool {
+	r.writeMutex.Lock()
+	defer r.writeMutex.Unlock()
+	return r.writeCtx != nil || r.suppressScansUntilRemoval
+}
+
 func (r *Reader) handleTagDetected(ctx context.Context, detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
 	log.Info().Msgf("new tag detected: %s (%s)", detectedTag.Type, detectedTag.UID)
+	if r.suppressingTagScans() {
+		log.Info().Msg("suppressing PN532 scan during or immediately after tag write")
+		return nil
+	}
 	r.processNewTag(ctx, detectedTag, iq)
 	return nil
 }
 
 func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	log.Info().Msg("tag removed")
+	r.writeMutex.Lock()
+	writtenTagRemoved := r.suppressScansUntilRemoval
+	r.suppressScansUntilRemoval = false
+	r.writeMutex.Unlock()
 	iq <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  nil,
+		Source:            tokens.SourceReader,
+		Token:             nil,
+		WrittenTagRemoved: writtenTagRemoved,
 	}
 
 	r.mutex.Lock()
@@ -809,6 +825,12 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
 				return writeErr
 			}
+
+			// Polling may report card-changed after WriteNDEF but before the API
+			// records wroteToken. Suppress callbacks until this physical tag leaves.
+			r.writeMutex.Lock()
+			r.suppressScansUntilRemoval = true
+			r.writeMutex.Unlock()
 
 			log.Info().Msg("successfully wrote text to PN532 tag")
 			log.Debug().Msgf("wrote NDEF text: %s", text)

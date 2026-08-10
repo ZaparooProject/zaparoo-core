@@ -131,6 +131,39 @@ func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
 	}
 }
 
+func TestReaderWriteActiveTracksOverlappingWrites(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	state.SetReaderWriteActive(true)
+	state.SetReaderWriteActive(true)
+	assert.True(t, state.ReaderWriteActive())
+
+	state.SetReaderWriteActive(false)
+	assert.True(t, state.ReaderWriteActive())
+	state.SetReaderWriteActive(false)
+	assert.False(t, state.ReaderWriteActive())
+
+	state.SetReaderWriteActive(false)
+	assert.False(t, state.ReaderWriteActive())
+}
+
+func TestWrittenTagRemovalDuringWriteClearsCompletedToken(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	written := &tokens.Token{UID: "written"}
+
+	state.SetReaderWriteActive(true)
+	state.MarkWrittenTagRemoved()
+	state.SetWroteToken(written)
+	assert.Equal(t, written, state.GetWroteToken())
+
+	state.SetReaderWriteActive(false)
+	assert.Nil(t, state.GetWroteToken())
+}
+
 func TestConsumePendingWrite(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()

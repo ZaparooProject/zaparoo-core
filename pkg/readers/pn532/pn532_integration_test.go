@@ -827,6 +827,23 @@ func TestWriteWithContext_Success(t *testing.T) {
 	require.Len(t, mockNTAGTag.lastNDEFMessage.Records, 1, "should have one NDEF record")
 	assert.Equal(t, pn532.NDEFTypeText, mockNTAGTag.lastNDEFMessage.Records[0].Type)
 	assert.Equal(t, text, mockNTAGTag.lastNDEFMessage.Records[0].Text)
+
+	// A card-changed callback can race the API's wroteToken update. The reader
+	// must suppress it until removal so old or partially rewritten NDEF never runs.
+	scanQueue := make(chan readers.Scan, 1)
+	detected := &pn532.DetectedTag{Type: pn532.TagTypeNTAG, UID: mockNTAGTag.uid}
+	require.NoError(t, reader.handleTagDetected(ctx, detected, scanQueue))
+	select {
+	case scan := <-scanQueue:
+		t.Fatalf("unexpected scan during post-write suppression: %+v", scan)
+	default:
+	}
+
+	reader.handleTagRemoved(scanQueue)
+	removal := <-scanQueue
+	assert.Nil(t, removal.Token)
+	assert.True(t, removal.WrittenTagRemoved)
+	assert.False(t, reader.suppressingTagScans())
 }
 
 // TestWriteWithContext_DifferentTagTypes tests that different tag types are converted correctly

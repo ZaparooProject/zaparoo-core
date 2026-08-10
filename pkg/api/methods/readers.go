@@ -36,10 +36,20 @@ func HandleReaderWrite(
 	allReaders []readers.Reader,
 	lastScanned *tokens.Token,
 	setWroteToken func(*tokens.Token),
+	setWriteActive ...func(bool),
 ) (any, error) {
 	var p models.ReaderWriteParams
 	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	var writeActivity func(bool)
+	if len(setWriteActive) > 0 {
+		writeActivity = setWriteActive[0]
+	}
+	if writeActivity != nil {
+		writeActivity(true)
+		defer writeActivity(false)
 	}
 
 	var r readers.Reader
