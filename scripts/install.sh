@@ -26,8 +26,20 @@ VERSION=""
 VERSION_TAG=""
 DRY_RUN=false
 NONINTERACTIVE="${NONINTERACTIVE:-}"
+ZAPAROO_GUI="${ZAPAROO_GUI:-}"
 TMP_DIR=""
 APP_PATH="${HOME}/.local/bin/zaparoo"
+STEAMOS_ADMIN_DECLINED=false
+STEAMOS_ADMIN_ACCESSED=false
+STEAMOS_TEMP_PASSWORD_SET=false
+STEAMOS_ADMIN_USER=""
+STEAMOS_ADMIN_PASSWORD=""
+STEAMOS_TEMP_ADMIN_PASSWORD='Zaparoo!'
+GUI_PROGRESS_PID=""
+GUI_PROGRESS_FD=""
+GUI_PROGRESS_PATH=""
+HARDWARE_INSTALLED=false
+DECKY_INSTALLED=false
 DECKY_REPO="ZaparooProject/zaparoo-decky"
 DECKY_API_URL="https://api.github.com/repos/${DECKY_REPO}"
 DECKY_HOME="${HOME}/homebrew"
@@ -76,6 +88,49 @@ warn() {
 abort() {
     error "$@"
     exit 1
+}
+
+gui_available() {
+    [ "${ZAPAROO_GUI}" = "1" ] && command -v zenity >/dev/null 2>&1
+}
+
+start_gui_progress() {
+    local text="$1"
+    if ! gui_available; then
+        return
+    fi
+    stop_gui_progress
+    ensure_tmp_dir
+    GUI_PROGRESS_PATH="${TMP_DIR}/gui-progress.$$"
+    mkfifo "${GUI_PROGRESS_PATH}"
+    zenity --progress --pulsate --no-cancel --auto-close \
+        --title="Zaparoo Installer" --text="${text}" \
+        < "${GUI_PROGRESS_PATH}" 2>/dev/null &
+    GUI_PROGRESS_PID=$!
+    exec {GUI_PROGRESS_FD}>"${GUI_PROGRESS_PATH}"
+}
+
+update_gui_progress() {
+    local text="$1"
+    if [ -n "${GUI_PROGRESS_FD}" ]; then
+        printf '# %s\n' "${text}" >&"${GUI_PROGRESS_FD}" || true
+    fi
+}
+
+stop_gui_progress() {
+    if [ -n "${GUI_PROGRESS_FD}" ]; then
+        printf '100\n' >&"${GUI_PROGRESS_FD}" || true
+        exec {GUI_PROGRESS_FD}>&-
+        GUI_PROGRESS_FD=""
+    fi
+    if [ -n "${GUI_PROGRESS_PID}" ]; then
+        wait "${GUI_PROGRESS_PID}" 2>/dev/null || true
+        GUI_PROGRESS_PID=""
+    fi
+    if [ -n "${GUI_PROGRESS_PATH}" ]; then
+        rm -f "${GUI_PROGRESS_PATH}"
+        GUI_PROGRESS_PATH=""
+    fi
 }
 
 # ============================================================================
@@ -154,6 +209,127 @@ detect_arch() {
             abort "Unsupported architecture: ${arch}"
             ;;
     esac
+}
+
+steamos_password_status() {
+    local username="$1"
+    passwd -S "${username}" 2>/dev/null | awk '{ print $2 }'
+}
+
+validate_gui_admin_password() {
+    local password
+    while true; do
+        password="$(zenity --password --title="Zaparoo Installer" \
+            --text="Enter your Steam Deck admin password. Zaparoo uses admin access only for approved NFC reader support and Decky installation steps.")" || return 1
+        if printf '%s\n' "${password}" | sudo -S -k -p '' -v >/dev/null 2>&1; then
+            STEAMOS_ADMIN_PASSWORD="${password}"
+            password=""
+            return 0
+        fi
+        password=""
+        zenity --error --title="Zaparoo Installer" --text="Incorrect admin password" || true
+    done
+}
+
+ensure_steamos_admin() {
+    local status response
+
+    if [ "${STEAMOS_ADMIN_DECLINED}" = true ]; then
+        return 1
+    fi
+    require_command sudo
+    if sudo -n true >/dev/null 2>&1; then
+        STEAMOS_ADMIN_ACCESSED=true
+        return 0
+    fi
+    if [ "${STEAMOS_TEMP_PASSWORD_SET}" = true ]; then
+        STEAMOS_ADMIN_PASSWORD="${STEAMOS_TEMP_ADMIN_PASSWORD}"
+        if printf '%s\n' "${STEAMOS_ADMIN_PASSWORD}" | \
+            sudo -S -p '' -v >/dev/null 2>&1; then
+            STEAMOS_ADMIN_ACCESSED=true
+            return 0
+        fi
+        return 1
+    fi
+
+    STEAMOS_ADMIN_USER="$(id -un)"
+    status="$(steamos_password_status "${STEAMOS_ADMIN_USER}" || true)"
+    if [ "${status}" = "NP" ]; then
+        response="$(prompt_yes_no \
+            "SteamOS needs temporary admin access to install NFC hardware support and the Decky plugin. No admin password is set. Zaparoo can temporarily set it to 'Zaparoo!', then remove it when installation finishes. If installation is interrupted, use 'Zaparoo!' as the admin password. Continue?" \
+            "y")"
+        if [ "${response}" != "y" ]; then
+            STEAMOS_ADMIN_DECLINED=true
+            return 1
+        fi
+        if ! printf '%s\n%s\n' "${STEAMOS_TEMP_ADMIN_PASSWORD}" "${STEAMOS_TEMP_ADMIN_PASSWORD}" | \
+            passwd "${STEAMOS_ADMIN_USER}" >/dev/null; then
+            warn "Could not set temporary SteamOS admin password"
+            return 1
+        fi
+        STEAMOS_TEMP_PASSWORD_SET=true
+        STEAMOS_ADMIN_PASSWORD="${STEAMOS_TEMP_ADMIN_PASSWORD}"
+        if ! printf '%s\n' "${STEAMOS_ADMIN_PASSWORD}" | \
+            sudo -S -k -p '' -v >/dev/null 2>&1; then
+            warn "Could not obtain temporary SteamOS admin access"
+            return 1
+        fi
+        STEAMOS_ADMIN_ACCESSED=true
+        return 0
+    fi
+
+    info "SteamOS needs admin access to install NFC hardware support and the Decky plugin"
+    if gui_available; then
+        if ! validate_gui_admin_password; then
+            STEAMOS_ADMIN_DECLINED=true
+            return 1
+        fi
+    elif ! sudo -v; then
+        STEAMOS_ADMIN_DECLINED=true
+        return 1
+    fi
+    STEAMOS_ADMIN_ACCESSED=true
+}
+
+run_privileged() {
+    require_command sudo
+    if [ "$(detect_linux_distro)" != "steamos" ]; then
+        sudo "$@"
+        return
+    fi
+    if [ -n "${STEAMOS_ADMIN_PASSWORD}" ]; then
+        STEAMOS_ADMIN_ACCESSED=true
+        printf '%s\n' "${STEAMOS_ADMIN_PASSWORD}" | sudo -S -p '' "$@"
+        return
+    fi
+    if sudo -n true >/dev/null 2>&1; then
+        STEAMOS_ADMIN_ACCESSED=true
+        sudo -n "$@"
+        return
+    fi
+    ensure_steamos_admin || return 1
+    if [ -n "${STEAMOS_ADMIN_PASSWORD}" ]; then
+        printf '%s\n' "${STEAMOS_ADMIN_PASSWORD}" | sudo -S -p '' "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+cleanup_steamos_admin() {
+    if [ "${STEAMOS_TEMP_PASSWORD_SET}" = true ]; then
+        if printf '%s\n' "${STEAMOS_ADMIN_PASSWORD:-${STEAMOS_TEMP_ADMIN_PASSWORD}}" | \
+            sudo -S -k -p '' passwd -d "${STEAMOS_ADMIN_USER}" >/dev/null 2>&1; then
+            success "Temporary SteamOS admin password removed"
+            STEAMOS_TEMP_PASSWORD_SET=false
+        else
+            warn "Could not remove temporary admin password. Use 'Zaparoo!' as the admin password and remove it from SteamOS settings."
+        fi
+    fi
+    STEAMOS_ADMIN_PASSWORD=""
+    if [ "${STEAMOS_ADMIN_ACCESSED}" = true ]; then
+        sudo -k >/dev/null 2>&1 || true
+        STEAMOS_ADMIN_ACCESSED=false
+    fi
 }
 
 # ============================================================================
@@ -445,12 +621,18 @@ json_string_field() {
         's/.*"'"${field}"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
 }
 
+core_health_ok() {
+    local health="$1"
+    printf '%s\n' "${health}" | grep -Eq \
+        '^[[:space:]]*OK[[:space:]]*$|"status"[[:space:]]*:[[:space:]]*"ok"'
+}
+
 verify_core_api() {
     local expected_version="$1"
     local attempt health version_response actual_version actual_platform
     for ((attempt = 0; attempt < 30; attempt++)); do
         health="$(curl --fail --silent --show-error "http://127.0.0.1:7497/health" 2>/dev/null || true)"
-        if echo "${health}" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+        if core_health_ok "${health}"; then
             version_response="$(curl --fail --silent --show-error \
                 -H 'Content-Type: application/json' \
                 --data '{"jsonrpc":"2.0","id":"installer","method":"version"}' \
@@ -752,11 +934,11 @@ PY
 
 rollback_decky_plugin() {
     local backup_path="$1"
-    sudo rm -rf -- "${DECKY_PLUGIN_PATH}"
+    run_privileged rm -rf -- "${DECKY_PLUGIN_PATH}"
     if [ -d "${backup_path}" ]; then
-        sudo mv -- "${backup_path}" "${DECKY_PLUGIN_PATH}"
+        run_privileged mv -- "${backup_path}" "${DECKY_PLUGIN_PATH}"
     fi
-    sudo systemctl start "${DECKY_SERVICE}" >/dev/null 2>&1 || true
+    run_privileged systemctl start "${DECKY_SERVICE}" >/dev/null 2>&1 || true
 }
 
 install_decky_stage() {
@@ -768,26 +950,31 @@ install_decky_stage() {
         abort "Decky rollback path already exists: ${backup_path}"
     fi
     owner="$(id -u):$(id -g)"
+    start_gui_progress "Stopping Decky Loader..."
     info "Stopping Decky Loader for plugin replacement..."
-    sudo systemctl stop "${DECKY_SERVICE}" || abort "Failed to stop Decky Loader"
-    if [ -e "${DECKY_PLUGIN_PATH}" ] && ! sudo mv -- "${DECKY_PLUGIN_PATH}" "${backup_path}"; then
-        sudo systemctl start "${DECKY_SERVICE}" >/dev/null 2>&1 || true
+    run_privileged systemctl stop "${DECKY_SERVICE}" || abort "Failed to stop Decky Loader"
+    update_gui_progress "Installing Zaparoo Decky..."
+    if [ -e "${DECKY_PLUGIN_PATH}" ] && \
+        ! run_privileged mv -- "${DECKY_PLUGIN_PATH}" "${backup_path}"; then
+        run_privileged systemctl start "${DECKY_SERVICE}" >/dev/null 2>&1 || true
         abort "Failed to preserve installed Zaparoo Decky plugin"
     fi
-    if ! sudo mv -- "${staged_plugin}" "${DECKY_PLUGIN_PATH}" || \
-        ! sudo chown -R "${owner}" "${DECKY_PLUGIN_PATH}" || \
-        ! sudo chown 0:0 "${DECKY_PLUGIN_PATH}"; then
+    if ! run_privileged mv -- "${staged_plugin}" "${DECKY_PLUGIN_PATH}" || \
+        ! run_privileged chown -R "${owner}" "${DECKY_PLUGIN_PATH}" || \
+        ! run_privileged chown 0:0 "${DECKY_PLUGIN_PATH}"; then
         rollback_decky_plugin "${backup_path}"
         abort "Failed to install Zaparoo Decky plugin"
     fi
-    if ! sudo systemctl start "${DECKY_SERVICE}" || \
-        ! sudo systemctl is-active --quiet "${DECKY_SERVICE}"; then
+    update_gui_progress "Restarting Decky Loader..."
+    if ! run_privileged systemctl start "${DECKY_SERVICE}" || \
+        ! run_privileged systemctl is-active --quiet "${DECKY_SERVICE}"; then
         rollback_decky_plugin "${backup_path}"
         abort "Decky Loader failed to restart; previous plugin was restored"
     fi
     if [ -d "${backup_path}" ]; then
-        sudo rm -rf -- "${backup_path}"
+        run_privileged rm -rf -- "${backup_path}"
     fi
+    stop_gui_progress
 }
 
 offer_decky_plugin() {
@@ -803,7 +990,7 @@ offer_decky_plugin() {
         warn "Zaparoo Decky requires Core ${DECKY_MINIMUM_CORE_VERSION} or newer; skipping plugin"
         return 0
     fi
-    response="$(prompt_yes_no "Install or update the optional Zaparoo Decky plugin (restarts Decky Loader)?" "n")"
+    response="$(prompt_yes_no "Install or update Zaparoo Decky? This requires admin access and restarts Decky Loader." "n")"
     if [ "${response}" != "y" ]; then
         info "Skipping optional Decky plugin"
         return 0
@@ -834,6 +1021,7 @@ offer_decky_plugin() {
             abort "Installed Zaparoo Decky ${current} is newer than stable ${decky_version}; refusing to downgrade"
         fi
         if [ "${relation}" -eq 0 ]; then
+            DECKY_INSTALLED=true
             success "Zaparoo Decky ${current} is already current"
             return 0
         fi
@@ -856,7 +1044,12 @@ offer_decky_plugin() {
     mkdir -p "${stage_path}"
     extract_decky_archive "${archive_path}" "${stage_path}" "${decky_version}" || \
         abort "Zaparoo Decky archive validation failed"
+    if ! ensure_steamos_admin; then
+        warn "Skipping optional Decky plugin because admin access was not granted"
+        return 0
+    fi
     install_decky_stage "${stage_path}/Zaparoo"
+    DECKY_INSTALLED=true
     success "Zaparoo Decky ${decky_version} installed"
 }
 
@@ -946,9 +1139,9 @@ uninstall_steamos() {
     "${APP_PATH}" -uninstall service || warn "Failed to remove service"
     "${APP_PATH}" -uninstall steam-runtime || warn "Failed to remove Steam Runtime files"
     "${APP_PATH}" -uninstall desktop || warn "Failed to remove desktop shortcut"
-    response="$(prompt_yes_no "Remove hardware support (requires sudo)?" "n")"
+    response="$(prompt_yes_no "Remove hardware support (requires admin access)?" "n")"
     if [ "${response}" = "y" ]; then
-        sudo "${APP_PATH}" -uninstall hardware || warn "Failed to remove hardware support"
+        run_privileged "${APP_PATH}" -uninstall hardware || warn "Failed to remove hardware support"
     fi
     "${APP_PATH}" -uninstall application || abort "Failed to remove application"
     success "Zaparoo Core removed; config, databases, mappings, and media were preserved"
@@ -1045,6 +1238,15 @@ prompt_yes_no() {
         return
     fi
 
+    if gui_available; then
+        if zenity --question --title="Zaparoo Installer" --text="${prompt}"; then
+            echo "y"
+        else
+            echo "n"
+        fi
+        return
+    fi
+
     # When run via "curl | bash", stdin is the pipe, not the terminal.
     # We need to read from /dev/tty for input. The prompt goes to stderr
     # so it's not captured by command substitution.
@@ -1130,24 +1332,32 @@ install_desktop() {
 install_hardware() {
     local install_binary="${1:-${ZAPAROO_BIN}}"
     local response
-    response="$(prompt_yes_no "Install hardware support (udev rules, requires sudo)?" "y")"
+    response="$(prompt_yes_no "Install NFC reader support? This requires admin access. On SteamOS, the same access can be reused if you choose to install Zaparoo Decky next." "y")"
 
     if [ "${response}" = "y" ]; then
-        info "Installing hardware support (requires root)..."
+        info "Installing NFC hardware support..."
 
         if [ "$DRY_RUN" = true ]; then
-            info "[DRY-RUN] Would install udev rules to: /etc/udev/rules.d/99-zaparoo.rules"
+            info "[DRY-RUN] Would install udev rules to: /etc/udev/rules.d/60-zaparoo.rules"
             info "[DRY-RUN] Would reload udev with: udevadm control --reload-rules"
-            info "[DRY-RUN] Would require: sudo privileges"
+            info "[DRY-RUN] Would request temporary SteamOS admin access"
             success "[DRY-RUN] Hardware support installation simulated"
             return 0
         fi
 
-        if ! sudo "${install_binary}" -install hardware; then
+        if [ "$(detect_linux_distro)" = "steamos" ] && ! ensure_steamos_admin; then
+            warn "Skipping NFC hardware support because admin access was not granted"
+            return 1
+        fi
+        start_gui_progress "Installing NFC hardware support..."
+        if ! run_privileged "${install_binary}" -install hardware; then
+            stop_gui_progress
             warn "Failed to install hardware support"
             return 1
         fi
+        stop_gui_progress
 
+        HARDWARE_INSTALLED=true
         success "Hardware support installed"
         info "You may need to replug your reader or reboot for changes to take effect"
     else
@@ -1412,6 +1622,8 @@ install_windows() {
 # ============================================================================
 
 cleanup() {
+    stop_gui_progress
+    cleanup_steamos_admin
     if [ -n "${TMP_DIR:-}" ] && [ -d "${TMP_DIR}" ]; then
         rm -rf "${TMP_DIR}"
     fi
@@ -1442,9 +1654,9 @@ uninstall_linux_generic() {
     fi
     "${APP_PATH}" -uninstall service || warn "Failed to remove service"
     "${APP_PATH}" -uninstall desktop || warn "Failed to remove desktop shortcut"
-    response="$(prompt_yes_no "Remove hardware support (requires sudo)?" "n")"
+    response="$(prompt_yes_no "Remove hardware support (requires admin access)?" "n")"
     if [ "${response}" = "y" ]; then
-        sudo "${APP_PATH}" -uninstall hardware || warn "Failed to remove hardware support"
+        run_privileged "${APP_PATH}" -uninstall hardware || warn "Failed to remove hardware support"
     fi
     "${APP_PATH}" -uninstall application || abort "Failed to remove application"
     success "Zaparoo Core removed; user data was preserved"
@@ -1521,7 +1733,7 @@ parse_args() {
 }
 
 main() {
-    local os_type distro
+    local os_type distro summary
 
     parse_args "$@"
 
@@ -1596,9 +1808,21 @@ main() {
     printf "\n"
     info "For more information, visit: https://zaparoo.org"
     printf "\n"
+    if gui_available; then
+        summary="Zaparoo setup completed successfully."
+        if [ "${HARDWARE_INSTALLED}" = true ]; then
+            summary+=$'\n\nNFC reader support: installed'
+        fi
+        if [ "${DECKY_INSTALLED}" = true ]; then
+            summary+=$'\nZaparoo Decky: installed'
+        fi
+        zenity --info --title="Zaparoo Installer" --text="${summary}" || true
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
-    trap cleanup EXIT INT TERM
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     main "$@"
 fi

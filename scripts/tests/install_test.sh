@@ -177,6 +177,15 @@ test_invalid_release_metadata() {
     pass "reject invalid release metadata"
 }
 
+test_core_health_response() {
+    core_health_ok "OK" || fail "plain-text Core health response was rejected"
+    core_health_ok '{"status":"ok"}' || fail "JSON Core health response was rejected"
+    if core_health_ok "not ok"; then
+        fail "invalid Core health response was accepted"
+    fi
+    pass "accept current and legacy Core health responses"
+}
+
 test_api_identity_fields_are_literal() {
     local response='{"result":{"version":"2.17.0+build.1","platform":"steamos"}}'
     assert_equal "2.17.0+build.1" "$(json_string_field version "${response}")" \
@@ -314,6 +323,115 @@ test_decky_requires_compatible_core() {
     pass "skip Decky plugin for incompatible Core"
 }
 
+test_steamos_temporary_admin_lifecycle() {
+    local password_input="${TEST_TMP}/temporary-password-input"
+    local sudo_log="${TEST_TMP}/temporary-password-sudo.log"
+    local output
+    output="$(
+        sudo() {
+            printf '%s\n' "$*" >> "${sudo_log}"
+            if [ "$1" = "-n" ] && [ "${2:-}" = "true" ]; then
+                return 1
+            fi
+            if [[ " $* " == *" -S "* ]]; then
+                cat >/dev/null || true
+            fi
+        }
+        passwd() {
+            if [ "$1" = "-S" ]; then
+                echo "deck NP 2026-01-01 0 99999 7 -1"
+                return
+            fi
+            cat > "${password_input}"
+        }
+        id() {
+            case "$1" in
+                -un) echo deck ;;
+                *) command id "$@" ;;
+            esac
+        }
+        prompt_yes_no() { echo y; }
+
+        STEAMOS_ADMIN_DECLINED=false
+        STEAMOS_TEMP_PASSWORD_SET=false
+        STEAMOS_ADMIN_USER=""
+        ensure_steamos_admin
+        printf 'password_set=%s\n' "${STEAMOS_TEMP_PASSWORD_SET}"
+        cleanup_steamos_admin
+        printf 'password_removed=%s\n' "${STEAMOS_TEMP_PASSWORD_SET}"
+    )"
+
+    assert_contains "${output}" "password_set=true" "temporary password setup"
+    assert_contains "${output}" "password_removed=false" "temporary password cleanup"
+    assert_equal $'Zaparoo!\nZaparoo!' "$(cat "${password_input}")" "recoverable temporary password"
+    assert_contains "$(cat "${sudo_log}")" "passwd -d deck" "temporary password removal"
+    pass "set and remove recoverable SteamOS admin password"
+}
+
+test_gui_admin_password_is_reused_without_timestamp() {
+    local sudo_input="${TEST_TMP}/gui-sudo-input"
+    local sudo_log="${TEST_TMP}/gui-sudo.log"
+
+    (
+        zenity() { echo "existing-password"; }
+        sudo() {
+            printf '%s\n' "$*" >> "${sudo_log}"
+            if [[ " $* " == *" -S "* ]]; then
+                cat >> "${sudo_input}"
+            fi
+        }
+        detect_linux_distro() { echo steamos; }
+
+        STEAMOS_ADMIN_PASSWORD=""
+        validate_gui_admin_password
+        run_privileged echo protected
+    )
+
+    assert_contains "$(cat "${sudo_log}")" "-S -p  echo protected" \
+        "GUI privileged command password reuse"
+    assert_equal $'existing-password\nexisting-password' "$(cat "${sudo_input}")" \
+        "GUI password input"
+    pass "reuse GUI admin password without sudo timestamp"
+}
+
+test_steamos_admin_decline_is_remembered() {
+    local password_log="${TEST_TMP}/declined-password.log"
+    local output
+    output="$(
+        sudo() {
+            if [ "$1" = "-n" ] && [ "${2:-}" = "true" ]; then
+                return 1
+            fi
+            return 0
+        }
+        passwd() {
+            if [ "$1" = "-S" ]; then
+                echo "deck NP 2026-01-01 0 99999 7 -1"
+            else
+                printf 'changed\n' >> "${password_log}"
+            fi
+        }
+        id() { echo deck; }
+        prompt_yes_no() { echo n; }
+
+        STEAMOS_ADMIN_DECLINED=false
+        STEAMOS_TEMP_PASSWORD_SET=false
+        if ensure_steamos_admin; then
+            echo "unexpected-success"
+        fi
+        if ensure_steamos_admin; then
+            echo "unexpected-repeat-success"
+        fi
+        printf 'declined=%s\n' "${STEAMOS_ADMIN_DECLINED}"
+    )"
+
+    assert_contains "${output}" "declined=true" "admin decline state"
+    if [ -e "${password_log}" ]; then
+        fail "declined admin access changed the password"
+    fi
+    pass "remember declined SteamOS admin access"
+}
+
 test_install_hardware_accepts_installed_binary() {
     local installed_binary="${TEST_TMP}/installed/zaparoo"
     local output
@@ -366,6 +484,7 @@ test_update_mode_is_rejected
 test_dry_run_prompts_accept
 test_signed_release_selection
 test_invalid_release_metadata
+test_core_health_response
 test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name
@@ -374,6 +493,9 @@ test_decky_release_selection
 test_decky_archive_validation
 test_unrecognized_binary_is_not_replaced
 test_decky_requires_compatible_core
+test_steamos_temporary_admin_lifecycle
+test_gui_admin_password_is_reused_without_timestamp
+test_steamos_admin_decline_is_remembered
 test_install_hardware_accepts_installed_binary
 test_failed_install_removes_integration
 
