@@ -188,6 +188,31 @@ func TestPlaySyncDuePendingBypassesIntervalButHonorsBackoff(t *testing.T) {
 	assert.True(t, playSyncDue(&s, now.Add(time.Minute), true))
 }
 
+func TestRecordPlaySyncError_DoesNotBackoffExpectedInactivity(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	_, disabledErr := backupsvc.NewManager(cfg, nil, nil).SyncPlayHistory(context.Background())
+	require.Error(t, disabledErr)
+	require.True(t, backupsvc.IsPlaySyncDisabledError(disabledErr))
+
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	state := remoteHeartbeatState{
+		nextAttempt: now.Add(time.Hour),
+		backoff:     remoteHeartbeatMaxBackoff,
+	}
+
+	assert.True(t, recordPlaySyncError(&state, now, disabledErr))
+	assert.True(t, state.nextAttempt.IsZero(), "enabling sync must allow the next request immediately")
+	assert.Equal(t, remoteHeartbeatInitialBackoff, state.backoff)
+
+	networkErr := errors.New("network unavailable")
+	assert.False(t, recordPlaySyncError(&state, now, networkErr))
+	assert.Equal(t, now.Add(remoteHeartbeatInitialBackoff), state.nextAttempt)
+	assert.Equal(t, 2*remoteHeartbeatInitialBackoff, state.backoff)
+}
+
 func TestRemoteBackupScheduler_PlaySyncRequestBypassesSuccessInterval(t *testing.T) {
 	rootDir := t.TempDir()
 	var watermarkRequests atomic.Int32

@@ -120,6 +120,20 @@ func onlineFailureRequiresWarning(err error, expected bool) bool {
 	return err != nil && !expected && !errors.Is(err, context.Canceled)
 }
 
+// recordPlaySyncError applies retry backoff only to real failures. Disabled or
+// unlinked sync is an idle state, not a failure; retaining its backoff would
+// delay the first upload after the user enables sync or links the device.
+func recordPlaySyncError(retryState *remoteHeartbeatState, now time.Time, err error) bool {
+	expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
+	if expected {
+		retryState.nextAttempt = time.Time{}
+		retryState.backoff = remoteHeartbeatInitialBackoff
+		return true
+	}
+	retryState.recordFailure(now)
+	return false
+}
+
 func startRemoteBackupScheduler(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -230,8 +244,7 @@ func remoteBackupSchedulerLoop(
 		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		info, err := mgr.SyncPlayHistory(ctx)
 		if err != nil {
-			playSyncState.recordFailure(now)
-			expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
+			expected := recordPlaySyncError(&playSyncState, now, err)
 			if onlineFailureRequiresWarning(err, expected) {
 				log.Warn().Err(err).
 					Dur("retry_in", playSyncState.nextAttempt.Sub(now)).
