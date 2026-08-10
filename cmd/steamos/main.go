@@ -50,6 +50,12 @@ func main() {
 	}
 }
 
+func steamOSDefaults(freshInstall bool) config.Values {
+	defaults := config.BaseDefaults
+	defaults.Service.Encryption = freshInstall
+	return defaults
+}
+
 func run() error {
 	if steamruntime.IsInvocation(os.Args[0]) {
 		if err := steamruntime.Run(context.Background()); err != nil {
@@ -153,10 +159,14 @@ func run() error {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
-	// SteamOS-specific: Migrate config from legacy tapto.ini if present
-	defaults := config.BaseDefaults
+	// SteamOS-specific: Migrate config from legacy tapto.ini if present.
+	configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
 	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
-	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
+	migrationRequired := migrate.Required(iniPath, configPath)
+	_, configErr := os.Stat(configPath)
+	freshInstall := errors.Is(configErr, os.ErrNotExist) && !migrationRequired
+	defaults := steamOSDefaults(freshInstall)
+	if migrationRequired {
 		migrated, migrateErr := migrate.IniToToml(iniPath)
 		if migrateErr != nil {
 			return fmt.Errorf("error migrating config: %w", migrateErr)
