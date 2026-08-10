@@ -360,13 +360,26 @@ func (p *Platform) wrapSteamRuntime(launcher *platforms.Launcher) {
 		return
 	}
 	builder := launcher.BuildLaunchCommand
-	// Replace direct-launch wrappers: Steam owns process lifetime and Gamescope
-	// focus for Runtime sessions.
+	directLaunch := launcher.Launch
+	launcherID := launcher.ID
+	// Replace direct-launch wrappers while Runtime remains available. Readiness
+	// is checked again per launch because integration can be removed after the
+	// launcher cache is built.
 	launcher.Launch = func(
 		cfg *config.Instance,
 		path string,
 		opts *platforms.LaunchOptions,
 	) (*os.Process, error) {
+		if !p.steamRuntime.Available() {
+			if directLaunch == nil {
+				return nil, fmt.Errorf(
+					"runtime integration unavailable and launcher %q has no direct launch", launcherID,
+				)
+			}
+			log.Warn().Str("launcher", launcherID).Msg("Steam Runtime unavailable; using direct launch")
+			return directLaunch(cfg, path, opts)
+		}
+
 		commandSpec, err := builder(cfg, path, opts)
 		if err != nil {
 			return nil, err
@@ -383,7 +396,6 @@ func (p *Platform) wrapSteamRuntime(launcher *platforms.Launcher) {
 		return process, nil
 	}
 	launcher.Lifecycle = platforms.LifecycleBlocking
-	launcher.Kill = nil
 }
 
 // Launchers returns the available launchers for SteamOS.

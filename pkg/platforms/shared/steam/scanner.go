@@ -49,6 +49,10 @@ func (c *Client) ScanShortcuts(steamDir string) ([]platforms.ScanResult, error) 
 // steamDir should point to the steamapps directory (e.g., ~/.steam/steam/steamapps).
 func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
+	var librariesScanned int
+	var librariesSkipped int
+	var manifestsFound int
+	var manifestsSkipped int
 
 	//nolint:gosec // Safe: reads Steam config files for game library scanning
 	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
@@ -81,71 +85,103 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		log.Error().Msg("libraryfolders is not a map")
 		return results, nil
 	}
-	for l, v := range lfs {
-		log.Debug().Msgf("library id: %s", l)
-		ls, ok := v.(map[string]any)
+	for libraryID, value := range lfs {
+		log.Debug().Str("libraryID", libraryID).Msg("scanning Steam library")
+		library, ok := value.(map[string]any)
 		if !ok {
-			log.Error().Msgf("library %s is not a map", l)
+			librariesSkipped++
+			log.Warn().Str("libraryID", libraryID).Msg("skipping invalid Steam library entry")
 			continue
 		}
 
-		libraryPath, ok := ls["path"].(string)
+		libraryPath, ok := library["path"].(string)
 		if !ok {
-			log.Error().Msgf("library %s path is not a string", l)
+			librariesSkipped++
+			log.Warn().Str("libraryID", libraryID).Msg("skipping Steam library without a valid path")
 			continue
 		}
-		steamApps, err := os.ReadDir(filepath.Join(libraryPath, "steamapps"))
+		steamAppsPath := filepath.Join(libraryPath, "steamapps")
+		steamApps, err := os.ReadDir(steamAppsPath)
 		if err != nil {
-			log.Error().Err(err).Msg("error listing steamapps folder")
+			librariesSkipped++
+			log.Warn().
+				Err(err).
+				Str("libraryID", libraryID).
+				Str("libraryPath", libraryPath).
+				Msg("skipping unavailable Steam library")
 			continue
 		}
+		librariesScanned++
 
 		var manifestFiles []string
-		for _, mf := range steamApps {
-			if strings.HasPrefix(mf.Name(), "appmanifest_") {
-				manifestFiles = append(manifestFiles, filepath.Join(libraryPath, "steamapps", mf.Name()))
+		for _, manifest := range steamApps {
+			if strings.HasPrefix(manifest.Name(), "appmanifest_") {
+				manifestFiles = append(manifestFiles, filepath.Join(steamAppsPath, manifest.Name()))
 			}
 		}
+		manifestsFound += len(manifestFiles)
 
-		for _, mf := range manifestFiles {
-			log.Debug().Msgf("manifest file: %s", mf)
+		for _, manifestPath := range manifestFiles {
+			manifestAppID := strings.TrimSuffix(
+				strings.TrimPrefix(filepath.Base(manifestPath), "appmanifest_"), filepath.Ext(manifestPath),
+			)
+			log.Debug().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+				Msg("reading Steam app manifest")
 
 			//nolint:gosec // Safe: reads Steam manifest files for game library scanning
-			af, err := os.Open(mf)
+			manifestFile, err := os.Open(manifestPath)
 			if err != nil {
-				log.Error().Err(err).Msgf("error opening manifest: %s", mf)
-				return results, nil
+				manifestsSkipped++
+				log.Warn().
+					Err(err).
+					Str("manifestPath", manifestPath).
+					Str("appID", manifestAppID).
+					Msg("skipping unreadable Steam app manifest")
+				continue
 			}
 
-			ap := vdf.NewParser(af)
-			am, err := ap.Parse()
+			parser := vdf.NewParser(manifestFile)
+			manifest, err := parser.Parse()
 			if err != nil {
-				if closeErr := af.Close(); closeErr != nil {
-					log.Warn().Err(closeErr).Msg("error closing manifest file")
+				if closeErr := manifestFile.Close(); closeErr != nil {
+					log.Warn().Err(closeErr).Str("manifestPath", manifestPath).
+						Msg("error closing Steam app manifest")
 				}
-				log.Error().Err(err).Msgf("error parsing manifest: %s", mf)
-				return results, nil
+				manifestsSkipped++
+				log.Warn().
+					Err(err).
+					Str("manifestPath", manifestPath).
+					Str("appID", manifestAppID).
+					Msg("skipping invalid Steam app manifest")
+				continue
 			}
-			if closeErr := af.Close(); closeErr != nil {
-				log.Warn().Err(closeErr).Msg("error closing manifest file")
+			if closeErr := manifestFile.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("manifestPath", manifestPath).
+					Msg("error closing Steam app manifest")
 			}
-			am = normalizeVDFKeys(am)
+			manifest = normalizeVDFKeys(manifest)
 
-			appState, ok := am["appstate"].(map[string]any)
+			appState, ok := manifest["appstate"].(map[string]any)
 			if !ok {
-				log.Error().Msgf("appstate is not a map in manifest: %s", mf)
+				manifestsSkipped++
+				log.Warn().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+					Msg("skipping Steam app manifest without valid appstate")
 				continue
 			}
 
 			appID, ok := appState["appid"].(string)
 			if !ok {
-				log.Error().Msgf("appid is not a string in manifest: %s", mf)
+				manifestsSkipped++
+				log.Warn().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+					Msg("skipping Steam app manifest without valid appid")
 				continue
 			}
 
 			appName, ok := appState["name"].(string)
 			if !ok {
-				log.Error().Msgf("name is not a string in manifest: %s", mf)
+				manifestsSkipped++
+				log.Warn().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+					Msg("skipping Steam app manifest without valid name")
 				continue
 			}
 
@@ -156,6 +192,19 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			})
 		}
 	}
+
+	summary := log.Debug()
+	if librariesSkipped > 0 || manifestsSkipped > 0 {
+		summary = log.Warn()
+	}
+	summary.
+		Str("steamAppsDir", steamDir).
+		Int("librariesScanned", librariesScanned).
+		Int("librariesSkipped", librariesSkipped).
+		Int("manifestsFound", manifestsFound).
+		Int("manifestsSkipped", manifestsSkipped).
+		Int("results", len(results)).
+		Msg("Steam app scan complete")
 
 	return results, nil
 }

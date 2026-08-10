@@ -164,6 +164,36 @@ func TestScanSteamApps(t *testing.T) {
 		require.NoError(t, scanErr)
 		assert.Empty(t, results)
 	})
+
+	t.Run("continues_after_invalid_manifest", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		steamAppsDir := filepath.Join(tempDir, "steamapps")
+		require.NoError(t, os.MkdirAll(steamAppsDir, 0o750))
+
+		vdfContent := `"libraryfolders"
+{
+	"0"
+	{
+		"path"		"` + vdfEscapePath(tempDir) + `"
+	}
+}`
+		require.NoError(t, os.WriteFile(
+			filepath.Join(steamAppsDir, "libraryfolders.vdf"), []byte(vdfContent), 0o600,
+		))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(steamAppsDir, "appmanifest_100.acf"), []byte("invalid content"), 0o600,
+		))
+		createMockManifest(t, steamAppsDir, 200, "Valid Game")
+
+		results, scanErr := ScanSteamApps(steamAppsDir)
+
+		require.NoError(t, scanErr)
+		require.Len(t, results, 1)
+		assert.Equal(t, "Valid Game", results[0].Name)
+		assert.Contains(t, results[0].Path, "steam://200/")
+	})
 }
 
 func TestScanSteamShortcuts(t *testing.T) {

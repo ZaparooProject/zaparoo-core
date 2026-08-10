@@ -40,6 +40,7 @@ import (
 
 type fakeRuntimeBroker struct {
 	started    *steamruntime.Command
+	available  bool
 	owns       bool
 	clear      bool
 	clearedPID int
@@ -52,7 +53,7 @@ func (f *fakeRuntimeBroker) Start(_ context.Context, command *steamruntime.Comma
 
 func (*fakeRuntimeBroker) Stop(context.Context) error      { return nil }
 func (*fakeRuntimeBroker) Wait(context.Context, int) error { return nil }
-func (*fakeRuntimeBroker) Available() bool                 { return true }
+func (f *fakeRuntimeBroker) Available() bool               { return f.available }
 func (*fakeRuntimeBroker) HasActive() bool                 { return false }
 func (f *fakeRuntimeBroker) Owns(int) bool                 { return f.owns }
 func (f *fakeRuntimeBroker) Clear(pid int) bool {
@@ -94,7 +95,7 @@ func TestSteamRuntimeEnvOverridesPreserveOnlyCommandSpecificValues(t *testing.T)
 func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
 	t.Parallel()
 
-	broker := &fakeRuntimeBroker{}
+	broker := &fakeRuntimeBroker{available: true}
 	platform := NewPlatform()
 	platform.steamRuntime = broker
 	launcher := platforms.Launcher{
@@ -119,12 +120,54 @@ func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, process.Pid)
 	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
-	assert.Nil(t, launcher.Kill)
+	assert.NotNil(t, launcher.Kill)
 	require.NotNil(t, broker.started)
 	assert.Equal(t, "/usr/bin/emulator", broker.started.Executable)
 	assert.Equal(t, "/tmp", broker.started.Dir)
 	assert.Equal(t, []string{"--fullscreen", "game.rom"}, broker.started.Args)
 	assert.Equal(t, []string{"EMULATOR_OPTION=1"}, broker.started.Env)
+}
+
+func TestWrapSteamRuntimeFallsBackWhenIntegrationRemoved(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{available: true}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+	directLaunches := 0
+	killCalled := false
+	launcher := platforms.Launcher{
+		ID:        "TestEmulator",
+		Lifecycle: platforms.LifecycleTracked,
+		Kill: func(*config.Instance) error {
+			killCalled = true
+			return nil
+		},
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			directLaunches++
+			return &os.Process{Pid: 2}, nil
+		},
+		BuildLaunchCommand: func(
+			*config.Instance,
+			string,
+			*platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return &platforms.LaunchCommand{Executable: "/usr/bin/emulator"}, nil
+		},
+	}
+
+	platform.wrapSteamRuntime(&launcher)
+	broker.available = false
+	process, err := launcher.Launch(nil, "game.rom", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, process.Pid)
+	assert.Equal(t, 1, directLaunches)
+	assert.Nil(t, broker.started)
+	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
+	require.NotNil(t, launcher.Kill)
+	require.NoError(t, launcher.Kill(nil))
+	assert.True(t, killCalled)
 }
 
 func TestClearTrackedProcessMediaClearsRuntimeActiveMedia(t *testing.T) {
