@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,18 +34,20 @@ func testBroker(t *testing.T) *Broker {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "runtime"))
-	paths := InstallPaths{
+	fs := afero.NewOsFs()
+	paths := &InstallPaths{
+		FS:       fs,
 		Binary:   filepath.Join(dir, "zaparoo"),
 		Runtime:  filepath.Join(dir, runtimeExecutableName),
 		Desktop:  filepath.Join(dir, runtimeExecutableName+".desktop"),
 		SteamDir: filepath.Join(dir, "steam"),
 	}
-	require.NoError(t, os.WriteFile(paths.Binary, []byte("binary"), 0o700)) //nolint:gosec // Test-controlled path.
-	require.NoError(t, os.Symlink(paths.Binary, paths.Runtime))
-	require.NoError(t, os.WriteFile(paths.Desktop, desktopEntry(paths.Runtime), 0o600))
+	require.NoError(t, afero.WriteFile(fs, paths.Binary, []byte("binary"), 0o700))
+	require.NoError(t, symlinkFS(fs, paths.Binary, paths.Runtime))
+	require.NoError(t, afero.WriteFile(fs, paths.Desktop, desktopEntry(paths.Runtime), 0o600))
 	shortcutPath := filepath.Join(paths.SteamDir, "userdata", "123", "config", "shortcuts.vdf")
-	require.NoError(t, os.MkdirAll(filepath.Dir(shortcutPath), 0o750))
-	require.NoError(t, os.WriteFile(shortcutPath, shortcutFixture(42, paths.Runtime), 0o600))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(shortcutPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, shortcutPath, runtimeShortcutFixture(42, paths.Runtime), 0o600))
 
 	return brokerWithLauncher(paths, func(ctx context.Context, _ string) error {
 		//nolint:gosec // Current test binary.
@@ -62,7 +65,7 @@ func TestBrokerAvailabilityRequiresReadyIntegration(t *testing.T) {
 	broker := testBroker(t)
 	assert.True(t, broker.Available())
 
-	require.NoError(t, os.Remove(broker.paths.Runtime))
+	require.NoError(t, broker.paths.fileSystem().Remove(broker.paths.Runtime))
 	assert.False(t, broker.Available())
 }
 
@@ -71,9 +74,12 @@ func TestBrokerStartAndWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	process, err := broker.Start(ctx, &Command{Executable: "/bin/true"})
+	process, err := broker.Start(ctx, &Command{Executable: "true"})
 	require.NoError(t, err)
 	require.NoError(t, broker.Wait(ctx, process.Pid))
+	broker.mu.Lock()
+	assert.Zero(t, broker.lastRuntimePID)
+	broker.mu.Unlock()
 	assert.True(t, broker.Clear(process.Pid))
 	assert.False(t, broker.HasActive())
 }
@@ -83,16 +89,35 @@ func TestBrokerPreemptsActiveSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
-	first, err := broker.Start(ctx, &Command{Executable: "/bin/sleep", Args: []string{"60"}})
+	first, err := broker.Start(ctx, &Command{Executable: "sleep", Args: []string{"60"}})
 	require.NoError(t, err)
 	assert.True(t, broker.HasActive())
 
-	second, err := broker.Start(ctx, &Command{Executable: "/bin/true"})
+	second, err := broker.Start(ctx, &Command{Executable: "true"})
 	require.NoError(t, err)
-	require.NoError(t, broker.Wait(ctx, first.Pid))
+	firstWaitErr := broker.Wait(ctx, first.Pid)
+	require.NotErrorIs(t, firstWaitErr, context.DeadlineExceeded)
+	require.NotErrorIs(t, firstWaitErr, context.Canceled)
 	require.NoError(t, broker.Wait(ctx, second.Pid))
 	assert.True(t, broker.Clear(second.Pid))
 	assert.False(t, broker.HasActive())
+}
+
+func TestCompleteSessionPreservesReplacementRuntimePID(t *testing.T) {
+	t.Parallel()
+
+	session := &brokerSession{done: make(chan struct{}), runtimePID: 41}
+	broker := &Broker{active: session, lastRuntimePID: 42}
+
+	broker.completeSession(session, nil)
+
+	assert.Nil(t, broker.active)
+	assert.Equal(t, 42, broker.lastRuntimePID)
+	select {
+	case <-session.done:
+	default:
+		require.Fail(t, "session completion was not published")
+	}
 }
 
 func TestBrokerClearRemovesStaleSessions(t *testing.T) {

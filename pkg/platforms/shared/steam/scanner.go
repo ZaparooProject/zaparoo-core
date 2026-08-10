@@ -31,23 +31,28 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // ScanApps scans Steam library for installed official apps.
 // steamDir should point to the steamapps directory (e.g., ~/.steam/steam/steamapps).
-func (*Client) ScanApps(steamDir string) ([]platforms.ScanResult, error) {
-	return ScanSteamApps(steamDir)
+func (c *Client) ScanApps(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamAppsFS(c.fs, steamDir)
 }
 
 // ScanShortcuts scans Steam for non-Steam games (user-added shortcuts).
 // steamDir should point to the Steam root directory.
 func (c *Client) ScanShortcuts(steamDir string) ([]platforms.ScanResult, error) {
-	return scanSteamShortcutsFiltered(steamDir, c.opts.ExcludedShortcutExecutables)
+	return scanSteamShortcutsFiltered(c.fs, steamDir, c.opts.ExcludedShortcutExecutables)
 }
 
 // ScanSteamApps scans official Steam games from the libraryfolders.vdf file.
 // steamDir should point to the steamapps directory (e.g., ~/.steam/steam/steamapps).
 func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamAppsFS(afero.NewOsFs(), steamDir)
+}
+
+func scanSteamAppsFS(fs afero.Fs, steamDir string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 	var librariesScanned int
 	var librariesSkipped int
@@ -55,7 +60,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 	var manifestsSkipped int
 
 	//nolint:gosec // Safe: reads Steam config files for game library scanning
-	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
+	f, err := fs.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
 	if err != nil {
 		// Steam not installed at this path (no library file) is expected on many
 		// devices; log at Debug to keep it out of Sentry. Mirror ScanSteamShortcuts.
@@ -101,7 +106,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			continue
 		}
 		steamAppsPath := filepath.Join(libraryPath, "steamapps")
-		steamApps, err := os.ReadDir(steamAppsPath)
+		steamApps, err := afero.ReadDir(fs, steamAppsPath)
 		if err != nil {
 			librariesSkipped++
 			log.Warn().
@@ -129,7 +134,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 				Msg("reading Steam app manifest")
 
 			//nolint:gosec // Safe: reads Steam manifest files for game library scanning
-			manifestFile, err := os.Open(manifestPath)
+			manifestFile, err := fs.Open(manifestPath)
 			if err != nil {
 				manifestsSkipped++
 				log.Warn().
@@ -227,10 +232,14 @@ func NormalizeShortcutExecutable(value string) string {
 // ScanSteamShortcuts scans Steam shortcuts (non-Steam games) from the shortcuts.vdf file.
 // steamDir should point to the Steam root directory.
 func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
-	return scanSteamShortcutsFiltered(steamDir, nil)
+	return scanSteamShortcutsFiltered(afero.NewOsFs(), steamDir, nil)
 }
 
-func scanSteamShortcutsFiltered(steamDir string, excludedExecutables []string) ([]platforms.ScanResult, error) {
+func scanSteamShortcutsFiltered(
+	fs afero.Fs,
+	steamDir string,
+	excludedExecutables []string,
+) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 	excluded := make(map[string]struct{}, len(excludedExecutables))
 	for _, executable := range excludedExecutables {
@@ -250,7 +259,7 @@ func scanSteamShortcutsFiltered(steamDir string, excludedExecutables []string) (
 	log.Debug().Str("steamDir", steamDir).Msg("scanning Steam shortcuts")
 
 	userdataDir := filepath.Join(steamDir, "userdata")
-	if _, err := os.Stat(userdataDir); err != nil {
+	if _, err := fs.Stat(userdataDir); err != nil {
 		if os.IsNotExist(err) {
 			log.Debug().Str("path", userdataDir).Msg("Steam userdata directory not found")
 		} else {
@@ -273,7 +282,7 @@ func scanSteamShortcutsFiltered(steamDir string, excludedExecutables []string) (
 		return results, nil
 	}
 
-	userDirs, err := os.ReadDir(userdataDir)
+	userDirs, err := afero.ReadDir(fs, userdataDir)
 	if err != nil {
 		log.Error().Err(err).Str("path", userdataDir).Msg("error reading Steam userdata directory")
 		return results, nil
@@ -289,7 +298,7 @@ func scanSteamShortcutsFiltered(steamDir string, excludedExecutables []string) (
 		userDirsScanned++
 
 		shortcutsPath := filepath.Join(userdataDir, userDir.Name(), "config", "shortcuts.vdf")
-		if _, err := os.Stat(shortcutsPath); err != nil {
+		if _, err := fs.Stat(shortcutsPath); err != nil {
 			if os.IsNotExist(err) {
 				log.Debug().Str("userId", userDir.Name()).Msg("no shortcuts.vdf for user")
 			} else {
@@ -303,7 +312,7 @@ func scanSteamShortcutsFiltered(steamDir string, excludedExecutables []string) (
 		log.Debug().Str("path", shortcutsPath).Msg("reading shortcuts")
 
 		//nolint:gosec // Safe: reads Steam config files for game library scanning
-		shortcutsData, err := os.ReadFile(shortcutsPath)
+		shortcutsData, err := afero.ReadFile(fs, shortcutsPath)
 		if err != nil {
 			shortcutFileReadFailures++
 			log.Error().Err(err).Msgf("error reading shortcuts.vdf: %s", shortcutsPath)

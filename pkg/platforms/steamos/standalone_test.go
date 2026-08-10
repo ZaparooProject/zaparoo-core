@@ -68,6 +68,54 @@ func TestNativeStandaloneLaunchers(t *testing.T) {
 	}
 }
 
+func TestStandaloneLaunchCommandBuilders(t *testing.T) {
+	t.Run("flatpak", func(t *testing.T) {
+		mediaPath := filepath.Join(string(filepath.Separator), "games", "ps2", "game.iso")
+		def := standaloneDef{
+			id: "PCSX2", flatpakID: "net.pcsx2.PCSX2", args: batchArgs("-fullscreen", "-batch"),
+		}
+
+		command, err := buildStandaloneLaunchCommand(&def, mediaPath)
+
+		require.NoError(t, err)
+		assert.Equal(t, "flatpak", command.Executable)
+		assert.Equal(t, []string{
+			"run", "--filesystem=" + filepath.Dir(mediaPath) + ":ro", "--die-with-parent",
+			def.flatpakID, "-fullscreen", "-batch", mediaPath,
+		}, command.Args)
+		assert.Empty(t, command.Dir)
+		assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
+	})
+
+	t.Run("native", func(t *testing.T) {
+		dir := t.TempDir()
+		executableName := "zaparoo-test-emulator"
+		executable := filepath.Join(dir, executableName)
+		require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o700)) //nolint:gosec // Test executable.
+		t.Setenv("PATH", dir)
+		mediaPath := filepath.Join(dir, "game.rom")
+		def := standaloneDef{id: "TestNative", executable: executableName, args: batchArgs("--fullscreen")}
+
+		command, err := buildStandaloneLaunchCommand(&def, mediaPath)
+
+		require.NoError(t, err)
+		assert.Equal(t, executable, command.Executable)
+		assert.Equal(t, []string{"--fullscreen", mediaPath}, command.Args)
+		assert.Empty(t, command.Dir)
+		assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
+	})
+
+	t.Run("native executable missing", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		executableName := "zaparoo-missing-emulator"
+		def := standaloneDef{id: "MissingNative", executable: executableName, args: batchArgs()}
+
+		_, err := buildStandaloneLaunchCommand(&def, "game.rom")
+
+		require.ErrorContains(t, err, "executable not found")
+	})
+}
+
 func TestFlatpakRunArgsExposeMediaDirectoryReadOnly(t *testing.T) {
 	t.Parallel()
 

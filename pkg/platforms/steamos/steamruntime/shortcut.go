@@ -16,6 +16,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/vdfbinary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
+	"github.com/spf13/afero"
 )
 
 var errShortcutNotFound = errors.New("runtime shortcut not found")
@@ -30,7 +31,7 @@ func shortcutBigPictureID(appID uint32) uint64 {
 	return (uint64(appID) << 32) | 0x02000000
 }
 
-func findShortcutLocations(steamDir string, targets ...string) ([]shortcutLocation, error) {
+func findShortcutLocations(fs afero.Fs, steamDir string, targets ...string) ([]shortcutLocation, error) {
 	targetSet := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
 		if target != "" {
@@ -39,7 +40,7 @@ func findShortcutLocations(steamDir string, targets ...string) ([]shortcutLocati
 	}
 
 	userdataDir := filepath.Join(steamDir, "userdata")
-	users, err := os.ReadDir(userdataDir)
+	users, err := afero.ReadDir(fs, userdataDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errShortcutNotFound
@@ -53,7 +54,7 @@ func findShortcutLocations(steamDir string, targets ...string) ([]shortcutLocati
 		}
 		configDir := filepath.Join(userdataDir, user.Name(), "config")
 		path := filepath.Join(configDir, "shortcuts.vdf")
-		data, readErr := os.ReadFile(path) //nolint:gosec // Steam user config path.
+		data, readErr := afero.ReadFile(fs, path) //nolint:gosec // Steam user config path.
 		if errors.Is(readErr, os.ErrNotExist) {
 			continue
 		}
@@ -78,8 +79,8 @@ func findShortcutLocations(steamDir string, targets ...string) ([]shortcutLocati
 	return locations, nil
 }
 
-func findShortcutIDs(steamDir string, targets ...string) ([]uint64, error) {
-	locations, err := findShortcutLocations(steamDir, targets...)
+func findShortcutIDs(fs afero.Fs, steamDir string, targets ...string) ([]uint64, error) {
+	locations, err := findShortcutLocations(fs, steamDir, targets...)
 	if err != nil {
 		return nil, err
 	}

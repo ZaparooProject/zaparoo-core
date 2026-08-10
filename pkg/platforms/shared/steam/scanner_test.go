@@ -20,6 +20,8 @@
 package steam
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,9 +30,28 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var errTestFSAccess = errors.New("test filesystem access failure")
+
+type failOpenFS struct {
+	afero.Fs
+	failPaths map[string]error
+}
+
+func (f failOpenFS) Open(name string) (afero.File, error) {
+	if err := f.failPaths[filepath.Clean(name)]; err != nil {
+		return nil, err
+	}
+	file, err := f.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	return file, nil
+}
 
 // vdfEscapePath escapes backslashes in paths for VDF files.
 // VDF format requires backslashes to be escaped as double backslashes.
@@ -41,6 +62,19 @@ func vdfEscapePath(path string) string {
 func shortcutVirtualPath(appID uint32, appName string) string {
 	bpid := (uint64(appID) << 32) | 0x02000000
 	return virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), appName)
+}
+
+func writeMockManifestFS(t *testing.T, fs afero.Fs, steamAppsDir string, appID int, name string) string {
+	t.Helper()
+	appIDString := strconv.Itoa(appID)
+	path := filepath.Join(steamAppsDir, "appmanifest_"+appIDString+".acf")
+	content := `"AppState"
+{
+	"appid"		"` + appIDString + `"
+	"name"		"` + name + `"
+}`
+	require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	return path
 }
 
 func TestScanSteamApps(t *testing.T) {
@@ -194,6 +228,59 @@ func TestScanSteamApps(t *testing.T) {
 		assert.Equal(t, "Valid Game", results[0].Name)
 		assert.Contains(t, results[0].Path, "steam://200/")
 	})
+
+	t.Run("continues_after_library_directory_read_failure", func(t *testing.T) {
+		t.Parallel()
+
+		fs := afero.NewMemMapFs()
+		steamDir := filepath.Join(string(filepath.Separator), "steam", "steamapps")
+		libraryPath := filepath.Join(string(filepath.Separator), "library")
+		libraryAppsPath := filepath.Join(libraryPath, "steamapps")
+		require.NoError(t, fs.MkdirAll(steamDir, 0o750))
+		require.NoError(t, fs.MkdirAll(libraryAppsPath, 0o750))
+		content := `"libraryfolders"
+{
+	"0"
+	{
+		"path"		"` + vdfEscapePath(libraryPath) + `"
+	}
+}`
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(steamDir, "libraryfolders.vdf"), []byte(content), 0o600))
+		failingFS := failOpenFS{Fs: fs, failPaths: map[string]error{libraryAppsPath: errTestFSAccess}}
+
+		results, err := scanSteamAppsFS(failingFS, steamDir)
+
+		require.NoError(t, err)
+		assert.Empty(t, results)
+	})
+
+	t.Run("continues_after_manifest_open_failure", func(t *testing.T) {
+		t.Parallel()
+
+		fs := afero.NewMemMapFs()
+		libraryPath := filepath.Join(string(filepath.Separator), "library")
+		steamAppsDir := filepath.Join(libraryPath, "steamapps")
+		require.NoError(t, fs.MkdirAll(steamAppsDir, 0o750))
+		content := `"libraryfolders"
+{
+	"0"
+	{
+		"path"		"` + vdfEscapePath(libraryPath) + `"
+	}
+}`
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(steamAppsDir, "libraryfolders.vdf"), []byte(content), 0o600,
+		))
+		failedManifest := writeMockManifestFS(t, fs, steamAppsDir, 100, "Unreadable Game")
+		writeMockManifestFS(t, fs, steamAppsDir, 200, "Valid Game")
+		failingFS := failOpenFS{Fs: fs, failPaths: map[string]error{failedManifest: errTestFSAccess}}
+
+		results, err := scanSteamAppsFS(failingFS, steamAppsDir)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "Valid Game", results[0].Name)
+	})
 }
 
 func TestScanSteamShortcuts(t *testing.T) {
@@ -283,25 +370,50 @@ func TestScanSteamShortcuts(t *testing.T) {
 	t.Run("excludes_only_exact_shortcut_executable", func(t *testing.T) {
 		t.Parallel()
 
-		tempDir := t.TempDir()
-		userdataDir := filepath.Join(tempDir, "userdata", "12345678", "config")
-		require.NoError(t, os.MkdirAll(userdataDir, 0o750))
-		runtimePath := filepath.Join(tempDir, "bin", "zaparoo-steam-runtime")
-		shortcuts := []fixtures.TestShortcut{
-			{AppID: 42, AppName: "Zaparoo", Exe: `"` + runtimePath + `"`},
-			{AppID: 43, AppName: "Zaparoo", Exe: `"` + runtimePath + `-copy"`},
+		runtimePath := filepath.Join(string(filepath.Separator), "runtime", "bin", "zaparoo-steam-runtime")
+		tests := []struct {
+			name        string
+			excluded    string
+			nonMatching string
+		}{
+			{
+				name: "bare quoted path", excluded: `"` + runtimePath + `"`,
+				nonMatching: `"` + runtimePath + `-copy"`,
+			},
+			{
+				name: "quoted path with arguments", excluded: `"` + runtimePath + `" --runtime`,
+				nonMatching: `"` + runtimePath + `-copy" --runtime`,
+			},
+			{
+				name: "unquoted path with arguments", excluded: runtimePath + ` --runtime`,
+				nonMatching: runtimePath + `-copy --runtime`,
+			},
 		}
-		err := os.WriteFile(
-			filepath.Join(userdataDir, "shortcuts.vdf"), fixtures.BuildShortcutsVDF(shortcuts), 0o600,
-		)
-		require.NoError(t, err)
-		client := NewClient(Options{ExcludedShortcutExecutables: []string{runtimePath}})
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 
-		results, scanErr := client.ScanShortcuts(tempDir)
+				fs := afero.NewMemMapFs()
+				steamDir := filepath.Join(string(filepath.Separator), "steam")
+				userdataDir := filepath.Join(steamDir, "userdata", "12345678", "config")
+				require.NoError(t, fs.MkdirAll(userdataDir, 0o750))
+				shortcuts := []fixtures.TestShortcut{
+					{AppID: 42, AppName: "Zaparoo Runtime", Exe: tt.excluded},
+					{AppID: 43, AppName: "Runtime Copy", Exe: tt.nonMatching},
+				}
+				require.NoError(t, afero.WriteFile(
+					fs, filepath.Join(userdataDir, "shortcuts.vdf"), fixtures.BuildShortcutsVDF(shortcuts), 0o600,
+				))
+				client := NewClient(Options{ExcludedShortcutExecutables: []string{runtimePath}})
+				client.fs = fs
 
-		require.NoError(t, scanErr)
-		require.Len(t, results, 1)
-		assert.Equal(t, shortcutVirtualPath(shortcuts[1].AppID, shortcuts[1].AppName), results[0].Path)
+				results, scanErr := client.ScanShortcuts(steamDir)
+
+				require.NoError(t, scanErr)
+				require.Len(t, results, 1)
+				assert.Equal(t, shortcutVirtualPath(shortcuts[1].AppID, shortcuts[1].AppName), results[0].Path)
+			})
+		}
 	})
 
 	t.Run("skips_non_directory_entries", func(t *testing.T) {

@@ -79,12 +79,13 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		}
 		return &platforms.LaunchCommand{Executable: spec.Name, Args: spec.Args, Env: env}, nil
 	}
+	buildLaunchCommand := launcher.BuildLaunchCommand
 	launcher.Launch = func(
 		cfg *config.Instance,
 		mediaPath string,
 		launchOpts *platforms.LaunchOptions,
 	) (*os.Process, error) {
-		commandSpec, err := launcher.BuildLaunchCommand(cfg, mediaPath, launchOpts)
+		commandSpec, err := buildLaunchCommand(cfg, mediaPath, launchOpts)
 		if err != nil {
 			return nil, fmt.Errorf("build retroarch launch command: %w", err)
 		}

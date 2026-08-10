@@ -29,11 +29,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/spf13/afero"
 )
 
 // Client implements SteamClient for Steam game launching and scanning.
 type Client struct {
 	cmd  command.Executor
+	fs   afero.Fs
 	opts Options
 }
 
@@ -42,6 +44,7 @@ func NewClient(opts Options) *Client {
 	return &Client{
 		opts: opts,
 		cmd:  &command.RealExecutor{},
+		fs:   afero.NewOsFs(),
 	}
 }
 
@@ -51,6 +54,7 @@ func NewClientWithExecutor(opts Options, cmd command.Executor) *Client {
 	return &Client{
 		opts: opts,
 		cmd:  cmd,
+		fs:   afero.NewOsFs(),
 	}
 }
 

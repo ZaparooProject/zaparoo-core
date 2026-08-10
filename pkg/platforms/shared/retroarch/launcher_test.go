@@ -43,7 +43,22 @@ func TestNewLauncher(t *testing.T) {
 		Extensions: []string{".chd"},
 		Scan:       true,
 	}
-	launcher := NewLauncher(Options{NetworkCmdAddr: "127.0.0.1:55355"}, c)
+	fs := afero.NewMemMapFs()
+	root := filepath.Join(string(filepath.Separator), "runtime")
+	executable := filepath.Join(root, "retroarch")
+	coresDir := filepath.Join(root, "cores")
+	configPath := filepath.Join(root, "retroarch.cfg")
+	appendConfigPath := filepath.Join(root, "zaparoo.cfg")
+	corePath := filepath.Join(coresDir, c.Core)
+	mediaPath := filepath.Join(root, "games", "game.chd")
+	require.NoError(t, fs.MkdirAll(coresDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, executable, []byte("binary"), 0o750))
+	require.NoError(t, afero.WriteFile(fs, corePath, []byte("core"), 0o600))
+	launcher := NewLauncher(Options{
+		FS: fs, NetworkCmdAddr: "127.0.0.1:55355", Exec: []string{executable}, CoresDir: coresDir,
+		ConfigPath: configPath, AppendConfigPath: appendConfigPath, ExtraArgs: []string{"--verbose"},
+		ExtraEnv: []string{"BASE=1"}, LaunchEnv: func() []string { return []string{"DISPLAY=:1", "BASE=2"} },
+	}, c)
 
 	assert.Equal(t, c.ID, launcher.ID)
 	assert.Equal(t, c.SystemID, launcher.SystemID)
@@ -52,8 +67,18 @@ func TestNewLauncher(t *testing.T) {
 	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
 	assert.Len(t, launcher.Controls, 8)
 	assert.NotNil(t, launcher.Kill)
-	assert.NotNil(t, launcher.BuildLaunchCommand)
-	assert.NotNil(t, launcher.Launch)
+	command, err := launcher.BuildLaunchCommand(nil, mediaPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, executable, command.Executable)
+	assert.Equal(t, []string{
+		"--verbose",
+		"--config", configPath,
+		"--appendconfig", appendConfigPath,
+		"-L", corePath,
+		mediaPath,
+	}, command.Args)
+	assert.Empty(t, command.Dir)
+	assert.Equal(t, []string{"BASE=2", "DISPLAY=:1"}, command.Env)
 
 	c.Folders[0] = "changed"
 	c.Extensions[0] = ".changed"

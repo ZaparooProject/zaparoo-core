@@ -43,7 +43,7 @@ type Broker struct {
 	launch         func(context.Context, string) error
 	active         *brokerSession
 	sessions       map[int]*brokerSession
-	paths          InstallPaths
+	paths          *InstallPaths
 	launchMu       syncutil.Mutex
 	mu             syncutil.Mutex
 	latestPID      int
@@ -58,7 +58,7 @@ func NewBroker() *Broker {
 	})
 }
 
-func brokerWithLauncher(paths InstallPaths, launch func(context.Context, string) error) *Broker {
+func brokerWithLauncher(paths *InstallPaths, launch func(context.Context, string) error) *Broker {
 	return &Broker{
 		paths: paths, launch: launch, sessions: make(map[int]*brokerSession),
 	}
@@ -124,14 +124,21 @@ func (b *Broker) watchSession(session *brokerSession, decoder *json.Decoder) {
 		err = fmt.Errorf("unexpected runtime result: %s", exited.Phase)
 	}
 
+	b.completeSession(session, err)
+	_ = session.conn.Close()
+}
+
+func (b *Broker) completeSession(session *brokerSession, err error) {
 	b.mu.Lock()
 	session.err = err
 	if b.active == session {
 		b.active = nil
 	}
+	if b.lastRuntimePID == session.runtimePID {
+		b.lastRuntimePID = 0
+	}
 	close(session.done)
 	b.mu.Unlock()
-	_ = session.conn.Close()
 }
 
 func waitForSteamRelease(ctx context.Context, pid int) error {
@@ -248,7 +255,7 @@ func (b *Broker) stopActive(ctx context.Context) error {
 		return nil
 	}
 	if err := syscall.Kill(session.runtimePID, syscall.SIGTERM); err != nil &&
-		!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+		!errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signal runtime process: %w", err)
 	}
 	stopCtx, cancel := context.WithTimeout(ctx, runtimeStopTimeout)
@@ -302,6 +309,9 @@ func (b *Broker) Owns(pid int) bool {
 	return ok
 }
 
+// Clear removes the tracked session for pid. It returns true only when pid is
+// the latest Runtime launch, allowing callers to decide whether active-media
+// cleanup is still required.
 func (b *Broker) Clear(pid int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

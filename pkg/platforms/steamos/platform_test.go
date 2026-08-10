@@ -24,6 +24,7 @@ package steamos
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,10 +41,13 @@ import (
 
 type fakeRuntimeBroker struct {
 	started    *steamruntime.Command
+	stopErr    error
 	available  bool
+	active     bool
 	owns       bool
 	clear      bool
 	clearedPID int
+	stopCalls  int
 }
 
 func (f *fakeRuntimeBroker) Start(_ context.Context, command *steamruntime.Command) (*os.Process, error) {
@@ -51,10 +55,13 @@ func (f *fakeRuntimeBroker) Start(_ context.Context, command *steamruntime.Comma
 	return &os.Process{Pid: 1}, nil
 }
 
-func (*fakeRuntimeBroker) Stop(context.Context) error      { return nil }
+func (f *fakeRuntimeBroker) Stop(context.Context) error {
+	f.stopCalls++
+	return f.stopErr
+}
 func (*fakeRuntimeBroker) Wait(context.Context, int) error { return nil }
 func (f *fakeRuntimeBroker) Available() bool               { return f.available }
-func (*fakeRuntimeBroker) HasActive() bool                 { return false }
+func (f *fakeRuntimeBroker) HasActive() bool               { return f.active }
 func (f *fakeRuntimeBroker) Owns(int) bool                 { return f.owns }
 func (f *fakeRuntimeBroker) Clear(pid int) bool {
 	f.clearedPID = pid
@@ -77,18 +84,21 @@ func TestParseSteamOSSessionEnv(t *testing.T) {
 func TestSteamRuntimeEnvOverridesPreserveOnlyCommandSpecificValues(t *testing.T) {
 	t.Parallel()
 
+	runtimeDir := filepath.Join(string(filepath.Separator), "run", "user", "1000")
+	homeDir := filepath.Join(string(filepath.Separator), "tmp", "emulator-home")
+	libraryDir := filepath.Join(string(filepath.Separator), "opt", "emulator", "lib")
 	result := steamRuntimeEnvOverrides([]string{
 		"DISPLAY=:0",
 		"WAYLAND_DISPLAY=wayland-0",
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
-		"HOME=/tmp/emulator-home",
-		"LD_LIBRARY_PATH=/opt/emulator/lib",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(runtimeDir, "bus"),
+		"HOME=" + homeDir,
+		"LD_LIBRARY_PATH=" + libraryDir,
 		"FLAG_WITHOUT_VALUE",
 	})
 
 	assert.Equal(t, []string{
-		"HOME=/tmp/emulator-home",
-		"LD_LIBRARY_PATH=/opt/emulator/lib",
+		"HOME=" + homeDir,
+		"LD_LIBRARY_PATH=" + libraryDir,
 	}, result)
 }
 
@@ -98,6 +108,8 @@ func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
 	broker := &fakeRuntimeBroker{available: true}
 	platform := NewPlatform()
 	platform.steamRuntime = broker
+	executable := filepath.Join(string(filepath.Separator), "usr", "bin", "emulator")
+	workingDir := filepath.Join(string(filepath.Separator), "tmp")
 	launcher := platforms.Launcher{
 		Kill: func(*config.Instance) error { return nil },
 		BuildLaunchCommand: func(
@@ -106,8 +118,8 @@ func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
 			*platforms.LaunchOptions,
 		) (*platforms.LaunchCommand, error) {
 			return &platforms.LaunchCommand{
-				Executable: "/usr/bin/emulator",
-				Dir:        "/tmp",
+				Executable: executable,
+				Dir:        workingDir,
 				Args:       []string{"--fullscreen", "game.rom"},
 				Env:        []string{"DISPLAY=:0", "EMULATOR_OPTION=1"},
 			}, nil
@@ -122,8 +134,8 @@ func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
 	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
 	assert.NotNil(t, launcher.Kill)
 	require.NotNil(t, broker.started)
-	assert.Equal(t, "/usr/bin/emulator", broker.started.Executable)
-	assert.Equal(t, "/tmp", broker.started.Dir)
+	assert.Equal(t, executable, broker.started.Executable)
+	assert.Equal(t, workingDir, broker.started.Dir)
 	assert.Equal(t, []string{"--fullscreen", "game.rom"}, broker.started.Args)
 	assert.Equal(t, []string{"EMULATOR_OPTION=1"}, broker.started.Env)
 }
@@ -152,7 +164,9 @@ func TestWrapSteamRuntimeFallsBackWhenIntegrationRemoved(t *testing.T) {
 			string,
 			*platforms.LaunchOptions,
 		) (*platforms.LaunchCommand, error) {
-			return &platforms.LaunchCommand{Executable: "/usr/bin/emulator"}, nil
+			return &platforms.LaunchCommand{
+				Executable: filepath.Join(string(filepath.Separator), "usr", "bin", "emulator"),
+			}, nil
 		},
 	}
 
@@ -196,6 +210,54 @@ func TestClearTrackedProcessMediaPreservesReplacementRuntimeMedia(t *testing.T) 
 
 	assert.False(t, platform.ClearTrackedProcessMedia(&os.Process{Pid: 42}))
 	assert.Equal(t, "replacement", active.Path)
+}
+
+func TestPlatformStopHandlesRuntimeSession(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{active: true}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+
+	require.NoError(t, platform.Stop())
+	assert.Equal(t, 1, broker.stopCalls)
+}
+
+func TestPlatformStopContinuesAfterRuntimeError(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{active: true, stopErr: errors.New("runtime stop failed")}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+
+	require.NoError(t, platform.Stop())
+	assert.Equal(t, 1, broker.stopCalls)
+}
+
+func TestPlatformStopActiveLauncherHandlesRuntimeSession(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		broker := &fakeRuntimeBroker{active: true}
+		platform := NewPlatform()
+		platform.steamRuntime = broker
+
+		require.NoError(t, platform.StopActiveLauncher(platforms.StopForMenu))
+		assert.Equal(t, 1, broker.stopCalls)
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		t.Parallel()
+		stopErr := errors.New("runtime stop failed")
+		broker := &fakeRuntimeBroker{active: true, stopErr: stopErr}
+		platform := NewPlatform()
+		platform.steamRuntime = broker
+
+		err := platform.StopActiveLauncher(platforms.StopForMenu)
+		require.ErrorIs(t, err, stopErr)
+		assert.Equal(t, 1, broker.stopCalls)
+	})
 }
 
 func TestNewPlatform(t *testing.T) {

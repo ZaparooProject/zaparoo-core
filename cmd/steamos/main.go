@@ -57,13 +57,6 @@ func steamOSDefaults(freshInstall bool) config.Values {
 }
 
 func run() error {
-	if steamruntime.IsInvocation(os.Args[0]) {
-		if err := steamruntime.Run(context.Background()); err != nil {
-			return fmt.Errorf("run Steam Runtime: %w", err)
-		}
-		return nil
-	}
-
 	defer telemetry.Close()
 	defer func() {
 		if r := recover(); r != nil {
@@ -77,6 +70,13 @@ func run() error {
 			os.Exit(1)
 		}
 	}()
+
+	if steamruntime.IsInvocation(os.Args[0]) {
+		if err := steamruntime.Run(context.Background()); err != nil {
+			return fmt.Errorf("run Steam Runtime: %w", err)
+		}
+		return nil
+	}
 
 	install := flag.String(
 		"install",

@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/adrg/xdg"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -37,11 +38,12 @@ import (
 func TestCopyApplicationBinarySkipsSameFile(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "zaparoo")
-	require.NoError(t, os.WriteFile(path, []byte("binary"), 0o700)) //nolint:gosec // Test-controlled path.
+	fs := helpers.NewMemoryFS()
+	path := filepath.Join("application", "zaparoo")
+	require.NoError(t, fs.WriteFile(path, []byte("binary"), 0o700))
 
-	require.NoError(t, copyApplicationBinary(path, path))
-	content, err := os.ReadFile(path) //nolint:gosec // Test-controlled path.
+	require.NoError(t, copyApplicationBinary(fs.Fs, path, path))
+	content, err := fs.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("binary"), content)
 }
@@ -102,7 +104,7 @@ func TestInstallApplication(t *testing.T) {
 				tt.setupMock(cmd)
 			}
 
-			err := doInstallApplication(cmd)
+			err := doInstallApplication(cmd, afero.NewOsFs())
 
 			if tt.expectError {
 				require.Error(t, err)

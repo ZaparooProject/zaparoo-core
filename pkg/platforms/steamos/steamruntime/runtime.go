@@ -29,13 +29,14 @@ import (
 )
 
 const (
-	socketName      = "steam-runtime.sock"
-	phaseStarted    = "started"
-	phaseExited     = "exited"
-	phaseError      = "error"
-	protocolVersion = 1
-	protocolLimit   = 64 * 1024
-	brokerTimeout   = 30 * time.Second
+	socketName              = "steam-runtime.sock"
+	phaseStarted            = "started"
+	phaseExited             = "exited"
+	phaseError              = "error"
+	protocolVersion         = 1
+	protocolLimit           = 64 * 1024
+	brokerTimeout           = 30 * time.Second
+	runtimeCommandWaitDelay = 2 * time.Second
 )
 
 // Command describes one emulator process for Steam Runtime to own.
@@ -136,6 +137,11 @@ func runtimeDirectory() (string, error) {
 	//nolint:gosec // XDG_RUNTIME_DIR is current user's private runtime directory; child name is fixed.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create Steam Runtime directory: %w", err)
+	}
+	// A private parent removes any access window before the socket itself is
+	// tightened to 0600, without changing the process-wide umask.
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // Runtime directory must be private and traversable.
+		return "", fmt.Errorf("secure Steam Runtime directory: %w", err)
 	}
 	return dir, nil
 }
@@ -256,6 +262,20 @@ func executeCommand(ctx context.Context, conn *net.UnixConn, spec *Command) erro
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		if err != nil {
+			return fmt.Errorf("signal runtime command group: %w", err)
+		}
+		return nil
+	}
+	cmd.WaitDelay = runtimeCommandWaitDelay
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -288,7 +308,8 @@ func executeCommand(ctx context.Context, conn *net.UnixConn, spec *Command) erro
 		}
 		waitErr = <-waited
 	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		// CommandContext invokes the custom Cancel function above, signaling
+		// the whole process group before WaitDelay applies its kill fallback.
 		waitErr = <-waited
 	}
 	result := newCommandResult(spec, phaseExited)
