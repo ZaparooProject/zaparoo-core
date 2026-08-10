@@ -440,6 +440,113 @@ func TestRemoteBackupScheduler_PlaySyncExpectedInactivityResumes(t *testing.T) {
 	}
 }
 
+func TestRemoteBackupScheduler_PlaySyncRemoteUnlinkedWaitsForCredentialChange(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	rootDir := t.TempDir()
+	var watermarkRequests atomic.Int32
+	watermarkSeen := make(chan int32, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/play-sessions/watermark":
+			count := watermarkRequests.Add(1)
+			watermarkSeen <- count
+			if r.Header.Get("Authorization") == "Bearer stale-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"watermark": nil})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
+	require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+	cfg.SetBackupRemoteEnabled(false)
+	cfg.SetPlaytimeSync(true)
+	lookupURL := config.RemoteAuthLookupURL(server.URL)
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		lookupURL: {Bearer: "stale-token"},
+	})
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: rootDir, ConfigDir: rootDir,
+	}).Maybe()
+	st, _ := stateservice.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	syncFinished := make(chan struct{}, 1)
+	mockUserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+	mockUserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), mock.Anything).
+		Run(func(mock.Arguments) { syncFinished <- struct{}{} }).
+		Return([]database.MediaHistoryEntry{}, nil).Once()
+	db := &database.Database{UserDB: mockUserDB}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	playSyncRequests := make(chan struct{}, 1)
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		remoteBackupSchedulerLoop(
+			ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), playSyncRequests,
+			func(time.Duration) *time.Ticker {
+				close(ready)
+				return time.NewTicker(time.Hour)
+			},
+		)
+		close(done)
+	}()
+	<-ready
+	select {
+	case count := <-watermarkSeen:
+		assert.Equal(t, int32(1), count)
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial play sync did not reach remote unlinked response")
+	}
+
+	playSyncRequests <- struct{}{}
+	select {
+	case <-watermarkSeen:
+		t.Fatal("play sync retried without a bearer configuration change")
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		lookupURL: {Bearer: "linked-token"},
+	})
+	playSyncRequests <- struct{}{}
+	select {
+	case count := <-watermarkSeen:
+		assert.Equal(t, int32(2), count)
+	case <-time.After(5 * time.Second):
+		t.Fatal("play sync did not resume after bearer configuration changed")
+	}
+	select {
+	case <-syncFinished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resumed play sync did not finish")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("backup scheduler did not stop after cancellation")
+	}
+	assert.Equal(t, int32(2), watermarkRequests.Load())
+	mockUserDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestRemoteBackupScheduleInterval(t *testing.T) {
 	t.Parallel()
 

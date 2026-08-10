@@ -47,6 +47,11 @@ type remoteHeartbeatState struct {
 	idle        bool
 }
 
+type playSyncConfiguration struct {
+	bearer  string
+	enabled bool
+}
+
 const (
 	remoteBackupSchedulerCheckInterval = 1 * time.Minute
 	remoteBackupIdleQuietWindow        = 5 * time.Second
@@ -126,13 +131,18 @@ func onlineFailureRequiresWarning(err error, expected bool) bool {
 // recordPlaySyncError applies retry backoff only to real failures. Disabled or
 // unlinked sync is an idle state, not a failure; retaining its backoff would
 // delay the first upload after the user enables sync or links the device.
-func playSyncEligible(cfg *config.Instance) bool {
-	if !cfg.PlaytimeSyncEnabled() {
-		return false
-	}
+func currentPlaySyncConfiguration(cfg *config.Instance) playSyncConfiguration {
+	configuration := playSyncConfiguration{enabled: cfg.PlaytimeSyncEnabled()}
 	lookupURL := config.RemoteAuthLookupURL(cfg.PlaytimeBaseURL())
 	entry := config.LookupAuth(config.GetAuthCfg(), lookupURL)
-	return entry != nil && entry.Bearer != ""
+	if entry != nil {
+		configuration.bearer = entry.Bearer
+	}
+	return configuration
+}
+
+func (c playSyncConfiguration) eligible() bool {
+	return c.enabled && c.bearer != ""
 }
 
 func recordPlaySyncError(retryState *remoteHeartbeatState, now time.Time, err error) bool {
@@ -249,13 +259,19 @@ func remoteBackupSchedulerLoop(
 	// and never bypass retry backoff.
 	playSyncState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
 	playSyncPending := false
+	var idlePlaySyncConfiguration playSyncConfiguration
 	tryPlaySync := func() {
 		now := time.Now()
 		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
-		if !playSyncEligible(cfg) {
+		configuration := currentPlaySyncConfiguration(cfg)
+		if !configuration.eligible() {
 			playSyncState.idle = true
 			playSyncState.nextAttempt = time.Time{}
 			playSyncState.backoff = remoteHeartbeatInitialBackoff
+			idlePlaySyncConfiguration = configuration
+			return
+		}
+		if playSyncState.idle && configuration == idlePlaySyncConfiguration {
 			return
 		}
 		playSyncState.idle = false
@@ -265,6 +281,9 @@ func remoteBackupSchedulerLoop(
 		info, err := mgr.SyncPlayHistory(ctx)
 		if err != nil {
 			expected := recordPlaySyncError(&playSyncState, now, err)
+			if expected {
+				idlePlaySyncConfiguration = configuration
+			}
 			if onlineFailureRequiresWarning(err, expected) {
 				log.Warn().Err(err).
 					Dur("retry_in", playSyncState.nextAttempt.Sub(now)).
@@ -275,6 +294,7 @@ func remoteBackupSchedulerLoop(
 			return
 		}
 		playSyncState.recordSuccess(now)
+		idlePlaySyncConfiguration = playSyncConfiguration{}
 		playSyncPending = false
 		if info.Uploaded > 0 {
 			log.Info().Int("sessions", info.Uploaded).Msg("play history sync completed")
