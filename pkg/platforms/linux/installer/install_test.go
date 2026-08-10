@@ -21,6 +21,7 @@ package installer
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,17 +36,142 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCopyApplicationBinarySkipsSameFile(t *testing.T) {
+type failingApplicationCopyFS struct {
+	afero.Fs
+	operation   string
+	source      string
+	destination string
+}
+
+type failingApplicationCopyFile struct {
+	afero.File
+	operation string
+}
+
+var errInjectedApplicationCopy = errors.New("injected application copy failure")
+
+func (fs *failingApplicationCopyFS) Stat(name string) (os.FileInfo, error) {
+	if fs.operation == "stat" && name == fs.source {
+		return nil, errInjectedApplicationCopy
+	}
+	info, err := fs.Fs.Stat(name)
+	if err != nil {
+		return nil, fmt.Errorf("stat backing filesystem: %w", err)
+	}
+	return info, nil
+}
+
+func (fs *failingApplicationCopyFS) Open(name string) (afero.File, error) {
+	if fs.operation == "open" && name == fs.source {
+		return nil, errInjectedApplicationCopy
+	}
+	file, err := fs.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open backing filesystem: %w", err)
+	}
+	return file, nil
+}
+
+func (fs *failingApplicationCopyFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
+	file, err := fs.Fs.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, fmt.Errorf("open backing filesystem file: %w", err)
+	}
+	if name == fs.destination && (fs.operation == "copy" || fs.operation == "close") {
+		return &failingApplicationCopyFile{File: file, operation: fs.operation}, nil
+	}
+	return file, nil
+}
+
+func (fs *failingApplicationCopyFS) Chmod(name string, mode os.FileMode) error {
+	if fs.operation == "chmod" && name == fs.destination {
+		return errInjectedApplicationCopy
+	}
+	if err := fs.Fs.Chmod(name, mode); err != nil {
+		return fmt.Errorf("chmod backing filesystem file: %w", err)
+	}
+	return nil
+}
+
+func (file *failingApplicationCopyFile) Write(p []byte) (int, error) {
+	if file.operation != "copy" {
+		written, err := file.File.Write(p)
+		if err != nil {
+			return written, fmt.Errorf("write backing filesystem file: %w", err)
+		}
+		return written, nil
+	}
+	written, err := file.File.Write(p[:min(3, len(p))])
+	if err != nil {
+		return written, fmt.Errorf("write partial backing filesystem file: %w", err)
+	}
+	return written, errInjectedApplicationCopy
+}
+
+func (file *failingApplicationCopyFile) Close() error {
+	err := file.File.Close()
+	if file.operation == "close" {
+		return errors.Join(err, errInjectedApplicationCopy)
+	}
+	if err != nil {
+		return fmt.Errorf("close backing filesystem file: %w", err)
+	}
+	return nil
+}
+
+func TestCopyApplicationBinary(t *testing.T) {
 	t.Parallel()
 
-	fs := helpers.NewMemoryFS()
-	path := filepath.Join("application", "zaparoo")
-	require.NoError(t, fs.WriteFile(path, []byte("binary"), 0o700))
+	t.Run("same path", func(t *testing.T) {
+		t.Parallel()
+		fs := helpers.NewMemoryFS()
+		path := filepath.Join("application", "zaparoo")
+		require.NoError(t, fs.WriteFile(path, []byte("binary"), 0o700))
 
-	require.NoError(t, copyApplicationBinary(fs.Fs, path, path))
-	content, err := fs.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, []byte("binary"), content)
+		require.NoError(t, copyApplicationBinary(fs.Fs, path, path))
+		content, err := fs.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("binary"), content)
+	})
+
+	t.Run("distinct paths", func(t *testing.T) {
+		t.Parallel()
+		fs := helpers.NewMemoryFS()
+		source := filepath.Join("source", "zaparoo")
+		destination := filepath.Join("destination", "zaparoo")
+		require.NoError(t, fs.Fs.MkdirAll(filepath.Dir(source), 0o755))
+		require.NoError(t, fs.Fs.MkdirAll(filepath.Dir(destination), 0o755))
+		require.NoError(t, afero.WriteFile(fs.Fs, source, []byte("application binary"), 0o600))
+
+		require.NoError(t, copyApplicationBinary(fs.Fs, source, destination))
+		content, err := afero.ReadFile(fs.Fs, destination)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("application binary"), content)
+		info, err := fs.Fs.Stat(destination)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	})
+
+	for _, operation := range []string{"stat", "open", "copy", "close", "chmod"} {
+		t.Run(operation+" failure", func(t *testing.T) {
+			t.Parallel()
+			baseFS := afero.NewMemMapFs()
+			source := filepath.Join("source", "zaparoo")
+			destination := filepath.Join("destination", "zaparoo")
+			require.NoError(t, baseFS.MkdirAll(filepath.Dir(source), 0o755))
+			require.NoError(t, baseFS.MkdirAll(filepath.Dir(destination), 0o755))
+			require.NoError(t, afero.WriteFile(baseFS, source, []byte("application binary"), 0o600))
+			fs := &failingApplicationCopyFS{
+				Fs: baseFS, operation: operation, source: source, destination: destination,
+			}
+
+			err := copyApplicationBinary(fs, source, destination)
+			require.ErrorIs(t, err, errInjectedApplicationCopy)
+			exists, existsErr := afero.Exists(baseFS, destination)
+			require.NoError(t, existsErr)
+			assert.False(t, exists, "failed copy must remove destination")
+		})
+	}
 }
 
 func TestInstallApplication(t *testing.T) {
@@ -103,8 +229,11 @@ func TestInstallApplication(t *testing.T) {
 			if tt.setupMock != nil {
 				tt.setupMock(cmd)
 			}
+			fs := helpers.NewMemoryFS()
+			binaryPath := filepath.Join(string(filepath.Separator), "fixtures", "zaparoo")
+			require.NoError(t, fs.WriteFile(binaryPath, []byte("fixture binary"), 0o755))
 
-			err := doInstallApplication(cmd, afero.NewOsFs())
+			err := doInstallApplication(cmd, fs.Fs, binaryPath)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -116,16 +245,15 @@ func TestInstallApplication(t *testing.T) {
 
 				// Verify files were created (basic smoke test)
 				binPath := filepath.Join(xdg.Home, ".local", "bin", "zaparoo")
-				_, err := os.Stat(binPath)
+				_, err := fs.Fs.Stat(binPath)
 				require.NoError(t, err, "binary should be installed")
 
 				desktopPath := filepath.Join(xdg.DataHome, "applications", "zaparoo.desktop")
-				_, err = os.Stat(desktopPath)
+				_, err = fs.Fs.Stat(desktopPath)
 				require.NoError(t, err, "desktop file should be installed")
 
 				// Verify desktop file is properly templated with binary path
-				//nolint:gosec // Reading test fixture file for verification
-				desktopContent, err := os.ReadFile(desktopPath)
+				desktopContent, err := afero.ReadFile(fs.Fs, desktopPath)
 				require.NoError(t, err, "should be able to read desktop file")
 				expectedPath := filepath.Join(xdg.Home, ".local", "bin", "zaparoo")
 				assert.Contains(t, string(desktopContent), "Exec="+expectedPath+" -start",
@@ -135,7 +263,7 @@ func TestInstallApplication(t *testing.T) {
 				iconSizes := []string{"16x16", "32x32", "48x48", "128x128", "256x256"}
 				for _, size := range iconSizes {
 					iconPath := filepath.Join(xdg.DataHome, "icons", "hicolor", size, "apps", "zaparoo.png")
-					_, err = os.Stat(iconPath)
+					_, err = fs.Fs.Stat(iconPath)
 					require.NoError(t, err, "icon %s should be installed", size)
 				}
 			}

@@ -71,17 +71,27 @@ const (
 // InstallApplication installs application files (binary, application launcher entry, icon).
 // Does not install systemd service or desktop shortcut. Must NOT be run as root.
 func InstallApplication() error {
-	return doInstallApplication(&command.RealExecutor{}, afero.NewOsFs())
+	binaryPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("error getting executable path: %w", err)
+	}
+	return doInstallApplication(&command.RealExecutor{}, afero.NewOsFs(), binaryPath)
 }
 
 func copyApplicationBinary(fs afero.Fs, source, destination string) error {
 	if filepath.Clean(source) == filepath.Clean(destination) {
 		return nil
 	}
-	sourceInfo, sourceErr := fs.Stat(source)
-	destinationInfo, destinationErr := fs.Stat(destination)
-	if sourceErr == nil && destinationErr == nil && os.SameFile(sourceInfo, destinationInfo) {
+	sourceInfo, err := fs.Stat(source)
+	if err != nil {
+		return fmt.Errorf("stat application binary: %w", err)
+	}
+	destinationInfo, err := fs.Stat(destination)
+	if err == nil && os.SameFile(sourceInfo, destinationInfo) {
 		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat installed application binary: %w", err)
 	}
 
 	sourceFile, err := fs.Open(source)
@@ -103,21 +113,16 @@ func copyApplicationBinary(fs afero.Fs, source, destination string) error {
 		return fmt.Errorf("close application binary: %w", err)
 	}
 	if err = fs.Chmod(destination, 0o755); err != nil {
+		_ = fs.Remove(destination)
 		return fmt.Errorf("make application binary executable: %w", err)
 	}
 	return nil
 }
 
 // doInstallApplication is the internal testable implementation.
-func doInstallApplication(cmd command.Executor, fs afero.Fs) error {
+func doInstallApplication(cmd command.Executor, fs afero.Fs, binaryPath string) error {
 	if os.Geteuid() == 0 {
 		return errors.New("application install must not be run as root")
-	}
-
-	// Get the current binary path
-	binaryPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("error getting executable path: %w", err)
 	}
 
 	// Install binary to ~/.local/bin

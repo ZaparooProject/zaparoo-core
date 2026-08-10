@@ -492,7 +492,7 @@ test_batocera_package_checksum() {
     if (
         pacman() {
             if [ "${1:-}" = "-Q" ]; then
-                return 1
+                return 0
             fi
             printf '%s\n' "$*" >> "${pacman_log}"
         }
