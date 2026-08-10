@@ -107,7 +107,7 @@ start_gui_progress() {
         --title="Zaparoo Installer" --text="${text}" \
         < "${GUI_PROGRESS_PATH}" 2>/dev/null &
     GUI_PROGRESS_PID=$!
-    exec {GUI_PROGRESS_FD}>"${GUI_PROGRESS_PATH}"
+    exec {GUI_PROGRESS_FD}<>"${GUI_PROGRESS_PATH}"
 }
 
 update_gui_progress() {
@@ -343,6 +343,16 @@ require_command() {
     fi
 }
 
+openssl_version_supported() {
+    local product version major
+    read -r product version _ <<< "$(openssl version 2>/dev/null)"
+    if [ "${product}" != "OpenSSL" ]; then
+        return 1
+    fi
+    major="${version%%.*}"
+    [[ "${major}" =~ ^[0-9]+$ ]] && [ "${major}" -ge 3 ]
+}
+
 check_requirements() {
     info "Checking requirements..."
 
@@ -355,6 +365,9 @@ check_requirements() {
 
     if [ "${MODE}" = "install" ]; then
         require_command openssl
+        if ! openssl_version_supported; then
+            abort "OpenSSL 3.0 or newer is required for signed release verification. Please upgrade OpenSSL and try again."
+        fi
         require_command sha256sum
     fi
 
@@ -787,7 +800,7 @@ install_steamos_transaction() {
 
     rm -f "${backup_path}"
     success "Zaparoo Core ${VERSION} is healthy and running"
-    install_hardware
+    install_hardware "${APP_PATH}"
     offer_decky_plugin
 }
 
@@ -985,7 +998,7 @@ offer_decky_plugin() {
         return 0
     fi
     core_version="$(installed_version)"
-    if [ -z "${core_version}" ] || \
+    if ! is_semver "${core_version}" || \
         [ "$(semver_compare "${core_version}" "${DECKY_MINIMUM_CORE_VERSION}")" -lt 0 ]; then
         warn "Zaparoo Decky requires Core ${DECKY_MINIMUM_CORE_VERSION} or newer; skipping plugin"
         return 0
@@ -1115,7 +1128,6 @@ status_steamos() {
         "${APP_PATH}" -steam-runtime-status || printf "    unavailable\n"
     fi
     if [ -n "${current}" ]; then
-        VERSION="${current}"
         if verify_core_api "${current}"; then
             printf "  API health: ok\n"
         else
@@ -1579,7 +1591,9 @@ install_batocera() {
         abort "Failed to download from ${download_url}"
     fi
 
-    success "Downloaded ${package_name}"
+    verify_file_checksum "${TMP_PACKAGE}" "${package_name}" || \
+        abort "Downloaded Batocera package verification failed"
+    success "Downloaded and verified ${package_name}"
 
     # Check if pacman is available
     if ! command -v pacman >/dev/null 2>&1; then
@@ -1822,6 +1836,7 @@ main() {
 
 if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
     trap cleanup EXIT
+    trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
     main "$@"

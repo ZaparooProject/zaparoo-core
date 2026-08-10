@@ -2,9 +2,9 @@
 [Desktop Entry]
 Name=Install Zaparoo
 Comment=Install Zaparoo Core, NFC support, and Decky integration
-Exec=bash -c "set -o pipefail; curl --fail --silent --show-error --location --proto =https --tlsv1.2 --connect-timeout 30 --max-time 120 --max-filesize 1048576 https://zaparoo.org/install.sh | ZAPAROO_GUI=1 bash || (zenity --error --title=Zaparoo\ Installer --text=Installation\ failed.\ Review\ the\ installer\ window\ for\ details.; false)"
+Exec=bash -c "set -o pipefail; curl --fail --silent --show-error --location --proto =https --tlsv1.2 --connect-timeout 30 --max-time 120 --max-filesize 1048576 https://zaparoo.org/install.sh | ZAPAROO_GUI=1 bash || (zenity --error --title='Zaparoo Installer' --text='Installation failed. Review the installer window for details.'; false)"
 Icon=system-software-install
-Terminal=true
+Terminal=false
 Type=Application
 StartupNotify=true
 Categories=Utility;

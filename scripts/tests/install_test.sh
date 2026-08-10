@@ -7,6 +7,11 @@
 
 set -euo pipefail
 
+if ! command -v python3 >/dev/null 2>&1; then
+    printf 'python3 is required to run installer tests\n' >&2
+    exit 1
+fi
+
 # Tests intentionally set globals consumed by sourced installer functions.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TEST_TMP="$(mktemp -d)"
@@ -232,6 +237,21 @@ test_semver_comparison() {
     pass "compare release versions and replace development builds"
 }
 
+test_openssl_version_requirement() {
+    openssl() { echo "OpenSSL 3.0.0 7 Sep 2021"; }
+    openssl_version_supported || fail "OpenSSL 3.0 was rejected"
+    openssl() { echo "OpenSSL 1.1.1w 11 Sep 2023"; }
+    if openssl_version_supported; then
+        fail "OpenSSL 1.1 was accepted"
+    fi
+    openssl() { echo "LibreSSL 3.3.6"; }
+    if openssl_version_supported; then
+        fail "LibreSSL was accepted as OpenSSL 3"
+    fi
+    unset -f openssl
+    pass "require OpenSSL 3.0 or newer"
+}
+
 test_decky_release_selection() {
     local metadata="${TEST_TMP}/decky-release.json"
     local output digest
@@ -320,6 +340,12 @@ test_decky_requires_compatible_core() {
         offer_decky_plugin 2>&1
     )"
     assert_contains "${output}" "requires Core 2.17.0 or newer" "Decky minimum Core version"
+    output="$(
+        decky_is_installed() { return 0; }
+        installed_version() { echo "development-build"; }
+        offer_decky_plugin 2>&1
+    )"
+    assert_contains "${output}" "requires Core 2.17.0 or newer" "invalid Core version"
     pass "skip Decky plugin for incompatible Core"
 }
 
@@ -446,6 +472,60 @@ test_install_hardware_accepts_installed_binary() {
     pass "use installed binary for hardware setup"
 }
 
+test_status_does_not_mutate_selected_version() {
+    local output
+    VERSION="selected-version"
+    output="$(
+        installed_version() { echo "2.17.0"; }
+        systemctl() { return 1; }
+        verify_core_api() { return 0; }
+        APP_PATH="${TEST_TMP}/missing-status-binary"
+        status_steamos
+        printf 'version=%s\n' "${VERSION}"
+    )"
+    assert_contains "${output}" "version=selected-version" "status VERSION preservation"
+    pass "keep status checks independent of selected version"
+}
+
+test_batocera_package_checksum() {
+    local pacman_log="${TEST_TMP}/batocera-pacman.log"
+    if (
+        pacman() {
+            if [ "${1:-}" = "-Q" ]; then
+                return 1
+            fi
+            printf '%s\n' "$*" >> "${pacman_log}"
+        }
+        curl() {
+            local output_path=""
+            while [ $# -gt 0 ]; do
+                if [ "$1" = "-o" ]; then
+                    output_path="$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            printf 'tampered package' > "${output_path}"
+        }
+        signed_checksum_for() {
+            printf '%064d\n' 0
+        }
+        VERSION="2.17.0"
+        VERSION_TAG="v2.17.0"
+        DRY_RUN=false
+        TMP_DIR="${TEST_TMP}/batocera-package"
+        mkdir -p "${TMP_DIR}"
+        install_batocera
+    ) >/dev/null 2>&1; then
+        fail "Batocera accepted a package with the wrong checksum"
+    fi
+    if [ -e "${pacman_log}" ]; then
+        fail "Batocera installed a package before checksum verification"
+    fi
+    pass "verify Batocera package before installation"
+}
+
 test_failed_install_removes_integration() {
     local fake_bin="${TEST_TMP}/bin-rollback"
     local rollback_log="${TEST_TMP}/rollback.log"
@@ -489,6 +569,7 @@ test_api_identity_fields_are_literal
 test_repair_requires_existing_install
 test_steamos_asset_name
 test_semver_comparison
+test_openssl_version_requirement
 test_decky_release_selection
 test_decky_archive_validation
 test_unrecognized_binary_is_not_replaced
@@ -497,6 +578,8 @@ test_steamos_temporary_admin_lifecycle
 test_gui_admin_password_is_reused_without_timestamp
 test_steamos_admin_decline_is_remembered
 test_install_hardware_accepts_installed_binary
+test_status_does_not_mutate_selected_version
+test_batocera_package_checksum
 test_failed_install_removes_integration
 
 printf '1..%d\n' "${TESTS_RUN}"
