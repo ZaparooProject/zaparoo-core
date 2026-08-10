@@ -239,6 +239,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 				log.Warn().Msg("reader error, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    r.ReaderID(),
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -258,8 +259,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 			if removed {
 				log.Info().Msg("token removed, sending to input queue")
 				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  nil,
+					Source:   tokens.SourceReader,
+					ReaderID: r.ReaderID(),
+					Token:    nil,
 				}
 				r.prevToken = nil
 			} else if token != nil {
@@ -269,8 +271,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 
 				log.Info().Msg("new token detected, sending to input queue")
 				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  token,
+					Source:   tokens.SourceReader,
+					ReaderID: r.ReaderID(),
+					Token:    token,
 				}
 				r.prevToken = token
 			}

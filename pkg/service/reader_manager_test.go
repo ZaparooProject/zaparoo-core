@@ -553,6 +553,37 @@ func TestReaderManager_SuppressesScanDuringReaderWrite(t *testing.T) {
 	assert.Equal(t, "next-tag", tok.UID)
 }
 
+func TestReaderManager_WriteCallbacksDoNotChangeAnotherReadersHoldState(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	active := &tokens.Token{
+		UID: "active-a", Text: "game-a", ScanTime: time.Now(), ReaderID: "reader-a",
+	}
+	env.sendScan(readers.Scan{ReaderID: "reader-a", Source: "test-reader", Token: active})
+	env.expectToken(t)
+	env.st.SetSoftwareToken(active)
+
+	env.st.SetReaderWriteActive(true, "reader-b")
+	env.sendScan(readers.Scan{
+		ReaderID: "reader-b",
+		Source:   "test-reader",
+		Token: &tokens.Token{
+			UID: "write-b", Text: "partial", ScanTime: time.Now(), ReaderID: "reader-b",
+		},
+	})
+	env.expectNoToken(t)
+	assert.Equal(t, active.UID, env.st.GetActiveCard().UID)
+	assert.Equal(t, active, env.st.GetSoftwareToken())
+
+	env.sendScan(readers.Scan{
+		ReaderID: "reader-b", Source: "test-reader", WrittenTagRemoved: true,
+	})
+	env.expectNoToken(t)
+	assert.Equal(t, active.UID, env.st.GetActiveCard().UID)
+	assert.Equal(t, active, env.st.GetSoftwareToken())
+	env.st.SetReaderWriteActive(false, "reader-b")
+}
+
 func TestReaderManager_IgnoreOnConnect_SuppressesFirstScan(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t, withIgnoreOnConnect)

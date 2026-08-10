@@ -730,6 +730,14 @@ preprocessing:
 		if writtenTagRemoved {
 			log.Info().Str("readerID", scanReaderID).Msg("written tag removed, allowing next scan to launch")
 			svc.State.MarkWrittenTagRemoved(scanReaderID)
+			continue preprocessing
+		}
+
+		// A reader may report the tag while its write operation is reading or
+		// verifying NDEF. Never mutate scan or hold state for that callback.
+		if scan != nil && svc.State.ReaderWriteActive(scanReaderID) {
+			log.Info().Str("readerID", scanReaderID).Msg("suppressing token scan during reader write")
+			continue preprocessing
 		}
 
 		if scan != nil && activeRemovalHook != nil &&
@@ -838,13 +846,6 @@ preprocessing:
 			}
 
 			log.Info().Msgf("new token scanned: %v", scan)
-
-			// A reader may report the tag while its write operation is reading or
-			// verifying NDEF. Never execute old, partial, or newly written content.
-			if svc.State.ReaderWriteActive(scanReaderID) {
-				log.Info().Str("readerID", scanReaderID).Msg("suppressing token scan during reader write")
-				continue preprocessing
-			}
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
 			if onScanScript := svc.Config.ReadersScan().OnScan; onScanScript != "" {

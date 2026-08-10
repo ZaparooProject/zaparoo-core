@@ -524,8 +524,9 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 	// Emit scan event
 	select {
 	case r.scanChan <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  token,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    token,
 	}:
 		log.Info().
 			Str("device_id", event.DeviceID).
@@ -555,8 +556,9 @@ func (r *Reader) handleUnmountEvent(deviceID string) {
 	// Emit removal scan
 	select {
 	case r.scanChan <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  nil,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    nil,
 	}:
 		log.Info().
 			Str("device_id", deviceID).

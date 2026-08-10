@@ -103,8 +103,9 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 		if token.Wait() && token.Error() != nil {
 			log.Error().Err(token.Error()).Msgf("mqtt reader: failed to subscribe to %s", topic)
 			scanQueue <- readers.Scan{
-				Source: tokens.SourceReader,
-				Error:  fmt.Errorf("failed to subscribe to topic: %w", token.Error()),
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Error:    fmt.Errorf("failed to subscribe to topic: %w", token.Error()),
 			}
 			return
 		}
@@ -208,8 +209,9 @@ func (r *Reader) createMessageHandler() mqtt.MessageHandler {
 
 		// Send to scan channel
 		r.scanCh <- readers.Scan{
-			Source: tokens.SourceReader,
-			Token:  token,
+			Source:   tokens.SourceReader,
+			ReaderID: r.ReaderID(),
+			Token:    token,
 		}
 	}
 }

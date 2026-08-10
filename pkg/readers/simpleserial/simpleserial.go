@@ -175,6 +175,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
 					iq <- readers.Scan{
 						Source:      tokens.SourceReader,
+						ReaderID:    r.ReaderID(),
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -201,8 +202,9 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 					if t != nil && !helpers.TokensEqual(t, r.lastToken) {
 						iq <- readers.Scan{
-							Source: tokens.SourceReader,
-							Token:  t,
+							Source:   tokens.SourceReader,
+							ReaderID: r.ReaderID(),
+							Token:    t,
 						}
 					}
 
@@ -220,8 +222,9 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 			// systems, serial data processing delays could cause spurious token removal events.
 			if r.lastToken != nil && time.Since(r.lastToken.ScanTime) > 1*time.Second {
 				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  nil,
+					Source:   tokens.SourceReader,
+					ReaderID: r.ReaderID(),
+					Token:    nil,
 				}
 				r.lastToken = nil
 			}

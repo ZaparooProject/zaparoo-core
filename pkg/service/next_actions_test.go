@@ -235,7 +235,7 @@ scan_feedback = true
 	readerID := "mock-reader-0123456789abcdef"
 	source := tokens.Token{UID: "source", Text: "**write:payload", ScanTime: time.Now(), ReaderID: readerID}
 	target := &tokens.Token{UID: "target", Text: "old", ScanTime: time.Now(), ReaderID: readerID}
-	written := &tokens.Token{UID: "target", Text: "payload", ScanTime: time.Now(), ReaderID: readerID}
+	written := &tokens.Token{UID: "target", Text: "payload", ScanTime: time.Now()}
 	svc.State.SetPendingWrite(&state.PendingWrite{Payload: "payload", Source: source, CreatedAt: time.Now()})
 	reader.On("WriteTarget", mock.Anything, "payload", readers.WriteOptions{
 		TargetUID:  "target",
@@ -248,6 +248,7 @@ scan_feedback = true
 
 	require.True(t, consumed)
 	assert.Nil(t, svc.State.GetPendingWrite())
+	assert.Equal(t, readerID, written.ReaderID)
 	assert.Equal(t, written, svc.State.GetWroteToken(readerID))
 	reader.AssertCalled(t, "WriteTarget", mock.Anything, "payload", readers.WriteOptions{
 		TargetUID:  "target",

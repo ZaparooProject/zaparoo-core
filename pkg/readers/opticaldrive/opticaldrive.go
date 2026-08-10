@@ -245,6 +245,7 @@ func (r *FileReader) Open(
 					hasProbed = false
 					iq <- readers.Scan{
 						Source:      tokens.SourceReader,
+						ReaderID:    r.ReaderID(),
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -291,8 +292,9 @@ func (r *FileReader) Open(
 					token = nil
 					tokenProperties = nil
 					iq <- readers.Scan{
-						Source: tokens.SourceReader,
-						Token:  nil,
+						Source:   tokens.SourceReader,
+						ReaderID: r.ReaderID(),
+						Token:    nil,
 					}
 				}
 				continue
@@ -314,6 +316,7 @@ func (r *FileReader) Open(
 			log.Debug().Msgf("new token: %s", token.UID)
 			iq <- readers.Scan{
 				Source:     tokens.SourceReader,
+				ReaderID:   r.ReaderID(),
 				Token:      token,
 				Properties: scanProperties,
 			}

@@ -457,10 +457,12 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 			if !errors.Is(err, context.Canceled) {
 				logTraceableError(err, "session polling")
 
+				readerID := r.ReaderID()
 				r.mutex.Lock()
 				log.Warn().Msg("reader session error, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    readerID,
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -528,8 +530,9 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 	}
 
 	iq <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  token,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    token,
 	}
 
 	r.mutex.Lock()
