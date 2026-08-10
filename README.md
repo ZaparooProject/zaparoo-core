@@ -170,13 +170,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>staydata</b></sub>
                 </a>
             </td>
-            <td align="center">
-                <a href="https://github.com/tomaioo">
-                    <img src="https://avatars.githubusercontent.com/u/203048277?v=4" width="100;" alt="tomaioo"/>
-                    <br />
-                    <sub><b>tomaioo</b></sub>
-                </a>
-            </td>
 		</tr>
 	<tbody>
 </table>
