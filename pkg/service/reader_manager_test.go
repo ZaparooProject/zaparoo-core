@@ -190,6 +190,7 @@ func (env *readerManagerEnv) expectNoToken(t *testing.T) {
 	}
 }
 
+//nolint:gocritic // Value helper keeps scan fixtures concise.
 func (env *readerManagerEnv) sendScan(scan readers.Scan) {
 	env.scanQueue <- scan
 }
@@ -477,6 +478,48 @@ func TestReaderManager_WrittenTagRemovalDuringWriteClearsCompletedToken(t *testi
 	env.sendScan(readers.Scan{Source: "test-reader", Token: written})
 	tok := env.expectToken(t)
 	assert.Equal(t, "just-written", tok.UID)
+}
+
+func TestReaderManager_WrittenTagRemovalAfterWriteClearsCompletedToken(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	written := &tokens.Token{
+		UID: "just-written", Text: "steam://1145360/Hades", ScanTime: time.Now(), ReaderID: "reader-1",
+	}
+	env.st.SetReaderWriteActive(true, "reader-1")
+	env.st.SetWroteToken(written)
+	env.st.SetReaderWriteActive(false, "reader-1")
+	assert.Equal(t, written, env.st.GetWroteToken("reader-1"))
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+	assert.Nil(t, env.st.GetWroteToken("reader-1"))
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: written})
+	tok := env.expectToken(t)
+	assert.Equal(t, "just-written", tok.UID)
+}
+
+func TestReaderManager_WrittenTagRemovalIsReaderScoped(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	readerA := &tokens.Token{UID: "written-a", Text: "reader-a", ScanTime: time.Now(), ReaderID: "reader-a"}
+	readerB := &tokens.Token{UID: "written-b", Text: "reader-b", ScanTime: time.Now(), ReaderID: "reader-b"}
+	env.st.SetReaderWriteActive(true, "reader-a")
+	env.st.SetReaderWriteActive(true, "reader-b")
+
+	env.sendScan(readers.Scan{ReaderID: "reader-a", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+	env.st.SetWroteToken(readerA)
+	env.st.SetWroteToken(readerB)
+	env.st.SetReaderWriteActive(false, "reader-a")
+	env.st.SetReaderWriteActive(false, "reader-b")
+
+	assert.Nil(t, env.st.GetWroteToken("reader-a"))
+	assert.Equal(t, readerB, env.st.GetWroteToken("reader-b"))
+	env.sendScan(readers.Scan{ReaderID: "reader-b", Token: readerB})
+	env.expectNoToken(t)
+	assert.Nil(t, env.st.GetWroteToken("reader-b"))
 }
 
 func TestReaderManager_SuppressesScanDuringReaderWrite(t *testing.T) {

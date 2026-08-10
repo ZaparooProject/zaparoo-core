@@ -842,6 +842,7 @@ func TestWriteWithContext_Success(t *testing.T) {
 	reader.handleTagRemoved(scanQueue)
 	removal := <-scanQueue
 	assert.Nil(t, removal.Token)
+	assert.Equal(t, reader.ReaderID(), removal.ReaderID)
 	assert.True(t, removal.WrittenTagRemoved)
 	assert.False(t, reader.suppressingTagScans())
 }

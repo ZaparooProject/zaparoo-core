@@ -65,6 +65,7 @@ type Scan struct {
 	Error             error
 	Token             *tokens.Token
 	Source            string
+	ReaderID          string
 	Properties        []ScanProperty
 	ReaderError       bool // True when Token is nil due to reader error/disconnect vs normal token removal
 	WrittenTagRemoved bool // True when a successful write's physical tag has left the reader

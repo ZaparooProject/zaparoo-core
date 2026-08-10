@@ -498,6 +498,7 @@ func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	r.writeMutex.Unlock()
 	iq <- readers.Scan{
 		Source:            tokens.SourceReader,
+		ReaderID:          r.ReaderID(),
 		Token:             nil,
 		WrittenTagRemoved: writtenTagRemoved,
 	}

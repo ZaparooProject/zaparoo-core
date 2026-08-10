@@ -248,7 +248,7 @@ scan_feedback = true
 
 	require.True(t, consumed)
 	assert.Nil(t, svc.State.GetPendingWrite())
-	assert.Equal(t, written, svc.State.GetWroteToken())
+	assert.Equal(t, written, svc.State.GetWroteToken(readerID))
 	reader.AssertCalled(t, "WriteTarget", mock.Anything, "payload", readers.WriteOptions{
 		TargetUID:  "target",
 		ExcludeUID: "source",

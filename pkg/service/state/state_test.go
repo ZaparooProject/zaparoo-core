@@ -136,32 +136,66 @@ func TestReaderWriteActiveTracksOverlappingWrites(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	state, _ := NewState(mockPlatform, "test-boot-uuid")
 
-	state.SetReaderWriteActive(true)
-	state.SetReaderWriteActive(true)
-	assert.True(t, state.ReaderWriteActive())
+	state.SetReaderWriteActive(true, "reader-1")
+	state.SetReaderWriteActive(true, "reader-1")
+	assert.True(t, state.ReaderWriteActive("reader-1"))
 
-	state.SetReaderWriteActive(false)
-	assert.True(t, state.ReaderWriteActive())
-	state.SetReaderWriteActive(false)
-	assert.False(t, state.ReaderWriteActive())
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.True(t, state.ReaderWriteActive("reader-1"))
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.False(t, state.ReaderWriteActive("reader-1"))
 
-	state.SetReaderWriteActive(false)
-	assert.False(t, state.ReaderWriteActive())
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.False(t, state.ReaderWriteActive("reader-1"))
 }
 
 func TestWrittenTagRemovalDuringWriteClearsCompletedToken(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
 	state, _ := NewState(mockPlatform, "test-boot-uuid")
-	written := &tokens.Token{UID: "written"}
+	written := &tokens.Token{UID: "written", ReaderID: "reader-1"}
 
-	state.SetReaderWriteActive(true)
-	state.MarkWrittenTagRemoved()
+	state.SetReaderWriteActive(true, "reader-1")
+	state.MarkWrittenTagRemoved("reader-1")
 	state.SetWroteToken(written)
-	assert.Equal(t, written, state.GetWroteToken())
+	assert.Equal(t, written, state.GetWroteToken("reader-1"))
 
-	state.SetReaderWriteActive(false)
-	assert.Nil(t, state.GetWroteToken())
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.Nil(t, state.GetWroteToken("reader-1"))
+}
+
+func TestWrittenTagRemovalAfterWriteClearsReaderToken(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	written := &tokens.Token{UID: "written", ReaderID: "reader-1"}
+
+	state.SetReaderWriteActive(true, "reader-1")
+	state.SetWroteToken(written)
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.Equal(t, written, state.GetWroteToken("reader-1"))
+
+	state.MarkWrittenTagRemoved("reader-1")
+	assert.Nil(t, state.GetWroteToken("reader-1"))
+}
+
+func TestWrittenTagRemovalDoesNotClearAnotherReader(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+	readerA := &tokens.Token{UID: "written-a", ReaderID: "reader-a"}
+	readerB := &tokens.Token{UID: "written-b", ReaderID: "reader-b"}
+
+	state.SetReaderWriteActive(true, "reader-a")
+	state.SetReaderWriteActive(true, "reader-b")
+	state.MarkWrittenTagRemoved("reader-a")
+	state.SetWroteToken(readerA)
+	state.SetWroteToken(readerB)
+	state.SetReaderWriteActive(false, "reader-a")
+	state.SetReaderWriteActive(false, "reader-b")
+
+	assert.Nil(t, state.GetWroteToken("reader-a"))
+	assert.Equal(t, readerB, state.GetWroteToken("reader-b"))
 }
 
 func TestConsumePendingWrite(t *testing.T) {
