@@ -56,7 +56,11 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		}
 		return validateLaunch(&opts, filepath.Join(opts.CoresDir, core))
 	}
-	launcher.Launch = func(cfg *config.Instance, mediaPath string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	launcher.BuildLaunchCommand = func(
+		cfg *config.Instance,
+		mediaPath string,
+		_ *platforms.LaunchOptions,
+	) (*platforms.LaunchCommand, error) {
 		core, err := resolveCore(cfg, &c)
 		if err != nil {
 			return nil, err
@@ -65,19 +69,29 @@ func NewLauncher(opts Options, c CoreLaunch) platforms.Launcher { //nolint:gocri
 		if err := validateLaunch(&opts, corePath); err != nil {
 			return nil, err
 		}
-
 		spec := buildCommandWithCore(&opts, core, mediaPath)
 		if spec.Name == "" {
 			return nil, errors.New("retroarch executable is not configured")
 		}
-
-		//nolint:gosec // command argv comes from built-in platform configuration
-		cmd := exec.CommandContext(context.Background(), spec.Name, spec.Args...)
-		env := helpers.MergeEnviron(os.Environ(), spec.Env)
+		env := append([]string(nil), spec.Env...)
 		if opts.LaunchEnv != nil {
 			env = helpers.MergeEnviron(env, opts.LaunchEnv())
 		}
-		cmd.Env = env
+		return &platforms.LaunchCommand{Executable: spec.Name, Args: spec.Args, Env: env}, nil
+	}
+	launcher.Launch = func(
+		cfg *config.Instance,
+		mediaPath string,
+		launchOpts *platforms.LaunchOptions,
+	) (*os.Process, error) {
+		commandSpec, err := launcher.BuildLaunchCommand(cfg, mediaPath, launchOpts)
+		if err != nil {
+			return nil, fmt.Errorf("build retroarch launch command: %w", err)
+		}
+
+		//nolint:gosec // command argv comes from built-in platform configuration
+		cmd := exec.CommandContext(context.Background(), commandSpec.Executable, commandSpec.Args...)
+		cmd.Env = helpers.MergeEnviron(os.Environ(), commandSpec.Env)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {

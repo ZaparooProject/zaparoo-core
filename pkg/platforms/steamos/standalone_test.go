@@ -31,6 +31,7 @@ func TestNativeStandaloneLaunchers(t *testing.T) {
 		assert.Contains(t, launcher.Groups, platformshared.LauncherGroupNative)
 		assert.Equal(t, platforms.LifecycleTracked, launcher.Lifecycle)
 		assert.NotNil(t, launcher.Availability)
+		assert.NotNil(t, launcher.BuildLaunchCommand)
 		assert.NotNil(t, launcher.Launch)
 	}
 

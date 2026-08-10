@@ -23,15 +23,42 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamos
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/steamruntime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type fakeRuntimeBroker struct {
+	started    *steamruntime.Command
+	owns       bool
+	clear      bool
+	clearedPID int
+}
+
+func (f *fakeRuntimeBroker) Start(_ context.Context, command *steamruntime.Command) (*os.Process, error) {
+	f.started = command
+	return &os.Process{Pid: 1}, nil
+}
+
+func (*fakeRuntimeBroker) Stop(context.Context) error      { return nil }
+func (*fakeRuntimeBroker) Wait(context.Context, int) error { return nil }
+func (*fakeRuntimeBroker) Available() bool                 { return true }
+func (*fakeRuntimeBroker) HasActive() bool                 { return false }
+func (f *fakeRuntimeBroker) Owns(int) bool                 { return f.owns }
+func (f *fakeRuntimeBroker) Clear(pid int) bool {
+	f.clearedPID = pid
+	return f.clear
+}
 
 func TestParseSteamOSSessionEnv(t *testing.T) {
 	t.Parallel()
@@ -44,6 +71,88 @@ func TestParseSteamOSSessionEnv(t *testing.T) {
 		"WAYLAND_DISPLAY=wayland-0",
 		"XDG_CURRENT_DESKTOP=KDE",
 	}, result)
+}
+
+func TestSteamRuntimeEnvOverridesPreserveOnlyCommandSpecificValues(t *testing.T) {
+	t.Parallel()
+
+	result := steamRuntimeEnvOverrides([]string{
+		"DISPLAY=:0",
+		"WAYLAND_DISPLAY=wayland-0",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+		"HOME=/tmp/emulator-home",
+		"LD_LIBRARY_PATH=/opt/emulator/lib",
+		"FLAG_WITHOUT_VALUE",
+	})
+
+	assert.Equal(t, []string{
+		"HOME=/tmp/emulator-home",
+		"LD_LIBRARY_PATH=/opt/emulator/lib",
+	}, result)
+}
+
+func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+	launcher := platforms.Launcher{
+		Kill: func(*config.Instance) error { return nil },
+		BuildLaunchCommand: func(
+			*config.Instance,
+			string,
+			*platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return &platforms.LaunchCommand{
+				Executable: "/usr/bin/emulator",
+				Dir:        "/tmp",
+				Args:       []string{"--fullscreen", "game.rom"},
+				Env:        []string{"DISPLAY=:0", "EMULATOR_OPTION=1"},
+			}, nil
+		},
+	}
+
+	platform.wrapSteamRuntime(&launcher)
+	process, err := launcher.Launch(nil, "game.rom", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, process.Pid)
+	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
+	assert.Nil(t, launcher.Kill)
+	require.NotNil(t, broker.started)
+	assert.Equal(t, "/usr/bin/emulator", broker.started.Executable)
+	assert.Equal(t, "/tmp", broker.started.Dir)
+	assert.Equal(t, []string{"--fullscreen", "game.rom"}, broker.started.Args)
+	assert.Equal(t, []string{"EMULATOR_OPTION=1"}, broker.started.Env)
+}
+
+func TestClearTrackedProcessMediaClearsRuntimeActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{owns: true, clear: true}
+	active := &models.ActiveMedia{Path: "test"}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+	platform.setActiveMedia = func(media *models.ActiveMedia) { active = media }
+	process := &os.Process{Pid: 42}
+
+	assert.True(t, platform.ClearTrackedProcessMedia(process))
+	assert.Equal(t, 42, broker.clearedPID)
+	assert.Nil(t, active)
+}
+
+func TestClearTrackedProcessMediaPreservesReplacementRuntimeMedia(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeRuntimeBroker{owns: true, clear: false}
+	active := &models.ActiveMedia{Path: "replacement"}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+	platform.setActiveMedia = func(media *models.ActiveMedia) { active = media }
+
+	assert.False(t, platform.ClearTrackedProcessMedia(&os.Process{Pid: 42}))
+	assert.Equal(t, "replacement", active.Path)
 }
 
 func TestNewPlatform(t *testing.T) {
@@ -149,8 +258,9 @@ func TestPlatformLaunchersUsesDirectSteam(t *testing.T) {
 	}
 
 	require.NotNil(t, steamLauncher, "Steam launcher should be present")
-	// SteamOS Steam launcher exists and supports steam scheme
+	// SteamOS Steam launcher exists and supports steam scheme.
 	assert.Contains(t, steamLauncher.Schemes, "steam")
+	assert.Equal(t, platforms.LifecycleExternal, steamLauncher.Lifecycle)
 }
 
 func TestPlatformDoesNotHaveFlatpakLaunchers(t *testing.T) {

@@ -198,7 +198,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 				go waitForBlockingProcess(params.Platform, proc, params.SetActiveMedia, params.Path)
 			}()
 		}
-	case LifecycleFireAndForget:
+	case LifecycleFireAndForget, LifecycleExternal:
 		_, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
@@ -212,6 +212,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	// "details" action just shows info page, doesn't launch a game
 	if IsActionDetails(action) {
 		log.Debug().Msg("skipping ActiveMedia for details action")
+		return nil
+	}
+	if params.Launcher.Lifecycle == LifecycleExternal {
+		log.Debug().Msg("deferring ActiveMedia to external platform lifecycle tracker")
 		return nil
 	}
 

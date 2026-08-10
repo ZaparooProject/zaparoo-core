@@ -104,6 +104,16 @@ func IsEmuDeckAvailable() bool {
 	return err == nil
 }
 
+func emuDeckStandaloneCommand(emulator EmulatorConfig, romPath string) *platforms.LaunchCommand {
+	args := make([]string, 0, len(emulator.Args)+3)
+	args = append(args, "run", emulator.FlatpakID)
+	args = append(args, emulator.Args...)
+	args = append(args, romPath)
+	return &platforms.LaunchCommand{
+		Executable: "flatpak", Args: args, Env: steamOSLaunchEnvOverrides(),
+	}
+}
+
 func launchStandaloneEmulator(
 	ctx context.Context,
 	emulator EmulatorConfig,
@@ -112,13 +122,10 @@ func launchStandaloneEmulator(
 	if !launchers.IsFlatpakInstalled(emulator.FlatpakID) {
 		return nil, fmt.Errorf("emulator not installed: %s", emulator.FlatpakID)
 	}
-	args := make([]string, 0, len(emulator.Args)+3)
-	args = append(args, "run", emulator.FlatpakID)
-	args = append(args, emulator.Args...)
-	args = append(args, romPath)
+	commandSpec := emuDeckStandaloneCommand(emulator, romPath)
 
 	//nolint:gosec // Flatpak ID and arguments come from built-in mappings.
-	cmd := exec.CommandContext(ctx, "flatpak", args...)
+	cmd := exec.CommandContext(ctx, commandSpec.Executable, commandSpec.Args...)
 	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -181,6 +188,13 @@ func standaloneEmuDeckLauncher(
 				return fmt.Errorf("emulator not installed: %s", emulator.FlatpakID)
 			}
 			return nil
+		},
+		BuildLaunchCommand: func(
+			_ *config.Instance,
+			path string,
+			_ *platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return emuDeckStandaloneCommand(emulator, path), nil
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			return launchStandaloneEmulator(context.Background(), emulator, path, systemFolder)

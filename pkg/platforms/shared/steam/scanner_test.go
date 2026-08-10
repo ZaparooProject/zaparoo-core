@@ -250,6 +250,30 @@ func TestScanSteamShortcuts(t *testing.T) {
 		assert.True(t, results[1].NoExt)
 	})
 
+	t.Run("excludes_only_exact_shortcut_executable", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		userdataDir := filepath.Join(tempDir, "userdata", "12345678", "config")
+		require.NoError(t, os.MkdirAll(userdataDir, 0o750))
+		runtimePath := filepath.Join(tempDir, "bin", "zaparoo-steam-runtime")
+		shortcuts := []fixtures.TestShortcut{
+			{AppID: 42, AppName: "Zaparoo", Exe: `"` + runtimePath + `"`},
+			{AppID: 43, AppName: "Zaparoo", Exe: `"` + runtimePath + `-copy"`},
+		}
+		err := os.WriteFile(
+			filepath.Join(userdataDir, "shortcuts.vdf"), fixtures.BuildShortcutsVDF(shortcuts), 0o600,
+		)
+		require.NoError(t, err)
+		client := NewClient(Options{ExcludedShortcutExecutables: []string{runtimePath}})
+
+		results, scanErr := client.ScanShortcuts(tempDir)
+
+		require.NoError(t, scanErr)
+		require.Len(t, results, 1)
+		assert.Equal(t, shortcutVirtualPath(shortcuts[1].AppID, shortcuts[1].AppName), results[0].Path)
+	})
+
 	t.Run("skips_non_directory_entries", func(t *testing.T) {
 		t.Parallel()
 

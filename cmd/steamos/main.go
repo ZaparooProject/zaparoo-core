@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -38,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/steamruntime"
 	"github.com/rs/zerolog/log"
 )
 
@@ -49,6 +51,13 @@ func main() {
 }
 
 func run() error {
+	if steamruntime.IsInvocation(os.Args[0]) {
+		if err := steamruntime.Run(context.Background()); err != nil {
+			return fmt.Errorf("run Steam Runtime: %w", err)
+		}
+		return nil
+	}
+
 	defer telemetry.Close()
 	defer func() {
 		if r := recover(); r != nil {
@@ -66,12 +75,12 @@ func run() error {
 	install := flag.String(
 		"install",
 		"",
-		"install component: application, desktop, service, hardware",
+		"install component: application, desktop, service, hardware, steam-runtime",
 	)
 	uninstall := flag.String(
 		"uninstall",
 		"",
-		"uninstall component: application, desktop, service, hardware",
+		"uninstall component: application, desktop, service, hardware, steam-runtime",
 	)
 
 	pl := steamos.NewPlatform()
@@ -87,16 +96,48 @@ func run() error {
 		false,
 		"start service and open web UI in browser",
 	)
+	steamRuntimeStatus := flag.Bool("steam-runtime-status", false, "report Steam Runtime integration status")
 
 	flags.Pre(pl)
 
+	if *steamRuntimeStatus {
+		status, err := steamruntime.Status()
+		if err != nil {
+			return fmt.Errorf("inspect Steam Runtime: %w", err)
+		}
+		_, _ = fmt.Fprintf(
+			os.Stdout, "State: %s\nRuntime: %s\nDesktop: %s\nShortcuts: %d\n",
+			status.State, status.RuntimePath, status.DesktopPath, len(status.ShortcutIDs),
+		)
+		return nil
+	}
+
 	if *install != "" {
+		if *install == "steam-runtime" {
+			result, err := steamruntime.Install(context.Background())
+			if err != nil {
+				return fmt.Errorf("install Steam Runtime: %w", err)
+			}
+			if result.SteamRestartNeeded {
+				_, _ = fmt.Fprintln(os.Stdout, "Steam Runtime installed; restart Steam to load its shortcut")
+			} else {
+				_, _ = fmt.Fprintf(os.Stdout, "Steam Runtime installed as shortcut %d\n", result.ShortcutID)
+			}
+			return nil
+		}
 		if err := cli.HandleInstall(*install); err != nil {
 			return fmt.Errorf("install failed: %w", err)
 		}
 		return nil
 	}
 	if *uninstall != "" {
+		if *uninstall == "steam-runtime" {
+			if err := steamruntime.Uninstall(); err != nil {
+				return fmt.Errorf("uninstall Steam Runtime: %w", err)
+			}
+			_, _ = fmt.Fprintln(os.Stdout, "Steam Runtime files removed; remove its Steam shortcut manually")
+			return nil
+		}
 		if err := cli.HandleUninstall(*uninstall); err != nil {
 			return fmt.Errorf("uninstall failed: %w", err)
 		}

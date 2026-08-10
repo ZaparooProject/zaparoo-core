@@ -44,11 +44,22 @@ import (
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/steamruntime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+type runtimeBroker interface {
+	Start(context.Context, *steamruntime.Command) (*os.Process, error)
+	Stop(context.Context) error
+	Wait(context.Context, int) error
+	Available() bool
+	HasActive() bool
+	Owns(int) bool
+	Clear(int) bool
+}
 
 // Platform implements the SteamOS platform (Steam Deck and compatible handhelds).
 // Uses console-first approach with direct steam command for Game Mode integration.
@@ -58,13 +69,16 @@ type Platform struct {
 	procScanner               *procscanner.Scanner
 	steamTracker              *steamtracker.PlatformIntegration
 	emuTracker                *EmulatorTracker
+	steamRuntime              runtimeBroker
+	setActiveMedia            func(*models.ActiveMedia)
 	retroArchAppendConfigPath string
 }
 
 // NewPlatform creates a new SteamOS platform instance.
 func NewPlatform() *Platform {
 	return &Platform{
-		Base: linuxbase.NewBase(platformids.SteamOS),
+		Base:         linuxbase.NewBase(platformids.SteamOS),
+		steamRuntime: steamruntime.NewBroker(),
 	}
 }
 
@@ -80,16 +94,32 @@ func steamOSSessionEnvOverrides() []string {
 	return parseSteamOSSessionEnv(string(output))
 }
 
+func isSteamOSSessionEnvKey(key string) bool {
+	switch key {
+	case "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE",
+		"XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseSteamOSSessionEnv(output string) []string {
 	result := make([]string, 0, 8)
 	for line := range strings.SplitSeq(output, "\n") {
 		key, _, found := strings.Cut(line, "=")
-		if !found {
-			continue
+		if found && isSteamOSSessionEnvKey(key) {
+			result = append(result, line)
 		}
-		switch key {
-		case "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE",
-			"XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS":
+	}
+	return result
+}
+
+func steamRuntimeEnvOverrides(env []string) []string {
+	result := make([]string, 0, len(env))
+	for _, line := range env {
+		key, _, found := strings.Cut(line, "=")
+		if found && !isSteamOSSessionEnvKey(key) {
 			result = append(result, line)
 		}
 	}
@@ -175,6 +205,7 @@ func (p *Platform) StartPost(
 	db *database.Database,
 	scheduler *idle.Scheduler,
 ) error {
+	p.setActiveMedia = setActiveMedia
 	// Initialize base platform
 	//nolint:wrapcheck // Pass-through to base implementation
 	if err := p.Base.StartPost(ctx, cfg, launcherManager, activeMedia, setActiveMedia, db, scheduler); err != nil {
@@ -200,6 +231,7 @@ func (p *Platform) StartPost(
 		setActiveMedia,
 		steamRoot,
 	)
+	p.steamTracker.IgnoreExecutable(steamruntime.DefaultInstallPaths().Runtime)
 	p.steamTracker.Start()
 
 	// Start emulator tracker for EmuDeck/RetroDECK game detection
@@ -236,6 +268,13 @@ func (*Platform) onEmulatorStop(name string, pid int) {
 // Stop stops the platform and cleans up resources.
 func (p *Platform) Stop() error {
 	steamOSGameMode.RevertFocus()
+	if p.steamRuntime != nil && p.steamRuntime.HasActive() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := p.steamRuntime.Stop(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to stop Steam Runtime session")
+		}
+		cancel()
+	}
 
 	// Stop trackers first (they reference the scanner)
 	if p.emuTracker != nil {
@@ -254,10 +293,53 @@ func (p *Platform) Stop() error {
 	return p.Base.Stop()
 }
 
+func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
+	if p.steamRuntime != nil && p.steamRuntime.HasActive() {
+		steamOSGameMode.RevertFocus()
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		err := p.steamRuntime.Stop(ctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("stop Steam Runtime launcher: %w", err)
+		}
+		return nil
+	}
+	//nolint:wrapcheck // Pass-through to shared Linux process manager.
+	return p.Base.StopActiveLauncher(intent)
+}
+
+func (p *Platform) SetTrackedProcess(proc *os.Process) {
+	if p.steamRuntime != nil && proc != nil && p.steamRuntime.Owns(proc.Pid) {
+		return
+	}
+	p.Base.SetTrackedProcess(proc)
+}
+
+func (p *Platform) WaitTrackedProcess(proc *os.Process) error {
+	if p.steamRuntime != nil && proc != nil && p.steamRuntime.Owns(proc.Pid) {
+		//nolint:wrapcheck // Broker provides full runtime wait context.
+		return p.steamRuntime.Wait(context.Background(), proc.Pid)
+	}
+	//nolint:wrapcheck // Pass-through to shared Linux process manager.
+	return p.Base.WaitTrackedProcess(proc)
+}
+
+func (p *Platform) ClearTrackedProcessMedia(proc *os.Process) bool {
+	if p.steamRuntime != nil && proc != nil && p.steamRuntime.Owns(proc.Pid) {
+		if !p.steamRuntime.Clear(proc.Pid) {
+			return false
+		}
+		if p.setActiveMedia != nil {
+			p.setActiveMedia(nil)
+		}
+		return true
+	}
+	return p.Base.ClearTrackedProcessMedia(proc)
+}
+
 // ReturnToMenu stops active media on SteamOS. Steam's Game Mode shell remains
 // responsible for presenting its menu.
 func (p *Platform) ReturnToMenu() error {
-	//nolint:wrapcheck // Pass-through to the shared Linux process manager.
 	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
@@ -273,9 +355,47 @@ func (p *Platform) LaunchMedia(
 	return p.Base.LaunchMedia(cfg, path, launcher, db, opts, p)
 }
 
+func (p *Platform) wrapSteamRuntime(launcher *platforms.Launcher) {
+	if p.steamRuntime == nil || launcher.BuildLaunchCommand == nil {
+		return
+	}
+	builder := launcher.BuildLaunchCommand
+	// Replace direct-launch wrappers: Steam owns process lifetime and Gamescope
+	// focus for Runtime sessions.
+	launcher.Launch = func(
+		cfg *config.Instance,
+		path string,
+		opts *platforms.LaunchOptions,
+	) (*os.Process, error) {
+		commandSpec, err := builder(cfg, path, opts)
+		if err != nil {
+			return nil, err
+		}
+		process, err := p.steamRuntime.Start(context.Background(), &steamruntime.Command{
+			Executable: commandSpec.Executable,
+			Dir:        commandSpec.Dir,
+			Args:       commandSpec.Args,
+			Env:        steamRuntimeEnvOverrides(commandSpec.Env),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("start Steam Runtime launch: %w", err)
+		}
+		return process, nil
+	}
+	launcher.Lifecycle = platforms.LifecycleBlocking
+	launcher.Kill = nil
+}
+
 // Launchers returns the available launchers for SteamOS.
 // SteamOS uses direct steam command (not xdg-open) for better Game Mode integration.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	steamOpts := steam.DefaultSteamOSOptions()
+	runtimePaths := steamruntime.DefaultInstallPaths()
+	steamOpts.ExcludedShortcutExecutables = []string{runtimePaths.Runtime, runtimePaths.Desktop}
+	steamLauncher := steam.NewSteamLauncher(steamOpts)
+	// Steam may present cloud-sync or compatibility UI before starting a game.
+	// Publish ActiveMedia only after Steam's process tracker observes a real session.
+	steamLauncher.Lifecycle = platforms.LifecycleExternal
 	ls := []platforms.Launcher{
 		// Kodi launchers (8 types)
 		kodi.NewKodiLocalLauncher(),
@@ -288,7 +408,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiTVShowLauncher(),
 
 		// Steam with Steam Deck optimizations
-		steam.NewSteamLauncher(steam.DefaultSteamOSOptions()),
+		steamLauncher,
 
 		// Generic for custom scripts
 		launchers.NewGenericLauncher(),
@@ -310,5 +430,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		ls = append(ls, emudeckLaunchers...)
 	}
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	allLaunchers := append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	if p.steamRuntime != nil && p.steamRuntime.Available() && steamOSGameMode.IsGamingMode() {
+		for i := range allLaunchers {
+			p.wrapSteamRuntime(&allLaunchers[i])
+		}
+	}
+	return allLaunchers
 }

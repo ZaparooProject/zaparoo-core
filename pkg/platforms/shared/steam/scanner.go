@@ -41,8 +41,8 @@ func (*Client) ScanApps(steamDir string) ([]platforms.ScanResult, error) {
 
 // ScanShortcuts scans Steam for non-Steam games (user-added shortcuts).
 // steamDir should point to the Steam root directory.
-func (*Client) ScanShortcuts(steamDir string) ([]platforms.ScanResult, error) {
-	return ScanSteamShortcuts(steamDir)
+func (c *Client) ScanShortcuts(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamShortcutsFiltered(steamDir, c.opts.ExcludedShortcutExecutables)
 }
 
 // ScanSteamApps scans official Steam games from the libraryfolders.vdf file.
@@ -160,10 +160,35 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 	return results, nil
 }
 
+// NormalizeShortcutExecutable extracts and cleans a shortcut's executable
+// without interpreting its display name or remaining arguments.
+func NormalizeShortcutExecutable(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, `"`) {
+		if end := strings.Index(value[1:], `"`); end >= 0 {
+			return filepath.Clean(value[1 : end+1])
+		}
+	}
+	if index := strings.IndexByte(value, ' '); index > 0 {
+		value = value[:index]
+	}
+	return filepath.Clean(strings.Trim(value, `"`))
+}
+
 // ScanSteamShortcuts scans Steam shortcuts (non-Steam games) from the shortcuts.vdf file.
 // steamDir should point to the Steam root directory.
 func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamShortcutsFiltered(steamDir, nil)
+}
+
+func scanSteamShortcutsFiltered(steamDir string, excludedExecutables []string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
+	excluded := make(map[string]struct{}, len(excludedExecutables))
+	for _, executable := range excludedExecutables {
+		if executable != "" {
+			excluded[filepath.Clean(executable)] = struct{}{}
+		}
+	}
 	var userDirsScanned int
 	var shortcutsFilesFound int
 	var shortcutFileAccessFailures int
@@ -171,6 +196,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 	var shortcutFileParseFailures int
 	var parsedShortcuts int
 	var skippedBlankNames int
+	var skippedExecutables int
 
 	log.Debug().Str("steamDir", steamDir).Msg("scanning Steam shortcuts")
 
@@ -192,6 +218,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			Int("shortcutFileParseFailures", shortcutFileParseFailures).
 			Int("parsedShortcuts", parsedShortcuts).
 			Int("skippedBlankNames", skippedBlankNames).
+			Int("skippedExecutables", skippedExecutables).
 			Int("results", len(results)).
 			Msg("Steam shortcuts scan complete")
 		return results, nil
@@ -252,6 +279,10 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 				skippedBlankNames++
 				continue
 			}
+			if _, skip := excluded[NormalizeShortcutExecutable(shortcut.Exe)]; skip {
+				skippedExecutables++
+				continue
+			}
 
 			// Non-Steam games require a "Big Picture ID" (BPID) for launching.
 			// BPID = (AppID << 32) | 0x02000000
@@ -277,6 +308,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 		Int("shortcutFileParseFailures", shortcutFileParseFailures).
 		Int("parsedShortcuts", parsedShortcuts).
 		Int("skippedBlankNames", skippedBlankNames).
+		Int("skippedExecutables", skippedExecutables).
 		Int("results", len(results)).
 		Msg("Steam shortcuts scan complete")
 

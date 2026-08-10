@@ -410,6 +410,37 @@ func TestDoLaunch_LifecycleModes(t *testing.T) {
 	}
 }
 
+func TestDoLaunch_ExternalLifecycleDefersActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:        "Steam",
+		SystemID:  "PC",
+		Lifecycle: platforms.LifecycleExternal,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		Path:           "steam://212680/FTL",
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "FTL" }))
+	assert.True(t, launchCalled)
+	assert.Nil(t, activeMedia, "external tracker must publish ActiveMedia after Steam starts the game")
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 	t.Parallel()
 

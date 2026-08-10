@@ -73,6 +73,18 @@ func InstallApplication() error {
 	return doInstallApplication(&command.RealExecutor{})
 }
 
+func copyApplicationBinary(source, destination string) error {
+	sourceInfo, sourceErr := os.Stat(source)
+	destinationInfo, destinationErr := os.Stat(destination)
+	if sourceErr == nil && destinationErr == nil && os.SameFile(sourceInfo, destinationInfo) {
+		return nil
+	}
+	if err := helpers.CopyFile(source, destination, 0o755); err != nil {
+		return fmt.Errorf("copy application binary: %w", err)
+	}
+	return nil
+}
+
 // doInstallApplication is the internal testable implementation.
 func doInstallApplication(cmd command.Executor) error {
 	if os.Geteuid() == 0 {
@@ -92,7 +104,7 @@ func doInstallApplication(cmd command.Executor) error {
 	}
 
 	destBinary := filepath.Join(binDir, "zaparoo")
-	if err := helpers.CopyFile(binaryPath, destBinary, 0o755); err != nil {
+	if err := copyApplicationBinary(binaryPath, destBinary); err != nil {
 		return fmt.Errorf("error installing binary: %w", err)
 	}
 

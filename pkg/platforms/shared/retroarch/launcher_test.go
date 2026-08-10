@@ -52,6 +52,7 @@ func TestNewLauncher(t *testing.T) {
 	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
 	assert.Len(t, launcher.Controls, 8)
 	assert.NotNil(t, launcher.Kill)
+	assert.NotNil(t, launcher.BuildLaunchCommand)
 	assert.NotNil(t, launcher.Launch)
 
 	c.Folders[0] = "changed"

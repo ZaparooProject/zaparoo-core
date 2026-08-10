@@ -82,6 +82,16 @@ func IsRetroDECKAvailable() bool {
 	return true
 }
 
+func retroDECKLaunchCommand(romPath string) *platforms.LaunchCommand {
+	return &platforms.LaunchCommand{
+		Executable: "flatpak",
+		Args: []string{
+			"run", "--env=LOG_BUFFER=", RetroDECKFlatpakID, romPath,
+		},
+		Env: steamOSLaunchEnvOverrides(),
+	}
+}
+
 // LaunchViaRetroDECK launches a game using RetroDECK's CLI.
 // RetroDECK uses RetroENGINE which accepts a ROM path directly.
 func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error) {
@@ -89,9 +99,9 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 		Str("romPath", romPath).
 		Msg("launching game via RetroDECK")
 
-	// Use flatpak run with the RetroDECK app ID
+	commandSpec := retroDECKLaunchCommand(romPath)
 	//nolint:gosec // G204: romPath is the game to launch, launcher's purpose
-	cmd := exec.CommandContext(ctx, "flatpak", "run", RetroDECKFlatpakID, romPath)
+	cmd := exec.CommandContext(ctx, commandSpec.Executable, commandSpec.Args...)
 	cmd.Env = steamOSLaunchEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -141,6 +151,13 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 			return true
 		},
 
+		BuildLaunchCommand: func(
+			_ *config.Instance,
+			path string,
+			_ *platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return retroDECKLaunchCommand(path), nil
+		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			return LaunchViaRetroDECK(context.Background(), path)
 		},

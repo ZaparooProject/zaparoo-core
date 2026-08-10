@@ -34,6 +34,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCopyApplicationBinarySkipsSameFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "zaparoo")
+	require.NoError(t, os.WriteFile(path, []byte("binary"), 0o700)) //nolint:gosec // Test-controlled path.
+
+	require.NoError(t, copyApplicationBinary(path, path))
+	content, err := os.ReadFile(path) //nolint:gosec // Test-controlled path.
+	require.NoError(t, err)
+	assert.Equal(t, []byte("binary"), content)
+}
+
 func TestInstallApplication(t *testing.T) {
 	// Cannot use t.Parallel() - tests modify shared XDG paths
 

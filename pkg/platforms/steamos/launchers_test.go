@@ -135,6 +135,7 @@ func TestCreateEmuDeckLauncherTest(t *testing.T) {
 
 	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
 	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupEmuDeck)
+	assert.NotNil(t, launcher.BuildLaunchCommand)
 
 	tests := []struct {
 		name     string
@@ -207,6 +208,7 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 
 	launcher := createRetroDECKLauncher("snes", systemInfo, paths)
 	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupRetroDECK)
+	assert.NotNil(t, launcher.BuildLaunchCommand)
 
 	tests := []struct {
 		name     string
@@ -349,5 +351,6 @@ func TestEmuDeckStandaloneLauncherHasNoControls(t *testing.T) {
 
 	launcher := createEmuDeckLauncher("psx", systemInfo, paths, testEmuDeckRetroArchOptions())
 
+	assert.NotNil(t, launcher.BuildLaunchCommand)
 	assert.Nil(t, launcher.Controls, "standalone launcher should not have controls")
 }

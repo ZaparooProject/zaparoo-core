@@ -30,6 +30,10 @@ type Options struct {
 	// Only used on Linux; ignored on Windows.
 	ExtraPaths []string
 
+	// ExcludedShortcutExecutables are exact normalized executable paths omitted
+	// from non-Steam shortcut scans. Names are not used for exclusion.
+	ExcludedShortcutExecutables []string
+
 	// UseXdgOpen uses xdg-open for launching (desktop-friendly).
 	// When false, uses direct `steam` command (console/Game Mode friendly).
 	// Only used on Linux; ignored on Windows.

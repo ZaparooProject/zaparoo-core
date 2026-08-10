@@ -80,6 +80,8 @@ const (
 	LifecycleTracked
 	// LifecycleBlocking waits for process to exit naturally
 	LifecycleBlocking
+	// LifecycleExternal launches without a process handle; platform lifecycle tracking publishes ActiveMedia.
+	LifecycleExternal
 )
 
 // StopIntent indicates the reason for stopping a launcher
@@ -243,6 +245,15 @@ type LaunchOptions struct {
 	Slot string
 }
 
+// LaunchCommand is an executable and argument vector that can be delegated to
+// a platform-owned process runtime without invoking a shell.
+type LaunchCommand struct {
+	Executable string
+	Dir        string
+	Args       []string
+	Env        []string
+}
+
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
@@ -264,6 +275,9 @@ type Launcher struct {
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	// The opts parameter is optional and may be nil.
 	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	// BuildLaunchCommand optionally describes the same launch as an executable
+	// and argv for platform runtimes that must own the launched process tree.
+	BuildLaunchCommand func(*config.Instance, string, *LaunchOptions) (*LaunchCommand, error)
 	// WaitForReady optionally blocks until launched media is ready for controls
 	// or raw input. If nil, platform-level readiness is used, then immediate ready.
 	WaitForReady func(context.Context, *config.Instance, *models.ActiveMedia) error
