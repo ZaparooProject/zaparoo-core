@@ -186,29 +186,51 @@ func TestPlaySyncDuePendingBypassesIntervalButHonorsBackoff(t *testing.T) {
 	s.nextAttempt = now.Add(time.Minute)
 	assert.False(t, playSyncDue(&s, now, true), "completed session must not bypass failure backoff")
 	assert.True(t, playSyncDue(&s, now.Add(time.Minute), true))
+
+	s.idle = true
+	s.nextAttempt = time.Time{}
+	assert.False(t, playSyncDue(&s, now.Add(time.Minute), true), "pending sync must remain idle while ineligible")
 }
 
 func TestRecordPlaySyncError_DoesNotBackoffExpectedInactivity(t *testing.T) {
-	t.Parallel()
-
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
+	t.Cleanup(config.ClearAuthCfgForTesting)
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	_, disabledErr := backupsvc.NewManager(cfg, nil, nil).SyncPlayHistory(context.Background())
+	manager := backupsvc.NewManager(cfg, nil, nil)
+	_, disabledErr := manager.SyncPlayHistory(t.Context())
 	require.Error(t, disabledErr)
 	require.True(t, backupsvc.IsPlaySyncDisabledError(disabledErr))
+	cfg.SetPlaytimeSync(true)
+	_, unlinkedErr := manager.SyncPlayHistory(t.Context())
+	require.Error(t, unlinkedErr)
+	require.True(t, backupsvc.IsRemoteUnlinkedError(unlinkedErr))
 
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
-	state := remoteHeartbeatState{
-		nextAttempt: now.Add(time.Hour),
-		backoff:     remoteHeartbeatMaxBackoff,
+	for _, tt := range []struct {
+		err  error
+		name string
+	}{
+		{name: "disabled", err: disabledErr},
+		{name: "unlinked", err: unlinkedErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := remoteHeartbeatState{
+				nextAttempt: now.Add(time.Hour),
+				backoff:     remoteHeartbeatMaxBackoff,
+			}
+
+			assert.True(t, recordPlaySyncError(&state, now, tt.err))
+			assert.True(t, state.idle)
+			assert.True(t, state.nextAttempt.IsZero(), "eligibility change must allow the next request immediately")
+			assert.Equal(t, remoteHeartbeatInitialBackoff, state.backoff)
+		})
 	}
 
-	assert.True(t, recordPlaySyncError(&state, now, disabledErr))
-	assert.True(t, state.nextAttempt.IsZero(), "enabling sync must allow the next request immediately")
-	assert.Equal(t, remoteHeartbeatInitialBackoff, state.backoff)
-
+	state := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
 	networkErr := errors.New("network unavailable")
 	assert.False(t, recordPlaySyncError(&state, now, networkErr))
+	assert.False(t, state.idle)
 	assert.Equal(t, now.Add(remoteHeartbeatInitialBackoff), state.nextAttempt)
 	assert.Equal(t, 2*remoteHeartbeatInitialBackoff, state.backoff)
 }
@@ -308,6 +330,114 @@ func TestRemoteBackupScheduler_PlaySyncRequestBypassesSuccessInterval(t *testing
 	assert.Equal(t, int32(2), watermarkRequests.Load())
 	mockUserDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestRemoteBackupScheduler_PlaySyncExpectedInactivityResumes(t *testing.T) {
+	tests := []struct {
+		name             string
+		initiallyLinked  bool
+		initiallyEnabled bool
+	}{
+		{name: "disabled", initiallyLinked: true, initiallyEnabled: false},
+		{name: "unlinked", initiallyLinked: false, initiallyEnabled: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config.SetAuthCfgForTesting(map[string]config.CredentialEntry{})
+			t.Cleanup(config.ClearAuthCfgForTesting)
+			rootDir := t.TempDir()
+			watermarkSeen := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"id": "device-1", "name": "test", "backup_active": false,
+					})
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/device/play-sessions/watermark":
+					_ = json.NewEncoder(w).Encode(map[string]any{"watermark": nil})
+					watermarkSeen <- struct{}{}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			cfg, err := config.NewConfig(rootDir, config.BaseDefaults)
+			require.NoError(t, err)
+			require.NoError(t, cfg.SetBackupRemoteBaseURL(server.URL))
+			require.NoError(t, cfg.SetPlaytimeBaseURL(server.URL))
+			cfg.SetBackupRemoteEnabled(false)
+			cfg.SetPlaytimeSync(tt.initiallyEnabled)
+			credentials := map[string]config.CredentialEntry{
+				config.RemoteAuthLookupURL(server.URL): {Bearer: "test-token"},
+			}
+			if tt.initiallyLinked {
+				config.SetAuthCfgForTesting(credentials)
+			}
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+			mockPlatform.On("Settings").Return(platforms.Settings{
+				DataDir: rootDir, ConfigDir: rootDir,
+			}).Maybe()
+			st, _ := stateservice.NewState(mockPlatform, "test-boot")
+			t.Cleanup(st.StopService)
+
+			mockUserDB := testhelpers.NewMockUserDBI()
+			syncFinished := make(chan struct{}, 1)
+			mockUserDB.On("ResetMediaHistorySyncAfter", (*time.Time)(nil)).Return(nil).Once()
+			mockUserDB.On("GetMediaHistorySyncBatch", time.Time{}, int64(0), mock.Anything).
+				Run(func(mock.Arguments) { syncFinished <- struct{}{} }).
+				Return([]database.MediaHistoryEntry{}, nil).Once()
+			db := &database.Database{UserDB: mockUserDB}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			playSyncRequests := make(chan struct{}, 1)
+			ready := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				remoteBackupSchedulerLoop(
+					ctx, cfg, mockPlatform, db, st, nil, syncutil.NewPauser(), playSyncRequests,
+					func(time.Duration) *time.Ticker {
+						close(ready)
+						return time.NewTicker(time.Hour)
+					},
+				)
+				close(done)
+			}()
+			<-ready
+			select {
+			case <-watermarkSeen:
+				t.Fatal("play sync ran while expected to remain idle")
+			default:
+			}
+
+			cfg.SetPlaytimeSync(true)
+			config.SetAuthCfgForTesting(credentials)
+			playSyncRequests <- struct{}{}
+			select {
+			case <-watermarkSeen:
+			case <-time.After(5 * time.Second):
+				t.Fatal("play sync did not resume after becoming eligible")
+			}
+			select {
+			case <-syncFinished:
+			case <-time.After(5 * time.Second):
+				t.Fatal("resumed play sync did not finish")
+			}
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("backup scheduler did not stop after cancellation")
+			}
+			mockUserDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }
 
 func TestRemoteBackupScheduleInterval(t *testing.T) {

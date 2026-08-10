@@ -44,6 +44,7 @@ type remoteHeartbeatState struct {
 	lastSuccess time.Time
 	nextAttempt time.Time
 	backoff     time.Duration
+	idle        bool
 }
 
 const (
@@ -101,6 +102,7 @@ func (s *remoteHeartbeatState) due(now time.Time) bool {
 }
 
 func (s *remoteHeartbeatState) recordFailure(now time.Time) {
+	s.idle = false
 	if s.backoff <= 0 {
 		s.backoff = remoteHeartbeatInitialBackoff
 	}
@@ -109,6 +111,7 @@ func (s *remoteHeartbeatState) recordFailure(now time.Time) {
 }
 
 func (s *remoteHeartbeatState) recordSuccess(now time.Time) {
+	s.idle = false
 	s.lastSuccess = now
 	s.nextAttempt = time.Time{}
 	s.backoff = remoteHeartbeatInitialBackoff
@@ -123,9 +126,19 @@ func onlineFailureRequiresWarning(err error, expected bool) bool {
 // recordPlaySyncError applies retry backoff only to real failures. Disabled or
 // unlinked sync is an idle state, not a failure; retaining its backoff would
 // delay the first upload after the user enables sync or links the device.
+func playSyncEligible(cfg *config.Instance) bool {
+	if !cfg.PlaytimeSyncEnabled() {
+		return false
+	}
+	lookupURL := config.RemoteAuthLookupURL(cfg.PlaytimeBaseURL())
+	entry := config.LookupAuth(config.GetAuthCfg(), lookupURL)
+	return entry != nil && entry.Bearer != ""
+}
+
 func recordPlaySyncError(retryState *remoteHeartbeatState, now time.Time, err error) bool {
 	expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
 	if expected {
+		retryState.idle = true
 		retryState.nextAttempt = time.Time{}
 		retryState.backoff = remoteHeartbeatInitialBackoff
 		return true
@@ -238,10 +251,17 @@ func remoteBackupSchedulerLoop(
 	playSyncPending := false
 	tryPlaySync := func() {
 		now := time.Now()
+		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+		if !playSyncEligible(cfg) {
+			playSyncState.idle = true
+			playSyncState.nextAttempt = time.Time{}
+			playSyncState.backoff = remoteHeartbeatInitialBackoff
+			return
+		}
+		playSyncState.idle = false
 		if !playSyncDue(&playSyncState, now, playSyncPending) {
 			return
 		}
-		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		info, err := mgr.SyncPlayHistory(ctx)
 		if err != nil {
 			expected := recordPlaySyncError(&playSyncState, now, err)
@@ -287,6 +307,9 @@ func remoteBackupSchedulerLoop(
 // A session lifecycle or active-heartbeat request bypasses the normal success
 // interval, but never the failure backoff.
 func playSyncDue(s *remoteHeartbeatState, now time.Time, pending bool) bool {
+	if s.idle {
+		return false
+	}
 	if !pending && !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < playSyncInterval {
 		return false
 	}
