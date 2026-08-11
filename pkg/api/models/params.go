@@ -29,6 +29,7 @@ import (
 type SearchParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	PathPrefix  *string   `json:"pathPrefix,omitempty"`
 	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
 	Cursor      *string   `json:"cursor,omitempty"`
 	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`

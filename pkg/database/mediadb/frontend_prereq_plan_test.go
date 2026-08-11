@@ -83,6 +83,16 @@ func TestFrontendPrerequisiteQueryPlansUseExistingIndexes(t *testing.T) {
 		assertRandomPlanContains(t, plan, "mediatitletags_tag_idx")
 	})
 
+	t.Run("search path prefix uses media path index", func(t *testing.T) {
+		pathClause, args := browsePathPrefixCondition("Media.Path", folderDir)
+		plan := randomQueryPlan(t, mediaDB.sql.Load(), `
+			SELECT Media.DBID
+			FROM Media
+			WHERE Media.IsMissing = 0 AND `+pathClause+`
+			ORDER BY Media.Path`, args...)
+		assertRandomPlanContains(t, plan, "media_path_idx")
+	})
+
 	t.Run("favorite browse uses reverse tag indexes", func(t *testing.T) {
 		opts := &database.BrowseFilesOptions{
 			PathPrefix: folderDir,

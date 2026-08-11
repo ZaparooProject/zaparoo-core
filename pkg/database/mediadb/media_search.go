@@ -69,6 +69,31 @@ func buildMediaSearchTypeGroups(
 	return groups
 }
 
+func mergeMediaSearchTypeGroupVariants(
+	groups []mediaSearchTypeGroup,
+	wordCount int,
+) ([][]string, bool) {
+	merged := make([][]string, wordCount)
+	seen := make([]map[string]struct{}, wordCount)
+	includeName := false
+	for i := range groups {
+		includeName = includeName || groups[i].includeName
+		for wordIndex, variants := range groups[i].variantGroups {
+			if seen[wordIndex] == nil {
+				seen[wordIndex] = make(map[string]struct{}, len(variants))
+			}
+			for _, variant := range variants {
+				if _, ok := seen[wordIndex][variant]; ok {
+					continue
+				}
+				seen[wordIndex][variant] = struct{}{}
+				merged[wordIndex] = append(merged[wordIndex], variant)
+			}
+		}
+	}
+	return merged, includeName
+}
+
 func mediaSearchTypeGroupsCacheable(groups []mediaSearchTypeGroup) bool {
 	if len(groups) == 0 {
 		return false
@@ -158,8 +183,13 @@ func compareSearchResults(a, b *database.SearchResultWithCursor, sortOrder strin
 func titleDBIDQueryParamCount(candidateCount int, filters *database.SearchFilters) int {
 	_, tagArgs := buildCandidateTagFilterSQL(filters.Tags)
 	_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+	var pathArgs []any
+	if filters.PathPrefix != "" {
+		_, pathArgs = browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(filters.PathPrefix))
+	}
 
-	count := candidateCount + len(tagArgs) + len(letterArgs) + 1 // LIMIT
+	count := candidateCount + len(pathArgs) + len(tagArgs) + len(letterArgs) + 1 // LIMIT
 	if filters.SortCursor != nil {
 		count += 2
 	} else if filters.Cursor != nil {
@@ -182,6 +212,7 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 			groups[i].systems,
 			groups[i].variantGroups,
 			rawWords,
+			filters.PathPrefix,
 			filters.Tags,
 			filters.Letter,
 			filters.Cursor,

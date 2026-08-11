@@ -737,6 +737,7 @@ type SearchFilters struct {
 	Cursor     *int64                `json:"cursor,omitempty"`
 	SortCursor *SearchCursor         `json:"-"`
 	Letter     *string               `json:"letter,omitempty"`
+	PathPrefix string                `json:"pathPrefix,omitempty"`
 	Query      string                `json:"query"`
 	Sort       string                `json:"sort,omitempty"`
 	Systems    []systemdefs.System   `json:"systems,omitempty"`

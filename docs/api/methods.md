@@ -522,7 +522,7 @@ None.
 
 Query the media database and return all matching indexed media.
 
-**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, query, tags, letter, and sort scope.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, pathPrefix, query, tags, letter, and sort scope.
 
 #### Parameters
 
@@ -532,6 +532,7 @@ An object:
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
 | query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
+| pathPrefix | string   | No       | Recursively restrict results beneath a filesystem directory or virtual route. Matching respects path boundaries, so `/roms/SNES` does not include `/roms/SNES2`; `%` and `_` are literal path characters. |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
 | tags       | string[] | No       | Filter results by case-sensitive tags. Maximum 50 tags, each up to 128 characters. Default and `+` filters require matches, `-` excludes matches, and `~` joins alternatives. Can be used without query or systems for tag-only searches. |

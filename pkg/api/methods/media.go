@@ -950,6 +950,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if params.Query != nil {
 		query = *params.Query
 	}
+	var pathPrefix string
+	if params.PathPrefix != nil {
+		pathPrefix = *params.PathPrefix
+	}
 	tagParams := params.Tags
 
 	// Validate and parse tags parameter - requires type:value format
@@ -987,6 +991,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	searchFilters := database.SearchFilters{
 		Systems:    systems,
+		PathPrefix: pathPrefix,
 		Query:      query,
 		Sort:       sortOrder,
 		Tags:       tagFilters, // Will be empty if no tags provided

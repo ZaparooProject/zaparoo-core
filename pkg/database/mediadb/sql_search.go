@@ -787,7 +787,7 @@ func sqlSearchMediaWithFilters(
 	includeName bool,
 ) ([]database.SearchResultWithCursor, error) {
 	return sqlSearchMediaWithFiltersSorted(
-		ctx, db, systems, variantGroups, rawWords, tags, letter, cursor, nil, "", limit, includeName)
+		ctx, db, systems, variantGroups, rawWords, "", tags, letter, cursor, nil, "", limit, includeName)
 }
 
 func sqlSearchMediaWithFiltersSorted(
@@ -796,6 +796,7 @@ func sqlSearchMediaWithFiltersSorted(
 	systems []systemdefs.System,
 	variantGroups [][]string,
 	rawWords []string,
+	pathPrefix string,
 	tags []zapscript.TagFilter,
 	letter *string,
 	cursor *int64,
@@ -814,8 +815,8 @@ func sqlSearchMediaWithFiltersSorted(
 	// covers every defined system the SystemID IN (...) clause filters nothing,
 	// but its presence makes SQLite drive the join from Systems and scan every
 	// title instead of the handful of tag matches. Omit it in that case.
-	skipSystemFilter := len(variantGroups) == 0 && !includeName && len(tags) > 0 &&
-		requestedAllSystems(systems)
+	skipSystemFilter := requestedAllSystems(systems) && (pathPrefix != "" ||
+		(len(variantGroups) == 0 && !includeName && len(tags) > 0))
 
 	// Build system ID args
 	args := make([]any, 0)
@@ -881,6 +882,15 @@ func sqlSearchMediaWithFiltersSorted(
 		cursorArgs = []any{*cursor}
 	}
 
+	pathFilterCondition := ""
+	var pathFilterArgs []any
+	if pathPrefix != "" {
+		pathClause, pathArgs := browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+		pathFilterCondition = " AND " + pathClause
+		pathFilterArgs = pathArgs
+	}
+
 	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
 	tagFilterCondition := ""
 	if len(tagFilterClauses) > 0 {
@@ -921,6 +931,7 @@ func sqlSearchMediaWithFiltersSorted(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE ` + systemCondition +
 		`Media.IsMissing = 0` +
+		pathFilterCondition +
 		variantCondition +
 		cursorCondition +
 		tagFilterCondition +
@@ -929,11 +940,12 @@ func sqlSearchMediaWithFiltersSorted(
 		` LIMIT ?`
 
 	// Assemble args in WHERE-clause order.
-	mediaArgs := append([]any(nil), args...)        // System IDs
-	mediaArgs = append(mediaArgs, variantArgs...)   // Query variants
-	mediaArgs = append(mediaArgs, cursorArgs...)    // Cursor keyset
-	mediaArgs = append(mediaArgs, tagFilterArgs...) // Tag filters
-	mediaArgs = append(mediaArgs, letterArgs...)    // Letter filters
+	mediaArgs := append([]any(nil), args...)         // System IDs
+	mediaArgs = append(mediaArgs, pathFilterArgs...) // Recursive path range
+	mediaArgs = append(mediaArgs, variantArgs...)    // Query variants
+	mediaArgs = append(mediaArgs, cursorArgs...)     // Cursor keyset
+	mediaArgs = append(mediaArgs, tagFilterArgs...)  // Tag filters
+	mediaArgs = append(mediaArgs, letterArgs...)     // Letter filters
 	mediaArgs = append(mediaArgs, limit)
 
 	queryStarted := time.Now()
@@ -998,6 +1010,7 @@ func sqlSearchMediaWithFiltersSorted(
 
 	log.Debug().
 		Int("systems", len(systems)).
+		Str("pathPrefix", pathPrefix).
 		Int("variantGroups", len(variantGroups)).
 		Int("tagFilters", len(tags)).
 		Str("sort", sortOrder).
@@ -1020,13 +1033,14 @@ func sqlSearchMediaByTitleDBIDs(
 	limit int,
 ) ([]database.SearchResultWithCursor, error) {
 	return sqlSearchMediaByTitleDBIDsSorted(
-		ctx, db, titleDBIDs, tags, letter, cursor, nil, "", limit)
+		ctx, db, titleDBIDs, "", tags, letter, cursor, nil, "", limit)
 }
 
 func sqlSearchMediaByTitleDBIDsSorted(
 	ctx context.Context,
 	db sqlQueryable,
 	titleDBIDs []int64,
+	pathPrefix string,
 	tags []zapscript.TagFilter,
 	letter *string,
 	cursor *int64,
@@ -1048,6 +1062,13 @@ func sqlSearchMediaByTitleDBIDsSorted(
 	// Build additional filter conditions
 	var extraConditions []string
 	var extraArgs []any
+
+	if pathPrefix != "" {
+		pathClause, pathArgs := browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+		extraConditions = append(extraConditions, pathClause)
+		extraArgs = append(extraArgs, pathArgs...)
+	}
 
 	switch {
 	case sortCursor != nil:

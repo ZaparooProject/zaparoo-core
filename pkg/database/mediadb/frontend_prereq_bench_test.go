@@ -205,6 +205,42 @@ func benchmarkFrontendPrerequisiteQueries(b *testing.B, rows int) {
 		})
 	}
 
+	b.Run("search-name-asc-path-prefix", func(b *testing.B) {
+		b.ReportAllocs()
+		filters := &database.SearchFilters{
+			PathPrefix: folderDir,
+			Sort:       "name-asc",
+			Systems:    searchSystems,
+			Tags:       favorite,
+			Limit:      100,
+		}
+		b.ResetTimer()
+		for b.Loop() {
+			_, err := mediaDB.SearchMediaWithFilters(ctx, filters)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("search-name-asc-path-prefix-query", func(b *testing.B) {
+		b.ReportAllocs()
+		filters := &database.SearchFilters{
+			PathPrefix: folderDir,
+			Query:      "Game",
+			Sort:       "name-asc",
+			Systems:    searchSystems,
+			Limit:      100,
+		}
+		b.ResetTimer()
+		for b.Loop() {
+			_, err := mediaDB.SearchMediaWithFilters(ctx, filters)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
 	b.Run("search-name-asc-cursor-page", func(b *testing.B) {
 		b.ReportAllocs()
 		firstPageFilters := &database.SearchFilters{

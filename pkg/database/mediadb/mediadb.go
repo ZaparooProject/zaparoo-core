@@ -2304,11 +2304,30 @@ func (db *MediaDB) SearchMediaWithFilters(
 	qWords := strings.Fields(filters.Query)
 	if len(qWords) == 0 || len(filters.Systems) == 0 {
 		return sqlSearchMediaWithFiltersSorted(
-			ctx, db.sql.Load(), filters.Systems, nil, qWords, filters.Tags,
+			ctx, db.sql.Load(), filters.Systems, nil, qWords, filters.PathPrefix, filters.Tags,
 			filters.Letter, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit, false)
 	}
 
 	groups := buildMediaSearchTypeGroups(filters.Systems, qWords)
+	if strings.Contains(filters.PathPrefix, "://") && requestedAllSystems(filters.Systems) {
+		variantGroups, includeName := mergeMediaSearchTypeGroupVariants(groups, len(qWords))
+		return sqlSearchMediaWithFiltersSorted(
+			ctx,
+			db.sql.Load(),
+			filters.Systems,
+			variantGroups,
+			qWords,
+			filters.PathPrefix,
+			filters.Tags,
+			filters.Letter,
+			filters.Cursor,
+			filters.SortCursor,
+			filters.Sort,
+			filters.Limit,
+			includeName,
+		)
+	}
+
 	systemIDs := make([]string, len(filters.Systems))
 	for i := range filters.Systems {
 		systemIDs[i] = filters.Systems[i].ID
@@ -2331,7 +2350,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 				Int("candidates", len(candidateIDs)).
 				Msg("media search using in-memory slug cache")
 			return sqlSearchMediaByTitleDBIDsSorted(
-				ctx, db.sql.Load(), candidateIDs, filters.Tags,
+				ctx, db.sql.Load(), candidateIDs, filters.PathPrefix, filters.Tags,
 				filters.Letter, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit)
 		}
 

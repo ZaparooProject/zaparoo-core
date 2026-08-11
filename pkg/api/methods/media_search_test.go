@@ -933,6 +933,42 @@ func TestResolveSystems_PreservesOrder(t *testing.T) {
 	assert.Equal(t, "Genesis", systems[2].ID)
 }
 
+func TestHandleMediaSearch_PassesPathPrefix(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	pathPrefix := "steam://44"
+	query := "target"
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.PathPrefix == pathPrefix && filters.Query == query
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil)
+
+	paramsJSON, err := json.Marshal(models.SearchParams{
+		PathPrefix: &pathPrefix,
+		Query:      &query,
+	})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	_, err = HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+	})
+	require.NoError(t, err)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaSearch_DeduplicatesSystems(t *testing.T) {
 	t.Parallel()
 
