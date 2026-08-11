@@ -36,6 +36,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const writeConcurrencyTestDeadline = time.Second
+
+type writeResult struct {
+	token *tokens.Token
+	err   error
+}
+
 // mockTransport is a mock implementation of pn532.Transport for testing.
 type mockTransport struct{}
 
@@ -873,10 +880,6 @@ func TestWriteWithContext_RemovalBeforeCompletionDoesNotSuppressNextTag(t *testi
 	reader.deviceInfo = config.ReadersConnect{Driver: "pn532", Path: "/dev/test"}
 	scanQueue := make(chan readers.Scan, 2)
 
-	type writeResult struct {
-		token *tokens.Token
-		err   error
-	}
 	writeDone := make(chan writeResult, 1)
 	go func() {
 		token, err := reader.WriteWithContext(t.Context(), "new text")
@@ -894,7 +897,7 @@ func TestWriteWithContext_RemovalBeforeCompletionDoesNotSuppressNextTag(t *testi
 	select {
 	case removal = <-scanQueue:
 		removalBeforeCompletion = true
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(writeConcurrencyTestDeadline):
 	}
 
 	close(finishWrite)
@@ -904,18 +907,20 @@ func TestWriteWithContext_RemovalBeforeCompletionDoesNotSuppressNextTag(t *testi
 	if !removalBeforeCompletion {
 		select {
 		case removal = <-scanQueue:
-		case <-time.After(time.Second):
+		case <-time.After(writeConcurrencyTestDeadline):
 			t.Fatal("tag removal did not complete after write")
 		}
 	}
 	select {
 	case <-removalDone:
-	case <-time.After(time.Second):
+	case <-time.After(writeConcurrencyTestDeadline):
 		t.Fatal("tag removal callback did not return")
 	}
 
 	assert.True(t, removalBeforeCompletion, "removal must not wait for write completion")
 	assert.False(t, removal.WrittenTagRemoved)
+	assert.False(t, reader.writingTag)
+	assert.False(t, reader.tagRemovedDuringWrite)
 	assert.False(t, reader.suppressingTagScans())
 
 	nextTag := &pn532.DetectedTag{
@@ -926,35 +931,36 @@ func TestWriteWithContext_RemovalBeforeCompletionDoesNotSuppressNextTag(t *testi
 	case scan := <-scanQueue:
 		require.NotNil(t, scan.Token)
 		assert.Equal(t, "next-tag", scan.Token.UID)
-	case <-time.After(time.Second):
+	case <-time.After(writeConcurrencyTestDeadline):
 		t.Fatal("subsequent tag remained suppressed after pre-completion removal")
 	}
 }
 
-func TestWriteWithContext_DoesNotBlockActiveWriteRemoval(t *testing.T) {
+func TestWriteWithContext_RemovalWhileWaitingForTargetPreservesSuppression(t *testing.T) {
 	t.Parallel()
 
 	writeStarted := make(chan struct{})
 	finishWrite := make(chan struct{})
+	tag := &mockTag{uid: "written-tag", tagType: pn532.TagTypeNTAG}
 	reader := NewReader(&config.Instance{})
 	reader.session = &mockPollingSession{
 		writeToNextTagWithRetryFunc: func(
 			_ context.Context,
-			_ context.Context,
-			_ func(context.Context, pn532.Tag) error,
+			writeCtx context.Context,
+			writeFunc func(context.Context, pn532.Tag) error,
 		) error {
 			close(writeStarted)
 			<-finishWrite
-			return nil
+			return writeFunc(writeCtx, tag)
 		},
 	}
 	reader.deviceInfo = config.ReadersConnect{Driver: "pn532", Path: "/dev/test"}
 	scanQueue := make(chan readers.Scan, 1)
 
-	writeDone := make(chan error, 1)
+	writeDone := make(chan writeResult, 1)
 	go func() {
-		_, err := reader.WriteWithContext(t.Context(), "new text")
-		writeDone <- err
+		token, err := reader.WriteWithContext(t.Context(), "new text")
+		writeDone <- writeResult{token: token, err: err}
 	}()
 	<-writeStarted
 
@@ -968,24 +974,38 @@ func TestWriteWithContext_DoesNotBlockActiveWriteRemoval(t *testing.T) {
 	case removal := <-scanQueue:
 		assert.False(t, removal.WrittenTagRemoved)
 		removalBeforeCompletion = true
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(writeConcurrencyTestDeadline):
 	}
 
 	close(finishWrite)
-	require.NoError(t, <-writeDone)
+	result := <-writeDone
+	require.NoError(t, result.err)
+	require.NotNil(t, result.token)
 	if !removalBeforeCompletion {
 		select {
 		case <-scanQueue:
-		case <-time.After(time.Second):
+		case <-time.After(writeConcurrencyTestDeadline):
 			t.Fatal("tag removal did not complete after write")
 		}
 	}
 	select {
 	case <-removalDone:
-	case <-time.After(time.Second):
+	case <-time.After(writeConcurrencyTestDeadline):
 		t.Fatal("tag removal callback did not return")
 	}
 	assert.True(t, removalBeforeCompletion, "active write must not hold the reader lifecycle lock")
+	assert.True(t, reader.suppressingTagScans())
+
+	detected := &pn532.DetectedTag{Type: pn532.TagTypeNTAG, UID: tag.uid}
+	require.NoError(t, reader.handleTagDetected(t.Context(), detected, scanQueue))
+	select {
+	case scan := <-scanQueue:
+		t.Fatalf("unexpected scan after successful write: %+v", scan)
+	case <-time.After(writeConcurrencyTestDeadline):
+	}
+
+	reader.handleTagRemoved(scanQueue)
+	assert.True(t, (<-scanQueue).WrittenTagRemoved)
 }
 
 // TestWriteWithContext_DifferentTagTypes tests that different tag types are converted correctly
@@ -1186,6 +1206,8 @@ func TestWriteWithContext_WriteNDEFError(t *testing.T) {
 	assert.Nil(t, token)
 	assert.Contains(t, err.Error(), "failed to write NDEF to tag")
 
-	// Verify WriteNDEF was called
+	// Verify WriteNDEF was called and phase state was cleared on failure.
 	assert.True(t, mockTestTag.writeNDEFCalled)
+	assert.False(t, reader.writingTag)
+	assert.False(t, reader.tagRemovedDuringWrite)
 }

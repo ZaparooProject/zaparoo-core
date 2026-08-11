@@ -303,6 +303,7 @@ type Reader struct {
 	connected                 bool
 	suppressScansUntilRemoval bool
 	tagRemovedDuringWrite     bool
+	writingTag                bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -498,7 +499,7 @@ func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	log.Info().Msg("tag removed")
 	r.writeMutex.Lock()
 	writtenTagRemoved := r.suppressScansUntilRemoval
-	if r.writeCtx != nil {
+	if r.writingTag {
 		r.tagRemovedDuringWrite = true
 	}
 	r.suppressScansUntilRemoval = false
@@ -796,6 +797,7 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 	r.writeMutex.Lock()
 	r.writeCtx, r.writeCancel = context.WithCancel(ctx)
 	r.tagRemovedDuringWrite = false
+	r.writingTag = false
 	writeCtx := r.writeCtx
 	r.writeMutex.Unlock()
 
@@ -808,6 +810,7 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			r.writeCtx = nil
 		}
 		r.tagRemovedDuringWrite = false
+		r.writingTag = false
 		r.writeMutex.Unlock()
 	}()
 
@@ -835,21 +838,33 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 				}},
 			}
 
-			// Write NDEF message to tag (includes automatic verification)
-			if err := tag.WriteNDEF(writeCtx, ndefMessage); err != nil {
-				logTraceableError(err, "write NDEF")
-				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
-				return writeErr
-			}
+			// Track only the physical write phase. A removal while waiting for a
+			// target belongs to earlier polling state and must not affect this tag.
+			r.writeMutex.Lock()
+			r.tagRemovedDuringWrite = false
+			r.writingTag = true
+			r.writeMutex.Unlock()
+
+			// Write NDEF message to tag (includes automatic verification).
+			writeNDEFErr := tag.WriteNDEF(writeCtx, ndefMessage)
 
 			// Polling may report card-changed after WriteNDEF but before the API
 			// records wroteToken. Suppress callbacks until this physical tag leaves,
-			// unless its removal already arrived while this write was completing.
+			// unless its removal arrived during the physical write.
 			r.writeMutex.Lock()
-			if !r.tagRemovedDuringWrite {
+			tagRemovedDuringWrite := r.tagRemovedDuringWrite
+			r.tagRemovedDuringWrite = false
+			r.writingTag = false
+			if writeNDEFErr == nil && !tagRemovedDuringWrite {
 				r.suppressScansUntilRemoval = true
 			}
 			r.writeMutex.Unlock()
+
+			if writeNDEFErr != nil {
+				logTraceableError(writeNDEFErr, "write NDEF")
+				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", writeNDEFErr)
+				return writeErr
+			}
 
 			log.Info().Msg("successfully wrote text to PN532 tag")
 			log.Debug().Msgf("wrote NDEF text: %s", text)
