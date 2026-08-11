@@ -677,17 +677,23 @@ func browsePathPrefixCondition(column, pathPrefix string) (condition string, arg
 
 func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
 	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "m.SortName")
-	conditions := make([]string, 0, 3+len(letterClauses))
+	// Most browse scopes are bounded enough for correlated candidate probes.
+	// Required favorites are exceptionally sparse in production, so drive from
+	// that reverse-index set and probe any remaining filters per candidate.
+	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m")
+	conditions := make([]string, 0, 3+len(letterClauses)+len(tagClauses))
 	conditions = append(conditions, `m.ParentDir = ?`, `m.IsMissing = 0`)
 	conditions = append(conditions, letterClauses...)
 
-	args = make([]any, 0, 1+len(letterArgs))
+	args = make([]any, 0, 1+len(letterArgs)+len(tagArgs))
 	args = append(args, opts.PathPrefix)
 	args = append(args, letterArgs...)
 	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
 		conditions = append(conditions, systemClause)
 		args = append(args, systemArgs...)
 	}
+	conditions = append(conditions, tagClauses...)
+	args = append(args, tagArgs...)
 
 	return strings.Join(conditions, " AND "), args
 }
@@ -1228,6 +1234,7 @@ func sqlBrowseFileCountFromMedia(
 		PathPrefix: opts.PathPrefix,
 		Letter:     opts.Letter,
 		Systems:    opts.Systems,
+		Tags:       opts.Tags,
 	})
 	query := `SELECT COUNT(*)
 		FROM Media m
@@ -1364,18 +1371,20 @@ const (
 func sqlBrowseIndex(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseIndexOptions,
+	opts *database.BrowseIndexOptions,
 ) (database.BrowseIndexResult, error) {
 	filesOpts := &database.BrowseFilesOptions{
 		PathPrefix: opts.PathPrefix,
 		Sort:       opts.Sort,
 		Systems:    opts.Systems,
+		Tags:       opts.Tags,
 	}
 	sortMode := resolveBrowseSortMode(ctx, db, filesOpts)
 	if browseSortExpr(sortMode) != "m.SortName" {
 		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
 			PathPrefix: opts.PathPrefix,
 			Systems:    opts.Systems,
+			Tags:       opts.Tags,
 		})
 		if err != nil {
 			return database.BrowseIndexResult{}, err

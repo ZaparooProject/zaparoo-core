@@ -50,7 +50,7 @@ func (p *apiLaunchablePlatform) Launchables(*config.Instance) []launchables.Laun
 func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
 	mockMediaDB := testhelpers.NewMockMediaDBI()
-	mockMediaDB.On("IndexedSystems").Return([]string{}, nil)
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{}, nil)
 	mockPlatform := &apiLaunchablePlatform{
 		MockPlatform: mocks.NewMockPlatform(),
 		defs: []launchables.Launchable{
@@ -87,5 +87,7 @@ func TestHandleSystems_IncludesVirtualSystems(t *testing.T) {
 	assert.Equal(t, "Chess", response.Systems[0].Name)
 	assert.Equal(t, "Other", response.Systems[0].Category)
 	assert.Equal(t, "zaparoo://"+launchables.EncodeID(id)+"/Chess", response.Systems[0].ZapScript)
+	require.NotNil(t, response.Systems[0].MediaCount)
+	assert.Zero(t, *response.Systems[0].MediaCount)
 	mockMediaDB.AssertExpectations(t)
 }

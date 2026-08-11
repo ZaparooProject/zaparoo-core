@@ -1446,6 +1446,23 @@ func (m *MockMediaDBI) IndexedSystems() ([]string, error) {
 	return nil, nil
 }
 
+func (m *MockMediaDBI) SystemMediaCounts(
+	ctx context.Context,
+	tags []zapscript.TagFilter,
+) ([]database.SystemMediaCount, error) {
+	args := m.Called(ctx, tags)
+	if counts, ok := args.Get(0).([]database.SystemMediaCount); ok {
+		if err := args.Error(1); err != nil {
+			return counts, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return counts, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockMediaDBI) SystemIndexed(system *systemdefs.System) bool {
 	args := m.Called(system)
 	return args.Bool(0)
@@ -2682,6 +2699,7 @@ func (m *MockMediaDBI) BrowseFileCount(
 	return 0, nil
 }
 
+//nolint:gocritic // Value options preserve the established MediaDBI method contract.
 func (m *MockMediaDBI) BrowseIndex(
 	ctx context.Context, opts database.BrowseIndexOptions,
 ) (database.BrowseIndexResult, error) {

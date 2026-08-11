@@ -34,6 +34,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGenerateQueryHash_PreservesPathCase(t *testing.T) {
+	t.Parallel()
+
+	mediaDB := &MediaDB{}
+	upperPrefix, err := mediaDB.generateQueryHash(&database.MediaQuery{PathPrefix: filepath.Join("roms", "SNES")})
+	require.NoError(t, err)
+	lowerPrefix, err := mediaDB.generateQueryHash(&database.MediaQuery{PathPrefix: filepath.Join("roms", "snes")})
+	require.NoError(t, err)
+	assert.NotEqual(t, upperPrefix, lowerPrefix)
+}
+
 func TestFetchAndAttachTags_EmptyResults(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -758,16 +769,17 @@ func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) 
 		string(filepath.Separator), "media", "fat", "_Arcade", "_Organized", "_Horizontal",
 	)) + "/"
 	mock.ExpectQuery(
-		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), ` +
-			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.Path LIKE \? ` +
-			`AND Media\.IsMissing = 0`,
-	).WithArgs(pathPrefix + "%").WillReturnRows(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), `+
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.Path >= \? `+
+			`AND Media\.Path < \? AND Media\.IsMissing = 0`,
+	).WithArgs(pathPrefix, stringPrefixUpperBound(pathPrefix)).WillReturnRows(
 		sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42),
 	)
 	mock.ExpectQuery(
 		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* `+
-			`WHERE Media\.Path LIKE \? AND Media\.IsMissing = 0 AND Media\.DBID >= \?`,
-	).WithArgs(pathPrefix+"%", int64(42)).WillReturnRows(
+			`WHERE Media\.Path >= \? AND Media\.Path < \? AND Media\.IsMissing = 0 `+
+			`AND Media\.DBID = \? LIMIT 1`,
+	).WithArgs(pathPrefix, stringPrefixUpperBound(pathPrefix), int64(42)).WillReturnRows(
 		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
 			AddRow("Arcade", pathPrefix+"game.mra", 42),
 	)
@@ -779,6 +791,70 @@ func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, pathPrefix+"game.mra", result.Path)
 	assert.Equal(t, MediaStats{Count: 1, MinDBID: 42, MaxDBID: 42}, stats)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSQLSelectRandomGameWithStats_DenseGapRejectsMissingDBID(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	exactQuery := `SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+		`WHERE Media\.IsMissing = 0 AND Media\.DBID = \? LIMIT 1`
+	mock.ExpectQuery(exactQuery).WithArgs(int64(2)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}),
+	)
+	mock.ExpectQuery(exactQuery).WithArgs(int64(4)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("NES", filepath.Join("roms", "nes", "four.nes"), int64(4)),
+	)
+
+	offsets := []int{1, 3}
+	result, err := sqlSelectRandomGameWithStatsUsing(
+		context.Background(), db, &database.MediaQuery{},
+		MediaStats{Count: 3, MinDBID: 1, MaxDBID: 4},
+		func(maxValue int) (int, error) {
+			require.Equal(t, 4, maxValue)
+			offset := offsets[0]
+			offsets = offsets[1:]
+			return offset, nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), result.MediaID)
+	assert.Empty(t, offsets)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSQLSelectRandomGameWithStats_SparseUsesUniformOrdinal(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+			`WHERE Media\.IsMissing = 0 ORDER BY Media\.DBID ASC LIMIT 1 OFFSET \?`,
+	).WithArgs(1).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("SNES", filepath.Join("roms", "snes", "hundred.sfc"), int64(100)),
+	)
+
+	result, err := sqlSelectRandomGameWithStatsUsing(
+		context.Background(), db, &database.MediaQuery{},
+		MediaStats{Count: 2, MinDBID: 1, MaxDBID: 100},
+		func(maxValue int) (int, error) {
+			require.Equal(t, 2, maxValue)
+			return 1, nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), result.MediaID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

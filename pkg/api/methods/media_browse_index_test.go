@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -100,6 +101,40 @@ func TestHandleMediaBrowseIndex_FilesystemPath(t *testing.T) {
 	assert.Equal(t, "name-desc", cursor.SortMode)
 	assert.Equal(t, 3, cursor.TotalFiles)
 
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowseIndex_TagsReachDatabaseScope(t *testing.T) {
+	t.Parallel()
+
+	romsRoot := browseTestAbsPath("roms")
+	snesPath := filepath.Join(romsRoot, "SNES")
+	prefix := filepath.ToSlash(snesPath) + "/"
+	tags := []string{"user:favorite"}
+
+	mockPlatform := newBrowseIndexPlatform(t, []string{romsRoot})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseIndex", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseIndexOptions) bool {
+			return opts.PathPrefix == prefix && len(opts.Tags) == 1 &&
+				opts.Tags[0].Type == "user" && opts.Tags[0].Value == "favorite" &&
+				opts.Tags[0].Operator == zapscript.TagOperatorAND
+		})).Return(database.BrowseIndexResult{
+		Scheme:     "latin",
+		SortMode:   "name-asc",
+		TotalFiles: 1,
+		Buckets:    []database.BrowseIndexBucket{{Key: "A", AtStart: true, Count: 1}},
+	}, nil)
+
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Path: &snesPath, Tags: &tags})
+	result, err := HandleMediaBrowseIndex(env)
+	require.NoError(t, err)
+
+	res, ok := result.(models.BrowseIndexResults)
+	require.True(t, ok)
+	assert.Equal(t, 1, res.TotalFiles)
+	require.Len(t, res.Groups, 1)
+	assert.Equal(t, "A", res.Groups[0].Key)
 	mockMediaDB.AssertExpectations(t)
 }
 

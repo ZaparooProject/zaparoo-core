@@ -187,6 +187,7 @@ type PlaytimeStatusResponse struct {
 type System struct {
 	ReleaseDate  *string `json:"releaseDate,omitempty"`
 	Manufacturer *string `json:"manufacturer,omitempty"`
+	MediaCount   *int    `json:"mediaCount,omitempty"`
 	ID           string  `json:"id,omitempty"`
 	Name         string  `json:"name,omitempty"`
 	Category     string  `json:"category,omitempty"`

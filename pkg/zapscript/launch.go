@@ -421,16 +421,21 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 		}, nil
 	}
 
-	// absolute path, use database query to find random media with this path prefix
-	// this includes virtual paths and zips as options
-	if filepath.IsAbs(query) {
-		cleanedPath := filepath.Clean(query)
+	isFilesystemPath := filepath.IsAbs(query)
+	isVirtualPath := strings.Contains(query, "://")
+
+	// Path queries use the media database so virtual entries and tags compose.
+	if isFilesystemPath || isVirtualPath {
+		cleanedPath := query
+		if isFilesystemPath {
+			cleanedPath = filepath.ToSlash(filepath.Clean(query))
+		}
 		mediaQuery := database.MediaQuery{
-			PathPrefix: filepath.ToSlash(cleanedPath),
+			PathPrefix: cleanedPath,
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
-		fallbackToFilesystem := len(tagFilters) == 0 &&
+		fallbackToFilesystem := isFilesystemPath && len(tagFilters) == 0 &&
 			(errors.Is(searchErr, sql.ErrNoRows) || errors.Is(searchErr, context.DeadlineExceeded))
 		if fallbackToFilesystem {
 			// Slow indexed lookups should not block direct directory launches.

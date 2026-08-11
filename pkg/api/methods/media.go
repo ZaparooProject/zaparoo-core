@@ -48,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
@@ -163,12 +164,16 @@ func resolveSystems(ids []string, fuzzy bool) ([]systemdefs.System, error) {
 	return systems, nil
 }
 
+const sortedSearchCursorVersion = 2
+
 type cursorData struct {
-	LastID int64 `json:"lastId"`
+	SortValue string `json:"sortValue,omitempty"`
+	Sort      string `json:"sort,omitempty"`
+	Version   int    `json:"version,omitempty"`
+	LastID    int64  `json:"lastId"`
 }
 
-func encodeCursor(lastID int64) (string, error) {
-	data := cursorData{LastID: lastID}
+func encodeMediaSearchCursorData(data cursorData) (string, error) {
 	bytes, err := json.Marshal(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal cursor data: %w", err)
@@ -176,7 +181,28 @@ func encodeCursor(lastID int64) (string, error) {
 	return base64.StdEncoding.EncodeToString(bytes), nil
 }
 
-func decodeCursor(cursor string) (*int64, error) {
+func encodeCursor(lastID int64) (string, error) {
+	return encodeMediaSearchCursorData(cursorData{LastID: lastID})
+}
+
+func encodeSortedSearchCursor(result *database.SearchResultWithCursor, sortOrder string) (string, error) {
+	sortValue := result.SortValue
+	if sortValue == "" {
+		if strings.HasPrefix(sortOrder, "filename-") {
+			sortValue = result.Path
+		} else {
+			sortValue = result.Name
+		}
+	}
+	return encodeMediaSearchCursorData(cursorData{
+		Version:   sortedSearchCursorVersion,
+		Sort:      sortOrder,
+		SortValue: sortValue,
+		LastID:    result.MediaID,
+	})
+}
+
+func decodeCursorData(cursor string) (*cursorData, error) {
 	if cursor == "" {
 		return nil, nil //nolint:nilnil // empty cursor is valid and should return nil
 	}
@@ -187,12 +213,44 @@ func decodeCursor(cursor string) (*int64, error) {
 	}
 
 	var data cursorData
-	err = json.Unmarshal(bytes, &data)
-	if err != nil {
+	if err = json.Unmarshal(bytes, &data); err != nil {
 		return nil, models.ClientErrf("invalid cursor data: %w", err)
 	}
+	return &data, nil
+}
 
+func decodeCursor(cursor string) (*int64, error) {
+	data, err := decodeCursorData(cursor)
+	if err != nil || data == nil {
+		return nil, err
+	}
+	if data.Version != 0 || data.Sort != "" || data.SortValue != "" {
+		return nil, models.ClientErrf("cursor requires matching search sort")
+	}
 	return &data.LastID, nil
+}
+
+func decodeMediaSearchCursor(
+	cursor string,
+	sortOrder string,
+) (*int64, *database.SearchCursor, error) {
+	if sortOrder == "" {
+		legacy, err := decodeCursor(cursor)
+		return legacy, nil, err
+	}
+
+	data, err := decodeCursorData(cursor)
+	if err != nil || data == nil {
+		return nil, nil, err
+	}
+	if data.Version != sortedSearchCursorVersion || data.Sort != sortOrder {
+		return nil, nil, models.ClientErrf("cursor does not match search sort %q", sortOrder)
+	}
+	return nil, &database.SearchCursor{
+		SortValue: data.SortValue,
+		Sort:      data.Sort,
+		LastID:    data.LastID,
+	}, nil
 }
 
 type indexingStatusVals struct {
@@ -814,6 +872,40 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	return nil, err
 }
 
+func searchResultSystem(systemID string, launcherCache *helpers.LauncherCache) models.System {
+	result := models.System{ID: systemID, Name: systemID}
+	if system, err := systemdefs.GetSystem(systemID); err == nil {
+		result.ID = system.ID
+		metadata, metadataErr := assets.GetSystemMetadata(system.ID)
+		if metadataErr != nil {
+			log.Err(metadataErr).Str("systemID", system.ID).Msg("error getting system metadata")
+			return result
+		}
+		result.Name = metadata.Name
+		result.Category = metadata.Category
+		if metadata.ReleaseDate != "" {
+			result.ReleaseDate = &metadata.ReleaseDate
+		}
+		if metadata.Manufacturer != "" {
+			result.Manufacturer = &metadata.Manufacturer
+		}
+		return result
+	}
+
+	if launcherCache != nil {
+		for _, system := range launcherCache.GetLaunchableSystems() {
+			if launchables.EncodeID(system.ID) != systemID {
+				continue
+			}
+			result.Name = system.Name
+			result.Category = system.Category
+			result.ZapScript = system.ZapScript()
+			break
+		}
+	}
+	return result
+}
+
 func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
 
@@ -837,12 +929,18 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	ctx := env.Context
 
-	// Handle cursor-based pagination
+	var sortOrder string
+	if params.Sort != nil {
+		sortOrder = *params.Sort
+	}
+
+	// Handle cursor-based pagination. Legacy unsorted requests keep their
+	// DBID-only cursor; explicit sorts use a compound sort-value/DBID cursor.
 	var cursorStr string
 	if params.Cursor != nil {
 		cursorStr = *params.Cursor
 	}
-	cursor, err := decodeCursor(cursorStr)
+	cursor, sortCursor, err := decodeMediaSearchCursor(cursorStr, sortOrder)
 	if err != nil {
 		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
@@ -888,12 +986,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	searchFilters := database.SearchFilters{
-		Systems: systems,
-		Query:   query,
-		Tags:    tagFilters, // Will be empty if no tags provided
-		Letter:  validatedLetter,
-		Cursor:  cursor,
-		Limit:   limit,
+		Systems:    systems,
+		Query:      query,
+		Sort:       sortOrder,
+		Tags:       tagFilters, // Will be empty if no tags provided
+		Letter:     validatedLetter,
+		Cursor:     cursor,
+		SortCursor: sortCursor,
+		Limit:      limit,
 	}
 
 	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
@@ -915,30 +1015,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	results := make([]models.SearchResultMedia, 0, len(searchResults))
 	for i := range searchResults {
 		result := &searchResults[i]
-		system, err := systemdefs.GetSystem(result.SystemID)
-		if err != nil {
-			continue
-		}
-
-		resultSystem := models.System{
-			ID: system.ID,
-		}
-
-		metadata, err := assets.GetSystemMetadata(system.ID)
-		if err != nil {
-			resultSystem.Name = system.ID
-			log.Err(err).Msg("error getting system metadata")
-		} else {
-			resultSystem.Name = metadata.Name
-			resultSystem.Category = metadata.Category
-			if metadata.ReleaseDate != "" {
-				resultSystem.ReleaseDate = &metadata.ReleaseDate
-			}
-			if metadata.Manufacturer != "" {
-				resultSystem.Manufacturer = &metadata.Manufacturer
-			}
-		}
-
+		resultSystem := searchResultSystem(result.SystemID, env.LauncherCache)
 		zapScript := result.ZapScript()
 
 		var relPath *string
@@ -967,7 +1044,13 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		var nextCursor *string
 		if hasNextPage {
 			lastResult := searchResults[len(searchResults)-1]
-			cursorStr, err := encodeCursor(lastResult.MediaID)
+			var cursorStr string
+			var err error
+			if sortOrder == "" {
+				cursorStr, err = encodeCursor(lastResult.MediaID)
+			} else {
+				cursorStr, err = encodeSortedSearchCursor(&lastResult, sortOrder)
+			}
 			if err != nil {
 				log.Error().Err(err).Msg("failed to encode next cursor")
 				return nil, fmt.Errorf("failed to generate next page cursor: %w", err)

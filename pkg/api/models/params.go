@@ -33,6 +33,7 @@ type SearchParams struct {
 	Cursor      *string   `json:"cursor,omitempty"`
 	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
 	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 	Query       *string   `json:"query"`
 }
 
@@ -42,12 +43,14 @@ type BrowseParams struct {
 	Path        *string   `json:"path,omitempty"`
 	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
 	Cursor      *string   `json:"cursor,omitempty"`
+	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
 	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
 	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 }
 
 type SystemsParams struct {
-	All bool `json:"all,omitempty"`
+	Tags *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	All  bool      `json:"all,omitempty"`
 }
 
 type MediaIndexParams struct {

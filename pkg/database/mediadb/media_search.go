@@ -118,12 +118,51 @@ func searchMediaTypeGroupsInCache(
 	return candidates
 }
 
+func sqliteNoCaseCompare(a, b string) int {
+	limit := min(len(a), len(b))
+	for i := range limit {
+		left := a[i]
+		right := b[i]
+		if left >= 'A' && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if right >= 'A' && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		if order := cmp.Compare(left, right); order != 0 {
+			return order
+		}
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+func compareSearchResults(a, b *database.SearchResultWithCursor, sortOrder string) int {
+	var order int
+	switch sortOrder {
+	case "name-asc", "name-desc":
+		order = sqliteNoCaseCompare(a.SortValue, b.SortValue)
+	case "filename-asc", "filename-desc":
+		order = cmp.Compare(a.SortValue, b.SortValue)
+	default:
+		return cmp.Compare(a.MediaID, b.MediaID)
+	}
+	if order == 0 {
+		order = cmp.Compare(a.MediaID, b.MediaID)
+	}
+	if sortOrder == "name-desc" || sortOrder == "filename-desc" {
+		return -order
+	}
+	return order
+}
+
 func titleDBIDQueryParamCount(candidateCount int, filters *database.SearchFilters) int {
 	_, tagArgs := buildCandidateTagFilterSQL(filters.Tags)
 	_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
 
 	count := candidateCount + len(tagArgs) + len(letterArgs) + 1 // LIMIT
-	if filters.Cursor != nil {
+	if filters.SortCursor != nil {
+		count += 2
+	} else if filters.Cursor != nil {
 		count++
 	}
 	return count
@@ -137,7 +176,7 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, filters.Limit)
 	for i := range groups {
-		groupResults, err := sqlSearchMediaWithFilters(
+		groupResults, err := sqlSearchMediaWithFiltersSorted(
 			ctx,
 			db.sql.Load(),
 			groups[i].systems,
@@ -146,6 +185,8 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 			filters.Tags,
 			filters.Letter,
 			filters.Cursor,
+			filters.SortCursor,
+			filters.Sort,
 			filters.Limit,
 			groups[i].includeName,
 		)
@@ -156,7 +197,7 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 	}
 
 	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
-		return cmp.Compare(a.MediaID, b.MediaID)
+		return compareSearchResults(&a, &b, filters.Sort)
 	})
 	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
 		return a.MediaID == b.MediaID

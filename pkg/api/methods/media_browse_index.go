@@ -107,6 +107,11 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 	}
 
+	tagFilters, err := parseBrowseTagFilters(params.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	var sortOrder string
 	if params.Sort != nil {
 		sortOrder = *params.Sort
@@ -137,6 +142,7 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		PathPrefix: prefix,
 		Sort:       sortOrder,
 		Systems:    systems,
+		Tags:       tagFilters,
 	})
 	logBrowseTiming("index", prefix, started, len(result.Buckets))
 	if err != nil {

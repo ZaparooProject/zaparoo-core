@@ -322,6 +322,11 @@ type SearchResult struct {
 	MediaID  int64
 }
 
+type SystemMediaCount struct {
+	SystemID string
+	Count    int
+}
+
 type TagInfo struct {
 	Tag   string `json:"tag"`
 	Type  string `json:"type"`
@@ -444,6 +449,7 @@ type BrowseFilesOptions struct {
 	PathPrefix string
 	Sort       string
 	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
 	Limit      int
 }
 
@@ -452,6 +458,7 @@ type BrowseFileCountOptions struct {
 	Letter     *string
 	PathPrefix string
 	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
 }
 
 // BrowseIndexOptions contains parameters for the BrowseIndex facet query. It
@@ -461,6 +468,7 @@ type BrowseIndexOptions struct {
 	PathPrefix string
 	Sort       string
 	Systems    []systemdefs.System
+	Tags       []zapscript.TagFilter
 }
 
 // BrowseIndexBucket is one first-character bucket of a browse scope. SortValue
@@ -718,14 +726,22 @@ type MediaQuery struct {
 	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 }
 
+type SearchCursor struct {
+	SortValue string
+	Sort      string
+	LastID    int64
+}
+
 // SearchFilters represents parameters for filtered media search
 type SearchFilters struct {
-	Cursor  *int64                `json:"cursor,omitempty"`
-	Letter  *string               `json:"letter,omitempty"`
-	Query   string                `json:"query"`
-	Systems []systemdefs.System   `json:"systems,omitempty"`
-	Tags    []zapscript.TagFilter `json:"tags,omitempty"`
-	Limit   int                   `json:"limit"`
+	Cursor     *int64                `json:"cursor,omitempty"`
+	SortCursor *SearchCursor         `json:"-"`
+	Letter     *string               `json:"letter,omitempty"`
+	Query      string                `json:"query"`
+	Sort       string                `json:"sort,omitempty"`
+	Systems    []systemdefs.System   `json:"systems,omitempty"`
+	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
+	Limit      int                   `json:"limit"`
 }
 
 // ScanStagedTag is one tag derived from a scanned file, staged for set-based
@@ -1032,6 +1048,7 @@ type MediaDBI interface {
 	BrowseCacheNeedsRebuild(ctx context.Context) (bool, error)
 
 	IndexedSystems() ([]string, error)
+	SystemMediaCounts(ctx context.Context, tags []zapscript.TagFilter) ([]SystemMediaCount, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)

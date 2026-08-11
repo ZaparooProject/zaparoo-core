@@ -81,6 +81,40 @@ func TestCursorEncodeDecycle(t *testing.T) {
 	}
 }
 
+func TestSortedSearchCursorEncodeDecode(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := encodeSortedSearchCursor(&database.SearchResultWithCursor{
+		SortValue: "Bravo",
+		MediaID:   42,
+	}, "name-asc")
+	require.NoError(t, err)
+
+	legacy, sorted, err := decodeMediaSearchCursor(encoded, "name-asc")
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+	require.NotNil(t, sorted)
+	assert.Equal(t, "name-asc", sorted.Sort)
+	assert.Equal(t, "Bravo", sorted.SortValue)
+	assert.Equal(t, int64(42), sorted.LastID)
+
+	_, _, err = decodeMediaSearchCursor(encoded, "name-desc")
+	require.Error(t, err)
+
+	legacyEncoded, err := encodeCursor(42)
+	require.NoError(t, err)
+	_, _, err = decodeMediaSearchCursor(legacyEncoded, "name-asc")
+	require.Error(t, err)
+}
+
+func TestSearchResultSystem_UnknownSystemFallsBackToID(t *testing.T) {
+	t.Parallel()
+
+	result := searchResultSystem("virtual-system", nil)
+	assert.Equal(t, "virtual-system", result.ID)
+	assert.Equal(t, "virtual-system", result.Name)
+}
+
 func TestDecodeCursor_InvalidInputs(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -199,6 +233,51 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 		assert.Equal(t, "Mario Bros", searchResults.Results[0].Name)
 		assert.Equal(t, "/games/mario.nes", searchResults.Results[0].Path)
 	}
+}
+
+func TestHandleMediaSearch_WithExplicitSort(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Sort == "name-asc" && filters.Cursor == nil &&
+				filters.SortCursor == nil && filters.Limit == 3
+		})).Return([]database.SearchResultWithCursor{
+		{SystemID: "NES", Name: "Alpha", Path: filepath.Join("games", "alpha.nes"), MediaID: 1, SortValue: "Alpha"},
+		{SystemID: "NES", Name: "Bravo", Path: filepath.Join("games", "bravo.nes"), MediaID: 2, SortValue: "Bravo"},
+		{
+			SystemID: "NES", Name: "Charlie", Path: filepath.Join("games", "charlie.nes"),
+			MediaID: 3, SortValue: "Charlie",
+		},
+	}, nil)
+
+	maxResults := 2
+	sortOrder := "name-asc"
+	paramsJSON, err := json.Marshal(models.SearchParams{MaxResults: &maxResults, Sort: &sortOrder})
+	require.NoError(t, err)
+
+	result, err := HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+	})
+	require.NoError(t, err)
+
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, searchResults.Results, 2)
+	require.NotNil(t, searchResults.Pagination)
+	require.NotNil(t, searchResults.Pagination.NextCursor)
+	legacy, sorted, err := decodeMediaSearchCursor(*searchResults.Pagination.NextCursor, sortOrder)
+	require.NoError(t, err)
+	assert.Nil(t, legacy)
+	require.NotNil(t, sorted)
+	assert.Equal(t, "Bravo", sorted.SortValue)
+	assert.Equal(t, int64(2), sorted.LastID)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaSearch_WithCursor(t *testing.T) {

@@ -45,6 +45,8 @@ Returns `null` on success.
 
 Currently, it is not reported if the launched ZapScript encountered an error during launching, and the method will return before execution of ZapScript is complete.
 
+For ZapScript `launch.random`, Core selects uniformly from matching non-missing media rows after applying systems, tags, and path scope. Filesystem and virtual path targets recursively include subfolders. Tagged requests never use filesystem fallback because unindexed files have no tag metadata.
+
 #### Example
 
 ##### Request
@@ -520,7 +522,7 @@ None.
 
 Query the media database and return all matching indexed media.
 
-**Note:** This API now uses cursor-based pagination for all requests. The `total` field is deprecated and always returns -1. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value in the `cursor` parameter of your next request.
+**Note:** This API uses cursor-based pagination for all requests. The `total` field is deprecated and returns only the current response-page count; it is not the full match count. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value and repeat the same systems, query, tags, letter, and sort scope.
 
 #### Parameters
 
@@ -531,9 +533,10 @@ An object:
 | query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
-| cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
-| tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. Can be used without query or systems for tag-only searches. |
+| cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same scope and sort. |
+| tags       | string[] | No       | Filter results by case-sensitive tags. Maximum 50 tags, each up to 128 characters. Default and `+` filters require matches, `-` excludes matches, and `~` joins alternatives. Can be used without query or systems for tag-only searches. |
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
+| sort       | string   | No       | Explicit order: `name-asc`, `name-desc`, `filename-asc`, or `filename-desc`. Name uses the returned display name with SQLite's case-insensitive collation; filename uses full indexed path. Omitted preserves legacy database order. |
 | fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 #### Result
@@ -566,6 +569,7 @@ An object:
 | category     | string | No       | Category of system (e.g., "Console", "Computer"). Not yet formalised.    |
 | releaseDate  | string | No       | Release date of the system in ISO 8601 format (YYYY-MM-DD).              |
 | manufacturer | string | No       | Manufacturer of the system (e.g., "Nintendo", "Sega").                   |
+| mediaCount   | number | No       | Exact non-missing indexed media-row count for this system, or exact matching count when `systems.tags` is set. Zero means the system is supported but empty. Omitted by older Core versions or when counts are unavailable. |
 
 ##### Pagination object
 
@@ -706,6 +710,8 @@ Browse indexed media content by directory, similar to navigating a file manager.
 
 When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots. When `systems` is provided without `path`, returns populated launcher routes for those systems only. Pass the same `systems` filter when browsing a returned route to keep shared paths scoped to the selected systems.
 
+Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
+
 #### Parameters
 
 All parameters are optional. When called with no parameters, returns root entries.
@@ -716,7 +722,8 @@ All parameters are optional. When called with no parameters, returns root entrie
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
-| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, letter, and sort parameters. |
+| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, tags, letter, and sort parameters. |
+| tags       | string[] | No     | Filter direct media files by tags. Syntax and AND/NOT/OR operators match `media.search`. Directories remain unfiltered. |
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. Name sorting is prefix-aware for detected ranked/date collection folders. The `filename` variants sort by full file path. |
 
@@ -726,7 +733,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | :--------- | :------------------------------------ | :------- | :----------------------------------------------------------------------- |
 | path       | string                                | Yes      | The browsed directory path. Empty string when listing roots.             |
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
-| totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `letter` filter). |
+| totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
 | pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
 
 ##### Browse entry object
@@ -866,7 +873,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 Return the ordered first-character "jump to letter" buckets for a browse scope. Each bucket carries a count and a ready-to-use cursor that seeks `media.browse` to the start of that bucket, so a single round trip gives a client everything it needs to draw a section rail _and_ jump into the full ordered list. This avoids paging from the top to reach a distant section, which matters on constrained clients (e.g. MiSTer).
 
-The scope parameters mirror `media.browse` so the index describes the exact list `media.browse` would return for the same scope. The per-bucket `cursor` is an ordinary browse cursor: pass it to `media.browse` with the same `path`/`systems`/`sort` to get a normal page that begins at the bucket and continues into the next bucket as the user scrolls.
+The scope parameters mirror `media.browse` so the index describes the exact media-file list `media.browse` would return for the same scope. The per-bucket `cursor` is an ordinary browse cursor: pass it to `media.browse` with the same `path`/`systems`/`tags`/`sort` to get a normal page that begins at the bucket and continues into the next bucket as the user scrolls.
 
 #### Parameters
 
@@ -877,6 +884,7 @@ All parameters are optional.
 | path        | string   | No       | Directory or virtual scheme to index, same as `media.browse`. Omit or set empty for a root listing (no rail applies). |
 | systems     | string[] | No       | Case-sensitive system IDs to scope the index to, same as `media.browse`.                          |
 | fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in `systems`.                                                |
+| tags        | string[] | No       | Filter indexed media by tags, using the same syntax and operators as `media.browse`.               |
 | sort        | string   | No       | Sort order, must match the `media.browse` sort the rail is for. One of `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. |
 
 #### Result
@@ -884,7 +892,7 @@ All parameters are optional.
 | Key        | Type                                          | Required | Description                                                                 |
 | :--------- | :-------------------------------------------- | :------- | :-------------------------------------------------------------------------- |
 | scheme     | string                                        | Yes      | Collation used to derive the buckets. `latin` for first-character bucketing; `none` when no rail applies (a root listing, or a directory whose effective sort is not alphabetical, e.g. a ranked/date-prefixed collection folder), in which case `groups` is empty. |
-| totalFiles | number                                        | Yes      | Total media files in the scope.                                             |
+| totalFiles | number                                        | Yes      | Total media files matching the complete systems/path/tags scope.             |
 | groups     | [BrowseIndexGroup](#browse-index-group-object)[] | Yes   | Only non-empty buckets, ordered to match `sort`.                            |
 
 ##### Browse index group object
@@ -2387,17 +2395,22 @@ List systems currently indexed or supported by an available launcher on the runn
 
 Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index.
 
+Responses include an exact non-missing `mediaCount` for each system when the media database count query succeeds. Supported systems with no indexed media have `mediaCount: 0`. The field is omitted if counts are unavailable, preserving compatibility with older clients and database-error fallback behavior.
+
+Set `tags` to return only systems containing matching non-missing media. Tagged responses use `mediaCount` for the exact matching count and omit zero-match systems. Tag syntax and AND/NOT/OR operators match `media.search`. Tags remain the final filter when combined with `all`, so launcher-only systems with no matching media are omitted.
+
 #### Parameters
 
-| Key | Type    | Required | Description                                                                                     |
-| :-- | :------ | :------- | :---------------------------------------------------------------------------------------------- |
-| all | boolean | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
+| Key  | Type     | Required | Description                                                                                     |
+| :--- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| all  | boolean  | No       | Include systems with unavailable launchers. Defaults to `false`. Indexed systems remain listed. |
+| tags | string[] | No       | Return systems with matching media. Uses the same tag syntax and operators as `media.search`.    |
 
 #### Result
 
 | Key     | Type                       | Required | Description                                                        |
 | :------ | :------------------------- | :------- | :----------------------------------------------------------------- |
-| systems | [System](#system-object)[] | Yes      | Indexed, available, and optionally unavailable platform systems.   |
+| systems | [System](#system-object)[] | Yes      | Indexed, available, and optionally unavailable platform systems. Tagged requests include only positive-count systems. |
 
 See [System object](#system-object).
 
@@ -2429,14 +2442,16 @@ See [System object](#system-object).
         "name": "Gameboy Color",
         "category": "Handheld",
         "releaseDate": "1998-10-21",
-        "manufacturer": "Nintendo"
+        "manufacturer": "Nintendo",
+        "mediaCount": 842
       },
       {
         "id": "EDSAC",
         "name": "EDSAC",
         "category": "Computer",
         "releaseDate": "1949-05-06",
-        "manufacturer": "University of Cambridge"
+        "manufacturer": "University of Cambridge",
+        "mediaCount": 0
       }
     ]
   }
