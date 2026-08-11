@@ -299,8 +299,10 @@ type Reader struct {
 	wg                        sync.WaitGroup
 	mutex                     syncutil.RWMutex
 	writeMutex                syncutil.Mutex
+	writeOperationMutex       syncutil.Mutex
 	connected                 bool
 	suppressScansUntilRemoval bool
+	tagRemovedDuringWrite     bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -496,6 +498,9 @@ func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	log.Info().Msg("tag removed")
 	r.writeMutex.Lock()
 	writtenTagRemoved := r.suppressScansUntilRemoval
+	if r.writeCtx != nil {
+		r.tagRemovedDuringWrite = true
+	}
 	r.suppressScansUntilRemoval = false
 	r.writeMutex.Unlock()
 	iq <- readers.Scan{
@@ -733,12 +738,14 @@ func (r *Reader) Path() string {
 func (r *Reader) ReaderID() string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
+	return r.readerIDLocked()
+}
 
+func (r *Reader) readerIDLocked() string {
 	stablePath := helpers.GetUSBTopologyPath(r.deviceInfo.Path)
 	if stablePath == "" {
 		stablePath = r.deviceInfo.ConnectionString()
 	}
-
 	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
@@ -771,20 +778,24 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 		return nil, errors.New("text cannot be empty")
 	}
 
-	// Capture readerID before acquiring lock to avoid deadlock in callback
-	readerID := r.ReaderID()
+	r.writeOperationMutex.Lock()
+	defer r.writeOperationMutex.Unlock()
 
-	// Lock for the entire write operation
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	if r.session == nil {
+	// Snapshot lifecycle state without holding the lifecycle lock through the
+	// blocking write. Removal callbacks need the same lock for reader identity
+	// and last-token cleanup.
+	r.mutex.RLock()
+	session := r.session
+	readerID := r.readerIDLocked()
+	r.mutex.RUnlock()
+	if session == nil {
 		return nil, errors.New("session not initialized")
 	}
 
-	// Create cancellable context for this write operation under writeMutex
+	// Create cancellable context for this write operation under writeMutex.
 	r.writeMutex.Lock()
 	r.writeCtx, r.writeCancel = context.WithCancel(ctx)
+	r.tagRemovedDuringWrite = false
 	writeCtx := r.writeCtx
 	r.writeMutex.Unlock()
 
@@ -796,13 +807,14 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			r.writeCancel = nil
 			r.writeCtx = nil
 		}
+		r.tagRemovedDuringWrite = false
 		r.writeMutex.Unlock()
 	}()
 
 	var resultToken *tokens.Token
 	var writeErr error
 
-	err := r.session.WriteToNextTagWithRetry(
+	err := session.WriteToNextTagWithRetry(
 		ctx, writeCtx, writeTimeout, writeRetryCount,
 		func(writeCtx context.Context, tag pn532.Tag) error {
 			uid := tag.UID()
@@ -831,9 +843,12 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			}
 
 			// Polling may report card-changed after WriteNDEF but before the API
-			// records wroteToken. Suppress callbacks until this physical tag leaves.
+			// records wroteToken. Suppress callbacks until this physical tag leaves,
+			// unless its removal already arrived while this write was completing.
 			r.writeMutex.Lock()
-			r.suppressScansUntilRemoval = true
+			if !r.tagRemovedDuringWrite {
+				r.suppressScansUntilRemoval = true
+			}
 			r.writeMutex.Unlock()
 
 			log.Info().Msg("successfully wrote text to PN532 tag")

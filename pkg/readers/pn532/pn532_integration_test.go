@@ -86,6 +86,7 @@ func (m *mockPN532Device) Close() error {
 
 // mockTag is a mock implementation of pn532.Tag for testing.
 type mockTag struct {
+	writeNDEFFunc   func(context.Context, *pn532.NDEFMessage) error
 	writeNDEFErr    error
 	lastNDEFMessage *pn532.NDEFMessage
 	uid             string
@@ -117,9 +118,12 @@ func (*mockTag) ReadNDEF(_ context.Context) (*pn532.NDEFMessage, error) {
 	return nil, assert.AnError
 }
 
-func (m *mockTag) WriteNDEF(_ context.Context, message *pn532.NDEFMessage) error {
+func (m *mockTag) WriteNDEF(ctx context.Context, message *pn532.NDEFMessage) error {
 	m.writeNDEFCalled = true
 	m.lastNDEFMessage = message
+	if m.writeNDEFFunc != nil {
+		return m.writeNDEFFunc(ctx, message)
+	}
 	return m.writeNDEFErr
 }
 
@@ -141,15 +145,16 @@ func (*mockTag) Summary() string {
 
 // mockPollingSession is a mock implementation of PollingSession for testing.
 type mockPollingSession struct {
-	mockTag                    pn532.Tag
-	writeToNextTagWithRetryErr error // Error to return before invoking callback
-	startFunc                  func(ctx context.Context) error
-	closeFunc                  func() error
-	onCardDetected             func(context.Context, *pn532.DetectedTag) error
-	onCardRemoved              func()
-	onCardChanged              func(context.Context, *pn532.DetectedTag) error
-	closeCalled                bool
-	setCallbacksCalled         bool
+	mockTag                     pn532.Tag
+	writeToNextTagWithRetryErr  error // Error to return before invoking callback
+	writeToNextTagWithRetryFunc func(context.Context, context.Context, func(context.Context, pn532.Tag) error) error
+	startFunc                   func(ctx context.Context) error
+	closeFunc                   func() error
+	onCardDetected              func(context.Context, *pn532.DetectedTag) error
+	onCardRemoved               func()
+	onCardChanged               func(context.Context, *pn532.DetectedTag) error
+	closeCalled                 bool
+	setCallbacksCalled          bool
 }
 
 func (m *mockPollingSession) Start(ctx context.Context) error {
@@ -195,12 +200,15 @@ func (m *mockPollingSession) WriteToNextTag(
 }
 
 func (m *mockPollingSession) WriteToNextTagWithRetry(
-	_ context.Context,
+	ctx context.Context,
 	writeCtx context.Context,
 	_ time.Duration,
 	_ int,
 	writeFunc func(context.Context, pn532.Tag) error,
 ) error {
+	if m.writeToNextTagWithRetryFunc != nil {
+		return m.writeToNextTagWithRetryFunc(ctx, writeCtx, writeFunc)
+	}
 	// Return session-level error if configured (before invoking callback)
 	if m.writeToNextTagWithRetryErr != nil {
 		return m.writeToNextTagWithRetryErr
@@ -845,6 +853,139 @@ func TestWriteWithContext_Success(t *testing.T) {
 	assert.Equal(t, reader.ReaderID(), removal.ReaderID)
 	assert.True(t, removal.WrittenTagRemoved)
 	assert.False(t, reader.suppressingTagScans())
+}
+
+func TestWriteWithContext_RemovalBeforeCompletionDoesNotSuppressNextTag(t *testing.T) {
+	t.Parallel()
+
+	writeStarted := make(chan struct{})
+	finishWrite := make(chan struct{})
+	tag := &mockTag{
+		uid: "written-tag", tagType: pn532.TagTypeNTAG,
+		writeNDEFFunc: func(_ context.Context, _ *pn532.NDEFMessage) error {
+			close(writeStarted)
+			<-finishWrite
+			return nil
+		},
+	}
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{mockTag: tag}
+	reader.deviceInfo = config.ReadersConnect{Driver: "pn532", Path: "/dev/test"}
+	scanQueue := make(chan readers.Scan, 2)
+
+	type writeResult struct {
+		token *tokens.Token
+		err   error
+	}
+	writeDone := make(chan writeResult, 1)
+	go func() {
+		token, err := reader.WriteWithContext(t.Context(), "new text")
+		writeDone <- writeResult{token: token, err: err}
+	}()
+	<-writeStarted
+
+	removalDone := make(chan struct{})
+	go func() {
+		reader.handleTagRemoved(scanQueue)
+		close(removalDone)
+	}()
+	var removal readers.Scan
+	removalBeforeCompletion := false
+	select {
+	case removal = <-scanQueue:
+		removalBeforeCompletion = true
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	close(finishWrite)
+	result := <-writeDone
+	require.NoError(t, result.err)
+	require.NotNil(t, result.token)
+	if !removalBeforeCompletion {
+		select {
+		case removal = <-scanQueue:
+		case <-time.After(time.Second):
+			t.Fatal("tag removal did not complete after write")
+		}
+	}
+	select {
+	case <-removalDone:
+	case <-time.After(time.Second):
+		t.Fatal("tag removal callback did not return")
+	}
+
+	assert.True(t, removalBeforeCompletion, "removal must not wait for write completion")
+	assert.False(t, removal.WrittenTagRemoved)
+	assert.False(t, reader.suppressingTagScans())
+
+	nextTag := &pn532.DetectedTag{
+		Type: pn532.TagTypeNTAG, UID: "next-tag", TargetData: []byte("next"),
+	}
+	require.NoError(t, reader.handleTagDetected(t.Context(), nextTag, scanQueue))
+	select {
+	case scan := <-scanQueue:
+		require.NotNil(t, scan.Token)
+		assert.Equal(t, "next-tag", scan.Token.UID)
+	case <-time.After(time.Second):
+		t.Fatal("subsequent tag remained suppressed after pre-completion removal")
+	}
+}
+
+func TestWriteWithContext_DoesNotBlockActiveWriteRemoval(t *testing.T) {
+	t.Parallel()
+
+	writeStarted := make(chan struct{})
+	finishWrite := make(chan struct{})
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{
+		writeToNextTagWithRetryFunc: func(
+			_ context.Context,
+			_ context.Context,
+			_ func(context.Context, pn532.Tag) error,
+		) error {
+			close(writeStarted)
+			<-finishWrite
+			return nil
+		},
+	}
+	reader.deviceInfo = config.ReadersConnect{Driver: "pn532", Path: "/dev/test"}
+	scanQueue := make(chan readers.Scan, 1)
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := reader.WriteWithContext(t.Context(), "new text")
+		writeDone <- err
+	}()
+	<-writeStarted
+
+	removalDone := make(chan struct{})
+	go func() {
+		reader.handleTagRemoved(scanQueue)
+		close(removalDone)
+	}()
+	removalBeforeCompletion := false
+	select {
+	case removal := <-scanQueue:
+		assert.False(t, removal.WrittenTagRemoved)
+		removalBeforeCompletion = true
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	close(finishWrite)
+	require.NoError(t, <-writeDone)
+	if !removalBeforeCompletion {
+		select {
+		case <-scanQueue:
+		case <-time.After(time.Second):
+			t.Fatal("tag removal did not complete after write")
+		}
+	}
+	select {
+	case <-removalDone:
+	case <-time.After(time.Second):
+		t.Fatal("tag removal callback did not return")
+	}
+	assert.True(t, removalBeforeCompletion, "active write must not hold the reader lifecycle lock")
 }
 
 // TestWriteWithContext_DifferentTagTypes tests that different tag types are converted correctly
