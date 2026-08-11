@@ -739,6 +739,41 @@ func requestedAllSystems(systems []systemdefs.System) bool {
 	return true
 }
 
+func searchSortExpr(sortOrder string) string {
+	switch sortOrder {
+	case "name-asc", "name-desc":
+		return "MediaTitles.Name COLLATE NOCASE"
+	case "filename-asc", "filename-desc":
+		return "Media.Path"
+	default:
+		return "Media.DBID"
+	}
+}
+
+func searchSortClause(sortOrder string) string {
+	expr := searchSortExpr(sortOrder)
+	switch sortOrder {
+	case "name-desc", "filename-desc":
+		return expr + " DESC, Media.DBID DESC"
+	default:
+		return expr + " ASC, Media.DBID ASC"
+	}
+}
+
+func searchCursorPredicate(sortOrder string) string {
+	expr := searchSortExpr(sortOrder)
+	switch sortOrder {
+	case "name-desc", "filename-desc":
+		return "(" + expr + ", Media.DBID) < (?, ?)"
+	default:
+		return "(" + expr + ", Media.DBID) > (?, ?)"
+	}
+}
+
+func searchCursorCondition(sortOrder string) string {
+	return " AND " + searchCursorPredicate(sortOrder) + " "
+}
+
 func sqlSearchMediaWithFilters(
 	ctx context.Context,
 	db sqlQueryable,
@@ -748,6 +783,25 @@ func sqlSearchMediaWithFilters(
 	tags []zapscript.TagFilter,
 	letter *string,
 	cursor *int64,
+	limit int,
+	includeName bool,
+) ([]database.SearchResultWithCursor, error) {
+	return sqlSearchMediaWithFiltersSorted(
+		ctx, db, systems, variantGroups, rawWords, "", tags, letter, cursor, nil, "", limit, includeName)
+}
+
+func sqlSearchMediaWithFiltersSorted(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+	variantGroups [][]string,
+	rawWords []string,
+	pathPrefix string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	cursor *int64,
+	sortCursor *database.SearchCursor,
+	sortOrder string,
 	limit int,
 	includeName bool,
 ) ([]database.SearchResultWithCursor, error) {
@@ -761,8 +815,8 @@ func sqlSearchMediaWithFilters(
 	// covers every defined system the SystemID IN (...) clause filters nothing,
 	// but its presence makes SQLite drive the join from Systems and scan every
 	// title instead of the handful of tag matches. Omit it in that case.
-	skipSystemFilter := len(variantGroups) == 0 && !includeName && len(tags) > 0 &&
-		requestedAllSystems(systems)
+	skipSystemFilter := requestedAllSystems(systems) && (pathPrefix != "" ||
+		(len(variantGroups) == 0 && !includeName && len(tags) > 0))
 
 	// Build system ID args
 	args := make([]any, 0)
@@ -809,11 +863,32 @@ func sqlSearchMediaWithFilters(
 		variantCondition = " AND " + strings.Join(groupClauses, " AND ")
 	}
 
-	// Add cursor condition if provided
+	// Add cursor condition if provided. Explicit sorts use their compound
+	// sort-value/DBID keyset; legacy requests retain the DBID-only cursor.
 	cursorCondition := ""
-	if cursor != nil {
+	var cursorArgs []any
+	switch {
+	case sortCursor != nil:
+		if sortOrder == "" || sortCursor.Sort != sortOrder {
+			return nil, errors.New("search cursor sort does not match request")
+		}
+		cursorCondition = searchCursorCondition(sortOrder)
+		cursorArgs = []any{sortCursor.SortValue, sortCursor.LastID}
+	case cursor != nil:
+		if sortOrder != "" {
+			return nil, errors.New("legacy search cursor cannot continue explicit sort")
+		}
 		cursorCondition = " AND Media.DBID > ? "
-		variantArgs = append(variantArgs, *cursor)
+		cursorArgs = []any{*cursor}
+	}
+
+	pathFilterCondition := ""
+	var pathFilterArgs []any
+	if pathPrefix != "" {
+		pathClause, pathArgs := browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+		pathFilterCondition = " AND " + pathClause
+		pathFilterArgs = pathArgs
 	}
 
 	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
@@ -827,7 +902,6 @@ func sqlSearchMediaWithFilters(
 	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
 	if len(letterClauses) > 0 {
 		letterFilterCondition = " AND " + strings.Join(letterClauses, " AND ")
-		variantArgs = append(variantArgs, letterArgs...)
 	}
 
 	systemCondition := ""
@@ -836,9 +910,13 @@ func sqlSearchMediaWithFilters(
 			prepareVariadic("?", ",", len(systems)) + `) AND `
 	}
 
-	// Every query must use cursor order because media-type-scoped searches are
-	// merged in Go before applying the page limit.
-	orderCondition := ` ORDER BY Media.DBID ASC`
+	// Every query must use the requested cursor order because media-type-scoped
+	// searches are merged in Go before applying the page limit.
+	orderCondition := ` ORDER BY ` + searchSortClause(sortOrder)
+	sortValueSelect := ""
+	if sortOrder != "" {
+		sortValueSelect = `, ` + searchSortExpr(sortOrder) + ` AS SortValue`
+	}
 
 	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 	mediaQuery := `
@@ -847,12 +925,13 @@ func sqlSearchMediaWithFilters(
 			MediaTitles.Name,
 			Media.Path,
 			Media.DBID,
-			MediaTitles.DisambiguationTypes
+			MediaTitles.DisambiguationTypes` + sortValueSelect + `
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE ` + systemCondition +
 		`Media.IsMissing = 0` +
+		pathFilterCondition +
 		variantCondition +
 		cursorCondition +
 		tagFilterCondition +
@@ -860,10 +939,13 @@ func sqlSearchMediaWithFilters(
 		orderCondition +
 		` LIMIT ?`
 
-	// Assemble final args: systems → variants → tag filters → limit
-	mediaArgs := append([]any(nil), args...)        // System IDs
-	mediaArgs = append(mediaArgs, variantArgs...)   // Variant args (includes cursor, letter if present)
-	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
+	// Assemble args in WHERE-clause order.
+	mediaArgs := append([]any(nil), args...)         // System IDs
+	mediaArgs = append(mediaArgs, pathFilterArgs...) // Recursive path range
+	mediaArgs = append(mediaArgs, variantArgs...)    // Query variants
+	mediaArgs = append(mediaArgs, cursorArgs...)     // Cursor keyset
+	mediaArgs = append(mediaArgs, tagFilterArgs...)  // Tag filters
+	mediaArgs = append(mediaArgs, letterArgs...)     // Letter filters
 	mediaArgs = append(mediaArgs, limit)
 
 	queryStarted := time.Now()
@@ -890,11 +972,29 @@ func sqlSearchMediaWithFilters(
 	// Collect media items
 	for mediaRows.Next() {
 		result := database.SearchResultWithCursor{}
-		if scanErr := mediaRows.Scan(
-			&result.SystemID, &result.Name, &result.Path, &result.MediaID, &result.DisambiguationTypes,
-		); scanErr != nil {
+		var scanErr error
+		if sortOrder == "" {
+			scanErr = mediaRows.Scan(
+				&result.SystemID,
+				&result.Name,
+				&result.Path,
+				&result.MediaID,
+				&result.DisambiguationTypes,
+			)
+		} else {
+			scanErr = mediaRows.Scan(
+				&result.SystemID,
+				&result.Name,
+				&result.Path,
+				&result.MediaID,
+				&result.DisambiguationTypes,
+				&result.SortValue,
+			)
+		}
+		if scanErr != nil {
 			return results, fmt.Errorf("failed to scan media result: %w", scanErr)
 		}
+		result.SortMode = sortOrder
 		results = append(results, result)
 	}
 	if err = mediaRows.Err(); err != nil {
@@ -910,8 +1010,10 @@ func sqlSearchMediaWithFilters(
 
 	log.Debug().
 		Int("systems", len(systems)).
+		Str("pathPrefix", pathPrefix).
 		Int("variantGroups", len(variantGroups)).
 		Int("tagFilters", len(tags)).
+		Str("sort", sortOrder).
 		Bool("tagDriven", skipSystemFilter).
 		Int("rows", len(results)).
 		Dur("queryDuration", queryElapsed).
@@ -930,6 +1032,22 @@ func sqlSearchMediaByTitleDBIDs(
 	cursor *int64,
 	limit int,
 ) ([]database.SearchResultWithCursor, error) {
+	return sqlSearchMediaByTitleDBIDsSorted(
+		ctx, db, titleDBIDs, "", tags, letter, cursor, nil, "", limit)
+}
+
+func sqlSearchMediaByTitleDBIDsSorted(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	pathPrefix string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	cursor *int64,
+	sortCursor *database.SearchCursor,
+	sortOrder string,
+	limit int,
+) ([]database.SearchResultWithCursor, error) {
 	if len(titleDBIDs) == 0 {
 		return []database.SearchResultWithCursor{}, nil
 	}
@@ -945,7 +1063,24 @@ func sqlSearchMediaByTitleDBIDs(
 	var extraConditions []string
 	var extraArgs []any
 
-	if cursor != nil {
+	if pathPrefix != "" {
+		pathClause, pathArgs := browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+		extraConditions = append(extraConditions, pathClause)
+		extraArgs = append(extraArgs, pathArgs...)
+	}
+
+	switch {
+	case sortCursor != nil:
+		if sortOrder == "" || sortCursor.Sort != sortOrder {
+			return nil, errors.New("search cursor sort does not match request")
+		}
+		extraConditions = append(extraConditions, searchCursorPredicate(sortOrder))
+		extraArgs = append(extraArgs, sortCursor.SortValue, sortCursor.LastID)
+	case cursor != nil:
+		if sortOrder != "" {
+			return nil, errors.New("legacy search cursor cannot continue explicit sort")
+		}
 		extraConditions = append(extraConditions, "Media.DBID > ?")
 		extraArgs = append(extraArgs, *cursor)
 	}
@@ -963,6 +1098,11 @@ func sqlSearchMediaByTitleDBIDs(
 		whereExtra = " AND " + strings.Join(extraConditions, " AND ")
 	}
 
+	sortValueSelect := ""
+	if sortOrder != "" {
+		sortValueSelect = `, ` + searchSortExpr(sortOrder) + ` AS SortValue`
+	}
+
 	//nolint:gosec // Safe: WHERE clause built from sanitized components
 	query := `
 		SELECT
@@ -970,12 +1110,12 @@ func sqlSearchMediaByTitleDBIDs(
 			MediaTitles.Name,
 			Media.Path,
 			Media.DBID,
-			MediaTitles.DisambiguationTypes
+			MediaTitles.DisambiguationTypes` + sortValueSelect + `
 		FROM MediaTitles
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE ` + titleCondition + ` AND Media.IsMissing = 0` + whereExtra + `
-		ORDER BY Media.DBID ASC
+		ORDER BY ` + searchSortClause(sortOrder) + `
 		LIMIT ?`
 
 	finalArgs := make([]any, 0, len(args)+len(extraArgs)+1)
@@ -993,11 +1133,29 @@ func sqlSearchMediaByTitleDBIDs(
 	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
 	for rows.Next() {
 		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(
-			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.DisambiguationTypes,
-		); scanErr != nil {
+		var scanErr error
+		if sortOrder == "" {
+			scanErr = rows.Scan(
+				&r.SystemID,
+				&r.Name,
+				&r.Path,
+				&r.MediaID,
+				&r.DisambiguationTypes,
+			)
+		} else {
+			scanErr = rows.Scan(
+				&r.SystemID,
+				&r.Name,
+				&r.Path,
+				&r.MediaID,
+				&r.DisambiguationTypes,
+				&r.SortValue,
+			)
+		}
+		if scanErr != nil {
 			return nil, fmt.Errorf("failed to scan result: %w", scanErr)
 		}
+		r.SortMode = sortOrder
 		results = append(results, r)
 	}
 	if err = rows.Err(); err != nil {
@@ -1013,6 +1171,7 @@ func sqlSearchMediaByTitleDBIDs(
 	log.Debug().
 		Int("titleDBIDs", len(titleDBIDs)).
 		Int("tagFilters", len(tags)).
+		Str("sort", sortOrder).
 		Int("rows", len(results)).
 		Dur("queryDuration", queryElapsed).
 		Dur("tagsDuration", time.Since(tagsStarted)).
@@ -1397,88 +1556,81 @@ func sqlSearchMediaBySlugIn(
 	return results, nil
 }
 
-// sqlGetRandomMediaForTitle returns a random media entry for the given title DBID.
-func sqlGetRandomMediaForTitle(ctx context.Context, db sqlQueryable, titleDBID int64) (database.SearchResult, error) {
-	var row database.SearchResult
-	err := db.QueryRowContext(ctx, `
-		SELECT Systems.SystemID, Media.Path, Media.DBID
-		FROM Media
-		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Media.MediaTitleDBID = ? AND Media.IsMissing = 0
-		ORDER BY RANDOM() LIMIT 1
-	`, titleDBID).Scan(&row.SystemID, &row.Path, &row.MediaID)
-	if err != nil {
-		return row, fmt.Errorf("failed to get random media for title %d: %w", titleDBID, err)
-	}
-	row.Name = helpers.FilenameFromPath(row.Path)
-	return row, nil
+const (
+	randomDenseRangeFactor   = 4
+	randomExactProbeAttempts = 8
+)
+
+func sqlSelectRandomGameWithStats(
+	ctx context.Context,
+	db sqlQueryable,
+	query *database.MediaQuery,
+	stats MediaStats,
+) (database.SearchResult, error) {
+	return sqlSelectRandomGameWithStatsUsing(ctx, db, query, stats, helpers.RandomInt)
 }
 
-func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.System) (database.SearchResult, error) {
+func sqlSelectRandomGameWithStatsUsing(
+	ctx context.Context,
+	db sqlQueryable,
+	query *database.MediaQuery,
+	stats MediaStats,
+	randomInt func(int) (int, error),
+) (database.SearchResult, error) {
 	var row database.SearchResult
-
-	// Step 1: Get count, min DBID, and max DBID for this system
-	statsQuery := `
-		SELECT COUNT(*), COALESCE(MIN(Media.DBID), 0), COALESCE(MAX(Media.DBID), 0)
-		FROM Media
-		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Systems.SystemID = ? AND Media.IsMissing = 0
-	`
-	var count int
-	var minDBID, maxDBID int64
-	err := db.QueryRowContext(ctx, statsQuery, system.ID).Scan(&count, &minDBID, &maxDBID)
-	if err != nil {
-		return row, fmt.Errorf("failed to get media stats for system: %w", err)
-	}
-
-	if count == 0 {
+	if stats.Count <= 0 {
 		return row, sql.ErrNoRows
 	}
 
-	// Step 2: Generate random DBID within the range
-	// This approach is O(log n) instead of O(n) for OFFSET
-	randomOffset, err := helpers.RandomInt(int(maxDBID - minDBID + 1))
-	if err != nil {
-		return row, fmt.Errorf("failed to generate random DBID offset: %w", err)
-	}
-	targetDBID := minDBID + int64(randomOffset)
-
-	// Step 3: Get the first media item with DBID >= targetDBID
-	selectQuery := `
+	whereClause, baseArgs := buildMediaQueryWhereClause(query)
+	const selectColumns = `
 		SELECT Systems.SystemID, Media.Path, Media.DBID
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Systems.SystemID = ? AND Media.IsMissing = 0 AND Media.DBID >= ?
-		ORDER BY Media.DBID ASC
-		LIMIT 1
-	`
-	err = db.QueryRowContext(ctx, selectQuery, system.ID, targetDBID).Scan(
-		&row.SystemID,
-		&row.Path,
-		&row.MediaID,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
-		selectQuery = `
-			SELECT Systems.SystemID, Media.Path, Media.DBID
-			FROM Media
-			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-			WHERE Systems.SystemID = ? AND Media.IsMissing = 0 AND Media.DBID < ?
-			ORDER BY Media.DBID DESC
-			LIMIT 1
-		`
-		err = db.QueryRowContext(ctx, selectQuery, system.ID, targetDBID).Scan(
-			&row.SystemID,
-			&row.Path,
-			&row.MediaID,
-		)
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID`
+
+	maxInt := int64(^uint(0) >> 1)
+	var rangeSize int64
+	if stats.MaxDBID >= stats.MinDBID {
+		delta := stats.MaxDBID - stats.MinDBID
+		if delta < maxInt {
+			rangeSize = delta + 1
+		}
 	}
+
+	// Exact rejection sampling is constant-time for dense DBID ranges and stays
+	// uniform because misses are discarded rather than assigned to the next row.
+	if rangeSize > 0 && rangeSize <= int64(stats.Count)*randomDenseRangeFactor {
+		candidateWhereClause, candidateArgs := buildMediaCandidateQueryWhereClause(query)
+		exactQuery := selectColumns + "\n" + candidateWhereClause + " AND Media.DBID = ? LIMIT 1"
+		for range randomExactProbeAttempts {
+			randomOffset, err := randomInt(int(rangeSize))
+			if err != nil {
+				return row, fmt.Errorf("failed to generate exact random DBID offset: %w", err)
+			}
+			args := append(append([]any(nil), candidateArgs...), stats.MinDBID+int64(randomOffset))
+			err = db.QueryRowContext(ctx, exactQuery, args...).Scan(&row.SystemID, &row.Path, &row.MediaID)
+			if err == nil {
+				row.Name = helpers.FilenameFromPath(row.Path)
+				return row, nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return row, fmt.Errorf("failed exact random media probe: %w", err)
+			}
+		}
+	}
+
+	// Sparse scopes use a uniform ordinal over the exact matching set. This
+	// scans only to the chosen matching row and avoids ORDER BY RANDOM's full
+	// random-key sort.
+	randomOrdinal, err := randomInt(stats.Count)
 	if err != nil {
-		return row, fmt.Errorf("failed to scan random game row using DBID approach: %w", err)
+		return row, fmt.Errorf("failed to generate random media ordinal: %w", err)
+	}
+	offsetQuery := selectColumns + "\n" + whereClause + " ORDER BY Media.DBID ASC LIMIT 1 OFFSET ?"
+	args := append(append([]any(nil), baseArgs...), randomOrdinal)
+	if err = db.QueryRowContext(ctx, offsetQuery, args...).Scan(&row.SystemID, &row.Path, &row.MediaID); err != nil {
+		return row, fmt.Errorf("failed to select random media ordinal: %w", err)
 	}
 	row.Name = helpers.FilenameFromPath(row.Path)
 	return row, nil
@@ -1520,52 +1672,9 @@ func sqlRandomGameWithQueryAndStats(
 		return row, stats, sql.ErrNoRows
 	}
 
-	// Step 2: Generate random DBID within the range
-	randomOffset, err := helpers.RandomInt(int(stats.MaxDBID - stats.MinDBID + 1))
+	row, err = sqlSelectRandomGameWithStats(ctx, db, query, stats)
 	if err != nil {
-		return row, stats, fmt.Errorf("failed to generate random DBID offset: %w", err)
+		return row, stats, err
 	}
-	targetDBID := stats.MinDBID + int64(randomOffset)
-
-	// Step 3: Get the first media item with DBID >= targetDBID
-	//nolint:gosec // whereClause is built from safe conditions, no user input
-	selectQuery := fmt.Sprintf(`
-		SELECT Systems.SystemID, Media.Path, Media.DBID
-		FROM Media
-		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		%s AND Media.DBID >= ?
-		ORDER BY Media.DBID ASC
-		LIMIT 1
-	`, whereClause)
-
-	args = append(args, targetDBID)
-	err = db.QueryRowContext(ctx, selectQuery, args...).Scan(
-		&row.SystemID,
-		&row.Path,
-		&row.MediaID,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
-		selectQuery = fmt.Sprintf(`
-			SELECT Systems.SystemID, Media.Path, Media.DBID
-			FROM Media
-			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-			%s AND Media.DBID < ?
-			ORDER BY Media.DBID DESC
-			LIMIT 1
-		`, whereClause)
-		args[len(args)-1] = targetDBID
-		err = db.QueryRowContext(ctx, selectQuery, args...).Scan(
-			&row.SystemID,
-			&row.Path,
-			&row.MediaID,
-		)
-	}
-	if err != nil {
-		return row, stats, fmt.Errorf("failed to scan random game row with query: %w", err)
-	}
-	row.Name = helpers.FilenameFromPath(row.Path)
 	return row, stats, nil
 }

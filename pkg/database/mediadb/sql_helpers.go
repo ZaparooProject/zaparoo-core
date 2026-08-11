@@ -40,6 +40,13 @@ func prepareVariadic(p, s string, c int) string {
 	return strings.Join(q, s)
 }
 
+func mediaRecursivePathPrefix(path string) string {
+	if path == "" || strings.HasSuffix(path, "/") {
+		return path
+	}
+	return path + "/"
+}
+
 // buildMediaQueryWhereClause creates WHERE clause and arguments for a MediaQuery.
 // Centralizes the logic to avoid duplication between different query functions.
 func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string, args []any) {
@@ -56,10 +63,14 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 			fmt.Sprintf("Systems.SystemID IN (%s)", strings.Join(placeholders, ",")))
 	}
 
-	// Path prefix filtering (for absolute paths)
+	// Recursive paths use a boundary-delimited indexed range, so a scope such
+	// as /roms/SNES cannot include sibling /roms/SNES2 and wildcard characters
+	// in real path names stay literal.
 	if query.PathPrefix != "" {
-		whereConditions = append(whereConditions, "Media.Path LIKE ?")
-		args = append(args, query.PathPrefix+"%")
+		pathCondition, pathArgs := browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(query.PathPrefix))
+		whereConditions = append(whereConditions, pathCondition)
+		args = append(args, pathArgs...)
 	}
 
 	// PathGlob - match against slugified titles for fuzzy search
@@ -119,4 +130,20 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 	}
 
 	return whereClause, args
+}
+
+// buildMediaCandidateQueryWhereClause uses correlated tag probes for a query
+// already narrowed to one candidate DBID. This avoids materializing a complete
+// tag result set for each dense-range rejection-sampling attempt.
+func buildMediaCandidateQueryWhereClause(
+	query *database.MediaQuery,
+) (whereClause string, args []any) {
+	candidateQuery := *query
+	candidateQuery.Tags = nil
+	whereClause, args = buildMediaQueryWhereClause(&candidateQuery)
+	tagClauses, tagArgs := buildCandidateTagFilterSQL(query.Tags)
+	if len(tagClauses) == 0 {
+		return whereClause, args
+	}
+	return whereClause + " AND " + strings.Join(tagClauses, " AND "), append(args, tagArgs...)
 }

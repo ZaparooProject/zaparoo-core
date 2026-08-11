@@ -720,9 +720,10 @@ func TestMediaDB_RandomGameWithQuery_PathPrefixIntegration(t *testing.T) {
 
 	matchingDir := filepath.Join("roms", "nes", "favorites")
 	matchingPath := filepath.Join(matchingDir, "target.nes")
+	nestedPath := filepath.Join(matchingDir, "nested", "nested.nes")
+	siblingPrefixPath := filepath.Join("roms", "nes", "favorites-old", "sibling.nes")
 	outsidePath := filepath.Join("roms", "nes", "other", "outside.nes")
-	paths := []string{matchingPath, outsidePath}
-	var matchingMediaID int64
+	paths := []string{matchingPath, nestedPath, siblingPrefixPath, outsidePath}
 	for i, path := range paths {
 		name := fmt.Sprintf("Game %d", i+1)
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
@@ -731,27 +732,24 @@ func TestMediaDB_RandomGameWithQuery_PathPrefixIntegration(t *testing.T) {
 			Name:       name,
 		})
 		require.NoError(t, titleErr)
-		insertedMedia, mediaErr := mediaDB.InsertMedia(database.Media{
+		_, mediaErr := mediaDB.InsertMedia(database.Media{
 			SystemDBID:     insertedSystem.DBID,
 			MediaTitleDBID: insertedTitle.DBID,
 			Path:           path,
+			ParentDir:      ParentDirForMediaPath(filepath.ToSlash(path)),
 		})
 		require.NoError(t, mediaErr)
-		if path == matchingPath {
-			matchingMediaID = insertedMedia.DBID
-		}
 	}
 
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
-		PathPrefix: matchingDir + string(filepath.Separator),
+		PathPrefix: filepath.ToSlash(matchingDir),
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
-	assert.Equal(t, matchingPath, result.Path)
-	assert.Equal(t, matchingMediaID, result.MediaID)
+	assert.Contains(t, []string{matchingPath, nestedPath}, result.Path)
 }
 
 func TestMediaDB_RandomGameWithQuery_NegativeTagIntegration(t *testing.T) {
@@ -835,6 +833,67 @@ func TestMediaDB_RandomGameWithQuery_NegativeTagIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
 	assert.Equal(t, untaggedPath, result.Path)
+}
+
+func TestMediaDB_RandomGameWithQuery_TagsApplyBeforeSystems(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	favoriteType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "user"})
+	require.NoError(t, err)
+	favoriteTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: favoriteType.DBID, Tag: "favorite"})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	var favoritePath string
+	for _, systemID := range []string{"NES", "SNES"} {
+		systemDef, systemErr := systemdefs.GetSystem(systemID)
+		require.NoError(t, systemErr)
+		insertedSystem, insertErr := mediaDB.InsertSystem(database.System{
+			SystemID: systemDef.ID,
+			Name:     systemID,
+		})
+		require.NoError(t, insertErr)
+		insertedTitle, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, systemID+" Game"),
+			Name:       systemID + " Game",
+		})
+		require.NoError(t, insertErr)
+		mediaPath := filepath.Join("roms", strings.ToLower(systemID), "game.rom")
+		insertedMedia, insertErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSystem.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           mediaPath,
+		})
+		require.NoError(t, insertErr)
+		if systemID == "NES" {
+			favoritePath = mediaPath
+			_, insertErr = mediaDB.InsertMediaTag(database.MediaTag{
+				MediaDBID: insertedMedia.DBID,
+				TagDBID:   favoriteTag.DBID,
+			})
+			require.NoError(t, insertErr)
+		}
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+		Systems: []string{"NES", "SNES"},
+		Tags: []zapscript.TagFilter{{
+			Type:  "user",
+			Value: "favorite",
+		}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "NES", result.SystemID)
+	assert.Equal(t, favoritePath, result.Path)
 }
 
 func TestMediaDB_LookupsRespectCanceledContext(t *testing.T) {

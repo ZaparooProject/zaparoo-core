@@ -22,6 +22,7 @@ package mediadb
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -67,6 +68,44 @@ func buildMediaSearchTypeGroups(
 	}
 
 	return groups
+}
+
+func mediaSearchSystemsForPathPrefix(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+) ([]systemdefs.System, error) {
+	pathClause, args := browsePathPrefixCondition(
+		"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+	rows, err := db.QueryContext(ctx, `
+		SELECT DISTINCT Systems.SystemID
+		FROM Media
+		INNER JOIN Systems ON Systems.DBID = Media.SystemDBID
+		WHERE Media.IsMissing = 0 AND `+pathClause+`
+		ORDER BY Systems.SystemID`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query media search path systems: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	systems := make([]systemdefs.System, 0, 4)
+	for rows.Next() {
+		var systemID string
+		if scanErr := rows.Scan(&systemID); scanErr != nil {
+			return nil, fmt.Errorf("scan media search path system: %w", scanErr)
+		}
+		system, lookupErr := systemdefs.GetSystem(systemID)
+		if lookupErr == nil {
+			systems = append(systems, *system)
+			continue
+		}
+		// Unregistered indexed systems use System's default game-title normalization.
+		systems = append(systems, systemdefs.System{ID: systemID})
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("media search path systems rows: %w", rowsErr)
+	}
+	return systems, nil
 }
 
 func mediaSearchTypeGroupsCacheable(groups []mediaSearchTypeGroup) bool {
@@ -118,12 +157,56 @@ func searchMediaTypeGroupsInCache(
 	return candidates
 }
 
+func sqliteNoCaseCompare(a, b string) int {
+	limit := min(len(a), len(b))
+	for i := range limit {
+		left := a[i]
+		right := b[i]
+		if left >= 'A' && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if right >= 'A' && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		if order := cmp.Compare(left, right); order != 0 {
+			return order
+		}
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+func compareSearchResults(a, b *database.SearchResultWithCursor, sortOrder string) int {
+	var order int
+	switch sortOrder {
+	case "name-asc", "name-desc":
+		order = sqliteNoCaseCompare(a.SortValue, b.SortValue)
+	case "filename-asc", "filename-desc":
+		order = cmp.Compare(a.SortValue, b.SortValue)
+	default:
+		return cmp.Compare(a.MediaID, b.MediaID)
+	}
+	if order == 0 {
+		order = cmp.Compare(a.MediaID, b.MediaID)
+	}
+	if sortOrder == "name-desc" || sortOrder == "filename-desc" {
+		return -order
+	}
+	return order
+}
+
 func titleDBIDQueryParamCount(candidateCount int, filters *database.SearchFilters) int {
 	_, tagArgs := buildCandidateTagFilterSQL(filters.Tags)
 	_, letterArgs := BuildLetterFilterSQL(filters.Letter, "MediaTitles.Name")
+	var pathArgs []any
+	if filters.PathPrefix != "" {
+		_, pathArgs = browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(filters.PathPrefix))
+	}
 
-	count := candidateCount + len(tagArgs) + len(letterArgs) + 1 // LIMIT
-	if filters.Cursor != nil {
+	count := candidateCount + len(pathArgs) + len(tagArgs) + len(letterArgs) + 1 // LIMIT
+	if filters.SortCursor != nil {
+		count += 2
+	} else if filters.Cursor != nil {
 		count++
 	}
 	return count
@@ -137,15 +220,18 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, filters.Limit)
 	for i := range groups {
-		groupResults, err := sqlSearchMediaWithFilters(
+		groupResults, err := sqlSearchMediaWithFiltersSorted(
 			ctx,
 			db.sql.Load(),
 			groups[i].systems,
 			groups[i].variantGroups,
 			rawWords,
+			filters.PathPrefix,
 			filters.Tags,
 			filters.Letter,
 			filters.Cursor,
+			filters.SortCursor,
+			filters.Sort,
 			filters.Limit,
 			groups[i].includeName,
 		)
@@ -156,7 +242,7 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 	}
 
 	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
-		return cmp.Compare(a.MediaID, b.MediaID)
+		return compareSearchResults(&a, &b, filters.Sort)
 	})
 	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
 		return a.MediaID == b.MediaID

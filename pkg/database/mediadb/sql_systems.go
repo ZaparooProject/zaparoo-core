@@ -24,7 +24,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/rs/zerolog/log"
@@ -223,6 +225,134 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	return list, err
 }
 
+func buildNegativeOnlySystemMediaCountsQuery(
+	tags []zapscript.TagFilter,
+) (query string, args []any) {
+	forbidden := make([]zapscript.TagFilter, len(tags))
+	for i := range tags {
+		forbidden[i] = tags[i]
+		forbidden[i].Operator = zapscript.TagOperatorOR
+	}
+	forbiddenClauses, args := BuildTagFilterSQL(forbidden)
+
+	query = `
+		WITH TotalCounts AS (
+			SELECT Media.SystemDBID, COUNT(*) AS Count
+			FROM Media INDEXED BY media_system_present_path_idx
+			WHERE Media.IsMissing = 0
+			GROUP BY Media.SystemDBID
+		), ExcludedCounts AS (
+			SELECT Media.SystemDBID, COUNT(*) AS Count
+			FROM Media
+			WHERE Media.IsMissing = 0
+			AND ` + strings.Join(forbiddenClauses, " AND ") + `
+			GROUP BY Media.SystemDBID
+		)
+		SELECT Systems.SystemID, TotalCounts.Count - COALESCE(ExcludedCounts.Count, 0)
+		FROM TotalCounts
+		INNER JOIN Systems ON Systems.DBID = TotalCounts.SystemDBID
+		LEFT JOIN ExcludedCounts ON ExcludedCounts.SystemDBID = TotalCounts.SystemDBID
+		WHERE TotalCounts.Count > COALESCE(ExcludedCounts.Count, 0)
+		ORDER BY Systems.SystemID`
+	return query, args
+}
+
+func querySystemMediaCounts(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args ...any,
+) ([]database.SystemMediaCount, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query system media counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	counts := make([]database.SystemMediaCount, 0)
+	for rows.Next() {
+		var count database.SystemMediaCount
+		if scanErr := rows.Scan(&count.SystemID, &count.Count); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan system media count: %w", scanErr)
+		}
+		counts = append(counts, count)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("system media count rows: %w", err)
+	}
+	return counts, nil
+}
+
+func sqlSystemMediaCountsFromBrowseCache(
+	ctx context.Context,
+	db sqlQueryable,
+) ([]database.SystemMediaCount, error) {
+	return querySystemMediaCounts(ctx, db, `
+		SELECT Systems.SystemID, SUM(BrowseDirCounts.FileCount)
+		FROM BrowseDirs
+		INNER JOIN BrowseDirCounts ON BrowseDirCounts.ParentDirDBID = BrowseDirs.DBID
+		INNER JOIN Systems ON Systems.DBID = BrowseDirCounts.SystemDBID
+		WHERE BrowseDirs.Path = '/'
+		GROUP BY BrowseDirCounts.SystemDBID, Systems.SystemID
+		ORDER BY Systems.SystemID`)
+}
+
+func sqlSystemMediaCounts(
+	ctx context.Context,
+	db sqlQueryable,
+	tags []zapscript.TagFilter,
+) ([]database.SystemMediaCount, error) {
+	if len(tags) == 0 {
+		if state, err := sqlBrowseCacheStatus(ctx, db); err == nil && sqlBrowseCacheServeable(state) {
+			counts, cacheErr := sqlSystemMediaCountsFromBrowseCache(ctx, db)
+			if cacheErr == nil {
+				return counts, nil
+			}
+			log.Debug().Err(cacheErr).Msg("failed to read system media counts from browse cache")
+		} else if err != nil {
+			log.Debug().Err(err).Msg("failed to check browse cache for system media counts")
+		}
+
+		return querySystemMediaCounts(ctx, db, `
+			SELECT Systems.SystemID, matched.Count
+			FROM (
+				SELECT Media.SystemDBID, COUNT(*) AS Count
+				FROM Media INDEXED BY media_system_present_path_idx
+				WHERE Media.IsMissing = 0
+				GROUP BY Media.SystemDBID
+			) matched
+			INNER JOIN Systems ON Systems.DBID = matched.SystemDBID
+			ORDER BY Systems.SystemID`)
+	}
+
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tags)
+	negativeOnly := len(notFilters) > 0 && len(andFilters) == 0 && len(orFilters) == 0
+
+	var query string
+	var args []any
+	if negativeOnly {
+		query, args = buildNegativeOnlySystemMediaCountsQuery(tags)
+	} else {
+		tagClauses, tagArgs := BuildTagFilterSQL(tags)
+		conditions := make([]string, 1, 1+len(tagClauses))
+		conditions[0] = "Media.IsMissing = 0"
+		conditions = append(conditions, tagClauses...)
+		query = `
+			SELECT Systems.SystemID, matched.Count
+			FROM (
+				SELECT Media.SystemDBID, COUNT(*) AS Count
+				FROM Media
+				WHERE ` + strings.Join(conditions, " AND ") + `
+				GROUP BY Media.SystemDBID
+			) matched
+			INNER JOIN Systems ON Systems.DBID = matched.SystemDBID
+			ORDER BY Systems.SystemID`
+		args = tagArgs
+	}
+
+	return querySystemMediaCounts(ctx, db, query, args...)
+}
+
 func sqlIndexedSystemsFromBrowseCache(ctx context.Context, db sqlQueryable) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT s.SystemID
@@ -252,55 +382,6 @@ func sqlIndexedSystemsFromBrowseCache(ctx context.Context, db sqlQueryable) ([]s
 		return nil, err
 	}
 	return list, nil
-}
-
-// sqlFilterIndexedSystems returns only those systemIDs that exist in the Systems
-// table (i.e., have indexed content). Preserves input order.
-func sqlFilterIndexedSystems(ctx context.Context, db sqlQueryable, systemIDs []string) ([]string, error) {
-	if len(systemIDs) == 0 {
-		return []string{}, nil
-	}
-
-	args := make([]any, len(systemIDs))
-	for i, id := range systemIDs {
-		args[i] = id
-	}
-
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
-	rows, err := db.QueryContext(ctx,
-		"SELECT SystemID FROM Systems WHERE SystemID IN ("+
-			prepareVariadic("?", ",", len(systemIDs))+")",
-		args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to filter indexed systems: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close rows in sqlFilterIndexedSystems")
-		}
-	}()
-
-	indexed := make(map[string]struct{})
-	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return nil, fmt.Errorf("failed to scan indexed system: %w", scanErr)
-		}
-		indexed[id] = struct{}{}
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating indexed systems: %w", err)
-	}
-
-	// Preserve input order, dedup by removing from map after first match
-	result := make([]string, 0, len(indexed))
-	for _, id := range systemIDs {
-		if _, ok := indexed[id]; ok {
-			result = append(result, id)
-			delete(indexed, id)
-		}
-	}
-	return result, nil
 }
 
 func sqlGetAllSystems(ctx context.Context, db *sql.DB) ([]database.System, error) {

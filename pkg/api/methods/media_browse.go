@@ -29,10 +29,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
@@ -178,6 +180,17 @@ func HandleMediaBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	return result, err
 }
 
+func parseBrowseTagFilters(rawTags *[]string) ([]zapscript.TagFilter, error) {
+	if rawTags == nil || len(*rawTags) == 0 {
+		return nil, nil
+	}
+	tagFilters, err := filters.ParseTagFilters(*rawTags)
+	if err != nil {
+		return nil, models.ClientErrf("failed to parse tag filters: %w", err)
+	}
+	return tagFilters, nil
+}
+
 func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	select {
 	case browseSem <- struct{}{}:
@@ -192,6 +205,11 @@ func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			log.Warn().Err(err).Msg("invalid browse params")
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
+	}
+
+	tagFilters, err := parseBrowseTagFilters(params.Tags)
+	if err != nil {
+		return nil, err
 	}
 
 	maxResults := defaultMaxResults
@@ -235,11 +253,11 @@ func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 
 	// Virtual path (contains ://)
 	if strings.Contains(path, "://") {
-		return browseVirtual(&env, path, cursor, maxResults, params.Letter, sort, systems)
+		return browseVirtual(&env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 	}
 
 	// Filesystem path
-	return browseFilesystem(&env, path, cursor, maxResults, params.Letter, sort, systems)
+	return browseFilesystem(&env, path, cursor, maxResults, params.Letter, sort, systems, tagFilters)
 }
 
 // browseRoots returns the top-level root entries: filesystem roots with indexed
@@ -601,6 +619,7 @@ func browseFilesystem(
 	letter *string,
 	sort string,
 	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
 ) (any, error) {
 	// Normalize the path
 	cleaned := filepath.ToSlash(filepath.Clean(path))
@@ -676,7 +695,7 @@ func browseFilesystem(
 		// More directories remain: emit a directory-only page keyed by name.
 		if hasMoreDirs {
 			if cursor == nil {
-				totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems)
+				totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems, tags)
 				if err != nil {
 					return nil, err
 				}
@@ -685,14 +704,15 @@ func browseFilesystem(
 			if encErr != nil {
 				return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
 			}
-			return buildBrowseResponse(env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, &next, true, systems)
+			return buildBrowseResponse(
+				env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, &next, true, systems, tags)
 		}
 
 		// Directories are exhausted. Fill the rest of the page with the first
 		// files so small folders return in a single round-trip (mixed boundary
 		// page), then continue paging files from there.
 		if cursor == nil {
-			totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems)
+			totalFiles, err = browseTotalFileCount(ctx, env, prefix, nil, systems, tags)
 			if err != nil {
 				return nil, err
 			}
@@ -711,7 +731,7 @@ func browseFilesystem(
 				next = &encoded
 			}
 			return buildBrowseResponse(
-				env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, next, hasNext, systems)
+				env, cleaned, dirs, nil, maxResults, totalFiles, totalDirs, next, hasNext, systems, tags)
 		}
 
 		started = time.Now()
@@ -720,6 +740,7 @@ func browseFilesystem(
 			Limit:      remaining + 1,
 			Sort:       sort,
 			Systems:    systems,
+			Tags:       tags,
 		})
 		logBrowseTiming("files", prefix, started, len(files))
 		if err != nil {
@@ -730,7 +751,7 @@ func browseFilesystem(
 			return nil, encErr
 		}
 		return buildBrowseResponse(
-			env, cleaned, dirs, files, maxResults, totalFiles, totalDirs, next, next != nil, systems)
+			env, cleaned, dirs, files, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags)
 	}
 
 	// Files phase. A files-phase cursor with no keyset (LastID == 0) marks the
@@ -748,6 +769,7 @@ func browseFilesystem(
 		Letter:     letter,
 		Sort:       sort,
 		Systems:    systems,
+		Tags:       tags,
 	})
 	logBrowseTiming("files", prefix, started, len(files))
 	if err != nil {
@@ -757,7 +779,7 @@ func browseFilesystem(
 	// Get total file count. First-page cursors carry this forward so loading
 	// additional pages in large directories does not repeat the same count query.
 	if totalFiles == 0 && (len(files) > 0 || cursor != nil) {
-		totalFiles, err = browseTotalFileCount(ctx, env, prefix, letter, systems)
+		totalFiles, err = browseTotalFileCount(ctx, env, prefix, letter, systems, tags)
 		if err != nil {
 			return nil, err
 		}
@@ -767,7 +789,8 @@ func browseFilesystem(
 	if encErr != nil {
 		return nil, encErr
 	}
-	return buildBrowseResponse(env, cleaned, nil, files, maxResults, totalFiles, totalDirs, next, next != nil, systems)
+	return buildBrowseResponse(
+		env, cleaned, nil, files, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags)
 }
 
 // browseTotalFileCount returns the direct-child file count for a path prefix,
@@ -778,12 +801,14 @@ func browseTotalFileCount(
 	prefix string,
 	letter *string,
 	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
 ) (int, error) {
 	started := time.Now()
 	count, err := env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
 		PathPrefix: prefix,
 		Letter:     letter,
 		Systems:    systems,
+		Tags:       tags,
 	})
 	logBrowseTiming("file_count", prefix, started, count)
 	if err != nil {
@@ -830,6 +855,7 @@ func browseVirtual(
 	letter *string,
 	sort string,
 	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
 ) (any, error) {
 	// Validate scheme is known
 	if !isKnownVirtualScheme(env, schemePath) {
@@ -845,6 +871,7 @@ func browseVirtual(
 		Letter:     letter,
 		Sort:       sort,
 		Systems:    systems,
+		Tags:       tags,
 	}
 	started := time.Now()
 	files, err := env.Database.MediaDB.BrowseFiles(ctx, opts)
@@ -857,7 +884,7 @@ func browseVirtual(
 	if cursor != nil && cursor.TotalFiles > 0 {
 		totalFiles = cursor.TotalFiles
 	} else {
-		totalFiles, err = browseTotalFileCount(ctx, env, schemePath, letter, systems)
+		totalFiles, err = browseTotalFileCount(ctx, env, schemePath, letter, systems, tags)
 		if err != nil {
 			return nil, err
 		}
@@ -867,7 +894,8 @@ func browseVirtual(
 	if encErr != nil {
 		return nil, encErr
 	}
-	return buildBrowseResponse(env, schemePath, nil, files, maxResults, totalFiles, 0, next, next != nil, systems)
+	return buildBrowseResponse(
+		env, schemePath, nil, files, maxResults, totalFiles, 0, next, next != nil, systems, tags)
 }
 
 // buildBrowseResponse assembles a BrowseResults page from directory and file
@@ -886,13 +914,22 @@ func buildBrowseResponse(
 	nextCursor *string,
 	hasNextPage bool,
 	systems []systemdefs.System,
+	tagSets ...[]zapscript.TagFilter,
 ) (any, error) {
+	var tags []zapscript.TagFilter
+	if len(tagSets) > 0 {
+		tags = tagSets[0]
+	}
+
 	var rootDirs []string
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
 
-	singletonAliases := resolveDirSingletonAliases(env, path, dirs, systems)
+	var singletonAliases map[string]database.SingletonContainerAlias
+	if len(tags) == 0 {
+		singletonAliases = resolveDirSingletonAliases(env, path, dirs, systems)
+	}
 
 	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
 	for _, dir := range dirs {
