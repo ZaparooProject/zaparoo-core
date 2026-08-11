@@ -794,6 +794,47 @@ func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestRandomGameWithQuery_RefreshesStaleCachedStatsOnce(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mediaDB := &MediaDB{inTransaction: true}
+	mediaDB.sql.Store(db)
+	mock.ExpectQuery(`SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = \?`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"Count", "MinDBID", "MaxDBID"}).AddRow(1, 999, 999))
+
+	exactQuery := `SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+		`WHERE Media\.IsMissing = 0 AND Media\.DBID = \? LIMIT 1`
+	for range randomExactProbeAttempts {
+		mock.ExpectQuery(exactQuery).WithArgs(int64(999)).
+			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}))
+	}
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media .* ` +
+			`WHERE Media\.IsMissing = 0 ORDER BY Media\.DBID ASC LIMIT 1 OFFSET \?`,
+	).WithArgs(0).WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}))
+
+	mock.ExpectQuery(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), ` +
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE Media\.IsMissing = 0`,
+	).WillReturnRows(sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42))
+	mediaPath := filepath.Join("roms", "nes", "refreshed.nes")
+	mock.ExpectQuery(exactQuery).WithArgs(int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).AddRow("NES", mediaPath, 42),
+	)
+
+	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), result.MediaID)
+	assert.Equal(t, mediaPath, result.Path)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSQLSelectRandomGameWithStats_DenseGapRejectsMissingDBID(t *testing.T) {
 	t.Parallel()
 

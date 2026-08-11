@@ -87,6 +87,16 @@ func TestBrowseTags_FilesCountAndIndexStayAligned(t *testing.T) {
 	assert.Equal(t, "A", index.Buckets[0].Key)
 	assert.Equal(t, 1, index.Buckets[0].Count)
 
+	filenameIndex, err := mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		PathPrefix: pathPrefix,
+		Sort:       "filename-desc",
+		Tags:       favoriteFilter,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "none", filenameIndex.Scheme)
+	assert.Empty(t, filenameIndex.Buckets)
+	assert.Equal(t, 1, filenameIndex.TotalFiles, "non-matching rows must not contribute to filename index totals")
+
 	titleFilter := []zapscript.TagFilter{{Type: "genre", Value: "rpg"}}
 	titleFiles, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
 		PathPrefix: pathPrefix,

@@ -872,7 +872,10 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	return nil, err
 }
 
-func searchResultSystem(systemID string, launcherCache *helpers.LauncherCache) models.System {
+func searchResultSystem(
+	systemID string,
+	launchableSystems map[string]launchables.VirtualSystem,
+) models.System {
 	result := models.System{ID: systemID, Name: systemID}
 	if system, err := systemdefs.GetSystem(systemID); err == nil {
 		result.ID = system.ID
@@ -892,16 +895,10 @@ func searchResultSystem(systemID string, launcherCache *helpers.LauncherCache) m
 		return result
 	}
 
-	if launcherCache != nil {
-		for _, system := range launcherCache.GetLaunchableSystems() {
-			if launchables.EncodeID(system.ID) != systemID {
-				continue
-			}
-			result.Name = system.Name
-			result.Category = system.Category
-			result.ZapScript = system.ZapScript()
-			break
-		}
+	if system, ok := launchableSystems[systemID]; ok {
+		result.Name = system.Name
+		result.Category = system.Category
+		result.ZapScript = system.ZapScript()
 	}
 	return result
 }
@@ -1017,10 +1014,19 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
+	var launchableSystems map[string]launchables.VirtualSystem
+	if env.LauncherCache != nil {
+		cachedSystems := env.LauncherCache.GetLaunchableSystems()
+		launchableSystems = make(map[string]launchables.VirtualSystem, len(cachedSystems))
+		for i := range cachedSystems {
+			launchableSystems[launchables.EncodeID(cachedSystems[i].ID)] = cachedSystems[i]
+		}
+	}
+
 	results := make([]models.SearchResultMedia, 0, len(searchResults))
 	for i := range searchResults {
 		result := &searchResults[i]
-		resultSystem := searchResultSystem(result.SystemID, env.LauncherCache)
+		resultSystem := searchResultSystem(result.SystemID, launchableSystems)
 		zapScript := result.ZapScript()
 
 		var relPath *string

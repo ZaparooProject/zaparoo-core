@@ -22,6 +22,7 @@ package mediadb
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -69,29 +70,42 @@ func buildMediaSearchTypeGroups(
 	return groups
 }
 
-func mergeMediaSearchTypeGroupVariants(
-	groups []mediaSearchTypeGroup,
-	wordCount int,
-) ([][]string, bool) {
-	merged := make([][]string, wordCount)
-	seen := make([]map[string]struct{}, wordCount)
-	includeName := false
-	for i := range groups {
-		includeName = includeName || groups[i].includeName
-		for wordIndex, variants := range groups[i].variantGroups {
-			if seen[wordIndex] == nil {
-				seen[wordIndex] = make(map[string]struct{}, len(variants))
-			}
-			for _, variant := range variants {
-				if _, ok := seen[wordIndex][variant]; ok {
-					continue
-				}
-				seen[wordIndex][variant] = struct{}{}
-				merged[wordIndex] = append(merged[wordIndex], variant)
-			}
-		}
+func mediaSearchSystemsForPathPrefix(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+) ([]systemdefs.System, error) {
+	pathClause, args := browsePathPrefixCondition(
+		"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+	rows, err := db.QueryContext(ctx, `
+		SELECT DISTINCT Systems.SystemID
+		FROM Media
+		INNER JOIN Systems ON Systems.DBID = Media.SystemDBID
+		WHERE Media.IsMissing = 0 AND `+pathClause+`
+		ORDER BY Systems.SystemID`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query media search path systems: %w", err)
 	}
-	return merged, includeName
+	defer func() { _ = rows.Close() }()
+
+	systems := make([]systemdefs.System, 0, 4)
+	for rows.Next() {
+		var systemID string
+		if scanErr := rows.Scan(&systemID); scanErr != nil {
+			return nil, fmt.Errorf("scan media search path system: %w", scanErr)
+		}
+		system, lookupErr := systemdefs.GetSystem(systemID)
+		if lookupErr == nil {
+			systems = append(systems, *system)
+			continue
+		}
+		// Unregistered indexed systems use System's default game-title normalization.
+		systems = append(systems, systemdefs.System{ID: systemID})
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("media search path systems rows: %w", rowsErr)
+	}
+	return systems, nil
 }
 
 func mediaSearchTypeGroupsCacheable(groups []mediaSearchTypeGroup) bool {

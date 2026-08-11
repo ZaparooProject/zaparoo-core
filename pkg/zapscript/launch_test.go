@@ -1940,6 +1940,42 @@ launcher = "RA"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdRandom_QueryContainingVirtualMarkerUsesLegacySystemSearch(t *testing.T) {
+	t.Parallel()
+
+	const query = "NES/title://cutscene"
+	mediaPath := filepath.Join(launchTestAbsPath("games"), "NES", "Title Cutscene.nes")
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.MatchedBy(func(mediaQuery *database.MediaQuery) bool {
+		return mediaQuery.PathPrefix == "" &&
+			mediaQuery.PathGlob == "title://cutscene" &&
+			len(mediaQuery.Systems) == 1 &&
+			mediaQuery.Systems[0] == systemdefs.SystemNES
+	})).Return(database.SearchResult{
+		Path:     mediaPath,
+		SystemID: systemdefs.SystemNES,
+	}, nil)
+	mockPlatform.On(
+		"LaunchMedia", cfg, mediaPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Name: "launch.random", Args: []string{query}},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdRandom_VirtualPathUsesRecursivePrefixWithTags(t *testing.T) {
 	t.Parallel()
 

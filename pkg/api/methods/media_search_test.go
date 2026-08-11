@@ -33,10 +33,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/launchables"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -113,6 +115,25 @@ func TestSearchResultSystem_UnknownSystemFallsBackToID(t *testing.T) {
 	result := searchResultSystem("virtual-system", nil)
 	assert.Equal(t, "virtual-system", result.ID)
 	assert.Equal(t, "virtual-system", result.Name)
+}
+
+func TestSearchResultSystem_UsesLaunchableSystemMap(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.MustParse("01890f4a-33e8-4d44-d3a8-56824d352000")
+	encodedID := launchables.EncodeID(id)
+	result := searchResultSystem(encodedID, map[string]launchables.VirtualSystem{
+		encodedID: {
+			ID:       id,
+			Name:     "Chess",
+			Category: "Other",
+		},
+	})
+
+	assert.Equal(t, encodedID, result.ID)
+	assert.Equal(t, "Chess", result.Name)
+	assert.Equal(t, "Other", result.Category)
+	assert.Equal(t, "zaparoo://"+encodedID+"/Chess", result.ZapScript)
 }
 
 func TestDecodeCursor_InvalidInputs(t *testing.T) {

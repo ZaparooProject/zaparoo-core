@@ -123,6 +123,35 @@ func TestSearchMediaWithFilters_PathPrefixIncludesIndexedVirtualSystems(t *testi
 	assert.Equal(t, virtualPath, results[0].Path)
 }
 
+func TestSearchMediaWithFilters_VirtualPathKeepsMediaTypeVariantsScoped(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	nesSystem := insertSystemWithMedia(t, mediaDB, systemdefs.SystemNES, "Mario Kart", "steam://nes/mario-kart")
+	insertSystemMedia(t, mediaDB, nesSystem, "R-Type", "steam://nes/r-type")
+	insertSystemWithMedia(t, mediaDB, systemdefs.SystemMovie, "R-Type", "steam://movies/r-type")
+	mediaDB.slugSearchCache.Store(nil)
+
+	results, err := mediaDB.SearchMediaWithFilters(ctx, &database.SearchFilters{
+		Systems:    systemdefs.AllSystems(),
+		PathPrefix: "steam://",
+		Query:      "R-Type",
+		Sort:       "filename-asc",
+		Limit:      10,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	resultSystems := []string{results[0].SystemID, results[1].SystemID}
+	assert.ElementsMatch(t, []string{systemdefs.SystemNES, systemdefs.SystemMovie}, resultSystems)
+	for i := range results {
+		assert.Equal(t, "R-Type", results[i].Name)
+	}
+}
+
 func TestSearchMediaWithFilters_PathPrefixComposesAcrossCacheAndSQL(t *testing.T) {
 	t.Parallel()
 

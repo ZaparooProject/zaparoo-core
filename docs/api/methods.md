@@ -570,7 +570,7 @@ An object:
 | category     | string | No       | Category of system (e.g., "Console", "Computer"). Not yet formalised.    |
 | releaseDate  | string | No       | Release date of the system in ISO 8601 format (YYYY-MM-DD).              |
 | manufacturer | string | No       | Manufacturer of the system (e.g., "Nintendo", "Sega").                   |
-| mediaCount   | number | No       | Exact non-missing indexed media-row count for this system, or exact matching count when `systems.tags` is set. Zero means the system is supported but empty. Omitted by older Core versions or when counts are unavailable. |
+| mediaCount   | number | No       | Populated only in `systems` responses; not included on System objects nested in `media.search` results. Exact non-missing indexed media-row count for this system, or exact matching count when `systems.tags` is set. Zero means the system is supported but empty. Omitted by older Core versions or when counts are unavailable. |
 
 ##### Pagination object
 

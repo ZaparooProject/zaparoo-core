@@ -86,7 +86,10 @@ const defaultSlugSearchLimit = 50
 // logs during full-library indexing while preserving selective reindexing wins.
 const maxSelectiveInvalidationSystems = 32
 
-const mediaStatsCacheWriteTimeout = 100 * time.Millisecond
+const (
+	mediaStatsCacheWriteTimeout = 100 * time.Millisecond
+	mediaCountCacheMaxEntries   = 256
+)
 
 // mediaWALCheckpointThreshold bounds WAL growth during indexing. A batch commit
 // checkpoints (TRUNCATE) once the WAL has grown past this size, so a long
@@ -2308,29 +2311,22 @@ func (db *MediaDB) SearchMediaWithFilters(
 			filters.Letter, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit, false)
 	}
 
-	groups := buildMediaSearchTypeGroups(filters.Systems, qWords)
+	searchSystems := filters.Systems
 	if strings.Contains(filters.PathPrefix, "://") && requestedAllSystems(filters.Systems) {
-		variantGroups, includeName := mergeMediaSearchTypeGroupVariants(groups, len(qWords))
-		return sqlSearchMediaWithFiltersSorted(
-			ctx,
-			db.sql.Load(),
-			filters.Systems,
-			variantGroups,
-			qWords,
-			filters.PathPrefix,
-			filters.Tags,
-			filters.Letter,
-			filters.Cursor,
-			filters.SortCursor,
-			filters.Sort,
-			filters.Limit,
-			includeName,
-		)
+		var err error
+		searchSystems, err = mediaSearchSystemsForPathPrefix(ctx, db.sql.Load(), filters.PathPrefix)
+		if err != nil {
+			return nil, err
+		}
+		if len(searchSystems) == 0 {
+			return []database.SearchResultWithCursor{}, nil
+		}
 	}
 
-	systemIDs := make([]string, len(filters.Systems))
-	for i := range filters.Systems {
-		systemIDs[i] = filters.Systems[i].ID
+	groups := buildMediaSearchTypeGroups(searchSystems, qWords)
+	systemIDs := make([]string, len(searchSystems))
+	for i := range searchSystems {
+		systemIDs[i] = searchSystems[i].ID
 	}
 
 	cache := db.slugSearchCache.Load()
@@ -2737,18 +2733,33 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 		if stats.Count == 0 {
 			return result, sql.ErrNoRows
 		}
-		return db.randomGameWithStats(ctx, query, stats)
+		result, err := db.randomGameWithStats(ctx, query, stats)
+		if err == nil || !errors.Is(err, sql.ErrNoRows) {
+			return result, err
+		}
+
+		// A matching-row miss means cached count/range statistics are stale.
+		// Refresh once and retry through the uncached selector.
+		return db.randomGameWithFreshStats(ctx, query)
 	}
 
-	// Cache miss - use the full SQL implementation and cache the stats
+	return db.randomGameWithFreshStats(ctx, query)
+}
+
+func (db *MediaDB) randomGameWithFreshStats(
+	ctx context.Context,
+	query *database.MediaQuery,
+) (database.SearchResult, error) {
 	result, stats, err := sqlRandomGameWithQueryAndStats(ctx, db.sql.Load(), query)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			db.cacheMediaStats(ctx, query, stats)
+		}
 		return result, err
 	}
 
-	// Cache the stats for future use (best effort - don't fail if caching fails)
+	// Cache the stats for future use (best effort - don't fail if caching fails).
 	db.cacheMediaStats(ctx, query, stats)
-
 	return result, nil
 }
 
@@ -2859,6 +2870,25 @@ func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuer
 	`, queryHash, string(queryParams), stats.Count, stats.MinDBID, stats.MaxDBID, time.Now().Unix())
 	if err != nil {
 		return fmt.Errorf("failed to cache stats: %w", err)
+	}
+
+	_, err = db.sql.Load().ExecContext(ctx, `
+		DELETE FROM MediaCountCache
+		WHERE QueryHash IN (
+			SELECT QueryHash
+			FROM MediaCountCache
+			WHERE QueryHash <> ?
+			ORDER BY LastUpdated ASC, QueryHash ASC
+			LIMIT (
+				SELECT CASE
+					WHEN COUNT(*) > ? THEN COUNT(*) - ?
+					ELSE 0
+				END
+				FROM MediaCountCache
+			)
+		)`, queryHash, mediaCountCacheMaxEntries, mediaCountCacheMaxEntries)
+	if err != nil {
+		return fmt.Errorf("failed to prune media count cache: %w", err)
 	}
 
 	return nil

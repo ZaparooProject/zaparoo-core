@@ -422,7 +422,10 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	}
 
 	isFilesystemPath := filepath.IsAbs(query)
-	isVirtualPath := strings.Contains(query, "://")
+	virtualMarker := strings.Index(query, "://")
+	firstPathSeparator := strings.IndexAny(query, `/\`)
+	isVirtualPath := virtualMarker >= 0 &&
+		(firstPathSeparator < 0 || virtualMarker < firstPathSeparator)
 
 	// Path queries use the media database so virtual entries and tags compose.
 	if isFilesystemPath || isVirtualPath {

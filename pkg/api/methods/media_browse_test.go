@@ -1237,10 +1237,14 @@ func TestHandleMediaBrowse_FilesystemWithFiles(t *testing.T) {
 func TestHandleMediaBrowse_FilesystemFiltersFilesByTags(t *testing.T) {
 	t.Parallel()
 
+	romsRoot := filepath.Join(browseTestAbsPath(), "roms")
+	snesPath := filepath.Join(romsRoot, "SNES")
+	dbSNESPrefix := filepath.ToSlash(snesPath) + "/"
+
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
-		Return([]string{"/roms"})
+		Return([]string{romsRoot})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
 		Return([]platforms.Launcher{})
 
@@ -1248,25 +1252,25 @@ func TestHandleMediaBrowse_FilesystemFiltersFilesByTags(t *testing.T) {
 		return len(tags) == 1 && tags[0].Type == "user" && tags[0].Value == "favorite"
 	}
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/SNES/")).
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts(dbSNESPrefix)).
 		Return([]database.BrowseDirectoryResult{{Name: "RPG", FileCount: 99}}, nil)
-	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts("/roms/SNES/")).
+	mockMediaDB.On("BrowseDirCount", mock.Anything, browseDirCountOpts(dbSNESPrefix)).
 		Return(1, nil)
 	mockMediaDB.On("BrowseFiles", mock.Anything,
 		mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
-			return opts.PathPrefix == "/roms/SNES/" && tagMatcher(opts.Tags)
+			return opts.PathPrefix == dbSNESPrefix && tagMatcher(opts.Tags)
 		})).Return([]database.SearchResultWithCursor{{
 		SystemID: "SNES",
 		Name:     "Chrono Trigger",
-		Path:     "/roms/SNES/Chrono Trigger.sfc",
+		Path:     filepath.ToSlash(filepath.Join(snesPath, "Chrono Trigger.sfc")),
 		MediaID:  7,
 	}}, nil)
 	mockMediaDB.On("BrowseFileCount", mock.Anything,
 		mock.MatchedBy(func(opts database.BrowseFileCountOptions) bool {
-			return opts.PathPrefix == "/roms/SNES/" && tagMatcher(opts.Tags)
+			return opts.PathPrefix == dbSNESPrefix && tagMatcher(opts.Tags)
 		})).Return(1, nil)
 
-	path := "/roms/SNES"
+	path := snesPath
 	tags := []string{"user:favorite"}
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
 		Path: &path,
@@ -1895,6 +1899,55 @@ func TestHandleMediaBrowse_VirtualScheme(t *testing.T) {
 	assert.Equal(t, "media", browseResults.Entries[0].Type)
 	assert.Equal(t, "Team Fortress 2", browseResults.Entries[0].Name)
 
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_VirtualFiltersFilesByTags(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{browseTestAbsPath("roms")})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{
+			{ID: "Steam", SystemID: "Windows", Schemes: []string{"steam"}},
+		})
+
+	tagMatcher := func(tags []zapscript.TagFilter) bool {
+		return len(tags) == 1 &&
+			tags[0].Type == "user" &&
+			tags[0].Value == "favorite" &&
+			tags[0].Operator == zapscript.TagOperatorAND
+	}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseFiles", mock.Anything,
+		mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+			return opts.PathPrefix == "steam://" && tagMatcher(opts.Tags)
+		})).Return([]database.SearchResultWithCursor{{
+		SystemID: "Windows",
+		Name:     "Favorite Game",
+		Path:     "steam://440/favorite-game",
+		MediaID:  10,
+	}}, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseFileCountOptions) bool {
+			return opts.PathPrefix == "steam://" && tagMatcher(opts.Tags)
+		})).Return(1, nil)
+
+	path := "steam://"
+	tags := []string{"user:favorite"}
+	result, err := HandleMediaBrowse(newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path: &path,
+		Tags: &tags,
+	}))
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, 1, browseResults.TotalFiles)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, "Favorite Game", browseResults.Entries[0].Name)
 	mockMediaDB.AssertExpectations(t)
 }
 
