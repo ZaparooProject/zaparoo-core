@@ -7,6 +7,7 @@
 package steamos
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,6 +114,46 @@ func TestStandaloneLaunchCommandBuilders(t *testing.T) {
 		_, err := buildStandaloneLaunchCommand(&def, "game.rom")
 
 		require.ErrorContains(t, err, "executable not found")
+	})
+}
+
+func TestNativeStandaloneLauncherAvailabilityAndBuildErrors(t *testing.T) {
+	buildErr := errors.New("arguments unavailable")
+	t.Run("argument builder error", func(t *testing.T) {
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "BrokenArgs", flatpakID: "test.Flatpak",
+			args: func(string) ([]string, error) { return nil, buildErr },
+		})
+
+		_, err := launcher.BuildLaunchCommand(nil, "game.rom", nil)
+
+		require.ErrorIs(t, err, buildErr)
+	})
+
+	t.Run("missing native executable", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "MissingNative", executable: "missing-native", args: batchArgs(),
+		})
+
+		err := launcher.Availability(nil)
+
+		require.ErrorContains(t, err, "emulator not installed")
+	})
+
+	t.Run("available native executable", func(t *testing.T) {
+		dir := t.TempDir()
+		executable := filepath.Join(dir, "test-native")
+		require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o700)) //nolint:gosec // Test executable.
+		t.Setenv("PATH", dir)
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "TestNative", executable: filepath.Base(executable), args: batchArgs("--fullscreen"),
+		})
+
+		require.NoError(t, launcher.Availability(nil))
+		command, err := launcher.BuildLaunchCommand(nil, "game.rom", nil)
+		require.NoError(t, err)
+		assert.Equal(t, executable, command.Executable)
 	})
 }
 

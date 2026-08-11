@@ -41,17 +41,23 @@ import (
 
 type fakeRuntimeBroker struct {
 	started    *steamruntime.Command
+	startErr   error
 	stopErr    error
+	waitErr    error
 	available  bool
 	active     bool
 	owns       bool
 	clear      bool
 	clearedPID int
+	waitedPID  int
 	stopCalls  int
 }
 
 func (f *fakeRuntimeBroker) Start(_ context.Context, command *steamruntime.Command) (*os.Process, error) {
 	f.started = command
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
 	return &os.Process{Pid: 1}, nil
 }
 
@@ -59,10 +65,14 @@ func (f *fakeRuntimeBroker) Stop(context.Context) error {
 	f.stopCalls++
 	return f.stopErr
 }
-func (*fakeRuntimeBroker) Wait(context.Context, int) error { return nil }
-func (f *fakeRuntimeBroker) Available() bool               { return f.available }
-func (f *fakeRuntimeBroker) HasActive() bool               { return f.active }
-func (f *fakeRuntimeBroker) Owns(int) bool                 { return f.owns }
+
+func (f *fakeRuntimeBroker) Wait(_ context.Context, pid int) error {
+	f.waitedPID = pid
+	return f.waitErr
+}
+func (f *fakeRuntimeBroker) Available() bool { return f.available }
+func (f *fakeRuntimeBroker) HasActive() bool { return f.active }
+func (f *fakeRuntimeBroker) Owns(int) bool   { return f.owns }
 func (f *fakeRuntimeBroker) Clear(pid int) bool {
 	f.clearedPID = pid
 	return f.clear
@@ -140,6 +150,72 @@ func TestWrapSteamRuntimeDelegatesLaunchCommand(t *testing.T) {
 	assert.Equal(t, []string{"EMULATOR_OPTION=1"}, broker.started.Env)
 }
 
+func TestWrapSteamRuntimeReportsCommandAndStartFailures(t *testing.T) {
+	t.Parallel()
+
+	buildErr := errors.New("build failed")
+	startErr := errors.New("start failed")
+	for _, tt := range []struct {
+		buildErr error
+		startErr error
+		name     string
+	}{
+		{name: "build command", buildErr: buildErr},
+		{name: "start runtime", startErr: startErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			broker := &fakeRuntimeBroker{available: true, startErr: tt.startErr}
+			platform := NewPlatform()
+			platform.steamRuntime = broker
+			launcher := platforms.Launcher{
+				BuildLaunchCommand: func(
+					*config.Instance,
+					string,
+					*platforms.LaunchOptions,
+				) (*platforms.LaunchCommand, error) {
+					if tt.buildErr != nil {
+						return nil, tt.buildErr
+					}
+					return &platforms.LaunchCommand{Executable: "true"}, nil
+				},
+			}
+			platform.wrapSteamRuntime(&launcher)
+
+			_, err := launcher.Launch(nil, "game.rom", nil)
+
+			require.Error(t, err)
+			if tt.buildErr != nil {
+				assert.ErrorIs(t, err, tt.buildErr)
+			} else {
+				assert.ErrorIs(t, err, tt.startErr)
+			}
+		})
+	}
+}
+
+func TestWrapSteamRuntimeUnavailableWithoutDirectLaunch(t *testing.T) {
+	t.Parallel()
+
+	platform := NewPlatform()
+	platform.steamRuntime = &fakeRuntimeBroker{}
+	launcher := platforms.Launcher{
+		ID: "NoFallback",
+		BuildLaunchCommand: func(
+			*config.Instance,
+			string,
+			*platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return &platforms.LaunchCommand{Executable: "true"}, nil
+		},
+	}
+	platform.wrapSteamRuntime(&launcher)
+
+	_, err := launcher.Launch(nil, "game.rom", nil)
+
+	require.ErrorContains(t, err, "no direct launch")
+}
+
 func TestWrapSteamRuntimeFallsBackWhenIntegrationRemoved(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +258,21 @@ func TestWrapSteamRuntimeFallsBackWhenIntegrationRemoved(t *testing.T) {
 	require.NotNil(t, launcher.Kill)
 	require.NoError(t, launcher.Kill(nil))
 	assert.True(t, killCalled)
+}
+
+func TestWaitTrackedProcessUsesRuntimeBroker(t *testing.T) {
+	t.Parallel()
+
+	waitErr := errors.New("runtime exited with error")
+	broker := &fakeRuntimeBroker{owns: true, waitErr: waitErr}
+	platform := NewPlatform()
+	platform.steamRuntime = broker
+	process := &os.Process{Pid: 42}
+
+	err := platform.WaitTrackedProcess(process)
+
+	require.ErrorIs(t, err, waitErr)
+	assert.Equal(t, 42, broker.waitedPID)
 }
 
 func TestClearTrackedProcessMediaClearsRuntimeActiveMedia(t *testing.T) {

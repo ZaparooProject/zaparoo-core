@@ -281,6 +281,52 @@ func TestScanSteamApps(t *testing.T) {
 		require.Len(t, results, 1)
 		assert.Equal(t, "Valid Game", results[0].Name)
 	})
+
+	t.Run("skips_malformed_library_entries_and_manifests", func(t *testing.T) {
+		t.Parallel()
+
+		fs := afero.NewMemMapFs()
+		steamDir := filepath.Join(string(filepath.Separator), "steam", "steamapps")
+		libraryPath := filepath.Join(string(filepath.Separator), "library")
+		steamAppsDir := filepath.Join(libraryPath, "steamapps")
+		require.NoError(t, fs.MkdirAll(steamDir, 0o750))
+		require.NoError(t, fs.MkdirAll(steamAppsDir, 0o750))
+		libraries := `"libraryfolders"
+{
+	"bad-entry"	"not-a-map"
+	"missing-path"
+	{
+		"label"	"No path"
+	}
+	"unavailable"
+	{
+		"path"	"/missing-library"
+	}
+	"valid"
+	{
+		"path"	"` + vdfEscapePath(libraryPath) + `"
+	}
+}`
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(steamDir, "libraryfolders.vdf"), []byte(libraries), 0o600,
+		))
+		manifests := map[string]string{
+			"appmanifest_100.acf": `"Other" {}`,
+			"appmanifest_200.acf": `"AppState" { "name" "Missing ID" }`,
+			"appmanifest_300.acf": `"AppState" { "appid" "300" }`,
+			"appmanifest_400.acf": `"AppState" { "appid" "400" "name" "Valid Game" }`,
+		}
+		for name, content := range manifests {
+			require.NoError(t, afero.WriteFile(fs, filepath.Join(steamAppsDir, name), []byte(content), 0o600))
+		}
+
+		results, err := scanSteamAppsFS(fs, steamDir)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "Valid Game", results[0].Name)
+		assert.Contains(t, results[0].Path, "steam://400/")
+	})
 }
 
 func TestScanSteamShortcuts(t *testing.T) {

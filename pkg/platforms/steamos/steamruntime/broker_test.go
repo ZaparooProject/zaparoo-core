@@ -8,6 +8,7 @@ package steamruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,6 +85,17 @@ func TestBrokerStartAndWait(t *testing.T) {
 	assert.False(t, broker.HasActive())
 }
 
+func TestBrokerStartReportsSteamLaunchFailure(t *testing.T) {
+	broker := testBroker(t)
+	launchErr := errors.New("Steam unavailable")
+	broker.launch = func(context.Context, string) error { return launchErr }
+
+	_, err := broker.Start(t.Context(), &Command{Executable: "true"})
+
+	require.ErrorIs(t, err, launchErr)
+	assert.False(t, broker.HasActive())
+}
+
 func TestBrokerPreemptsActiveSession(t *testing.T) {
 	broker := testBroker(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
@@ -118,6 +130,24 @@ func TestCompleteSessionPreservesReplacementRuntimePID(t *testing.T) {
 	default:
 		require.Fail(t, "session completion was not published")
 	}
+}
+
+func TestWaitSessionHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	session := &brokerSession{done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.ErrorIs(t, waitSession(ctx, session), context.Canceled)
+	require.ErrorIs(t, waitSessionDone(ctx, session), context.Canceled)
+}
+
+func TestBrokerStopWithoutActiveSession(t *testing.T) {
+	t.Parallel()
+
+	broker := brokerWithLauncher(&InstallPaths{}, func(context.Context, string) error { return nil })
+	require.NoError(t, broker.Stop(t.Context()))
 }
 
 func TestBrokerClearRemovesStaleSessions(t *testing.T) {

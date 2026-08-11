@@ -7,12 +7,14 @@
 package steamruntime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -127,6 +129,106 @@ func TestStatusDetectsDuplicateShortcuts(t *testing.T) {
 	require.Len(t, status.ShortcutIDs, 2)
 }
 
+func TestInstallReportsSteamShortcutCommandFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fs := afero.NewOsFs()
+	paths := &InstallPaths{
+		FS: fs, Binary: filepath.Join(dir, "bin", "zaparoo"),
+		Runtime:  filepath.Join(dir, "bin", runtimeExecutableName),
+		Desktop:  filepath.Join(dir, "applications", runtimeExecutableName+".desktop"),
+		SteamDir: filepath.Join(dir, "steam"),
+	}
+	require.NoError(t, fs.MkdirAll(filepath.Dir(paths.Binary), 0o750))
+	require.NoError(t, afero.WriteFile(fs, paths.Binary, []byte("binary"), 0o700))
+	commandErr := errors.New("Steam command failed")
+	executor := &mocks.MockCommandExecutor{}
+	executor.On("Run", mock.Anything, "steamos-add-to-steam", []string{paths.Desktop}).
+		Return(commandErr).Once()
+
+	_, err := installWithExecutor(t.Context(), paths, executor)
+
+	require.ErrorIs(t, err, commandErr)
+	executor.AssertExpectations(t)
+}
+
+func TestInstallUsesExistingSteamShortcut(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fs := afero.NewOsFs()
+	paths := &InstallPaths{
+		FS: fs, Binary: filepath.Join(dir, "bin", "zaparoo"),
+		Runtime:  filepath.Join(dir, "bin", runtimeExecutableName),
+		Desktop:  filepath.Join(dir, "applications", runtimeExecutableName+".desktop"),
+		SteamDir: filepath.Join(dir, "steam"),
+	}
+	require.NoError(t, fs.MkdirAll(filepath.Dir(paths.Binary), 0o750))
+	require.NoError(t, afero.WriteFile(fs, paths.Binary, []byte("binary"), 0o700))
+	configDir := filepath.Join(paths.SteamDir, "userdata", "123", "config")
+	require.NoError(t, fs.MkdirAll(configDir, 0o750))
+	require.NoError(t, afero.WriteFile(
+		fs,
+		filepath.Join(configDir, "shortcuts.vdf"),
+		runtimeShortcutFixture(42, paths.Runtime),
+		0o600,
+	))
+	executor := &mocks.MockCommandExecutor{}
+
+	result, err := installWithExecutor(t.Context(), paths, executor)
+
+	require.NoError(t, err)
+	assert.Equal(t, shortcutBigPictureID(42), result.ShortcutID)
+	assert.False(t, result.ShortcutAdded)
+	assert.False(t, result.SteamRestartNeeded)
+	for _, artwork := range defaultArtwork {
+		path := filepath.Join(configDir, "grid", "42"+artwork.suffix)
+		info, statErr := fs.Stat(path)
+		require.NoError(t, statErr)
+		assert.Positive(t, info.Size())
+	}
+	executor.AssertExpectations(t)
+}
+
+func TestEnsureRuntimeSymlinkRepairsStaleTarget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fs := afero.NewOsFs()
+	paths := &InstallPaths{
+		FS: fs, Binary: filepath.Join(dir, "zaparoo"), Runtime: filepath.Join(dir, runtimeExecutableName),
+	}
+	require.NoError(t, afero.WriteFile(fs, paths.Binary, []byte("binary"), 0o700))
+	require.NoError(t, symlinkFS(fs, filepath.Join(dir, "old-zaparoo"), paths.Runtime))
+
+	require.NoError(t, ensureRuntimeSymlink(fs, paths))
+	target, err := readlinkFS(fs, paths.Runtime)
+	require.NoError(t, err)
+	assert.Equal(t, paths.Binary, target)
+}
+
+func TestEnsureRuntimeSymlinkRequiresInstalledBinary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	err := ensureRuntimeSymlink(afero.NewOsFs(), &InstallPaths{
+		Binary: filepath.Join(dir, "missing-zaparoo"), Runtime: filepath.Join(dir, runtimeExecutableName),
+	})
+
+	require.ErrorContains(t, err, "binary is unavailable")
+}
+
+func TestEnsureRuntimeSymlinkRequiresAbsolutePaths(t *testing.T) {
+	t.Parallel()
+
+	err := ensureRuntimeSymlink(afero.NewMemMapFs(), &InstallPaths{
+		Binary: "relative-zaparoo", Runtime: "relative-runtime",
+	})
+
+	require.ErrorContains(t, err, "must be absolute")
+}
+
 func TestInstallRefusesRuntimeRegularFile(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +249,37 @@ func TestInstallRefusesRuntimeRegularFile(t *testing.T) {
 	require.Contains(t, err.Error(), "refusing to replace non-symlink")
 }
 
+func TestStatusMissingAndStale(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name          string
+		state         string
+		createRuntime bool
+	}{
+		{name: "missing", state: statusMissing},
+		{name: "stale runtime only", state: statusStale, createRuntime: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			fs := afero.NewOsFs()
+			paths := &InstallPaths{
+				FS: fs, Binary: filepath.Join(dir, "zaparoo"),
+				Runtime: filepath.Join(dir, runtimeExecutableName),
+				Desktop: filepath.Join(dir, "runtime.desktop"), SteamDir: filepath.Join(dir, "steam"),
+			}
+			if tt.createRuntime {
+				require.NoError(t, afero.WriteFile(fs, paths.Binary, []byte("binary"), 0o700))
+				require.NoError(t, symlinkFS(fs, paths.Binary, paths.Runtime))
+			}
+			status, err := statusWithPaths(paths)
+			require.NoError(t, err)
+			assert.Equal(t, tt.state, status.State)
+		})
+	}
+}
+
 func TestUninstallRemovesRuntimeFiles(t *testing.T) {
 	t.Parallel()
 
@@ -165,6 +298,16 @@ func TestUninstallRemovesRuntimeFiles(t *testing.T) {
 	require.ErrorIs(t, runtimeErr, os.ErrNotExist)
 	_, desktopErr := fs.Stat(paths.Desktop)
 	require.ErrorIs(t, desktopErr, os.ErrNotExist)
+}
+
+func TestUninstallMissingFilesIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, uninstallWithPaths(&InstallPaths{
+		FS: afero.NewOsFs(), Runtime: filepath.Join(dir, runtimeExecutableName),
+		Desktop: filepath.Join(dir, "runtime.desktop"),
+	}))
 }
 
 func TestUninstallRefusesRuntimeRegularFile(t *testing.T) {
