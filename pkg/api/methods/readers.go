@@ -36,10 +36,16 @@ func HandleReaderWrite(
 	allReaders []readers.Reader,
 	lastScanned *tokens.Token,
 	setWroteToken func(*tokens.Token),
+	setWriteActive ...func(string, bool),
 ) (any, error) {
 	var p models.ReaderWriteParams
 	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	var writeActivity func(string, bool)
+	if len(setWriteActive) > 0 {
+		writeActivity = setWriteActive[0]
 	}
 
 	var r readers.Reader
@@ -58,6 +64,11 @@ func HandleReaderWrite(
 	if err != nil {
 		return nil, models.ClientErrf("failed to select writer: %w", err)
 	}
+	readerID := r.ReaderID()
+	if writeActivity != nil {
+		writeActivity(readerID, true)
+		defer writeActivity(readerID, false)
+	}
 
 	t, err := r.Write(p.Text)
 	if err != nil {
@@ -75,6 +86,7 @@ func HandleReaderWrite(
 	}
 
 	if t != nil {
+		t.ReaderID = readerID
 		setWroteToken(t)
 	}
 

@@ -44,6 +44,7 @@ type PlatformIntegration struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	activeGames    map[int]int
+	ignoredPaths   map[string]struct{}
 	steamRoot      string
 	mu             syncutil.Mutex
 }
@@ -67,9 +68,24 @@ func NewPlatformIntegration(
 		setActiveMedia: setActiveMedia,
 		steamRoot:      steamRoot,
 		activeGames:    make(map[int]int),
+		ignoredPaths:   make(map[string]struct{}),
 	}
 	pi.tracker = New(scanner, pi.onGameStart, pi.onGameStop)
 	return pi
+}
+
+// IgnoreExecutable prevents an internal Steam-owned helper shortcut from
+// becoming user-visible ActiveMedia. Matching is exact after path cleaning.
+func (pi *PlatformIntegration) IgnoreExecutable(path string) {
+	if path == "" {
+		return
+	}
+	pi.mu.Lock()
+	if pi.ignoredPaths == nil {
+		pi.ignoredPaths = make(map[string]struct{})
+	}
+	pi.ignoredPaths[steam.NormalizeShortcutExecutable(path)] = struct{}{}
+	pi.mu.Unlock()
 }
 
 // Start begins monitoring for Steam games.
@@ -90,8 +106,16 @@ func (pi *PlatformIntegration) Stop() {
 // onGameStart is called when a Steam game starts (detected via reaper process).
 func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string) {
 	pi.mu.Lock()
-	pi.activeGames[appID] = reaperPID
+	_, ignored := pi.ignoredPaths[steam.NormalizeShortcutExecutable(gamePath)]
+	if !ignored {
+		pi.activeGames[appID] = reaperPID
+	}
 	pi.mu.Unlock()
+	if ignored {
+		log.Debug().Int("appID", appID).Str("gamePath", gamePath).
+			Msg("ignoring internal Steam helper shortcut")
+		return
+	}
 
 	alreadyTracked := false
 	current := pi.activeMedia()

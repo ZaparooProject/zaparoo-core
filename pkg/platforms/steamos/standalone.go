@@ -207,6 +207,26 @@ func resolveStandaloneExecutable(name string) (string, error) {
 	return "", fmt.Errorf("executable not found: %s", name)
 }
 
+func buildStandaloneLaunchCommand(def *standaloneDef, path string) (*platforms.LaunchCommand, error) {
+	args, err := def.args(path)
+	if err != nil {
+		return nil, err
+	}
+	command := "flatpak"
+	commandArgs := args
+	if def.flatpakID != "" {
+		commandArgs = flatpakRunArgs(def.flatpakID, path, args)
+	} else {
+		command, err = resolveStandaloneExecutable(def.executable)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s executable: %w", def.id, err)
+		}
+	}
+	return &platforms.LaunchCommand{
+		Executable: command, Args: commandArgs, Env: steamOSLaunchEnvOverrides(),
+	}, nil
+}
+
 func newNativeStandaloneLauncher(def *standaloneDef) platforms.Launcher {
 	launcher := platforms.Launcher{
 		ID:                 def.id,
@@ -226,24 +246,20 @@ func newNativeStandaloneLauncher(def *standaloneDef) platforms.Launcher {
 			}
 			return nil
 		},
+		BuildLaunchCommand: func(
+			_ *config.Instance,
+			path string,
+			_ *platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return buildStandaloneLaunchCommand(def, path)
+		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			args, err := def.args(path)
+			commandSpec, err := buildStandaloneLaunchCommand(def, path)
 			if err != nil {
 				return nil, err
 			}
-			var command string
-			commandArgs := args
-			if def.flatpakID != "" {
-				command = "flatpak"
-				commandArgs = flatpakRunArgs(def.flatpakID, path, args)
-			} else {
-				command, err = resolveStandaloneExecutable(def.executable)
-				if err != nil {
-					return nil, fmt.Errorf("resolve %s executable: %w", def.id, err)
-				}
-			}
 			//nolint:gosec // Executable, Flatpak ID, and fixed arguments come from built-in definitions.
-			cmd := exec.CommandContext(context.Background(), command, commandArgs...)
+			cmd := exec.CommandContext(context.Background(), commandSpec.Executable, commandSpec.Args...)
 			cmd.Env = steamOSLaunchEnv()
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr

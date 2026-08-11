@@ -137,12 +137,22 @@ func TestHandleReaderWrite(t *testing.T) {
 
 		var wroteToken *tokens.Token
 		setWroteToken := func(t *tokens.Token) { wroteToken = t }
+		var writeActivity []bool
 
-		result, err := methods.HandleReaderWrite(params, rs, nil, setWroteToken)
+		var activityReaderIDs []string
+		result, err := methods.HandleReaderWrite(
+			params, rs, nil, setWroteToken, func(readerID string, active bool) {
+				activityReaderIDs = append(activityReaderIDs, readerID)
+				writeActivity = append(writeActivity, active)
+			},
+		)
 
 		require.NoError(t, err)
 		assert.Equal(t, methods.NoContent{}, result)
 		assert.Equal(t, returnedToken, wroteToken)
+		assert.Equal(t, "reader-1", wroteToken.ReaderID)
+		assert.Equal(t, []string{"reader-1", "reader-1"}, activityReaderIDs)
+		assert.Equal(t, []bool{true, false}, writeActivity)
 		m.AssertExpectations(t)
 	})
 
@@ -251,11 +261,15 @@ func TestHandleReaderWrite(t *testing.T) {
 		m := createWriteCapableReader("reader-1")
 		m.On("Write", "test data").Return(nil, errors.New("hardware failure"))
 		rs := []readers.Reader{m}
+		var writeActivity []bool
 
-		_, err := methods.HandleReaderWrite(params, rs, nil, nil)
+		_, err := methods.HandleReaderWrite(
+			params, rs, nil, nil, func(_ string, active bool) { writeActivity = append(writeActivity, active) },
+		)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error writing to reader")
+		assert.Equal(t, []bool{true, false}, writeActivity)
 		m.AssertExpectations(t)
 	})
 

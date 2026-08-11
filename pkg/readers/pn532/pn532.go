@@ -281,25 +281,29 @@ func createVIDPIDBlocklist() []string {
 }
 
 type Reader struct {
-	session          PollingSession
-	writeCtx         context.Context
-	device           PN532Device
-	ctx              context.Context
-	writeCancel      context.CancelFunc
-	cfg              *config.Instance
-	lastToken        *tokens.Token
-	cancel           context.CancelFunc
-	realDevice       *pn532.Device
-	tagOps           *tagops.TagOperations
-	transportFactory TransportFactory
-	deviceFactory    DeviceFactory
-	sessionFactory   SessionFactory
-	deviceInfo       config.ReadersConnect
-	name             string
-	wg               sync.WaitGroup
-	mutex            syncutil.RWMutex
-	writeMutex       syncutil.Mutex
-	connected        bool
+	session                   PollingSession
+	writeCtx                  context.Context
+	device                    PN532Device
+	ctx                       context.Context
+	writeCancel               context.CancelFunc
+	cfg                       *config.Instance
+	lastToken                 *tokens.Token
+	cancel                    context.CancelFunc
+	realDevice                *pn532.Device
+	tagOps                    *tagops.TagOperations
+	transportFactory          TransportFactory
+	deviceFactory             DeviceFactory
+	sessionFactory            SessionFactory
+	deviceInfo                config.ReadersConnect
+	name                      string
+	wg                        sync.WaitGroup
+	mutex                     syncutil.RWMutex
+	writeMutex                syncutil.Mutex
+	writeOperationMutex       syncutil.Mutex
+	connected                 bool
+	suppressScansUntilRemoval bool
+	tagRemovedDuringWrite     bool
+	writingTag                bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -456,10 +460,12 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 			if !errors.Is(err, context.Canceled) {
 				logTraceableError(err, "session polling")
 
+				readerID := r.ReaderID()
 				r.mutex.Lock()
 				log.Warn().Msg("reader session error, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    readerID,
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -473,17 +479,36 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 	return nil
 }
 
+func (r *Reader) suppressingTagScans() bool {
+	r.writeMutex.Lock()
+	defer r.writeMutex.Unlock()
+	return r.writeCtx != nil || r.suppressScansUntilRemoval
+}
+
 func (r *Reader) handleTagDetected(ctx context.Context, detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
 	log.Info().Msgf("new tag detected: %s (%s)", detectedTag.Type, detectedTag.UID)
+	if r.suppressingTagScans() {
+		log.Info().Msg("suppressing PN532 scan during or immediately after tag write")
+		return nil
+	}
 	r.processNewTag(ctx, detectedTag, iq)
 	return nil
 }
 
 func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	log.Info().Msg("tag removed")
+	r.writeMutex.Lock()
+	writtenTagRemoved := r.suppressScansUntilRemoval
+	if r.writingTag {
+		r.tagRemovedDuringWrite = true
+	}
+	r.suppressScansUntilRemoval = false
+	r.writeMutex.Unlock()
 	iq <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  nil,
+		Source:            tokens.SourceReader,
+		ReaderID:          r.ReaderID(),
+		Token:             nil,
+		WrittenTagRemoved: writtenTagRemoved,
 	}
 
 	r.mutex.Lock()
@@ -511,8 +536,9 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 	}
 
 	iq <- readers.Scan{
-		Source: tokens.SourceReader,
-		Token:  token,
+		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
+		Token:    token,
 	}
 
 	r.mutex.Lock()
@@ -713,12 +739,14 @@ func (r *Reader) Path() string {
 func (r *Reader) ReaderID() string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
+	return r.readerIDLocked()
+}
 
+func (r *Reader) readerIDLocked() string {
 	stablePath := helpers.GetUSBTopologyPath(r.deviceInfo.Path)
 	if stablePath == "" {
 		stablePath = r.deviceInfo.ConnectionString()
 	}
-
 	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
@@ -751,20 +779,25 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 		return nil, errors.New("text cannot be empty")
 	}
 
-	// Capture readerID before acquiring lock to avoid deadlock in callback
-	readerID := r.ReaderID()
+	r.writeOperationMutex.Lock()
+	defer r.writeOperationMutex.Unlock()
 
-	// Lock for the entire write operation
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	if r.session == nil {
+	// Snapshot lifecycle state without holding the lifecycle lock through the
+	// blocking write. Removal callbacks need the same lock for reader identity
+	// and last-token cleanup.
+	r.mutex.RLock()
+	session := r.session
+	readerID := r.readerIDLocked()
+	r.mutex.RUnlock()
+	if session == nil {
 		return nil, errors.New("session not initialized")
 	}
 
-	// Create cancellable context for this write operation under writeMutex
+	// Create cancellable context for this write operation under writeMutex.
 	r.writeMutex.Lock()
 	r.writeCtx, r.writeCancel = context.WithCancel(ctx)
+	r.tagRemovedDuringWrite = false
+	r.writingTag = false
 	writeCtx := r.writeCtx
 	r.writeMutex.Unlock()
 
@@ -776,13 +809,15 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 			r.writeCancel = nil
 			r.writeCtx = nil
 		}
+		r.tagRemovedDuringWrite = false
+		r.writingTag = false
 		r.writeMutex.Unlock()
 	}()
 
 	var resultToken *tokens.Token
 	var writeErr error
 
-	err := r.session.WriteToNextTagWithRetry(
+	err := session.WriteToNextTagWithRetry(
 		ctx, writeCtx, writeTimeout, writeRetryCount,
 		func(writeCtx context.Context, tag pn532.Tag) error {
 			uid := tag.UID()
@@ -803,10 +838,31 @@ func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.Writ
 				}},
 			}
 
-			// Write NDEF message to tag (includes automatic verification)
-			if err := tag.WriteNDEF(writeCtx, ndefMessage); err != nil {
-				logTraceableError(err, "write NDEF")
-				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
+			// Track only the physical write phase. A removal while waiting for a
+			// target belongs to earlier polling state and must not affect this tag.
+			r.writeMutex.Lock()
+			r.tagRemovedDuringWrite = false
+			r.writingTag = true
+			r.writeMutex.Unlock()
+
+			// Write NDEF message to tag (includes automatic verification).
+			writeNDEFErr := tag.WriteNDEF(writeCtx, ndefMessage)
+
+			// Polling may report card-changed after WriteNDEF but before the API
+			// records wroteToken. Suppress callbacks until this physical tag leaves,
+			// unless its removal arrived during the physical write.
+			r.writeMutex.Lock()
+			tagRemovedDuringWrite := r.tagRemovedDuringWrite
+			r.tagRemovedDuringWrite = false
+			r.writingTag = false
+			if writeNDEFErr == nil && !tagRemovedDuringWrite {
+				r.suppressScansUntilRemoval = true
+			}
+			r.writeMutex.Unlock()
+
+			if writeNDEFErr != nil {
+				logTraceableError(writeNDEFErr, "write NDEF")
+				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", writeNDEFErr)
 				return writeErr
 			}
 

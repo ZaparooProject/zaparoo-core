@@ -168,7 +168,8 @@ func TestOpen_SubscribeError(t *testing.T) {
 	mockClient.subscribeError = assert.AnError
 
 	reader := NewReader(&config.Instance{})
-	reader.clientFactory = func(_ *mqtt.ClientOptions) mqtt.Client {
+	reader.clientFactory = func(opts *mqtt.ClientOptions) mqtt.Client {
+		go opts.OnConnect(mockClient)
 		return mockClient
 	}
 
@@ -183,16 +184,14 @@ func TestOpen_SubscribeError(t *testing.T) {
 	// Should still succeed - subscription error is handled in callback
 	require.NoError(t, err)
 
-	// Wait briefly for the OnConnect callback to execute
-	time.Sleep(50 * time.Millisecond)
-
-	// Check that error was sent to scan queue
+	// Check that the asynchronous subscription error retains reader identity.
 	select {
 	case scan := <-scanQueue:
 		require.Error(t, scan.Error)
 		assert.Contains(t, scan.Error.Error(), "failed to subscribe to topic")
-	case <-time.After(100 * time.Millisecond):
-		// It's ok if no error was sent - the OnConnect callback is async
+		assert.Equal(t, reader.ReaderID(), scan.ReaderID)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for subscription error scan")
 	}
 }
 
@@ -356,6 +355,7 @@ func TestCreateMessageHandler(t *testing.T) {
 		select {
 		case scan := <-scanQueue:
 			assert.Equal(t, tokens.SourceReader, scan.Source)
+			assert.Equal(t, reader.ReaderID(), scan.ReaderID)
 			assert.NotNil(t, scan.Token)
 			assert.Equal(t, TokenType, scan.Token.Type)
 			assert.Equal(t, "**launch.system:nes", scan.Token.Text)

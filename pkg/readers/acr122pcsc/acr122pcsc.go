@@ -184,6 +184,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 				log.Warn().Msg("reader error, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    r.ReaderID(),
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -201,6 +202,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 				log.Warn().Msg("reader disconnected, sending error signal")
 				iq <- readers.Scan{
 					Source:      tokens.SourceReader,
+					ReaderID:    r.ReaderID(),
 					Token:       nil,
 					ReaderError: true,
 				}
@@ -303,8 +305,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 			}
 
 			iq <- readers.Scan{
-				Source: tokens.SourceReader,
-				Token:  token,
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Token:    token,
 			}
 
 			r.lastToken = token
@@ -335,8 +338,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, 
 			}
 
 			iq <- readers.Scan{
-				Source: tokens.SourceReader,
-				Token:  nil,
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Token:    nil,
 			}
 
 			r.lastToken = nil

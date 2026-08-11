@@ -7,6 +7,7 @@
 package steamos
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,6 +32,7 @@ func TestNativeStandaloneLaunchers(t *testing.T) {
 		assert.Contains(t, launcher.Groups, platformshared.LauncherGroupNative)
 		assert.Equal(t, platforms.LifecycleTracked, launcher.Lifecycle)
 		assert.NotNil(t, launcher.Availability)
+		assert.NotNil(t, launcher.BuildLaunchCommand)
 		assert.NotNil(t, launcher.Launch)
 	}
 
@@ -65,6 +67,94 @@ func TestNativeStandaloneLaunchers(t *testing.T) {
 	} {
 		assert.True(t, byID[id].SkipFilesystemScan, id)
 	}
+}
+
+func TestStandaloneLaunchCommandBuilders(t *testing.T) {
+	t.Run("flatpak", func(t *testing.T) {
+		mediaPath := filepath.Join(string(filepath.Separator), "games", "ps2", "game.iso")
+		def := standaloneDef{
+			id: "PCSX2", flatpakID: "net.pcsx2.PCSX2", args: batchArgs("-fullscreen", "-batch"),
+		}
+
+		command, err := buildStandaloneLaunchCommand(&def, mediaPath)
+
+		require.NoError(t, err)
+		assert.Equal(t, "flatpak", command.Executable)
+		assert.Equal(t, []string{
+			"run", "--filesystem=" + filepath.Dir(mediaPath) + ":ro", "--die-with-parent",
+			def.flatpakID, "-fullscreen", "-batch", mediaPath,
+		}, command.Args)
+		assert.Empty(t, command.Dir)
+		assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
+	})
+
+	t.Run("native", func(t *testing.T) {
+		dir := t.TempDir()
+		executableName := "zaparoo-test-emulator"
+		executable := filepath.Join(dir, executableName)
+		require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o700)) //nolint:gosec // Test executable.
+		t.Setenv("PATH", dir)
+		mediaPath := filepath.Join(dir, "game.rom")
+		def := standaloneDef{id: "TestNative", executable: executableName, args: batchArgs("--fullscreen")}
+
+		command, err := buildStandaloneLaunchCommand(&def, mediaPath)
+
+		require.NoError(t, err)
+		assert.Equal(t, executable, command.Executable)
+		assert.Equal(t, []string{"--fullscreen", mediaPath}, command.Args)
+		assert.Empty(t, command.Dir)
+		assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
+	})
+
+	t.Run("native executable missing", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		executableName := "zaparoo-missing-emulator"
+		def := standaloneDef{id: "MissingNative", executable: executableName, args: batchArgs()}
+
+		_, err := buildStandaloneLaunchCommand(&def, "game.rom")
+
+		require.ErrorContains(t, err, "executable not found")
+	})
+}
+
+func TestNativeStandaloneLauncherAvailabilityAndBuildErrors(t *testing.T) {
+	buildErr := errors.New("arguments unavailable")
+	t.Run("argument builder error", func(t *testing.T) {
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "BrokenArgs", flatpakID: "test.Flatpak",
+			args: func(string) ([]string, error) { return nil, buildErr },
+		})
+
+		_, err := launcher.BuildLaunchCommand(nil, "game.rom", nil)
+
+		require.ErrorIs(t, err, buildErr)
+	})
+
+	t.Run("missing native executable", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "MissingNative", executable: "missing-native", args: batchArgs(),
+		})
+
+		err := launcher.Availability(nil)
+
+		require.ErrorContains(t, err, "emulator not installed")
+	})
+
+	t.Run("available native executable", func(t *testing.T) {
+		dir := t.TempDir()
+		executable := filepath.Join(dir, "test-native")
+		require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o700)) //nolint:gosec // Test executable.
+		t.Setenv("PATH", dir)
+		launcher := newNativeStandaloneLauncher(&standaloneDef{
+			id: "TestNative", executable: filepath.Base(executable), args: batchArgs("--fullscreen"),
+		})
+
+		require.NoError(t, launcher.Availability(nil))
+		command, err := launcher.BuildLaunchCommand(nil, "game.rom", nil)
+		require.NoError(t, err)
+		assert.Equal(t, executable, command.Executable)
+	})
 }
 
 func TestFlatpakRunArgsExposeMediaDirectoryReadOnly(t *testing.T) {

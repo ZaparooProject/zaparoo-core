@@ -30,6 +30,7 @@ import (
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,8 +134,35 @@ func TestCreateEmuDeckLauncherTest(t *testing.T) {
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
+	fs := afero.NewMemMapFs()
+	coresDir := filepath.Join(string(filepath.Separator), "retroarch", "cores")
+	appendConfigPath := filepath.Join(string(filepath.Separator), "retroarch", "zaparoo.cfg")
+	core, ok := sharedretroarch.CoreLaunchForFolder(sharedretroarch.ProfileDesktop, "nes")
+	require.True(t, ok)
+	corePath := filepath.Join(coresDir, core.Core)
+	require.NoError(t, fs.MkdirAll(coresDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, corePath, []byte("core"), 0o600))
+	options := testEmuDeckRetroArchOptions()
+	options.FS = fs
+	options.Preflight = nil
+	options.CoresDir = coresDir
+	options.AppendConfigPath = appendConfigPath
+	options.LaunchEnv = func() []string { return []string{"STEAMOS_SESSION=1"} }
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths, options)
 	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupEmuDeck)
+
+	mediaPath := filepath.Join(paths.RomsPath, "nes", "super_mario.nes")
+	command, err := launcher.BuildLaunchCommand(nil, mediaPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "flatpak", command.Executable)
+	assert.Equal(t, []string{
+		"run", RetroArchFlatpakID,
+		"--appendconfig", appendConfigPath,
+		"-L", corePath,
+		mediaPath,
+	}, command.Args)
+	assert.Empty(t, command.Dir)
+	assert.Equal(t, []string{"STEAMOS_SESSION=1"}, command.Env)
 
 	tests := []struct {
 		name     string
@@ -207,6 +235,13 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 
 	launcher := createRetroDECKLauncher("snes", systemInfo, paths)
 	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupRetroDECK)
+	mediaPath := filepath.Join(paths.RomsPath, "snes", "chrono_trigger.sfc")
+	command, err := launcher.BuildLaunchCommand(nil, mediaPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "flatpak", command.Executable)
+	assert.Equal(t, []string{"run", "--env=LOG_BUFFER=", RetroDECKFlatpakID, mediaPath}, command.Args)
+	assert.Empty(t, command.Dir)
+	assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
 
 	tests := []struct {
 		name     string
@@ -348,6 +383,13 @@ func TestEmuDeckStandaloneLauncherHasNoControls(t *testing.T) {
 	}
 
 	launcher := createEmuDeckLauncher("psx", systemInfo, paths, testEmuDeckRetroArchOptions())
+	mediaPath := filepath.Join(paths.RomsPath, "psx", "game.chd")
+	command, err := launcher.BuildLaunchCommand(nil, mediaPath, nil)
+	require.NoError(t, err)
 
+	assert.Equal(t, "flatpak", command.Executable)
+	assert.Equal(t, []string{"run", "org.duckstation.DuckStation", mediaPath}, command.Args)
+	assert.Empty(t, command.Dir)
+	assert.Equal(t, steamOSLaunchEnvOverrides(), command.Env)
 	assert.Nil(t, launcher.Controls, "standalone launcher should not have controls")
 }

@@ -163,6 +163,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 					if token != nil {
 						iq <- readers.Scan{
 							Source:      tokens.SourceReader,
+							ReaderID:    r.ReaderID(),
 							ReaderError: true,
 						}
 					}
@@ -173,8 +174,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 					break
 				}
 				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Error:  err,
+					Source:   tokens.SourceReader,
+					ReaderID: r.ReaderID(),
+					Error:    err,
 				}
 				continue
 			}
@@ -187,8 +189,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 				log.Debug().Msg("file is empty, removing token")
 				token = nil
 				iq <- readers.Scan{
-					Source: tokens.SourceReader,
-					Token:  nil,
+					Source:   tokens.SourceReader,
+					ReaderID: r.ReaderID(),
+					Token:    nil,
 				}
 				continue
 			}
@@ -212,8 +215,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 
 			log.Debug().Msgf("new token: %s", token.Text)
 			iq <- readers.Scan{
-				Source: tokens.SourceReader,
-				Token:  token,
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
+				Token:    token,
 			}
 		}
 	}()

@@ -190,6 +190,7 @@ func (env *readerManagerEnv) expectNoToken(t *testing.T) {
 	}
 }
 
+//nolint:gocritic // Value helper keeps scan fixtures concise.
 func (env *readerManagerEnv) sendScan(scan readers.Scan) {
 	env.scanQueue <- scan
 }
@@ -434,6 +435,153 @@ func TestReaderManager_WroteTokenSuppression(t *testing.T) {
 
 func withIgnoreOnConnect(cfg *config.Instance) {
 	cfg.SetScanIgnoreOnConnect(true)
+}
+
+func TestReaderManager_WrittenTagRemovalAllowsImmediateLaunch(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	written := &tokens.Token{
+		UID:      "just-written",
+		Text:     "steam://1145360/Hades",
+		ScanTime: time.Now(),
+	}
+	env.st.SetWroteToken(written)
+
+	// PN532 suppresses write-time callbacks, then explicitly reports physical removal.
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+	assert.Nil(t, env.st.GetWroteToken())
+
+	// First scan after removal should launch; no redundant second scan required.
+	env.sendScan(readers.Scan{Source: "test-reader", Token: written})
+	tok := env.expectToken(t)
+	assert.Equal(t, "just-written", tok.UID)
+}
+
+func TestReaderManager_WrittenTagRemovalDuringWriteClearsCompletedToken(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	written := &tokens.Token{
+		UID:      "just-written",
+		Text:     "steam://1145360/Hades",
+		ScanTime: time.Now(),
+	}
+	env.st.SetReaderWriteActive(true)
+
+	// Physical removal can race ahead of the API recording its successful write.
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+	env.st.SetWroteToken(written)
+	env.st.SetReaderWriteActive(false)
+	assert.Nil(t, env.st.GetWroteToken())
+
+	env.sendScan(readers.Scan{Source: "test-reader", Token: written})
+	tok := env.expectToken(t)
+	assert.Equal(t, "just-written", tok.UID)
+}
+
+func TestReaderManager_WrittenTagRemovalAfterWriteClearsCompletedToken(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	written := &tokens.Token{
+		UID: "just-written", Text: "steam://1145360/Hades", ScanTime: time.Now(), ReaderID: "reader-1",
+	}
+	env.st.SetReaderWriteActive(true, "reader-1")
+	env.st.SetWroteToken(written)
+	env.st.SetReaderWriteActive(false, "reader-1")
+	assert.Equal(t, written, env.st.GetWroteToken("reader-1"))
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+	assert.Nil(t, env.st.GetWroteToken("reader-1"))
+
+	env.sendScan(readers.Scan{ReaderID: "reader-1", Token: written})
+	tok := env.expectToken(t)
+	assert.Equal(t, "just-written", tok.UID)
+}
+
+func TestReaderManager_WrittenTagRemovalIsReaderScoped(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	readerA := &tokens.Token{UID: "written-a", Text: "reader-a", ScanTime: time.Now(), ReaderID: "reader-a"}
+	readerB := &tokens.Token{UID: "written-b", Text: "reader-b", ScanTime: time.Now(), ReaderID: "reader-b"}
+	env.st.SetReaderWriteActive(true, "reader-a")
+	env.st.SetReaderWriteActive(true, "reader-b")
+
+	env.sendScan(readers.Scan{ReaderID: "reader-a", Token: nil, WrittenTagRemoved: true})
+	env.expectNoToken(t)
+	env.st.SetWroteToken(readerA)
+	env.st.SetWroteToken(readerB)
+	env.st.SetReaderWriteActive(false, "reader-a")
+	env.st.SetReaderWriteActive(false, "reader-b")
+
+	assert.Nil(t, env.st.GetWroteToken("reader-a"))
+	assert.Equal(t, readerB, env.st.GetWroteToken("reader-b"))
+	env.sendScan(readers.Scan{ReaderID: "reader-b", Token: readerB})
+	env.expectNoToken(t)
+	assert.Nil(t, env.st.GetWroteToken("reader-b"))
+}
+
+func TestReaderManager_SuppressesScanDuringReaderWrite(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	env.st.SetReaderWriteActive(true)
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "tag-being-written",
+			Text:     "old or partial content",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+	assert.True(t, env.st.GetActiveCard().ScanTime.IsZero())
+
+	env.st.SetReaderWriteActive(false)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "next-tag",
+			Text:     "new content",
+			ScanTime: time.Now(),
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "next-tag", tok.UID)
+}
+
+func TestReaderManager_WriteCallbacksDoNotChangeAnotherReadersHoldState(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+	active := &tokens.Token{
+		UID: "active-a", Text: "game-a", ScanTime: time.Now(), ReaderID: "reader-a",
+	}
+	env.sendScan(readers.Scan{ReaderID: "reader-a", Source: "test-reader", Token: active})
+	env.expectToken(t)
+	env.st.SetSoftwareToken(active)
+
+	env.st.SetReaderWriteActive(true, "reader-b")
+	env.sendScan(readers.Scan{
+		ReaderID: "reader-b",
+		Source:   "test-reader",
+		Token: &tokens.Token{
+			UID: "write-b", Text: "partial", ScanTime: time.Now(), ReaderID: "reader-b",
+		},
+	})
+	env.expectNoToken(t)
+	assert.Equal(t, active.UID, env.st.GetActiveCard().UID)
+	assert.Equal(t, active, env.st.GetSoftwareToken())
+
+	env.sendScan(readers.Scan{
+		ReaderID: "reader-b", Source: "test-reader", WrittenTagRemoved: true,
+	})
+	env.expectNoToken(t)
+	assert.Equal(t, active.UID, env.st.GetActiveCard().UID)
+	assert.Equal(t, active, env.st.GetSoftwareToken())
+	env.st.SetReaderWriteActive(false, "reader-b")
 }
 
 func TestReaderManager_IgnoreOnConnect_SuppressesFirstScan(t *testing.T) {

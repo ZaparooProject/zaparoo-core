@@ -59,15 +59,21 @@ type PendingWrite struct {
 	Source    tokens.Token
 }
 
+type readerWriteState struct {
+	wroteToken                *tokens.Token
+	activeWrites              int
+	clearWroteTokenAfterWrite bool
+}
+
 type State struct {
 	platform              platforms.Platform
 	ctx                   context.Context
-	ctxCancelFunc         context.CancelFunc
-	softwareToken         *tokens.Token
-	wroteToken            *tokens.Token
+	launcherManager       *LauncherManager
+	uiEvents              *uievents.Service
 	pendingLaunchOverride *PendingLaunchOverride
 	pendingWrite          *PendingWrite
 	readers               map[string]readers.Reader
+	readerWrites          map[string]*readerWriteState
 	Notifications         chan<- models.Notification
 	activeMedia           *models.ActiveMedia
 	backgroundMedia       *models.ActiveMedia
@@ -78,23 +84,23 @@ type State struct {
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
-	launcherManager       *LauncherManager
-	uiEvents              *uievents.Service
+	softwareToken         *tokens.Token
+	ctxCancelFunc         context.CancelFunc
 	backupCoordinator     *backupcoordinator.Coordinator
 	bootUUID              string
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
 	mediaLaunchAccesses   int
+	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
-	mediaRestoreMu        syncutil.RWMutex
 	activeMediaReady      bool
-	stopService           bool
 	restartRequested      bool
 	restorePendingRestart bool
 	runZapScript          bool
 	backgroundAutoPaused  bool
+	stopService           bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -106,6 +112,7 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 		runZapScript:      true,
 		platform:          platform,
 		readers:           make(map[string]readers.Reader),
+		readerWrites:      make(map[string]*readerWriteState),
 		Notifications:     ns,
 		ctx:               ctx,
 		ctxCancelFunc:     ctxCancelFunc,
@@ -387,16 +394,112 @@ func (s *State) GetSoftwareToken() *tokens.Token {
 	return s.softwareToken
 }
 
-func (s *State) SetWroteToken(token *tokens.Token) {
+func (s *State) SetReaderWriteActive(active bool, readerIDs ...string) {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
 	s.mu.Lock()
-	s.wroteToken = token
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	writeState := s.readerWrites[readerID]
+	if active {
+		if writeState == nil {
+			writeState = &readerWriteState{}
+			s.readerWrites[readerID] = writeState
+		}
+		writeState.activeWrites++
+		return
+	}
+	if writeState == nil || writeState.activeWrites == 0 {
+		return
+	}
+	writeState.activeWrites--
+	if writeState.activeWrites == 0 && writeState.clearWroteTokenAfterWrite {
+		writeState.wroteToken = nil
+		writeState.clearWroteTokenAfterWrite = false
+	}
+	if writeState.activeWrites == 0 && writeState.wroteToken == nil {
+		delete(s.readerWrites, readerID)
+	}
 }
 
-func (s *State) GetWroteToken() *tokens.Token {
+func (s *State) ReaderWriteActive(readerIDs ...string) bool {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.wroteToken
+	writeState := s.readerWrites[readerID]
+	return writeState != nil && writeState.activeWrites > 0
+}
+
+func (s *State) MarkWrittenTagRemoved(readerIDs ...string) {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	writeState := s.readerWrites[readerID]
+	if writeState == nil {
+		return
+	}
+	if writeState.activeWrites > 0 {
+		writeState.clearWroteTokenAfterWrite = true
+		return
+	}
+	delete(s.readerWrites, readerID)
+}
+
+func (s *State) SetWroteToken(token *tokens.Token) {
+	if token == nil {
+		s.mu.Lock()
+		for readerID, writeState := range s.readerWrites {
+			writeState.wroteToken = nil
+			if writeState.activeWrites == 0 {
+				delete(s.readerWrites, readerID)
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+	s.SetWroteTokenForReader(token.ReaderID, token)
+}
+
+func (s *State) SetWroteTokenForReader(readerID string, token *tokens.Token) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	writeState := s.readerWrites[readerID]
+	if writeState == nil {
+		if token == nil {
+			return
+		}
+		writeState = &readerWriteState{}
+		s.readerWrites[readerID] = writeState
+	}
+	writeState.wroteToken = token
+	if writeState.activeWrites == 0 && writeState.clearWroteTokenAfterWrite {
+		delete(s.readerWrites, readerID)
+		return
+	}
+	if writeState.activeWrites == 0 && token == nil {
+		delete(s.readerWrites, readerID)
+	}
+}
+
+func (s *State) GetWroteToken(readerIDs ...string) *tokens.Token {
+	readerID := ""
+	if len(readerIDs) > 0 {
+		readerID = readerIDs[0]
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	writeState := s.readerWrites[readerID]
+	if writeState == nil {
+		return nil
+	}
+	return writeState.wroteToken
 }
 
 func (s *State) SetPendingLaunchOverride(pending *PendingLaunchOverride) {

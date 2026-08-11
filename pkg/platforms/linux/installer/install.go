@@ -25,14 +25,15 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"text/template"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/adrg/xdg"
+	"github.com/spf13/afero"
 )
 
 //go:embed conf/blacklist-zaparoo.conf
@@ -70,35 +71,74 @@ const (
 // InstallApplication installs application files (binary, application launcher entry, icon).
 // Does not install systemd service or desktop shortcut. Must NOT be run as root.
 func InstallApplication() error {
-	return doInstallApplication(&command.RealExecutor{})
-}
-
-// doInstallApplication is the internal testable implementation.
-func doInstallApplication(cmd command.Executor) error {
-	if os.Geteuid() == 0 {
-		return errors.New("application install must not be run as root")
-	}
-
-	// Get the current binary path
 	binaryPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("error getting executable path: %w", err)
 	}
+	return doInstallApplication(&command.RealExecutor{}, afero.NewOsFs(), binaryPath)
+}
+
+func copyApplicationBinary(fs afero.Fs, source, destination string) error {
+	if filepath.Clean(source) == filepath.Clean(destination) {
+		return nil
+	}
+	sourceInfo, err := fs.Stat(source)
+	if err != nil {
+		return fmt.Errorf("stat application binary: %w", err)
+	}
+	destinationInfo, err := fs.Stat(destination)
+	if err == nil && os.SameFile(sourceInfo, destinationInfo) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat installed application binary: %w", err)
+	}
+
+	sourceFile, err := fs.Open(source)
+	if err != nil {
+		return fmt.Errorf("open application binary: %w", err)
+	}
+	defer func() { _ = sourceFile.Close() }()
+	destinationFile, err := fs.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		return fmt.Errorf("create application binary: %w", err)
+	}
+	if _, err = io.Copy(destinationFile, sourceFile); err != nil {
+		_ = destinationFile.Close()
+		_ = fs.Remove(destination)
+		return fmt.Errorf("copy application binary: %w", err)
+	}
+	if err = destinationFile.Close(); err != nil {
+		_ = fs.Remove(destination)
+		return fmt.Errorf("close application binary: %w", err)
+	}
+	if err = fs.Chmod(destination, 0o755); err != nil {
+		_ = fs.Remove(destination)
+		return fmt.Errorf("make application binary executable: %w", err)
+	}
+	return nil
+}
+
+// doInstallApplication is the internal testable implementation.
+func doInstallApplication(cmd command.Executor, fs afero.Fs, binaryPath string) error {
+	if os.Geteuid() == 0 {
+		return errors.New("application install must not be run as root")
+	}
 
 	// Install binary to ~/.local/bin
 	binDir := filepath.Join(xdg.Home, ".local", "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil { //nolint:gosec // XDG directory needs to be accessible
+	if err := fs.MkdirAll(binDir, 0o755); err != nil { //nolint:gosec // XDG directory needs to be accessible
 		return fmt.Errorf("error creating bin directory: %w", err)
 	}
 
 	destBinary := filepath.Join(binDir, "zaparoo")
-	if err := helpers.CopyFile(binaryPath, destBinary, 0o755); err != nil {
+	if err := copyApplicationBinary(fs, binaryPath, destBinary); err != nil {
 		return fmt.Errorf("error installing binary: %w", err)
 	}
 
 	// Install desktop file to applications
 	desktopDir := filepath.Join(xdg.DataHome, "applications")
-	if err := os.MkdirAll(desktopDir, 0o755); err != nil { //nolint:gosec // XDG directory needs to be accessible
+	if err := fs.MkdirAll(desktopDir, 0o755); err != nil { //nolint:gosec // XDG directory needs to be accessible
 		return fmt.Errorf("error creating applications directory: %w", err)
 	}
 
@@ -120,7 +160,7 @@ func doInstallApplication(cmd command.Executor) error {
 
 	desktopPath := filepath.Join(desktopDir, "zaparoo.desktop")
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := os.WriteFile(desktopPath, buf.Bytes(), 0o644); err != nil {
+	if err := afero.WriteFile(fs, desktopPath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("error writing desktop file: %w", err)
 	}
 
@@ -140,13 +180,13 @@ func doInstallApplication(cmd command.Executor) error {
 
 	for size, iconData := range iconSizes {
 		iconDir := filepath.Join(xdg.DataHome, "icons", "hicolor", size, "apps")
-		if err := os.MkdirAll(iconDir, 0o755); err != nil { //nolint:gosec // XDG directory needs to be accessible
+		if err := fs.MkdirAll(iconDir, 0o755); err != nil { //nolint:gosec // XDG directory needs to be accessible
 			return fmt.Errorf("error creating icon directory %s: %w", size, err)
 		}
 
 		iconPath := filepath.Join(iconDir, "zaparoo.png")
 		//nolint:gosec // Icon file needs to be readable by desktop environment
-		if err := os.WriteFile(iconPath, iconData, 0o644); err != nil {
+		if err := afero.WriteFile(fs, iconPath, iconData, 0o644); err != nil {
 			return fmt.Errorf("error writing icon file %s: %w", size, err)
 		}
 	}

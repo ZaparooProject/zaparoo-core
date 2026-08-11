@@ -31,27 +31,36 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // ScanApps scans Steam library for installed official apps.
 // steamDir should point to the steamapps directory (e.g., ~/.steam/steam/steamapps).
-func (*Client) ScanApps(steamDir string) ([]platforms.ScanResult, error) {
-	return ScanSteamApps(steamDir)
+func (c *Client) ScanApps(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamAppsFS(c.fs, steamDir)
 }
 
 // ScanShortcuts scans Steam for non-Steam games (user-added shortcuts).
 // steamDir should point to the Steam root directory.
-func (*Client) ScanShortcuts(steamDir string) ([]platforms.ScanResult, error) {
-	return ScanSteamShortcuts(steamDir)
+func (c *Client) ScanShortcuts(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamShortcutsFiltered(c.fs, steamDir, c.opts.ExcludedShortcutExecutables)
 }
 
 // ScanSteamApps scans official Steam games from the libraryfolders.vdf file.
 // steamDir should point to the steamapps directory (e.g., ~/.steam/steam/steamapps).
 func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamAppsFS(afero.NewOsFs(), steamDir)
+}
+
+func scanSteamAppsFS(fs afero.Fs, steamDir string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
+	var librariesScanned int
+	var librariesSkipped int
+	var manifestsFound int
+	var manifestsSkipped int
 
 	//nolint:gosec // Safe: reads Steam config files for game library scanning
-	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
+	f, err := fs.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
 	if err != nil {
 		// Steam not installed at this path (no library file) is expected on many
 		// devices; log at Debug to keep it out of Sentry. Mirror ScanSteamShortcuts.
@@ -81,71 +90,103 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		log.Error().Msg("libraryfolders is not a map")
 		return results, nil
 	}
-	for l, v := range lfs {
-		log.Debug().Msgf("library id: %s", l)
-		ls, ok := v.(map[string]any)
+	for libraryID, value := range lfs {
+		log.Debug().Str("libraryID", libraryID).Msg("scanning Steam library")
+		library, ok := value.(map[string]any)
 		if !ok {
-			log.Error().Msgf("library %s is not a map", l)
+			librariesSkipped++
+			log.Warn().Str("libraryID", libraryID).Msg("skipping invalid Steam library entry")
 			continue
 		}
 
-		libraryPath, ok := ls["path"].(string)
+		libraryPath, ok := library["path"].(string)
 		if !ok {
-			log.Error().Msgf("library %s path is not a string", l)
+			librariesSkipped++
+			log.Warn().Str("libraryID", libraryID).Msg("skipping Steam library without a valid path")
 			continue
 		}
-		steamApps, err := os.ReadDir(filepath.Join(libraryPath, "steamapps"))
+		steamAppsPath := filepath.Join(libraryPath, "steamapps")
+		steamApps, err := afero.ReadDir(fs, steamAppsPath)
 		if err != nil {
-			log.Error().Err(err).Msg("error listing steamapps folder")
+			librariesSkipped++
+			log.Warn().
+				Err(err).
+				Str("libraryID", libraryID).
+				Str("libraryPath", libraryPath).
+				Msg("skipping unavailable Steam library")
 			continue
 		}
+		librariesScanned++
 
 		var manifestFiles []string
-		for _, mf := range steamApps {
-			if strings.HasPrefix(mf.Name(), "appmanifest_") {
-				manifestFiles = append(manifestFiles, filepath.Join(libraryPath, "steamapps", mf.Name()))
+		for _, manifest := range steamApps {
+			if strings.HasPrefix(manifest.Name(), "appmanifest_") {
+				manifestFiles = append(manifestFiles, filepath.Join(steamAppsPath, manifest.Name()))
 			}
 		}
+		manifestsFound += len(manifestFiles)
 
-		for _, mf := range manifestFiles {
-			log.Debug().Msgf("manifest file: %s", mf)
+		for _, manifestPath := range manifestFiles {
+			manifestAppID := strings.TrimSuffix(
+				strings.TrimPrefix(filepath.Base(manifestPath), "appmanifest_"), filepath.Ext(manifestPath),
+			)
+			log.Debug().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+				Msg("reading Steam app manifest")
 
 			//nolint:gosec // Safe: reads Steam manifest files for game library scanning
-			af, err := os.Open(mf)
+			manifestFile, err := fs.Open(manifestPath)
 			if err != nil {
-				log.Error().Err(err).Msgf("error opening manifest: %s", mf)
-				return results, nil
+				manifestsSkipped++
+				log.Warn().
+					Err(err).
+					Str("manifestPath", manifestPath).
+					Str("appID", manifestAppID).
+					Msg("skipping unreadable Steam app manifest")
+				continue
 			}
 
-			ap := vdf.NewParser(af)
-			am, err := ap.Parse()
+			parser := vdf.NewParser(manifestFile)
+			manifest, err := parser.Parse()
 			if err != nil {
-				if closeErr := af.Close(); closeErr != nil {
-					log.Warn().Err(closeErr).Msg("error closing manifest file")
+				if closeErr := manifestFile.Close(); closeErr != nil {
+					log.Warn().Err(closeErr).Str("manifestPath", manifestPath).
+						Msg("error closing Steam app manifest")
 				}
-				log.Error().Err(err).Msgf("error parsing manifest: %s", mf)
-				return results, nil
+				manifestsSkipped++
+				log.Warn().
+					Err(err).
+					Str("manifestPath", manifestPath).
+					Str("appID", manifestAppID).
+					Msg("skipping invalid Steam app manifest")
+				continue
 			}
-			if closeErr := af.Close(); closeErr != nil {
-				log.Warn().Err(closeErr).Msg("error closing manifest file")
+			if closeErr := manifestFile.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("manifestPath", manifestPath).
+					Msg("error closing Steam app manifest")
 			}
-			am = normalizeVDFKeys(am)
+			manifest = normalizeVDFKeys(manifest)
 
-			appState, ok := am["appstate"].(map[string]any)
+			appState, ok := manifest["appstate"].(map[string]any)
 			if !ok {
-				log.Error().Msgf("appstate is not a map in manifest: %s", mf)
+				manifestsSkipped++
+				log.Warn().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+					Msg("skipping Steam app manifest without valid appstate")
 				continue
 			}
 
 			appID, ok := appState["appid"].(string)
 			if !ok {
-				log.Error().Msgf("appid is not a string in manifest: %s", mf)
+				manifestsSkipped++
+				log.Warn().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+					Msg("skipping Steam app manifest without valid appid")
 				continue
 			}
 
 			appName, ok := appState["name"].(string)
 			if !ok {
-				log.Error().Msgf("name is not a string in manifest: %s", mf)
+				manifestsSkipped++
+				log.Warn().Str("manifestPath", manifestPath).Str("appID", manifestAppID).
+					Msg("skipping Steam app manifest without valid name")
 				continue
 			}
 
@@ -157,13 +198,55 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		}
 	}
 
+	summary := log.Debug()
+	if librariesSkipped > 0 || manifestsSkipped > 0 {
+		summary = log.Warn()
+	}
+	summary.
+		Str("steamAppsDir", steamDir).
+		Int("librariesScanned", librariesScanned).
+		Int("librariesSkipped", librariesSkipped).
+		Int("manifestsFound", manifestsFound).
+		Int("manifestsSkipped", manifestsSkipped).
+		Int("results", len(results)).
+		Msg("Steam app scan complete")
+
 	return results, nil
+}
+
+// NormalizeShortcutExecutable extracts and cleans a shortcut's executable
+// without interpreting its display name or remaining arguments.
+func NormalizeShortcutExecutable(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, `"`) {
+		if end := strings.Index(value[1:], `"`); end >= 0 {
+			return filepath.Clean(value[1 : end+1])
+		}
+	}
+	if index := strings.IndexByte(value, ' '); index > 0 {
+		value = value[:index]
+	}
+	return filepath.Clean(strings.Trim(value, `"`))
 }
 
 // ScanSteamShortcuts scans Steam shortcuts (non-Steam games) from the shortcuts.vdf file.
 // steamDir should point to the Steam root directory.
 func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
+	return scanSteamShortcutsFiltered(afero.NewOsFs(), steamDir, nil)
+}
+
+func scanSteamShortcutsFiltered(
+	fs afero.Fs,
+	steamDir string,
+	excludedExecutables []string,
+) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
+	excluded := make(map[string]struct{}, len(excludedExecutables))
+	for _, executable := range excludedExecutables {
+		if executable != "" {
+			excluded[filepath.Clean(executable)] = struct{}{}
+		}
+	}
 	var userDirsScanned int
 	var shortcutsFilesFound int
 	var shortcutFileAccessFailures int
@@ -171,11 +254,12 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 	var shortcutFileParseFailures int
 	var parsedShortcuts int
 	var skippedBlankNames int
+	var skippedExecutables int
 
 	log.Debug().Str("steamDir", steamDir).Msg("scanning Steam shortcuts")
 
 	userdataDir := filepath.Join(steamDir, "userdata")
-	if _, err := os.Stat(userdataDir); err != nil {
+	if _, err := fs.Stat(userdataDir); err != nil {
 		if os.IsNotExist(err) {
 			log.Debug().Str("path", userdataDir).Msg("Steam userdata directory not found")
 		} else {
@@ -192,12 +276,13 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			Int("shortcutFileParseFailures", shortcutFileParseFailures).
 			Int("parsedShortcuts", parsedShortcuts).
 			Int("skippedBlankNames", skippedBlankNames).
+			Int("skippedExecutables", skippedExecutables).
 			Int("results", len(results)).
 			Msg("Steam shortcuts scan complete")
 		return results, nil
 	}
 
-	userDirs, err := os.ReadDir(userdataDir)
+	userDirs, err := afero.ReadDir(fs, userdataDir)
 	if err != nil {
 		log.Error().Err(err).Str("path", userdataDir).Msg("error reading Steam userdata directory")
 		return results, nil
@@ -213,7 +298,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 		userDirsScanned++
 
 		shortcutsPath := filepath.Join(userdataDir, userDir.Name(), "config", "shortcuts.vdf")
-		if _, err := os.Stat(shortcutsPath); err != nil {
+		if _, err := fs.Stat(shortcutsPath); err != nil {
 			if os.IsNotExist(err) {
 				log.Debug().Str("userId", userDir.Name()).Msg("no shortcuts.vdf for user")
 			} else {
@@ -227,7 +312,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 		log.Debug().Str("path", shortcutsPath).Msg("reading shortcuts")
 
 		//nolint:gosec // Safe: reads Steam config files for game library scanning
-		shortcutsData, err := os.ReadFile(shortcutsPath)
+		shortcutsData, err := afero.ReadFile(fs, shortcutsPath)
 		if err != nil {
 			shortcutFileReadFailures++
 			log.Error().Err(err).Msgf("error reading shortcuts.vdf: %s", shortcutsPath)
@@ -250,6 +335,10 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 		for _, shortcut := range shortcuts {
 			if shortcut.AppName == "" {
 				skippedBlankNames++
+				continue
+			}
+			if _, skip := excluded[NormalizeShortcutExecutable(shortcut.Exe)]; skip {
+				skippedExecutables++
 				continue
 			}
 
@@ -277,6 +366,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 		Int("shortcutFileParseFailures", shortcutFileParseFailures).
 		Int("parsedShortcuts", parsedShortcuts).
 		Int("skippedBlankNames", skippedBlankNames).
+		Int("skippedExecutables", skippedExecutables).
 		Int("results", len(results)).
 		Msg("Steam shortcuts scan complete")
 

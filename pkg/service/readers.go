@@ -600,8 +600,10 @@ preprocessing:
 		var scan *tokens.Token
 		var readerError bool
 		var scanSource string
+		var scanReaderID string
 		var scanProperties []readers.ScanProperty
 		var reinsertedDuringRemovalHook bool
+		var writtenTagRemoved bool
 
 		select {
 		case <-svc.State.GetContext().Done():
@@ -619,7 +621,12 @@ preprocessing:
 			scan = t.Token
 			readerError = t.ReaderError
 			scanSource = t.Source
+			scanReaderID = t.ReaderID
+			if scan != nil && scan.ReaderID != "" {
+				scanReaderID = scan.ReaderID
+			}
 			scanProperties = t.Properties
+			writtenTagRemoved = t.WrittenTagRemoved
 		case hookResult := <-removalHookResults:
 			if activeRemovalHook == nil || hookResult.generation != activeRemovalHook.generation {
 				continue preprocessing
@@ -717,6 +724,19 @@ preprocessing:
 			})
 			path, enabled := svc.Config.ReadySoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.ReadySound, "ready")
+			continue preprocessing
+		}
+
+		if writtenTagRemoved {
+			log.Info().Str("readerID", scanReaderID).Msg("written tag removed, allowing next scan to launch")
+			svc.State.MarkWrittenTagRemoved(scanReaderID)
+			continue preprocessing
+		}
+
+		// A reader may report the tag while its write operation is reading or
+		// verifying NDEF. Never mutate scan or hold state for that callback.
+		if scan != nil && svc.State.ReaderWriteActive(scanReaderID) {
+			log.Info().Str("readerID", scanReaderID).Msg("suppressing token scan during reader write")
 			continue preprocessing
 		}
 
@@ -855,13 +875,13 @@ preprocessing:
 
 			// avoid launching a token that was just written by a reader
 			// NOTE: This check requires both UID and Text to match (see helpers.TokensEqual).
-			wt := svc.State.GetWroteToken()
+			wt := svc.State.GetWroteToken(scanReaderID)
 			if wt != nil && helpers.TokensEqual(scan, wt) {
-				log.Info().Msg("skipping launching just written token")
-				svc.State.SetWroteToken(nil)
+				log.Info().Str("readerID", scanReaderID).Msg("skipping launching just written token")
+				svc.State.SetWroteTokenForReader(scanReaderID, nil)
 				continue preprocessing
 			}
-			svc.State.SetWroteToken(nil)
+			svc.State.SetWroteTokenForReader(scanReaderID, nil)
 
 			if handlePendingWrite(svc, scan, player) {
 				continue preprocessing

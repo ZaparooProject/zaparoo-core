@@ -79,6 +79,7 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token, player audio.Pl
 		return true
 	}
 	if written != nil {
+		written.ReaderID = writer.ReaderID()
 		svc.State.SetWroteToken(written)
 	}
 	playPendingWriteSuccessSound(svc, player)

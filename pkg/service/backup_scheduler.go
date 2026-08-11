@@ -44,6 +44,12 @@ type remoteHeartbeatState struct {
 	lastSuccess time.Time
 	nextAttempt time.Time
 	backoff     time.Duration
+	idle        bool
+}
+
+type playSyncConfiguration struct {
+	bearer  string
+	enabled bool
 }
 
 const (
@@ -101,6 +107,7 @@ func (s *remoteHeartbeatState) due(now time.Time) bool {
 }
 
 func (s *remoteHeartbeatState) recordFailure(now time.Time) {
+	s.idle = false
 	if s.backoff <= 0 {
 		s.backoff = remoteHeartbeatInitialBackoff
 	}
@@ -109,6 +116,7 @@ func (s *remoteHeartbeatState) recordFailure(now time.Time) {
 }
 
 func (s *remoteHeartbeatState) recordSuccess(now time.Time) {
+	s.idle = false
 	s.lastSuccess = now
 	s.nextAttempt = time.Time{}
 	s.backoff = remoteHeartbeatInitialBackoff
@@ -118,6 +126,35 @@ func (s *remoteHeartbeatState) recordSuccess(now time.Time) {
 // unlinked, or shutdown) from failures support logs must retain.
 func onlineFailureRequiresWarning(err error, expected bool) bool {
 	return err != nil && !expected && !errors.Is(err, context.Canceled)
+}
+
+// recordPlaySyncError applies retry backoff only to real failures. Disabled or
+// unlinked sync is an idle state, not a failure; retaining its backoff would
+// delay the first upload after the user enables sync or links the device.
+func currentPlaySyncConfiguration(cfg *config.Instance) playSyncConfiguration {
+	configuration := playSyncConfiguration{enabled: cfg.PlaytimeSyncEnabled()}
+	lookupURL := config.RemoteAuthLookupURL(cfg.PlaytimeBaseURL())
+	entry := config.LookupAuth(config.GetAuthCfg(), lookupURL)
+	if entry != nil {
+		configuration.bearer = entry.Bearer
+	}
+	return configuration
+}
+
+func (c playSyncConfiguration) eligible() bool {
+	return c.enabled && c.bearer != ""
+}
+
+func recordPlaySyncError(retryState *remoteHeartbeatState, now time.Time, err error) bool {
+	expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
+	if expected {
+		retryState.idle = true
+		retryState.nextAttempt = time.Time{}
+		retryState.backoff = remoteHeartbeatInitialBackoff
+		return true
+	}
+	retryState.recordFailure(now)
+	return false
 }
 
 func startRemoteBackupScheduler(
@@ -222,16 +259,31 @@ func remoteBackupSchedulerLoop(
 	// and never bypass retry backoff.
 	playSyncState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
 	playSyncPending := false
+	var idlePlaySyncConfiguration playSyncConfiguration
 	tryPlaySync := func() {
 		now := time.Now()
+		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
+		configuration := currentPlaySyncConfiguration(cfg)
+		if !configuration.eligible() {
+			playSyncState.idle = true
+			playSyncState.nextAttempt = time.Time{}
+			playSyncState.backoff = remoteHeartbeatInitialBackoff
+			idlePlaySyncConfiguration = configuration
+			return
+		}
+		if playSyncState.idle && configuration == idlePlaySyncConfiguration {
+			return
+		}
+		playSyncState.idle = false
 		if !playSyncDue(&playSyncState, now, playSyncPending) {
 			return
 		}
-		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		info, err := mgr.SyncPlayHistory(ctx)
 		if err != nil {
-			playSyncState.recordFailure(now)
-			expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
+			expected := recordPlaySyncError(&playSyncState, now, err)
+			if expected {
+				idlePlaySyncConfiguration = configuration
+			}
 			if onlineFailureRequiresWarning(err, expected) {
 				log.Warn().Err(err).
 					Dur("retry_in", playSyncState.nextAttempt.Sub(now)).
@@ -242,6 +294,7 @@ func remoteBackupSchedulerLoop(
 			return
 		}
 		playSyncState.recordSuccess(now)
+		idlePlaySyncConfiguration = playSyncConfiguration{}
 		playSyncPending = false
 		if info.Uploaded > 0 {
 			log.Info().Int("sessions", info.Uploaded).Msg("play history sync completed")
@@ -274,6 +327,9 @@ func remoteBackupSchedulerLoop(
 // A session lifecycle or active-heartbeat request bypasses the normal success
 // interval, but never the failure backoff.
 func playSyncDue(s *remoteHeartbeatState, now time.Time, pending bool) bool {
+	if s.idle {
+		return false
+	}
 	if !pending && !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < playSyncInterval {
 		return false
 	}
