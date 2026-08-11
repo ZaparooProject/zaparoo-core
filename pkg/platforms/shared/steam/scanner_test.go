@@ -202,26 +202,27 @@ func TestScanSteamApps(t *testing.T) {
 	t.Run("continues_after_invalid_manifest", func(t *testing.T) {
 		t.Parallel()
 
-		tempDir := t.TempDir()
-		steamAppsDir := filepath.Join(tempDir, "steamapps")
-		require.NoError(t, os.MkdirAll(steamAppsDir, 0o750))
+		fs := afero.NewMemMapFs()
+		libraryPath := filepath.Join(string(filepath.Separator), "library")
+		steamAppsDir := filepath.Join(libraryPath, "steamapps")
+		require.NoError(t, fs.MkdirAll(steamAppsDir, 0o750))
 
 		vdfContent := `"libraryfolders"
 {
 	"0"
 	{
-		"path"		"` + vdfEscapePath(tempDir) + `"
+		"path"		"` + vdfEscapePath(libraryPath) + `"
 	}
 }`
-		require.NoError(t, os.WriteFile(
-			filepath.Join(steamAppsDir, "libraryfolders.vdf"), []byte(vdfContent), 0o600,
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(steamAppsDir, "libraryfolders.vdf"), []byte(vdfContent), 0o600,
 		))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(steamAppsDir, "appmanifest_100.acf"), []byte("invalid content"), 0o600,
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(steamAppsDir, "appmanifest_100.acf"), []byte("invalid content"), 0o600,
 		))
-		createMockManifest(t, steamAppsDir, 200, "Valid Game")
+		writeMockManifestFS(t, fs, steamAppsDir, 200, "Valid Game")
 
-		results, scanErr := ScanSteamApps(steamAppsDir)
+		results, scanErr := scanSteamAppsFS(fs, steamAppsDir)
 
 		require.NoError(t, scanErr)
 		require.Len(t, results, 1)
@@ -234,24 +235,34 @@ func TestScanSteamApps(t *testing.T) {
 
 		fs := afero.NewMemMapFs()
 		steamDir := filepath.Join(string(filepath.Separator), "steam", "steamapps")
-		libraryPath := filepath.Join(string(filepath.Separator), "library")
-		libraryAppsPath := filepath.Join(libraryPath, "steamapps")
+		failingLibraryPath := filepath.Join(string(filepath.Separator), "failing-library")
+		failingAppsPath := filepath.Join(failingLibraryPath, "steamapps")
+		validLibraryPath := filepath.Join(string(filepath.Separator), "valid-library")
+		validAppsPath := filepath.Join(validLibraryPath, "steamapps")
 		require.NoError(t, fs.MkdirAll(steamDir, 0o750))
-		require.NoError(t, fs.MkdirAll(libraryAppsPath, 0o750))
+		require.NoError(t, fs.MkdirAll(failingAppsPath, 0o750))
+		require.NoError(t, fs.MkdirAll(validAppsPath, 0o750))
 		content := `"libraryfolders"
 {
 	"0"
 	{
-		"path"		"` + vdfEscapePath(libraryPath) + `"
+		"path"		"` + vdfEscapePath(failingLibraryPath) + `"
+	}
+	"1"
+	{
+		"path"		"` + vdfEscapePath(validLibraryPath) + `"
 	}
 }`
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(steamDir, "libraryfolders.vdf"), []byte(content), 0o600))
-		failingFS := failOpenFS{Fs: fs, failPaths: map[string]error{libraryAppsPath: errTestFSAccess}}
+		writeMockManifestFS(t, fs, validAppsPath, 200, "Valid Game")
+		failingFS := failOpenFS{Fs: fs, failPaths: map[string]error{failingAppsPath: errTestFSAccess}}
 
 		results, err := scanSteamAppsFS(failingFS, steamDir)
 
 		require.NoError(t, err)
-		assert.Empty(t, results)
+		require.Len(t, results, 1)
+		assert.Equal(t, "Valid Game", results[0].Name)
+		assert.Contains(t, results[0].Path, "steam://200/")
 	})
 
 	t.Run("continues_after_manifest_open_failure", func(t *testing.T) {
@@ -288,6 +299,7 @@ func TestScanSteamApps(t *testing.T) {
 		fs := afero.NewMemMapFs()
 		steamDir := filepath.Join(string(filepath.Separator), "steam", "steamapps")
 		libraryPath := filepath.Join(string(filepath.Separator), "library")
+		unavailableLibraryPath := filepath.Join(string(filepath.Separator), "missing-library")
 		steamAppsDir := filepath.Join(libraryPath, "steamapps")
 		require.NoError(t, fs.MkdirAll(steamDir, 0o750))
 		require.NoError(t, fs.MkdirAll(steamAppsDir, 0o750))
@@ -300,7 +312,7 @@ func TestScanSteamApps(t *testing.T) {
 	}
 	"unavailable"
 	{
-		"path"	"/missing-library"
+		"path"	"` + vdfEscapePath(unavailableLibraryPath) + `"
 	}
 	"valid"
 	{
