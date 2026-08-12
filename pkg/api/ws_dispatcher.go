@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -56,23 +57,34 @@ var (
 
 const wsDispatcherSessionKey = "api.ws.dispatcher"
 
+func queueDuration(enqueuedAt time.Time) time.Duration {
+	if enqueuedAt.IsZero() {
+		return 0
+	}
+	return time.Since(enqueuedAt)
+}
+
 type wsRequestJob struct {
-	tracker   RequestTracker
-	methodMap *MethodMap
-	cs        *apimiddleware.ClientSession
-	cancel    context.CancelFunc
-	env       *requests.RequestEnv
-	method    string
-	msg       []byte
-	image     bool
+	tracker    RequestTracker
+	methodMap  *MethodMap
+	cs         *apimiddleware.ClientSession
+	cancel     context.CancelFunc
+	env        *requests.RequestEnv
+	enqueuedAt time.Time
+	requestID  models.RPCID
+	method     string
+	msg        []byte
+	image      bool
 }
 
 type wsResponseJob struct {
-	tracker RequestTracker
-	cs      *apimiddleware.ClientSession
-	cancel  context.CancelFunc
-	result  requestResult
-	pong    bool
+	enqueuedAt time.Time
+	tracker    RequestTracker
+	cs         *apimiddleware.ClientSession
+	cancel     context.CancelFunc
+	method     string
+	result     requestResult
+	pong       bool
 }
 
 type wsSessionDispatcher struct {
@@ -197,7 +209,9 @@ func (d *wsSessionDispatcher) enqueuePong(cs *apimiddleware.ClientSession, track
 	select {
 	case <-d.ctx.Done():
 		return d.ctx.Err()
-	case d.responses <- &wsResponseJob{cs: cs, tracker: tracker, pong: true}:
+	case d.responses <- &wsResponseJob{
+		cs: cs, tracker: tracker, enqueuedAt: time.Now(), method: "ping", pong: true,
+	}:
 		return nil
 	default:
 		return errors.New("websocket response queue is full")
@@ -216,6 +230,12 @@ func (d *wsSessionDispatcher) worker(queue <-chan *wsRequestJob) {
 }
 
 func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
+	log.Debug().
+		Str("method", job.method).
+		Str("requestId", requestIDForLog(job.requestID)).
+		Dur("queueWaitDuration", queueDuration(job.enqueuedAt)).
+		Msg("websocket request dequeued")
+
 	//nolint:gosec // Cancellation is transferred to job and invoked when response handling completes.
 	ctx, cancel := requestContextForAPIMethod(d.ctx, job.method)
 	job.env.Context = ctx
@@ -226,7 +246,7 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 			log.Error().Interface("panic", r).Msg("panic in websocket request worker")
 			d.enqueueResponse(&wsResponseJob{
 				result: requestResult{ID: models.NullRPCID, Error: &JSONRPCErrorInternalError, ShouldReply: true},
-				cs:     job.cs, tracker: job.tracker, cancel: job.cancel,
+				cs:     job.cs, tracker: job.tracker, cancel: job.cancel, method: job.method,
 			})
 		}
 	}()
@@ -248,7 +268,9 @@ func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
 	defer unlock()
 
 	result := processRequestObject(job.methodMap, *job.env, job.msg)
-	d.enqueueResponse(&wsResponseJob{result: result, cs: job.cs, tracker: job.tracker, cancel: job.cancel})
+	d.enqueueResponse(&wsResponseJob{
+		result: result, cs: job.cs, tracker: job.tracker, cancel: job.cancel, method: job.method,
+	})
 }
 
 func mediaDBLockModeForAPIMethod(method string) mediaDBLockMode {
@@ -288,10 +310,12 @@ func (d *wsSessionDispatcher) finishWithoutReply(job *wsRequestJob) {
 		cs:      job.cs,
 		tracker: job.tracker,
 		cancel:  job.cancel,
+		method:  job.method,
 	})
 }
 
 func (d *wsSessionDispatcher) enqueueResponse(resp *wsResponseJob) {
+	resp.enqueuedAt = time.Now()
 	select {
 	case <-d.ctx.Done():
 		if resp.cancel != nil {
@@ -316,6 +340,16 @@ func (d *wsSessionDispatcher) writer() {
 }
 
 func (d *wsSessionDispatcher) writeResponse(resp *wsResponseJob) {
+	requestID := resp.result.ID
+	if resp.pong {
+		requestID = models.RPCID{}
+	}
+	log.Debug().
+		Str("method", resp.method).
+		Str("requestId", requestIDForLog(requestID)).
+		Dur("responseQueueDuration", queueDuration(resp.enqueuedAt)).
+		Msg("websocket response dequeued")
+
 	defer func() {
 		if resp.cancel != nil {
 			resp.cancel()
@@ -361,17 +395,19 @@ func enqueueWSRequest(
 	cs *apimiddleware.ClientSession,
 	tracker RequestTracker,
 ) error {
-	method := methodFromAPIRequestPayload(msg)
+	method, requestID := requestMetadataFromAPIRequestPayload(msg)
 	priority := classifyAPIMethod(method)
 	env.Context = d.ctx
 	job := &wsRequestJob{
-		methodMap: methodMap,
-		env:       env,
-		method:    method,
-		msg:       append([]byte(nil), msg...),
-		cs:        cs,
-		tracker:   tracker,
-		image:     isImageAPIMethod(method),
+		methodMap:  methodMap,
+		env:        env,
+		enqueuedAt: time.Now(),
+		requestID:  requestID,
+		method:     method,
+		msg:        append([]byte(nil), msg...),
+		cs:         cs,
+		tracker:    tracker,
+		image:      isImageAPIMethod(method),
 	}
 	if err := d.enqueue(job, priority); err != nil {
 		return fmt.Errorf("enqueue websocket request: %w", err)
