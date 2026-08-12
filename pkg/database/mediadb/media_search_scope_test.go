@@ -21,7 +21,9 @@ package mediadb
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -155,7 +157,7 @@ func TestMediaDB_SearchMediaWithFilters_ScopesSQLVariantsByMediaType(t *testing.
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMediaDB_SearchMediaWithFilters_FallsBackBeforeSQLiteVariableLimit(t *testing.T) {
+func TestMediaDB_SearchMediaWithFilters_FallsBackWhenScopedStreamIsSparse(t *testing.T) {
 	t.Parallel()
 
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -186,11 +188,20 @@ func TestMediaDB_SearchMediaWithFilters_FallsBackBeforeSQLiteVariableLimit(t *te
 	mediaDB.sql.Store(db)
 	mediaDB.slugSearchCache.Store(cache)
 
+	mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+		WithArgs(int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(int64(1), int64(20_000)))
+	mock.ExpectQuery("SELECT.*MediaTitles\\.Name.*Media\\.Path.*FROM Media NOT INDEXED").
+		WithArgs(int64(1), int64(10_000), int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"Name", "Path", "DBID", "DisambiguationTypes", "MediaTitleDBID",
+		}))
+
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(nes.ID, "%rtype%", "%rtype%", 10).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"SystemID", "Name", "Path", "DBID", "DisambiguationTypes",
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
 		}))
 
 	results, err := mediaDB.SearchMediaWithFilters(context.Background(), &database.SearchFilters{
@@ -202,4 +213,353 @@ func TestMediaDB_SearchMediaWithFilters_FallsBackBeforeSQLiteVariableLimit(t *te
 	require.NoError(t, err)
 	assert.Empty(t, results)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestScopedCandidateStream_MatchesGroupedSQL(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES
+			(1, 'SNES', 'Super Nintendo'),
+			(2, 'NES', 'Nintendo');`)
+	require.NoError(t, err)
+
+	titleStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, titleStmt.Close()) }()
+	mediaStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, IsMissing) VALUES (?, ?, ?, ?, ?)`)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mediaStmt.Close()) }()
+
+	const rowsPerSystem = 600
+	snesCandidates := make(map[string][]int64)
+	allCandidates := make(map[string][]int64)
+	var firstSNES, lastSNES int64
+	for i := 1; i <= rowsPerSystem; i++ {
+		var slug string
+		switch i % 6 {
+		case 0:
+			slug = fmt.Sprintf("alpha-super-%03d", i)
+		case 1:
+			slug = fmt.Sprintf("alpha-%03d", i)
+		case 2:
+			slug = fmt.Sprintf("super-%03d", i)
+		case 3:
+			slug = fmt.Sprintf("rare-%03d", i)
+		default:
+			slug = fmt.Sprintf("plain-%03d", i)
+		}
+
+		for systemDBID := int64(1); systemDBID <= 2; systemDBID++ {
+			mediaID := int64((i-1)*2) + systemDBID
+			titleID := systemDBID*10_000 + int64(i)
+			systemID := "SNES"
+			if systemDBID == 2 {
+				systemID = "NES"
+			}
+			_, err = titleStmt.ExecContext(ctx, titleID, systemDBID, slug, fmt.Sprintf("%s Game %03d", systemID, i))
+			require.NoError(t, err)
+			_, err = mediaStmt.ExecContext(
+				ctx, mediaID, titleID, systemDBID,
+				filepath.Join("roms", strings.ToLower(systemID), fmt.Sprintf("game-%03d.rom", i)),
+				i%17 == 0,
+			)
+			require.NoError(t, err)
+			for _, query := range []string{"alpha", "super", "rare", "plain"} {
+				if strings.Contains(slug, query) {
+					allCandidates[query] = append(allCandidates[query], titleID)
+				}
+			}
+			if systemDBID == 1 {
+				if firstSNES == 0 {
+					firstSNES = mediaID
+				}
+				lastSNES = mediaID
+				for _, query := range []string{"alpha", "super", "rare", "plain"} {
+					if strings.Contains(slug, query) {
+						snesCandidates[query] = append(snesCandidates[query], titleID)
+					}
+				}
+			}
+		}
+	}
+	require.NoError(t, tx.Commit())
+
+	bounds := mediaDBIDBounds{first: firstSNES, last: lastSNES}
+	snes := []systemdefs.System{{ID: "SNES"}}
+	assertParity := func(t *testing.T, query string, limit int, cursor *int64) []database.SearchResultWithCursor {
+		t.Helper()
+		expected, queryErr := sqlSearchMediaWithFiltersSorted(
+			ctx, mediaDB.sql.Load(), snes, [][]string{{query}}, []string{query},
+			"", nil, nil, cursor, nil, "", limit, false,
+		)
+		require.NoError(t, queryErr)
+		actual, streamErr := sqlSearchMediaByLargeTitleDBIDSetInSystems(
+			ctx, mediaDB.sql.Load(), snesCandidates[query], map[int64]string{1: "SNES"}, bounds, cursor, limit,
+		)
+		require.NoError(t, streamErr)
+		assert.Equal(t, searchResultIDs(expected), searchResultIDs(actual))
+		for i := range actual {
+			assert.Equal(t, expected[i].MediaTitleID, actual[i].MediaTitleID)
+		}
+		return expected
+	}
+
+	for _, tc := range []struct {
+		query string
+		limit int
+	}{
+		{query: "alpha", limit: 25},
+		{query: "alpha", limit: 100},
+		{query: "super", limit: 50},
+		{query: "rare", limit: 100},
+		{query: "plain", limit: 300},
+	} {
+		t.Run(fmt.Sprintf("%s-%d", tc.query, tc.limit), func(t *testing.T) {
+			assertParity(t, tc.query, tc.limit, nil)
+		})
+	}
+
+	firstPage := assertParity(t, "alpha", 25, nil)
+	require.Len(t, firstPage, 25)
+	cursor := firstPage[len(firstPage)-1].MediaID
+	assertParity(t, "alpha", 25, &cursor)
+
+	allSystems := []systemdefs.System{{ID: "SNES"}, {ID: "NES"}}
+	multiExpected, err := sqlSearchMediaWithFiltersSorted(
+		ctx, mediaDB.sql.Load(), allSystems, [][]string{{"alpha"}}, []string{"alpha"},
+		"", nil, nil, nil, nil, "", 100, false,
+	)
+	require.NoError(t, err)
+	multiActual, err := sqlSearchMediaByLargeTitleDBIDSetInSystems(
+		ctx, mediaDB.sql.Load(), allCandidates["alpha"], map[int64]string{1: "SNES", 2: "NES"},
+		mediaDBIDBounds{first: 1, last: rowsPerSystem * 2}, nil, 100,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, searchResultIDs(multiExpected), searchResultIDs(multiActual))
+	for i := range multiActual {
+		assert.Equal(t, multiExpected[i].SystemID, multiActual[i].SystemID)
+		assert.Equal(t, multiExpected[i].MediaTitleID, multiActual[i].MediaTitleID)
+	}
+}
+
+func searchResultIDs(results []database.SearchResultWithCursor) []int64 {
+	ids := make([]int64, len(results))
+	for i := range results {
+		ids[i] = results[i].MediaID
+	}
+	return ids
+}
+
+func TestMediaSearchBounds_CachesAndClears(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mediaDB := &MediaDB{}
+	mediaDB.sql.Store(db)
+
+	expectBounds := func(first, last int64) {
+		mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+			WithArgs(int64(7)).
+			WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(first, last))
+	}
+
+	expectBounds(100, 200)
+	bounds, found, err := mediaDB.getMediaSearchBounds(context.Background(), 7)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, mediaDBIDBounds{first: 100, last: 200}, bounds)
+
+	cached, found, err := mediaDB.getMediaSearchBounds(context.Background(), 7)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, bounds, cached)
+
+	mediaDB.clearMediaSearchBounds()
+	expectBounds(300, 400)
+	refreshed, found, err := mediaDB.getMediaSearchBounds(context.Background(), 7)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, mediaDBIDBounds{first: 300, last: 400}, refreshed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMediaSearchBounds_MetadataInvalidationPreservesCache(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "bounds-cache",
+		Name:       "Bounds Cache",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     system.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "snes", "bounds-cache.sfc"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	bounds, found, err := mediaDB.getMediaSearchBounds(ctx, system.DBID)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, mediaDBIDBounds{first: media.DBID, last: media.DBID}, bounds)
+
+	mediaDB.invalidateCaches(invalidationScope{AllSystems: true})
+	mediaDB.mediaSearchBoundsMu.RLock()
+	cached, ok := mediaDB.mediaSearchBounds[system.DBID]
+	mediaDB.mediaSearchBoundsMu.RUnlock()
+	assert.True(t, ok, "metadata-only invalidation must preserve media bounds")
+	assert.Equal(t, bounds, cached)
+
+	mediaDB.invalidateCaches(invalidationScope{AllSystems: true, MediaRowsChanged: true})
+	mediaDB.mediaSearchBoundsMu.RLock()
+	assert.Empty(t, mediaDB.mediaSearchBounds)
+	mediaDB.mediaSearchBoundsMu.RUnlock()
+
+	// Metadata-only transactions must not evict bounds; media inserts must.
+	bounds, found, err = mediaDB.getMediaSearchBounds(ctx, system.DBID)
+	require.NoError(t, err)
+	assert.True(t, found)
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	require.NoError(t, mediaDB.CommitTransaction())
+	mediaDB.mediaSearchBoundsMu.RLock()
+	assert.Equal(t, bounds, mediaDB.mediaSearchBounds[system.DBID])
+	mediaDB.mediaSearchBoundsMu.RUnlock()
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	secondTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "bounds-cache-second",
+		Name:       "Bounds Cache Second",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     system.DBID,
+		MediaTitleDBID: secondTitle.DBID,
+		Path:           filepath.Join("roms", "snes", "bounds-cache-second.sfc"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	mediaDB.mediaSearchBoundsMu.RLock()
+	assert.Empty(t, mediaDB.mediaSearchBounds)
+	mediaDB.mediaSearchBoundsMu.RUnlock()
+}
+
+func TestScopedCandidateStreamQueryPlanUsesRowIDOrder(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	seedBrowsePlanTestDB(t, mediaDB, 100)
+
+	rows, err := mediaDB.sql.Load().QueryContext(
+		context.Background(), "EXPLAIN QUERY PLAN "+scopedCandidateStreamQuery(1), 1, 100, 1,
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var planLines []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		planLines = append(planLines, detail)
+	}
+	require.NoError(t, rows.Err())
+
+	plan := strings.Join(planLines, "\n")
+	assert.Contains(t, plan, "INTEGER PRIMARY KEY")
+	assert.NotContains(t, plan, "USE TEMP B-TREE FOR ORDER BY")
+}
+
+func TestSQLSearchMediaByLargeTitleDBIDSetInSystems(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	const pageSize = 10
+	seedBrowsePlanTestDB(t, mediaDB, (sqliteMaxParams+pageSize)*2)
+
+	candidateIDs := make([]int64, sqliteMaxParams+pageSize)
+	for i := range candidateIDs {
+		candidateIDs[i] = int64((i + 1) * 2)
+	}
+
+	bounds := mediaDBIDBounds{first: 1, last: (sqliteMaxParams + pageSize) * 2}
+	results, err := sqlSearchMediaByLargeTitleDBIDSetInSystems(
+		context.Background(), mediaDB.sql.Load(), candidateIDs, map[int64]string{1: "MiSTer:Arcade"},
+		bounds, nil, pageSize,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, pageSize)
+	for i := range results {
+		assert.Equal(t, "MiSTer:Arcade", results[i].SystemID)
+		assert.Equal(t, int64((i+1)*2), results[i].MediaID)
+		assert.Equal(t, int64((i+1)*2), results[i].MediaTitleID)
+	}
+
+	cursor := results[len(results)-1].MediaID
+	secondPage, err := sqlSearchMediaByLargeTitleDBIDSetInSystems(
+		context.Background(), mediaDB.sql.Load(), candidateIDs, map[int64]string{1: "MiSTer:Arcade"},
+		bounds, &cursor, pageSize,
+	)
+	require.NoError(t, err)
+	require.Len(t, secondPage, pageSize)
+	for i := range secondPage {
+		assert.Equal(t, int64((i+pageSize+1)*2), secondPage[i].MediaID)
+	}
+}
+
+func TestSQLSearchMediaByLargeTitleDBIDSet(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+	const pageSize = 10
+	seedBrowsePlanTestDB(t, mediaDB, (sqliteMaxParams+pageSize)*2)
+
+	candidateIDs := make([]int64, sqliteMaxParams+pageSize)
+	for i := range candidateIDs {
+		candidateIDs[i] = int64((i + 1) * 2)
+	}
+
+	results, err := sqlSearchMediaByLargeTitleDBIDSet(
+		context.Background(), mediaDB.sql.Load(), candidateIDs, "", nil, nil, nil, pageSize,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, pageSize)
+	for i := range results {
+		assert.Equal(t, int64((i+1)*2), results[i].MediaID)
+	}
+
+	cursor := results[len(results)-1].MediaID
+	secondPage, err := sqlSearchMediaByLargeTitleDBIDSet(
+		context.Background(), mediaDB.sql.Load(), candidateIDs, "", nil, nil, &cursor, pageSize,
+	)
+	require.NoError(t, err)
+	require.Len(t, secondPage, pageSize)
+	for i := range secondPage {
+		assert.Equal(t, int64((i+pageSize+1)*2), secondPage[i].MediaID)
+	}
 }

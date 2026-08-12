@@ -128,12 +128,17 @@ func getSqliteConnParams() string {
 		"&_page_size=8192&_foreign_keys=ON&_txlock=immediate"
 }
 
+type mediaDBIDBounds struct {
+	first int64
+	last  int64
+}
+
 type MediaDB struct {
 	clock                   clockwork.Clock
 	ctx                     context.Context
 	pl                      platforms.Platform
-	batchInsertScanStage    *BatchInserter
-	batchInsertScanProperty *BatchInserter
+	scrapeImageSystems      map[string]struct{}
+	batchInsertTagType      *BatchInserter
 	stmtInsertMedia         *sql.Stmt
 	tx                      *sql.Tx
 	stmtInsertSystem        *sql.Stmt
@@ -143,7 +148,7 @@ type MediaDB struct {
 	batchInsertMediaTag     *BatchInserter
 	inMemoryTagCache        atomic.Pointer[tagCache]
 	batchInsertTag          *BatchInserter
-	batchInsertTagType      *BatchInserter
+	mediaSearchBounds       map[int64]mediaDBIDBounds
 	stmtInsertMediaTag      *sql.Stmt
 	batchInsertMediaTitle   *BatchInserter
 	stmtInsertMediaTitle    *sql.Stmt
@@ -151,14 +156,16 @@ type MediaDB struct {
 	batchInsertSystem       *BatchInserter
 	batchInsertScanTag      *BatchInserter
 	slugSearchCache         atomic.Pointer[SlugSearchCache]
-	scrapeImageSystems      map[string]struct{}
+	batchInsertScanStage    *BatchInserter
+	batchInsertScanProperty *BatchInserter
 	dbPath                  string
 	backgroundOps           sync.WaitGroup
 	backgroundOpsCount      atomic.Int64
-	backgroundOpsMu         syncutil.RWMutex
 	vacuumRetryDelay        time.Duration
 	analyzeRetryDelay       time.Duration
 	batchSize               int
+	backgroundOpsMu         syncutil.RWMutex
+	mediaSearchBoundsMu     syncutil.RWMutex
 	sqlMu                   syncutil.RWMutex
 	scrapeImageChangesMu    syncutil.Mutex
 	recreating              atomic.Bool
@@ -169,6 +176,7 @@ type MediaDB struct {
 	inTransaction           bool
 	browseCacheDirty        bool
 	utilityTagCacheDirty    bool
+	mediaSearchBoundsDirty  bool
 	scrapeImageChangesAll   bool
 }
 
@@ -196,11 +204,15 @@ type invalidationScope struct {
 	AllSystems              bool
 	PreserveSlugSearchCache bool
 	UtilityTagDBIDsChanged  bool
+	MediaRowsChanged        bool
 }
 
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
+	if scope.MediaRowsChanged {
+		db.clearMediaSearchBounds()
+	}
 	clearPrefixPolicyCache()
 	clearCoverAvailabilityCacheFor(db.sql.Load())
 	if scope.UtilityTagDBIDsChanged {
@@ -255,6 +267,59 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 			log.Warn().Err(err).Msg("failed to invalidate slug resolution cache for specific systems")
 		}
 	}
+}
+
+func (db *MediaDB) clearMediaSearchBounds() {
+	db.mediaSearchBoundsMu.Lock()
+	defer db.mediaSearchBoundsMu.Unlock()
+	db.mediaSearchBounds = nil
+}
+
+func (db *MediaDB) getMediaSearchBounds(ctx context.Context, systemDBID int64) (mediaDBIDBounds, bool, error) {
+	db.mediaSearchBoundsMu.RLock()
+	bounds, ok := db.mediaSearchBounds[systemDBID]
+	db.mediaSearchBoundsMu.RUnlock()
+	if ok {
+		return bounds, bounds.first > 0, nil
+	}
+
+	// Serialize misses so concurrent first searches for one system do not repeat
+	// the covering-index scan. Stable libraries pay this once per system; media
+	// mutations clear the map through invalidateCaches.
+	db.mediaSearchBoundsMu.Lock()
+	defer db.mediaSearchBoundsMu.Unlock()
+	if bounds, ok = db.mediaSearchBounds[systemDBID]; ok {
+		return bounds, bounds.first > 0, nil
+	}
+
+	queryStarted := time.Now()
+	var firstMediaID, lastMediaID sql.NullInt64
+	if err := db.sql.Load().QueryRowContext(ctx, `
+		SELECT MIN(DBID), MAX(DBID)
+		FROM Media
+		WHERE SystemDBID = ? AND IsMissing = 0`, systemDBID).Scan(&firstMediaID, &lastMediaID); err != nil {
+		return mediaDBIDBounds{}, false, fmt.Errorf("query media search bounds: %w", err)
+	}
+	if firstMediaID.Valid && lastMediaID.Valid {
+		bounds = mediaDBIDBounds{first: firstMediaID.Int64, last: lastMediaID.Int64}
+	}
+	if db.mediaSearchBounds == nil {
+		db.mediaSearchBounds = make(map[int64]mediaDBIDBounds)
+	}
+	db.mediaSearchBounds[systemDBID] = bounds
+	log.Debug().
+		Int64("systemDBID", systemDBID).
+		Int64("firstMediaID", bounds.first).
+		Int64("lastMediaID", bounds.last).
+		Dur("duration", time.Since(queryStarted)).
+		Msg("media search system bounds cached")
+	return bounds, bounds.first > 0, nil
+}
+
+func invalidationScopeForMediaSystemIDs(systemIDs []string) invalidationScope {
+	scope := invalidationScopeForSystemIDs(systemIDs)
+	scope.MediaRowsChanged = true
+	return scope
 }
 
 func invalidationScopeForSystemIDs(systemIDs []string) invalidationScope {
@@ -369,6 +434,7 @@ func (db *MediaDB) Open() error {
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.clearMediaSearchBounds()
 
 	if !exists {
 		log.Debug().Msg("media database is new, allocating schema")
@@ -658,9 +724,9 @@ func (db *MediaDB) UpdateLastGenerated() error {
 		case getSystemsErr != nil:
 			log.Warn().Err(getSystemsErr).
 				Msg("failed to load indexing systems for cache invalidation; clearing all caches")
-			db.invalidateCaches(invalidationScope{AllSystems: true})
+			db.invalidateCaches(invalidationScope{AllSystems: true, MediaRowsChanged: true})
 		default:
-			scope := invalidationScopeForSystemIDs(systemIDs)
+			scope := invalidationScopeForMediaSystemIDs(systemIDs)
 			scope.PreserveSlugSearchCache = isIndexing && !scope.AllSystems
 			db.invalidateCaches(scope)
 		}
@@ -1165,7 +1231,9 @@ func (db *MediaDB) Truncate() error {
 	}
 
 	// Invalidate all caches after full truncation
-	db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
+	db.invalidateCaches(invalidationScope{
+		AllSystems: true, UtilityTagDBIDsChanged: true, MediaRowsChanged: true,
+	})
 
 	// Reclaim disk space freed by the truncation
 	if err := sqlVacuum(db.ctx, db.sql.Load()); err != nil {
@@ -1188,7 +1256,7 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	}
 
 	// Invalidate caches for the affected systems
-	scope := invalidationScopeForSystemIDs(systemIDs)
+	scope := invalidationScopeForMediaSystemIDs(systemIDs)
 	scope.UtilityTagDBIDsChanged = true
 	db.invalidateCaches(scope)
 	return nil
@@ -1302,7 +1370,9 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 				log.Warn().Err(cacheErr).Msg("failed to invalidate cached media counts after orphan cleanup")
 			}
 		}
-		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
+		db.invalidateCaches(invalidationScope{
+			AllSystems: true, UtilityTagDBIDsChanged: true, MediaRowsChanged: true,
+		})
 		if err := sqlInvalidateBrowseCache(ctx, db.sql.Load()); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
 		}
@@ -1334,32 +1404,35 @@ func (db *MediaDB) Close() error {
 }
 
 func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationScope {
+	allSystemsScope := func() invalidationScope {
+		return invalidationScope{
+			AllSystems:             true,
+			UtilityTagDBIDsChanged: db.utilityTagCacheDirty,
+			MediaRowsChanged:       db.mediaSearchBoundsDirty,
+		}
+	}
+
 	// CommitTransaction already holds db.sqlMu, so use the SQL helpers directly
 	// instead of getters that would try to take the lock again.
 	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql.Load())
 	if statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
-		scope := invalidationScope{AllSystems: true}
-		scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
-		return scope
+		return allSystemsScope()
 	}
 
 	if status != IndexingStatusRunning && status != IndexingStatusPending {
-		scope := invalidationScope{AllSystems: true}
-		scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
-		return scope
+		return allSystemsScope()
 	}
 
 	systemIDs, getSystemsErr := sqlGetIndexingSystems(db.ctx, db.sql.Load())
 	if getSystemsErr != nil {
 		log.Warn().Err(getSystemsErr).Msg("failed to load indexing systems for cache invalidation")
-		scope := invalidationScope{AllSystems: true}
-		scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
-		return scope
+		return allSystemsScope()
 	}
 
 	scope := invalidationScopeForSystemIDs(systemIDs)
 	scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
+	scope.MediaRowsChanged = db.mediaSearchBoundsDirty
 	return scope
 }
 
@@ -1371,6 +1444,7 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.clearMediaSearchBounds()
 	db.ctx = ctx
 	db.pl = platform
 	db.clock = clockwork.NewRealClock()
@@ -1591,6 +1665,7 @@ func (db *MediaDB) ReconcileStagedSystem(
 		return stats, err
 	}
 	if stats.MediaUpserted > 0 || stats.MediaMissing > 0 {
+		db.mediaSearchBoundsDirty = true
 		countKeys := []string{DBConfigMediaMissingCount}
 		if stats.MediaUpserted > 0 {
 			countKeys = append(countKeys, DBConfigMediaTotalCount)
@@ -1640,6 +1715,7 @@ func (db *MediaDB) RollbackTransaction() error {
 	db.inTransaction = false // Clear transaction flag (no cache invalidation needed on rollback)
 	db.clearBrowseCacheInvalidation()
 	db.utilityTagCacheDirty = false
+	db.mediaSearchBoundsDirty = false
 	if err != nil {
 		return fmt.Errorf("failed to rollback transaction: %w", err)
 	}
@@ -1667,6 +1743,7 @@ func (db *MediaDB) rollbackAndLogError() {
 	db.inTransaction = false
 	db.clearBrowseCacheInvalidation()
 	db.utilityTagCacheDirty = false
+	db.mediaSearchBoundsDirty = false
 }
 
 func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
@@ -1681,6 +1758,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	if db.inTransaction {
 		return errors.New("transaction already in progress")
 	}
+	db.mediaSearchBoundsDirty = false
 
 	// Begin a proper transaction
 	tx, err := db.sql.Load().BeginTx(db.ctx, nil)
@@ -1916,12 +1994,14 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 				db.inTransaction = false
 				db.clearBrowseCacheInvalidation()
 				db.utilityTagCacheDirty = false
+				db.mediaSearchBoundsDirty = false
 				return fmt.Errorf("failed to flush batch inserts: %w; rollback also failed: %w", closeErr, rbErr)
 			}
 			db.tx = nil
 			db.inTransaction = false
 			db.clearBrowseCacheInvalidation()
 			db.utilityTagCacheDirty = false
+			db.mediaSearchBoundsDirty = false
 			return fmt.Errorf("failed to flush batch inserts: %w", closeErr)
 		}
 	} else {
@@ -1938,12 +2018,14 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 			db.inTransaction = false
 			db.clearBrowseCacheInvalidation()
 			db.utilityTagCacheDirty = false
+			db.mediaSearchBoundsDirty = false
 			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
 		}
 		db.tx = nil
 		db.inTransaction = false
 		db.clearBrowseCacheInvalidation()
 		db.utilityTagCacheDirty = false
+		db.mediaSearchBoundsDirty = false
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -1959,7 +2041,9 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	switch {
 	case statusErr != nil:
 		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+		db.invalidateCaches(invalidationScope{
+			AllSystems: true, MediaRowsChanged: db.mediaSearchBoundsDirty,
+		})
 	case indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending:
 		scope := db.cacheInvalidationScopeForCommittedTransaction()
 		scope.PreserveSlugSearchCache = true
@@ -1968,6 +2052,7 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	default:
 		db.invalidateCaches(db.cacheInvalidationScopeForCommittedTransaction())
 	}
+	db.mediaSearchBoundsDirty = false
 	if err := db.flushBrowseCacheInvalidation(); err != nil {
 		return err
 	}
@@ -2361,7 +2446,15 @@ func (db *MediaDB) SearchMediaWithFilters(
 	cacheReady := cache != nil && cache.CanServeSystems(systemIDs)
 	cacheableGroups := mediaSearchTypeGroupsCacheable(groups)
 	if cacheReady && cacheableGroups {
+		candidateStarted := time.Now()
 		candidateIDs := searchMediaTypeGroupsInCache(cache, groups)
+		candidateDuration := time.Since(candidateStarted)
+		log.Debug().
+			Strs("systems", systemIDs).
+			Int("mediaTypeGroups", len(groups)).
+			Int("candidates", len(candidateIDs)).
+			Dur("duration", candidateDuration).
+			Msg("media search in-memory candidate timing")
 		if len(candidateIDs) == 0 {
 			return []database.SearchResultWithCursor{}, nil
 		}
@@ -2378,10 +2471,77 @@ func (db *MediaDB) SearchMediaWithFilters(
 				filters.Letter, filters.Cursor, filters.SortCursor, filters.Sort, filters.Limit)
 		}
 
+		canStreamCandidates := filters.Sort == "" && filters.SortCursor == nil && filters.PathPrefix == "" &&
+			len(filters.Tags) == 0 && filters.Letter == nil && len(candidateIDs) >= filters.Limit
+		if canStreamCandidates {
+			var streamResults []database.SearchResultWithCursor
+			var streamErr error
+			strategy := ""
+			switch {
+			case requestedAllSystems(searchSystems):
+				strategy = "global"
+				streamResults, streamErr = sqlSearchMediaByLargeTitleDBIDSet(
+					ctx, db.sql.Load(), candidateIDs, filters.PathPrefix, filters.Tags,
+					filters.Letter, filters.Cursor, filters.Limit)
+			case len(searchSystems) > 0 && len(searchSystems) <= maxScopedStreamSystems:
+				resolvedDBIDs := cache.ResolveSystemDBIDs(systemIDs)
+				if len(resolvedDBIDs) == len(systemIDs) {
+					scopedSystems := make(map[int64]string, len(resolvedDBIDs))
+					var bounds mediaDBIDBounds
+					for i, systemDBID := range resolvedDBIDs {
+						var systemBounds mediaDBIDBounds
+						var found bool
+						systemBounds, found, streamErr = db.getMediaSearchBounds(ctx, systemDBID)
+						if streamErr != nil {
+							break
+						}
+						if !found {
+							continue
+						}
+						scopedSystems[systemDBID] = systemIDs[i]
+						if bounds.first == 0 || systemBounds.first < bounds.first {
+							bounds.first = systemBounds.first
+						}
+						bounds.last = max(bounds.last, systemBounds.last)
+					}
+					if streamErr == nil && len(scopedSystems) == 0 {
+						return []database.SearchResultWithCursor{}, nil
+					}
+					if streamErr == nil {
+						strategy = "system-scope"
+						streamResults, streamErr = sqlSearchMediaByLargeTitleDBIDSetInSystems(
+							ctx, db.sql.Load(), candidateIDs, scopedSystems, bounds,
+							filters.Cursor, filters.Limit)
+					}
+				}
+			}
+			if streamErr != nil && strategy == "" {
+				return nil, streamErr
+			}
+			if strategy != "" {
+				log.Debug().
+					Strs("systems", systemIDs).
+					Str("strategy", strategy).
+					Int("mediaTypeGroups", len(groups)).
+					Int("candidates", len(candidateIDs)).
+					Msg("media search streaming large in-memory candidate set")
+				if streamErr == nil {
+					return streamResults, nil
+				}
+				if !errors.Is(streamErr, errSearchCandidateSetTooSparse) {
+					return nil, streamErr
+				}
+				log.Debug().
+					Str("strategy", strategy).
+					Msg("media search candidate stream too sparse; falling back to grouped SQL")
+			}
+		}
+
 		log.Debug().
 			Int("candidates", len(candidateIDs)).
 			Int("queryParams", queryParams).
 			Int("maxQueryParams", sqliteMaxParams).
+			Str("sort", filters.Sort).
 			Msg("media search cache candidates exceed SQLite parameter budget")
 	}
 
@@ -3091,6 +3251,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) { //n
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
 		}
 		db.markBrowseCacheDirty()
+		db.mediaSearchBoundsDirty = true
 		// Return row as-is (DBID is already set by caller)
 		return row, nil
 	}
@@ -3104,12 +3265,13 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) { //n
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+		db.invalidateCaches(invalidationScope{AllSystems: true, MediaRowsChanged: true})
 		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
 			return result, invalidateErr
 		}
 	} else if err == nil {
 		db.markBrowseCacheDirty()
+		db.mediaSearchBoundsDirty = true
 	}
 
 	return result, err
