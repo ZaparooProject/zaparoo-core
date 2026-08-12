@@ -125,6 +125,22 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 	assert.Equal(t, database.TagInfo{Type: "release", Tag: "USA"}, results[0].ZapScriptTags[0])
 	require.Len(t, results[1].ZapScriptTags, 1)
 	assert.Equal(t, database.TagInfo{Type: "release", Tag: "Europe"}, results[1].ZapScriptTags[0])
+
+	// Search paths carrying title IDs reuse the already fetched media tags
+	// instead of issuing a second disambiguation query.
+	fetchedResults := []database.SearchResultWithCursor{
+		{
+			MediaID: mediaIDs[0], MediaTitleID: titleDBID, Name: "Sonic", SystemID: "NES",
+			DisambiguationTypes: "release",
+		},
+		{
+			MediaID: mediaIDs[1], MediaTitleID: titleDBID, Name: "Sonic", SystemID: "NES",
+			DisambiguationTypes: "release",
+		},
+	}
+	require.NoError(t, attachTagsAndDisambiguation(ctx, mediaDB.sql.Load(), fetchedResults))
+	assert.Equal(t, results[0].ZapScriptTags, fetchedResults[0].ZapScriptTags)
+	assert.Equal(t, results[1].ZapScriptTags, fetchedResults[1].ZapScriptTags)
 }
 
 // TestDisambiguationBackfill_RecomputesStaleTitlesAndStamps covers the one-time

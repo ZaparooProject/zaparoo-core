@@ -38,6 +38,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const tagPreflightMaxResults = 25
+
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
 // Combines file-level (MediaTags) and title-level (MediaTitleTags) tags via UNION ALL
@@ -155,14 +157,25 @@ func fetchAndAttachTagsByResultIDs(
 ) error {
 	tagIDs := collectResultTagIDs(results)
 	unionStarted := time.Now()
-	hasTags, err := resultIDsHaveTags(ctx, db, tagIDs.mediaIDs, tagIDs.titleIDs)
-	if err != nil {
-		return err
-	}
-	if !hasTags {
-		finishAttachTags(results, nil)
-		logFetchAndAttachTagsTiming(results, 0, unionStarted)
-		return nil
+	var preflightDuration time.Duration
+	if len(results) <= tagPreflightMaxResults {
+		preflightStarted := time.Now()
+		hasTags, err := resultIDsHaveTags(ctx, db, tagIDs.mediaIDs, tagIDs.titleIDs)
+		preflightDuration = time.Since(preflightStarted)
+		if err != nil {
+			return err
+		}
+		if !hasTags {
+			finishAttachTags(results, nil)
+			attachZapScriptTagsFromFetchedTags(results, nil)
+			log.Debug().
+				Int("rows", len(results)).
+				Dur("preflightDuration", preflightDuration).
+				Dur("duration", time.Since(unionStarted)).
+				Msg("fetch and attach tags by result IDs timing")
+			logFetchAndAttachTagsTiming(results, 0, unionStarted)
+			return nil
+		}
 	}
 
 	mediaPlaceholders := prepareVariadic("?", ",", len(tagIDs.mediaIDs))
@@ -201,6 +214,7 @@ func fetchAndAttachTagsByResultIDs(
 		tagsArgs = append(tagsArgs, id)
 	}
 
+	tagQueryStarted := time.Now()
 	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
 	if err != nil {
 		return fmt.Errorf("failed to prepare tags query: %w", err)
@@ -223,6 +237,7 @@ func fetchAndAttachTagsByResultIDs(
 
 	tagsMap := make(map[int64][]database.TagInfo)
 	seen := make(map[int64]map[tagKey]int)
+	mediaTagKeys := make(map[int64]map[tagKey]struct{})
 	for tagsRows.Next() {
 		tagRow, scanErr := scanSourceTagRow(tagsRows)
 		if scanErr != nil {
@@ -232,6 +247,13 @@ func fetchAndAttachTagsByResultIDs(
 		mediaIDsForTag := []int64{tagRow.sourceID}
 		if tagRow.sourceKind == 1 {
 			mediaIDsForTag = tagIDs.titleToMediaIDs[tagRow.sourceID]
+		} else {
+			keys := mediaTagKeys[tagRow.sourceID]
+			if keys == nil {
+				keys = make(map[tagKey]struct{})
+				mediaTagKeys[tagRow.sourceID] = keys
+			}
+			keys[tagKey{typ: tagRow.tagType, tag: dbtags.UnpadTagValue(tagRow.tag)}] = struct{}{}
 		}
 		for _, mediaID := range mediaIDsForTag {
 			appendTagInfo(tagsMap, seen, mediaID, tagRow.tag, tagRow.tagType, tagRow.label)
@@ -242,6 +264,14 @@ func fetchAndAttachTagsByResultIDs(
 	}
 
 	finishAttachTags(results, tagsMap)
+	attachZapScriptTagsFromFetchedTags(results, mediaTagKeys)
+	log.Debug().
+		Int("rows", len(results)).
+		Int("tagPairs", len(tagsMap)).
+		Dur("preflightDuration", preflightDuration).
+		Dur("tagQueryDuration", time.Since(tagQueryStarted)).
+		Dur("duration", time.Since(unionStarted)).
+		Msg("fetch and attach tags by result IDs timing")
 	logFetchAndAttachTagsTiming(results, len(tagsMap), unionStarted)
 	return nil
 }
@@ -432,10 +462,53 @@ func attachTagsAndDisambiguation(
 	db sqlQueryable,
 	results []database.SearchResultWithCursor,
 ) error {
+	hasTitleIDs := allResultsHaveTitleIDs(results)
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return err
 	}
+	if hasTitleIDs {
+		return nil
+	}
 	return attachZapScriptTags(ctx, db, results)
+}
+
+func attachZapScriptTagsFromFetchedTags(
+	results []database.SearchResultWithCursor,
+	mediaTagKeys map[int64]map[tagKey]struct{},
+) {
+	for i := range results {
+		result := &results[i]
+		result.ZapScriptTags = []database.TagInfo{}
+		if result.DisambiguationTypes == "" {
+			continue
+		}
+
+		disambiguatingTypes := make(map[string]struct{})
+		for tagType := range strings.SplitSeq(result.DisambiguationTypes, ",") {
+			disambiguatingTypes[tagType] = struct{}{}
+		}
+		mediaKeys := mediaTagKeys[result.MediaID]
+		for _, tag := range result.Tags {
+			if _, ok := disambiguatingTypes[tag.Type]; !ok {
+				continue
+			}
+			if _, ok := mediaKeys[tagKey{typ: tag.Type, tag: tag.Tag}]; !ok {
+				continue
+			}
+			result.ZapScriptTags = append(result.ZapScriptTags, tag)
+		}
+		sortZapScriptTags(result.ZapScriptTags)
+	}
+}
+
+func sortZapScriptTags(tags []database.TagInfo) {
+	sort.SliceStable(tags, func(a, b int) bool {
+		ra, rb := database.TagTypeDisplayRank(tags[a].Type), database.TagTypeDisplayRank(tags[b].Type)
+		if ra != rb {
+			return ra < rb
+		}
+		return tags[a].Tag < tags[b].Tag
+	})
 }
 
 // attachZapScriptTags populates ZapScriptTags on each result with the tags that
@@ -450,6 +523,7 @@ func attachTagsAndDisambiguation(
 // treated as "title has no variants" and skips the lookup, so a result left empty by
 // mistake silently yields no ZapScriptTags.
 func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []database.SearchResultWithCursor) error {
+	started := time.Now()
 	for i := range results {
 		if results[i].ZapScriptTags == nil {
 			results[i].ZapScriptTags = []database.TagInfo{}
@@ -476,6 +550,10 @@ func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []databas
 		mediaIDs = append(mediaIDs, id)
 	}
 	if len(mediaIDs) == 0 {
+		log.Debug().
+			Int("rows", len(results)).
+			Dur("duration", time.Since(started)).
+			Msg("attach ZapScript tags timing")
 		return nil
 	}
 
@@ -527,16 +605,16 @@ func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []databas
 		if zapTags, ok := byMedia[results[i].MediaID]; ok {
 			// Order by display importance (variant flags, region, ... credit last) so
 			// clients can render left-to-right and truncate. Within a type, sort by value.
-			sort.SliceStable(zapTags, func(a, b int) bool {
-				ra, rb := database.TagTypeDisplayRank(zapTags[a].Type), database.TagTypeDisplayRank(zapTags[b].Type)
-				if ra != rb {
-					return ra < rb
-				}
-				return zapTags[a].Tag < zapTags[b].Tag
-			})
+			sortZapScriptTags(zapTags)
 			results[i].ZapScriptTags = zapTags
 		}
 	}
+	log.Debug().
+		Int("rows", len(results)).
+		Int("queriedMedia", len(mediaIDs)).
+		Int("tagPairs", len(byMedia)).
+		Dur("duration", time.Since(started)).
+		Msg("attach ZapScript tags timing")
 	return nil
 }
 
@@ -925,6 +1003,7 @@ func sqlSearchMediaWithFiltersSorted(
 			MediaTitles.Name,
 			Media.Path,
 			Media.DBID,
+			MediaTitles.DBID,
 			MediaTitles.DisambiguationTypes` + sortValueSelect + `
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
@@ -979,6 +1058,7 @@ func sqlSearchMediaWithFiltersSorted(
 				&result.Name,
 				&result.Path,
 				&result.MediaID,
+				&result.MediaTitleID,
 				&result.DisambiguationTypes,
 			)
 		} else {
@@ -987,6 +1067,7 @@ func sqlSearchMediaWithFiltersSorted(
 				&result.Name,
 				&result.Path,
 				&result.MediaID,
+				&result.MediaTitleID,
 				&result.DisambiguationTypes,
 				&result.SortValue,
 			)
@@ -1110,6 +1191,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 			MediaTitles.Name,
 			Media.Path,
 			Media.DBID,
+			MediaTitles.DBID,
 			MediaTitles.DisambiguationTypes` + sortValueSelect + `
 		FROM MediaTitles
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -1140,6 +1222,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 				&r.Name,
 				&r.Path,
 				&r.MediaID,
+				&r.MediaTitleID,
 				&r.DisambiguationTypes,
 			)
 		} else {
@@ -1148,6 +1231,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 				&r.Name,
 				&r.Path,
 				&r.MediaID,
+				&r.MediaTitleID,
 				&r.DisambiguationTypes,
 				&r.SortValue,
 			)
