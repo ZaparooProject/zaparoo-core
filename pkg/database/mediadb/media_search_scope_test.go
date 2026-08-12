@@ -65,14 +65,13 @@ func TestMediaDB_SearchMediaWithFilters_ScopesCachedVariantsByMediaType(t *testi
 	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
 		WithArgs(int64(10), int64(20), 10).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"SystemID", "Name", "Path", "DBID", "DisambiguationTypes",
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
 		}).
-			AddRow(nes.ID, "R-Type", nesPath, int64(100), "").
-			AddRow(movie.ID, "R-Type", moviePath, int64(200), ""))
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(100, 200, 100, 200).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+			AddRow(nes.ID, "R-Type", nesPath, int64(100), int64(10), "").
+			AddRow(movie.ID, "R-Type", moviePath, int64(200), int64(20), ""))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(100, 200, 10, 20).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
 
 	results, err := mediaDB.SearchMediaWithFilters(context.Background(), &database.SearchFilters{
 		Systems: []systemdefs.System{*nes, *movie},
@@ -133,22 +132,16 @@ func TestMediaDB_SearchMediaWithFilters_ScopesSQLVariantsByMediaType(t *testing.
 		ExpectQuery().
 		WithArgs(nes.ID, "%rtype%", "%rtype%", 1).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"SystemID", "Name", "Path", "DBID", "DisambiguationTypes",
-		}).AddRow(nes.ID, "R-Type", nesPath, int64(300), ""))
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(300, 300).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow(nes.ID, "R-Type", nesPath, int64(300), int64(30), ""))
+	expectSearchTagsQuery(mock, 300, 30)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs(movie.ID, "%r%", "%r%", 1).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"SystemID", "Name", "Path", "DBID", "DisambiguationTypes",
-		}).AddRow(movie.ID, "R-Type", moviePath, int64(200), ""))
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(200, 200).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow(movie.ID, "R-Type", moviePath, int64(200), int64(20), ""))
+	expectSearchTagsQuery(mock, 200, 20)
 
 	results, err := mediaDB.SearchMediaWithFilters(context.Background(), &database.SearchFilters{
 		Systems: []systemdefs.System{*nes, *movie},
