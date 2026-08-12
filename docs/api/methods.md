@@ -1895,7 +1895,7 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 **Access:** All clients.
 
-Return the best matching image for one indexed media row as base64-encoded data.
+Return the best matching image for one indexed media row. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
 
 `media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
 
@@ -1909,19 +1909,24 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
-| maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. |
+| maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. Required for `localPath` delivery. |
+| delivery   | string   | No       | `inline` (default) or `localPath`. `localPath` requires a positive `maxSize` and returns a path on the Core host. |
 
 Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
 Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
 
+`localPath` never returns an original scraper or media path. Core resolves image semantics, materializes its own bounded thumbnail cache artifact, and returns that path. Path delivery is available to any client that explicitly requests it, regardless of peer locality or Core platform; remote callers are responsible for having an appropriate shared-filesystem view of the Core host path. Treat the path as opaque, transient, and nonportable: read it immediately, never persist it or derive neighboring paths, and retry once with `delivery: "inline"` if the file is inaccessible or disappears before it is opened. If cache materialization fails, Core can safely return `delivery: "inline"` in the same response.
+
 #### Result
 
 | Key         | Type   | Required | Description                                  |
 | :---------- | :----- | :------- | :------------------------------------------- |
+| delivery    | string | Yes      | Actual delivery used: `inline` or `localPath`. Clients must inspect this field because a requested local path can fall back inline. |
 | contentType | string | Yes      | MIME type of the returned image data.        |
 | extension   | string | No       | File extension without a dot, derived from MIME type or source path. |
-| data        | string | Yes      | Base64-encoded image bytes.                  |
+| data        | string | No       | Base64-encoded image bytes. Present for `inline` delivery. |
+| localPath   | string | No       | Absolute, opaque Core-host path to a cached thumbnail. Present for `localPath` delivery. |
 | typeTag     | string | Yes      | Canonical property tag that matched.         |
 
 #### Example
@@ -1949,9 +1954,42 @@ Resizing is intended for grid and preview views where transferring and holding f
   "jsonrpc": "2.0",
   "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
   "result": {
+    "delivery": "inline",
     "contentType": "image/webp",
     "extension": "webp",
     "data": "UklGRiQAAABXRUJQVlA4...",
+    "typeTag": "property:image-boxart"
+  }
+}
+```
+
+##### Local-path request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.image",
+  "params": {
+    "mediaId": 123,
+    "imageTypes": ["boxart"],
+    "maxSize": 256,
+    "delivery": "localPath"
+  }
+}
+```
+
+##### Local-path response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "delivery": "localPath",
+    "contentType": "image/webp",
+    "extension": "webp",
+    "localPath": "/media/fat/zaparoo/cache/thumbs/v2/U05FUw/example.webp",
     "typeTag": "property:image-boxart"
   }
 }

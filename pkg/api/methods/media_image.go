@@ -59,6 +59,8 @@ const (
 	misterMediaImageMaxBytes  = int64(2 * 1024 * 1024)
 	defaultMediaImageMaxBytes = int64(8 * 1024 * 1024)
 	mediaImageNoImageMax      = 4096
+	mediaImageDeliveryInline  = "inline"
+	mediaImageDeliveryPath    = "localPath"
 	// mediaThumbCacheDirName is the sub-directory under the core cache dir where
 	// resized thumbnail files are persisted across restarts.
 	mediaThumbCacheDirName = "thumbs"
@@ -320,43 +322,94 @@ func thumbCacheExtension(contentType string, data []byte) string {
 	return ""
 }
 
-// get looks up a cached resized image. Returns (data, contentType, true) on
-// hit, or (nil, "", false) on miss or any I/O error.
-func (c *mediaThumbCache) get(
+func thumbCacheFileInfo(fs afero.Fs, path string) (os.FileInfo, error) {
+	if lstater, ok := fs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(path)
+		if err != nil {
+			return nil, fmt.Errorf("lstat thumbnail cache file: %w", err)
+		}
+		return info, nil
+	}
+	info, err := fs.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat thumbnail cache file: %w", err)
+	}
+	return info, nil
+}
+
+// lookupPath returns a regular cached thumbnail path without reading its bytes.
+func (c *mediaThumbCache) lookupPath(
 	ref mediaRefParam, system, typeTag string, maxSize int,
-) (data []byte, contentType string, found bool) {
+) (path, contentType string, found bool) {
 	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
 	for _, format := range thumbCacheFormats {
 		//nolint:gosec // path is constructed from controlled dirs + SHA-256 hash + fixed extension
-		b, err := afero.ReadFile(c.fs, filepath.Join(c.systemDir(system), hash+format.ext))
-		if err == nil {
-			return b, format.contentType, true
+		candidate := filepath.Join(c.systemDir(system), hash+format.ext)
+		info, err := thumbCacheFileInfo(c.fs, candidate)
+		if err == nil && info.Mode().IsRegular() {
+			return candidate, format.contentType, true
 		}
 	}
-	return nil, "", false
+	return "", "", false
 }
 
-// set writes resized image bytes to the disk cache through a same-directory
-// temporary file and atomic rename. Failures are logged and ignored — the
-// caller always has the bytes in memory and must not fail on a cache write.
+// read returns cached thumbnail bytes. A deletion between lookup and read is a miss.
+func (c *mediaThumbCache) read(
+	ref mediaRefParam, system, typeTag string, maxSize int,
+) (data []byte, contentType string, found bool) {
+	path, contentType, found := c.lookupPath(ref, system, typeTag, maxSize)
+	if !found {
+		return nil, "", false
+	}
+	//nolint:gosec // lookupPath only returns controlled cache paths.
+	data, err := afero.ReadFile(c.fs, path)
+	if err != nil {
+		return nil, "", false
+	}
+	return data, contentType, true
+}
+
+// get keeps cache-focused tests concise; production response paths use lookupPath or read explicitly.
+func (c *mediaThumbCache) get(
+	ref mediaRefParam, system, typeTag string, maxSize int,
+) (data []byte, contentType string, found bool) {
+	return c.read(ref, system, typeTag, maxSize)
+}
+
+// isSafeLocalPath proves a returned cache path is absolute, contained by the
+// versioned thumbnail cache, and still names a regular non-symlink file.
+func (c *mediaThumbCache) isSafeLocalPath(path string) bool {
+	cleanDir := filepath.Clean(c.dir)
+	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanDir) || !filepath.IsAbs(cleanPath) {
+		return false
+	}
+	rel, err := filepath.Rel(cleanDir, cleanPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	info, err := thumbCacheFileInfo(c.fs, cleanPath)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// set writes resized image bytes through a same-directory temporary file and
+// atomic rename. The resulting path is returned only after materialization.
 func (c *mediaThumbCache) set(
 	ref mediaRefParam, system, typeTag string, maxSize int, data []byte, contentType string,
-) {
+) (string, error) {
 	ext := thumbCacheExtension(contentType, data)
 	if ext == "" {
-		return
+		return "", fmt.Errorf("unsupported thumbnail content type %q", contentType)
 	}
 	dir := c.systemDir(system)
 	if err := c.fs.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
-		log.Debug().Err(err).Str("dir", dir).Msg("media.image: thumb cache: failed to create dir")
-		return
+		return "", fmt.Errorf("create thumbnail cache directory: %w", err)
 	}
 	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
 	path := filepath.Join(dir, hash+ext)
 	tmp, err := afero.TempFile(c.fs, dir, ".thumb-*.tmp")
 	if err != nil {
-		log.Debug().Err(err).Str("dir", dir).Msg("media.image: thumb cache: failed to create temporary file")
-		return
+		return "", fmt.Errorf("create thumbnail cache temporary file: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer func() {
@@ -364,20 +417,18 @@ func (c *mediaThumbCache) set(
 		_ = c.fs.Remove(tmpPath)
 	}()
 	if err := c.fs.Chmod(tmpPath, 0o600); err != nil { //nolint:gosec // cache file, 0o600 is intentional
-		log.Debug().Err(err).Str("path", tmpPath).Msg("media.image: thumb cache: failed to set permissions")
-		return
+		return "", fmt.Errorf("set thumbnail cache file permissions: %w", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		log.Debug().Err(err).Str("path", tmpPath).Msg("media.image: thumb cache: failed to write temporary file")
-		return
+		return "", fmt.Errorf("write thumbnail cache temporary file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		log.Debug().Err(err).Str("path", tmpPath).Msg("media.image: thumb cache: failed to close temporary file")
-		return
+		return "", fmt.Errorf("close thumbnail cache temporary file: %w", err)
 	}
 	if err := c.fs.Rename(tmpPath, path); err != nil {
-		log.Debug().Err(err).Str("path", path).Msg("media.image: thumb cache: failed to replace file")
+		return "", fmt.Errorf("replace thumbnail cache file: %w", err)
 	}
+	return path, nil
 }
 
 // wipe empties the thumbnail cache and clears the in-memory resolved-type memo.
@@ -782,13 +833,82 @@ func imagePropertyTypeTags(props []database.MediaProperty) []string {
 	return result
 }
 
-// HandleMediaImage returns a single best-match image for a media record as a
-// base64-encoded blob.
+func inlineMediaImageResponse(data []byte, contentType, sourcePath, typeTag string) models.MediaImageResponse {
+	return models.MediaImageResponse{
+		Extension:   mediaContentExtension(contentType, sourcePath),
+		ContentType: contentType,
+		Data:        base64.StdEncoding.EncodeToString(data),
+		Delivery:    mediaImageDeliveryInline,
+		TypeTag:     typeTag,
+	}
+}
+
+func localMediaImageResponse(
+	cache *mediaThumbCache, path, contentType, typeTag string,
+) (models.MediaImageResponse, bool) {
+	if !cache.isSafeLocalPath(path) {
+		return models.MediaImageResponse{}, false
+	}
+	return models.MediaImageResponse{
+		Extension:   mediaContentExtension(contentType, ""),
+		ContentType: contentType,
+		Delivery:    mediaImageDeliveryPath,
+		LocalPath:   path,
+		TypeTag:     typeTag,
+	}, true
+}
+
+func cachedMediaImageResponse(
+	cache *mediaThumbCache,
+	ref mediaRefParam,
+	system string,
+	typeTag string,
+	maxSize int,
+	sourcePath string,
+	localPath bool,
+) (models.MediaImageResponse, bool) {
+	path, contentType, found := cache.lookupPath(ref, system, typeTag, maxSize)
+	if !found {
+		return models.MediaImageResponse{}, false
+	}
+	if localPath {
+		if response, ok := localMediaImageResponse(cache, path, contentType, typeTag); ok {
+			return response, true
+		}
+	}
+	data, contentType, found := cache.read(ref, system, typeTag, maxSize)
+	if !found {
+		return models.MediaImageResponse{}, false
+	}
+	return inlineMediaImageResponse(data, contentType, sourcePath, typeTag), true
+}
+
+func validateMediaImageDelivery(delivery string, ref mediaRefParam) error {
+	switch delivery {
+	case "", mediaImageDeliveryInline:
+		return nil
+	case mediaImageDeliveryPath:
+		if ref.MaxSize == nil || *ref.MaxSize <= 0 {
+			return models.ClientErrf("media.image: localPath delivery requires a positive maxSize")
+		}
+		return nil
+	default:
+		return models.ClientErrf("media.image: unsupported delivery %q", delivery)
+	}
+}
+
+// HandleMediaImage returns a single best-match image inline or as a transient,
+// Core-owned cached thumbnail path when explicitly requested.
 func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	ref, err := parseMediaImageRequest(env.Params)
+	ref, delivery, err := parseMediaImageRequest(env.Params)
 	if err != nil {
 		return nil, err
 	}
+	if deliveryErr := validateMediaImageDelivery(delivery, ref); deliveryErr != nil {
+		return nil, deliveryErr
+	}
+	localPath := delivery == mediaImageDeliveryPath
+
 	// Snap the requested size onto a standard tier so every view shares one
 	// cached image per cover and the resize dimension is bounded. All downstream
 	// uses (cache keys, resolved-type memo, resize) see the snapped value.
@@ -799,19 +919,15 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	prefs := imagePrefs(nil, ref.ImageTypes)
 
 	// Pre-semaphore fast path: if this exact request was served before and the
-	// disk thumbnail is still present, return it without ever acquiring the
-	// semaphore or loading the original full-size image from disk.
+	// disk thumbnail is still present, return it without loading the original.
 	if ref.MaxSize != nil && *ref.MaxSize > 0 {
 		maxSize := int(*ref.MaxSize)
-		if tc := mediaThumbCachePointer.Load(); tc != nil {
-			if resolved, ok := tc.getResolvedThumb(ref, prefs, maxSize); ok {
-				if cached, cachedCT, cacheHit := tc.get(ref, resolved.system, resolved.typeTag, maxSize); cacheHit {
-					return models.MediaImageResponse{
-						Extension:   mediaContentExtension(cachedCT, ""),
-						ContentType: cachedCT,
-						Data:        base64.StdEncoding.EncodeToString(cached),
-						TypeTag:     resolved.typeTag,
-					}, nil
+		if cache := mediaThumbCachePointer.Load(); cache != nil {
+			if resolved, ok := cache.getResolvedThumb(ref, prefs, maxSize); ok {
+				if response, found := cachedMediaImageResponse(
+					cache, ref, resolved.system, resolved.typeTag, maxSize, "", localPath,
+				); found {
+					return response, nil
 				}
 			}
 		}
@@ -853,54 +969,58 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		return nil, err
 	}
 
-	binary, ct := raw.binary, raw.contentType
+	binary, contentType := raw.binary, raw.contentType
 	if ref.MaxSize != nil && *ref.MaxSize > 0 {
 		maxSize := int(*ref.MaxSize)
-		tc := mediaThumbCachePointer.Load()
+		cache := mediaThumbCachePointer.Load()
 		// Record the resolved typeTag so the pre-semaphore path can find the
 		// disk file on the next request without loading the original image.
-		if tc != nil {
-			tc.setResolvedThumb(ref, prefs, maxSize, raw.system, raw.typeTag)
-		}
-		// Check the disk thumb cache before doing the expensive decode+resize.
-		if tc != nil {
-			if cached, cachedCT, ok := tc.get(ref, raw.system, raw.typeTag, maxSize); ok {
-				return models.MediaImageResponse{
-					Extension:   mediaContentExtension(cachedCT, raw.text),
-					ContentType: cachedCT,
-					Data:        base64.StdEncoding.EncodeToString(cached),
-					TypeTag:     raw.typeTag,
-				}, nil
+		if cache != nil {
+			cache.setResolvedThumb(ref, prefs, maxSize, raw.system, raw.typeTag)
+			if response, found := cachedMediaImageResponse(
+				cache, ref, raw.system, raw.typeTag, maxSize, raw.text, localPath,
+			); found {
+				return response, nil
 			}
 		}
-		binary, ct = resizeImageIfNeeded(binary, ct, maxSize)
-		// Write to the disk cache on a miss so future requests skip the resize.
-		if tc != nil {
-			tc.set(ref, raw.system, raw.typeTag, maxSize, binary, ct)
+
+		binary, contentType = resizeImageIfNeeded(binary, contentType, maxSize)
+		if cache != nil {
+			path, cacheErr := cache.set(ref, raw.system, raw.typeTag, maxSize, binary, contentType)
+			if cacheErr != nil {
+				log.Debug().Err(cacheErr).Msg("media.image: failed to materialize thumbnail cache file")
+			} else if localPath {
+				if response, ok := localMediaImageResponse(cache, path, contentType, raw.typeTag); ok {
+					return response, nil
+				}
+				log.Debug().Msg("media.image: thumbnail cache path failed local delivery validation")
+			}
 		}
 	}
-	return models.MediaImageResponse{
-		Extension:   mediaContentExtension(ct, raw.text),
-		ContentType: ct,
-		Data:        base64.StdEncoding.EncodeToString(binary),
-		TypeTag:     raw.typeTag,
-	}, nil
+	return inlineMediaImageResponse(binary, contentType, raw.text, raw.typeTag), nil
 }
 
-func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
-	var ref mediaRefParam
+func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, string, error) {
+	var params models.MediaImageParams
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&ref); err != nil {
-		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+	if err := decoder.Decode(&params); err != nil {
+		return mediaRefParam{}, "", models.ClientErrf("invalid params: %w", err)
+	}
+	ref := mediaRefParam{
+		MediaID: params.MediaID, MaxSize: params.MaxSize, System: params.System,
+		Path: params.Path, ImageTypes: params.ImageTypes,
 	}
 	if err := validateMediaRef(ref); err != nil {
-		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+		return mediaRefParam{}, "", models.ClientErrf("invalid params: %w", err)
 	}
 	if err := validateImageTypes(ref.ImageTypes); err != nil {
-		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+		return mediaRefParam{}, "", models.ClientErrf("invalid params: %w", err)
 	}
-	return ref, nil
+	if ref.MaxSize != nil && (*ref.MaxSize <= 0 || *ref.MaxSize > 8192) {
+		return mediaRefParam{}, "", models.ClientErrf("invalid params: maxSize must be between 1 and 8192")
+	}
+	return ref, params.Delivery, nil
 }
 
 func loadRawMediaImageSinglePath(

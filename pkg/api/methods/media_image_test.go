@@ -93,6 +93,21 @@ func mediaImageParams(row *database.MediaFullRow, extra string) json.RawMessage 
 	return json.RawMessage(fmt.Sprintf(`{"system": %q, "path": %q%s}`, row.System.SystemID, row.Path, extra))
 }
 
+func setMediaThumbCacheForTest(
+	t testing.TB,
+	cache *mediaThumbCache,
+	ref mediaRefParam,
+	system string,
+	typeTag string,
+	maxSize int,
+	data []byte,
+	contentType string,
+) {
+	t.Helper()
+	_, err := cache.set(ref, system, typeTag, maxSize, data, contentType)
+	require.NoError(t, err)
+}
+
 func TestMediaThumbCache_GetSetAndWipe(t *testing.T) {
 	t.Parallel()
 
@@ -108,7 +123,7 @@ func TestMediaThumbCache_GetSetAndWipe(t *testing.T) {
 	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 100)
 	assert.False(t, found)
 
-	cache.set(ref, "SNES", "property:image-boxart", 100, []byte("png-data"), "image/png")
+	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 100, []byte("png-data"), "image/png")
 	data, contentType, found := cache.get(ref, "SNES", "property:image-boxart", 100)
 	require.True(t, found)
 	assert.Equal(t, []byte("png-data"), data)
@@ -135,9 +150,35 @@ func TestMediaThumbCache_SkipsUnsupportedContentType(t *testing.T) {
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
 
-	cache.set(ref, "SNES", "property:image-boxart", 100, []byte("not an image"), "text/plain")
+	_, err := cache.set(ref, "SNES", "property:image-boxart", 100, []byte("not an image"), "text/plain")
+	require.Error(t, err)
 	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 100)
 	assert.False(t, found)
+}
+
+func TestMediaThumbCache_IsSafeLocalPath(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewOsFs()
+	cache := &mediaThumbCache{
+		fs: fs, dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]resolvedThumb),
+	}
+	require.NoError(t, fs.MkdirAll(cache.dir, 0o750))
+	inside := filepath.Join(cache.dir, "inside.webp")
+	require.NoError(t, afero.WriteFile(fs, inside, []byte("inside"), 0o600))
+	assert.True(t, cache.isSafeLocalPath(inside))
+
+	outside := filepath.Join(t.TempDir(), "outside.webp")
+	require.NoError(t, afero.WriteFile(fs, outside, []byte("outside"), 0o600))
+	assert.False(t, cache.isSafeLocalPath(outside))
+
+	symlink := filepath.Join(cache.dir, "link.webp")
+	require.NoError(t, os.Symlink(outside, symlink))
+	assert.False(t, cache.isSafeLocalPath(symlink))
+
+	relativeCache := &mediaThumbCache{fs: afero.NewMemMapFs(), dir: "relative"}
+	assert.False(t, relativeCache.isSafeLocalPath(filepath.Join("relative", "image.webp")))
 }
 
 func TestWipeMediaThumbCache_EmptiesLiveDirInPlace(t *testing.T) {
@@ -150,7 +191,7 @@ func TestWipeMediaThumbCache_EmptiesLiveDirInPlace(t *testing.T) {
 
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	cache.set(ref, "SNES", "property:image-boxart", 512, []byte("webp-bytes"), "image/webp")
+	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 512, []byte("webp-bytes"), "image/webp")
 	cache.setResolvedThumb(ref, nil, 512, "SNES", "property:image-boxart")
 	_, _, found := cache.get(ref, "SNES", "property:image-boxart", 512)
 	require.True(t, found)
@@ -191,8 +232,10 @@ func TestWipeMediaThumbCacheSystems_PreservesOtherSystems(t *testing.T) {
 	snesID, genesisID := int64(1), int64(2)
 	snesRef := mediaRefParam{MediaID: &snesID}
 	genesisRef := mediaRefParam{MediaID: &genesisID}
-	cache.set(snesRef, "SNES", "property:image-boxart", 512, []byte("snes"), "image/webp")
-	cache.set(genesisRef, "Genesis", "property:image-boxart", 512, []byte("genesis"), "image/webp")
+	setMediaThumbCacheForTest(t, cache, snesRef, "SNES", "property:image-boxart", 512, []byte("snes"), "image/webp")
+	setMediaThumbCacheForTest(
+		t, cache, genesisRef, "Genesis", "property:image-boxart", 512, []byte("genesis"), "image/webp",
+	)
 	cache.setResolvedThumb(snesRef, nil, 512, "SNES", "property:image-boxart")
 	cache.setResolvedThumb(genesisRef, nil, 512, "Genesis", "property:image-boxart")
 
@@ -221,8 +264,10 @@ func TestInvalidateIndexedThumbnails_SelectiveSystems(t *testing.T) {
 	snesID, genesisID := int64(1), int64(2)
 	snesRef := mediaRefParam{MediaID: &snesID}
 	genesisRef := mediaRefParam{MediaID: &genesisID}
-	cache.set(snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp")
-	cache.set(genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp")
+	setMediaThumbCacheForTest(t, cache, snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp")
+	setMediaThumbCacheForTest(
+		t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
+	)
 
 	invalidateIndexedThumbnails([]systemdefs.System{{ID: "SNES"}}, false)
 
@@ -256,8 +301,12 @@ func TestInvalidateIndexedThumbnails_FullCache(t *testing.T) {
 			snesID, genesisID := int64(1), int64(2)
 			snesRef := mediaRefParam{MediaID: &snesID}
 			genesisRef := mediaRefParam{MediaID: &genesisID}
-			cache.set(snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp")
-			cache.set(genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp")
+			setMediaThumbCacheForTest(
+				t, cache, snesRef, "SNES", "property:image-boxart", 256, []byte("snes"), "image/webp",
+			)
+			setMediaThumbCacheForTest(
+				t, cache, genesisRef, "Genesis", "property:image-boxart", 256, []byte("genesis"), "image/webp",
+			)
 
 			invalidateIndexedThumbnails(tt.systems, tt.rebuild)
 
@@ -655,6 +704,116 @@ func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, resp.Data, resp2.Data, "cache hit returns the identical thumbnail")
 	strictDB.AssertExpectations(t)
+}
+
+func expectInlineImageProperty(mockDB *testhelpers.MockMediaDBI, row *database.MediaFullRow, data []byte) {
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: data},
+		}, nil)
+}
+
+func TestHandleMediaImage_LocalPathColdAndWarm(t *testing.T) {
+	// Not parallel: installs process-wide thumbnail cache pointer.
+	cache := &mediaThumbCache{
+		fs: afero.NewOsFs(), dir: filepath.Join(t.TempDir(), mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]resolvedThumb),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	row := makeMediaFullRow(9001, 9010)
+	mockDB := testhelpers.NewMockMediaDBI()
+	expectInlineImageProperty(mockDB, row, []byte("cached-image"))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	))
+	// Path delivery is explicit and independent of peer locality or platform.
+	require.False(t, env.IsLocal)
+	require.Nil(t, env.Platform)
+
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, mediaImageDeliveryPath, resp.Delivery)
+	assert.Empty(t, resp.Data)
+	assert.True(t, filepath.IsAbs(resp.LocalPath))
+	assert.True(t, cache.isSafeLocalPath(resp.LocalPath))
+	cached, err := afero.ReadFile(cache.fs, resp.LocalPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("cached-image"), cached)
+
+	strictDB := testhelpers.NewMockMediaDBI()
+	warmEnv := makeMediaImageEnv(t, strictDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	))
+	warmResult, err := HandleMediaImage(warmEnv)
+	require.NoError(t, err)
+	warmResp, ok := warmResult.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, resp.LocalPath, warmResp.LocalPath)
+	assert.Equal(t, mediaImageDeliveryPath, warmResp.Delivery)
+	strictDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_LocalPathCacheWriteFailureFallsBackInline(t *testing.T) {
+	// Not parallel: installs process-wide thumbnail cache pointer.
+	cache := &mediaThumbCache{
+		fs:            afero.NewReadOnlyFs(afero.NewMemMapFs()),
+		dir:           filepath.Join(string(filepath.Separator), "cache", mediaThumbCacheVersionDir()),
+		resolvedTypes: make(map[string]resolvedThumb),
+	}
+	mediaThumbCachePointer.Store(cache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	row := makeMediaFullRow(9002, 9020)
+	mockDB := testhelpers.NewMockMediaDBI()
+	expectInlineImageProperty(mockDB, row, []byte("inline-fallback"))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(
+		row, `"maxSize": 256, "delivery": "localPath"`,
+	))
+
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, mediaImageDeliveryInline, resp.Delivery)
+	assert.Empty(t, resp.LocalPath)
+	decoded, err := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("inline-fallback"), decoded)
+}
+
+func TestHandleMediaImage_LocalPathValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		extra     string
+		wantError string
+	}{
+		{
+			name: "missing maxSize", extra: `"delivery": "localPath"`,
+			wantError: "requires a positive maxSize",
+		},
+		{
+			name: "unknown delivery", extra: `"delivery": "sharedMemory"`,
+			wantError: "unsupported delivery",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := makeMediaFullRow(9100, 9110)
+			env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), mediaImageParams(row, tt.extra))
+
+			_, err := HandleMediaImage(env)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantError)
+		})
+	}
 }
 
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes
@@ -1072,7 +1231,7 @@ func TestHandleMediaImage_NoImagePathCacheSkipsMediaDB(t *testing.T) {
 
 	row := makeMediaFullRow(405, 4050)
 	params := mediaImageParams(row, `"imageTypes": ["boxart"]`)
-	ref, err := parseMediaImageRequest(params)
+	ref, _, err := parseMediaImageRequest(params)
 	require.NoError(t, err)
 	prefs := imagePrefs(nil, ref.ImageTypes)
 	mediaImageNoImages.add(
@@ -1098,7 +1257,7 @@ func TestHandleMediaImage_NoImageCacheBypassesSemaphore(t *testing.T) {
 	defer func() { <-mediaImageSem }()
 
 	params := json.RawMessage(`{"mediaId":406,"imageTypes":["boxart"]}`)
-	ref, err := parseMediaImageRequest(params)
+	ref, _, err := parseMediaImageRequest(params)
 	require.NoError(t, err)
 	prefs := imagePrefs(nil, ref.ImageTypes)
 	mediaImageNoImages.add(
@@ -1121,7 +1280,7 @@ func TestHandleMediaImage_NoImageCacheRecheckedAfterSemaphore(t *testing.T) {
 	mediaImageSem <- struct{}{}
 
 	params := json.RawMessage(`{"mediaId":407,"imageTypes":["boxart"]}`)
-	ref, err := parseMediaImageRequest(params)
+	ref, _, err := parseMediaImageRequest(params)
 	require.NoError(t, err)
 	prefs := imagePrefs(nil, ref.ImageTypes)
 	noImageKey := mediaImageNoImageRequestKey(ref, prefs)

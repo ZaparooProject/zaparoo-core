@@ -336,6 +336,7 @@ type MediaImageParams struct {
 	MaxSize    *int32   `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
 	System     string   `json:"system"            validate:"omitempty,min=1"`
 	Path       string   `json:"path"              validate:"omitempty,min=1"`
+	Delivery   string   `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
 	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
 }
 
