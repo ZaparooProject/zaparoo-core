@@ -905,6 +905,8 @@ func searchResultSystem(
 
 func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
+	handlerStarted := time.Now()
+	semaphoreStarted := time.Now()
 
 	select {
 	case searchSem <- struct{}{}:
@@ -912,6 +914,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	case <-env.Context.Done():
 		return nil, env.Context.Err()
 	}
+	semaphoreDuration := time.Since(semaphoreStarted)
 
 	var params models.SearchParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
@@ -923,7 +926,6 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if params.MaxResults != nil && *params.MaxResults > 0 {
 		maxResults = *params.MaxResults
 	}
-
 	ctx := env.Context
 
 	var sortOrder string
@@ -998,7 +1000,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Limit:      limit,
 	}
 
+	searchStarted := time.Now()
 	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
+	searchDuration := time.Since(searchStarted)
 	if err != nil {
 		return nil, fmt.Errorf("error searching media with filters: %w", err)
 	}
@@ -1009,6 +1013,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		searchResults = searchResults[:maxResults]
 	}
 
+	coverStarted := time.Now()
 	coverStatuses := make(map[int64]bool)
 	if len(searchResults) > 0 {
 		coverRefs := make([]database.MediaCoverRef, len(searchResults))
@@ -1023,8 +1028,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			return nil, fmt.Errorf("get media search cover status: %w", err)
 		}
 	}
+	coverDuration := time.Since(coverStarted)
 
 	// Convert to API models
+	responseBuildStarted := time.Now()
 	var rootDirs []string
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
@@ -1039,11 +1046,20 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	results := make([]models.SearchResultMedia, 0, len(searchResults))
+	var systemBuildDuration time.Duration
+	var zapScriptDuration time.Duration
+	var relativePathDuration time.Duration
 	for i := range searchResults {
 		result := &searchResults[i]
+		stageStarted := time.Now()
 		resultSystem := searchResultSystem(result.SystemID, launchableSystems)
-		zapScript := result.ZapScript()
+		systemBuildDuration += time.Since(stageStarted)
 
+		stageStarted = time.Now()
+		zapScript := result.ZapScript()
+		zapScriptDuration += time.Since(stageStarted)
+
+		stageStarted = time.Now()
 		var relPath *string
 		if env.LauncherCache != nil {
 			rel := env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, result.Path)
@@ -1051,6 +1067,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				relPath = &rel
 			}
 		}
+		relativePathDuration += time.Since(stageStarted)
 
 		results = append(results, models.SearchResultMedia{
 			MediaID:            result.MediaID,
@@ -1091,6 +1108,19 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			PageSize:    maxResults,
 		}
 	}
+	responseBuildDuration := time.Since(responseBuildStarted)
+
+	log.Debug().
+		Int("rows", len(results)).
+		Dur("semaphoreDuration", semaphoreDuration).
+		Dur("searchDuration", searchDuration).
+		Dur("coverDuration", coverDuration).
+		Dur("responseBuildDuration", responseBuildDuration).
+		Dur("systemBuildDuration", systemBuildDuration).
+		Dur("zapScriptDuration", zapScriptDuration).
+		Dur("relativePathDuration", relativePathDuration).
+		Dur("handlerDuration", time.Since(handlerStarted)).
+		Msg("media search handler step timing")
 
 	return models.SearchResults{
 		Results:    results,
