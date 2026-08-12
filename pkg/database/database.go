@@ -239,12 +239,18 @@ type MediaUserData struct {
 	IsFavorite bool
 }
 
-// MediaPathID identifies a Media row by its system ID and path, used for batch
-// media-ID resolution of API responses.
+// MediaPathID identifies a Media row and its title by system ID and path, used
+// for batch API response enrichment.
 type MediaPathID struct {
-	SystemID string
-	Path     string
-	DBID     int64
+	SystemID       string
+	Path           string
+	DBID           int64
+	MediaTitleDBID int64
+}
+
+type MediaCoverRef struct {
+	MediaDBID      int64
+	MediaTitleDBID int64
 }
 
 type TagType struct {
@@ -1039,6 +1045,7 @@ type MediaDBI interface {
 	BrowseDirectories(ctx context.Context, opts BrowseDirectoriesOptions) ([]BrowseDirectoryResult, error)
 	BrowseDirCount(ctx context.Context, opts BrowseDirCountOptions) (int, error)
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
+	GetMediaCoverStatus(ctx context.Context, refs []MediaCoverRef) (map[int64]bool, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
@@ -1121,8 +1128,8 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
-	// FindMediaIDsByPaths returns the system ID, path, and DBID of every Media
-	// row whose Path is in paths, in a single query across all systems.
+	// FindMediaIDsByPaths returns the system ID, path, media DBID, and title DBID
+	// of every Media row whose Path is in paths, in one query across all systems.
 	FindMediaIDsByPaths(ctx context.Context, paths []string) ([]MediaPathID, error)
 	// FindSingleContainerLaunchMedia returns the one logical launch target in the
 	// direct contents of containerPath for systemDBID, or nil, nil when the

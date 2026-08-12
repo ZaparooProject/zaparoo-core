@@ -2697,6 +2697,23 @@ func (m *MockMediaDBI) BrowseFiles(
 	return []database.SearchResultWithCursor{}, nil
 }
 
+func (m *MockMediaDBI) GetMediaCoverStatus(
+	ctx context.Context, refs []database.MediaCoverRef,
+) (map[int64]bool, error) {
+	if !m.hasExpectedCall("GetMediaCoverStatus") {
+		return map[int64]bool{}, nil
+	}
+	args := m.Called(ctx, refs)
+	statuses, ok := args.Get(0).(map[int64]bool)
+	if !ok {
+		statuses = map[int64]bool{}
+	}
+	if err := args.Error(1); err != nil {
+		return statuses, fmt.Errorf("mock get media cover status failed: %w", err)
+	}
+	return statuses, nil
+}
+
 func (m *MockMediaDBI) BrowseFileCount(
 	ctx context.Context, opts database.BrowseFileCountOptions,
 ) (int, error) {

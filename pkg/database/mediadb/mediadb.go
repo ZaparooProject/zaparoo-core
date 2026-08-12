@@ -202,6 +202,7 @@ type invalidationScope struct {
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
 	clearPrefixPolicyCache()
+	clearCoverAvailabilityCacheFor(db.sql.Load())
 	if scope.UtilityTagDBIDsChanged {
 		clearUtilityTagCache()
 		clearImagePropertyTagCache()
@@ -365,6 +366,7 @@ func (db *MediaDB) Open() error {
 		}
 	}
 	clearUtilityTagCache()
+	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
 
@@ -376,6 +378,7 @@ func (db *MediaDB) Open() error {
 		}
 	}
 
+	registerCoverAvailabilityCacheOwner(sqlInstance, db)
 	return nil
 }
 
@@ -1320,6 +1323,7 @@ func (db *MediaDB) Close() error {
 	logSQLTraceSummary()
 	clearUtilityTagCacheFor(db.sql.Load())
 	clearImagePropertyTagCacheFor(db.sql.Load())
+	unregisterCoverAvailabilityCacheOwner(db.sql.Load())
 	clearPrefixPolicyCacheFor(db.sql.Load())
 
 	err := db.sql.Load().Close()
@@ -1364,6 +1368,7 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
 	db.sql.Store(sqlDB)
 	clearUtilityTagCache()
+	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
 	db.ctx = ctx
@@ -2130,6 +2135,29 @@ func (db *MediaDB) BrowseFiles(
 	results, err := sqlBrowseFiles(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
+}
+
+// GetMediaCoverStatus reports image-property availability at media or title scope.
+func (db *MediaDB) GetMediaCoverStatus(
+	ctx context.Context, refs []database.MediaCoverRef,
+) (map[int64]bool, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+	if coverIndex := cachedCoverAvailabilityIndex(db.sql.Load()); coverIndex != nil {
+		statuses := make(map[int64]bool, len(refs))
+		for _, ref := range refs {
+			if ref.MediaDBID <= 0 {
+				continue
+			}
+			statuses[ref.MediaDBID] = coverIndex.hasTitle(ref.MediaTitleDBID) ||
+				coverIndex.hasMedia(ref.MediaDBID)
+		}
+		return statuses, nil
+	}
+	statuses, err := fetchCoverStatuses(ctx, db.sql.Load(), refs)
+	db.NoteCorruption(err)
+	return statuses, err
 }
 
 // BrowseFileCount returns the total number of immediate child files under a path prefix.
