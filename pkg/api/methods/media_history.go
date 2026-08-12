@@ -104,7 +104,36 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		})
 	}
 	enrichStarted := time.Now()
-	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
+	mediaRows, err := resolveMediaPathIDs(env.Context, env.Database.MediaDB, mediaRefs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve media history cover identities: %w", err)
+	}
+	mediaIDs := make(map[mediaPathRef]int64, len(mediaRows))
+	coverRefs := make([]database.MediaCoverRef, 0, len(mediaRows))
+	seenIDs := make(map[int64]struct{}, len(mediaRows))
+	for _, ref := range mediaRefs {
+		row := mediaRows[ref]
+		if row.DBID <= 0 {
+			continue
+		}
+		mediaIDs[ref] = row.DBID
+		if _, ok := seenIDs[row.DBID]; ok {
+			continue
+		}
+		seenIDs[row.DBID] = struct{}{}
+		coverRefs = append(coverRefs, database.MediaCoverRef{
+			MediaDBID:      row.DBID,
+			MediaTitleDBID: row.MediaTitleDBID,
+		})
+	}
+
+	coverStatuses := make(map[int64]bool)
+	if len(coverRefs) > 0 {
+		coverStatuses, err = env.Database.MediaDB.GetMediaCoverStatus(env.Context, coverRefs)
+		if err != nil {
+			return nil, fmt.Errorf("get media history cover status: %w", err)
+		}
+	}
 	enrichElapsed := time.Since(enrichStarted)
 
 	buildStarted := time.Now()
@@ -119,10 +148,12 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			formatted := entry.EndTime.Format(time.RFC3339)
 			endedAt = &formatted
 		}
+		mediaID := mediaIDs[ref]
 
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
-			MediaID:    mediaIDs[ref],
+			MediaID:    mediaID,
 			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
+			HasCover:   coverStatuses[mediaID],
 			SystemID:   entry.SystemID,
 			SystemName: entry.SystemName,
 			MediaName:  entry.MediaName,

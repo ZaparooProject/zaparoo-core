@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -123,9 +124,11 @@ func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
 	}
 }
 
-func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathRef) map[mediaPathRef]int64 {
+func resolveMediaPathIDs(
+	ctx context.Context, db database.MediaDBI, refs []mediaPathRef,
+) (map[mediaPathRef]database.MediaPathID, error) {
 	if db == nil || len(refs) == 0 {
-		return nil
+		return map[mediaPathRef]database.MediaPathID{}, nil
 	}
 
 	wanted := make(map[mediaPathRef]bool, len(refs))
@@ -142,33 +145,54 @@ func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathR
 		}
 	}
 	if len(paths) == 0 {
-		return nil
+		return map[mediaPathRef]database.MediaPathID{}, nil
 	}
 
 	started := time.Now()
 	rows, err := db.FindMediaIDsByPaths(ctx, paths)
 	if err != nil {
-		log.Debug().Err(err).Msg("could not resolve media IDs by path")
-		return nil
+		return nil, fmt.Errorf("resolve media IDs by path: %w", err)
 	}
 
-	mediaIDs := make(map[mediaPathRef]int64, len(rows))
+	resolved := make(map[mediaPathRef]database.MediaPathID, len(rows))
 	for _, row := range rows {
 		if row.DBID <= 0 {
 			continue
 		}
 		ref := mediaPathRef{SystemID: row.SystemID, Path: row.Path}
 		if wanted[ref] {
-			mediaIDs[ref] = row.DBID
+			resolved[ref] = row
 		}
 	}
 
 	log.Debug().
 		Int("refs", len(refs)).
 		Int("paths", len(paths)).
-		Int("resolved", len(mediaIDs)).
+		Int("resolved", len(resolved)).
 		Dur("duration", time.Since(started)).
 		Msg("media ID enrichment timing")
+	return resolved, nil
+}
 
+func resolveMediaIDsByPath(
+	ctx context.Context, db database.MediaDBI, refs []mediaPathRef,
+) (map[mediaPathRef]int64, error) {
+	rows, err := resolveMediaPathIDs(ctx, db, refs)
+	if err != nil {
+		return nil, err
+	}
+	mediaIDs := make(map[mediaPathRef]int64, len(rows))
+	for ref, row := range rows {
+		mediaIDs[ref] = row.DBID
+	}
+	return mediaIDs, nil
+}
+
+func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathRef) map[mediaPathRef]int64 {
+	mediaIDs, err := resolveMediaIDsByPath(ctx, db, refs)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve media IDs by path")
+		return nil
+	}
 	return mediaIDs
 }

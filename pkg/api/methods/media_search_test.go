@@ -253,7 +253,47 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 		assert.Equal(t, "NES", searchResults.Results[0].System.ID)
 		assert.Equal(t, "Mario Bros", searchResults.Results[0].Name)
 		assert.Equal(t, "/games/mario.nes", searchResults.Results[0].Path)
+		assert.False(t, searchResults.Results[0].HasCover)
 	}
+}
+
+func TestHandleMediaSearch_IncludesCoverStatus(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{
+			{
+				SystemID: "NES", Name: "Covered", Path: filepath.Join("games", "covered.nes"),
+				MediaID: 1, MediaTitleID: 11,
+			},
+			{
+				SystemID: "NES", Name: "Uncovered", Path: filepath.Join("games", "uncovered.nes"),
+				MediaID: 2, MediaTitleID: 22,
+			},
+		}, nil)
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{
+		{MediaDBID: 1, MediaTitleDBID: 11},
+		{MediaDBID: 2, MediaTitleDBID: 22},
+	}).Return(map[int64]bool{1: true, 2: false}, nil)
+
+	paramsJSON, err := json.Marshal(models.SearchParams{})
+	require.NoError(t, err)
+	result, err := HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, response.Results, 2)
+	assert.True(t, response.Results[0].HasCover)
+	assert.False(t, response.Results[1].HasCover)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaSearch_WithExplicitSort(t *testing.T) {

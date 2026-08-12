@@ -66,6 +66,7 @@ type SearchResultMedia struct {
 	Tags               []database.TagInfo `json:"tags"`
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
 	MediaID            int64              `json:"mediaId,omitempty"`
+	HasCover           bool               `json:"hasCover"`
 }
 
 type PaginationInfo struct {
@@ -287,6 +288,7 @@ type MediaHistoryResponseEntry struct {
 	StartedAt  string  `json:"startedAt"`
 	PlayTime   int     `json:"playTime"`
 	MediaID    int64   `json:"mediaId,omitempty"`
+	HasCover   bool    `json:"hasCover"`
 }
 
 type MediaHistoryResponse struct {

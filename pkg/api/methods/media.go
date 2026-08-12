@@ -1009,6 +1009,21 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		searchResults = searchResults[:maxResults]
 	}
 
+	coverStatuses := make(map[int64]bool)
+	if len(searchResults) > 0 {
+		coverRefs := make([]database.MediaCoverRef, len(searchResults))
+		for i := range searchResults {
+			coverRefs[i] = database.MediaCoverRef{
+				MediaDBID:      searchResults[i].MediaID,
+				MediaTitleDBID: searchResults[i].MediaTitleID,
+			}
+		}
+		coverStatuses, err = env.Database.MediaDB.GetMediaCoverStatus(ctx, coverRefs)
+		if err != nil {
+			return nil, fmt.Errorf("get media search cover status: %w", err)
+		}
+	}
+
 	// Convert to API models
 	var rootDirs []string
 	if env.LauncherCache != nil && env.Platform != nil {
@@ -1040,6 +1055,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		results = append(results, models.SearchResultMedia{
 			MediaID:            result.MediaID,
 			RelPath:            relPath,
+			HasCover:           coverStatuses[result.MediaID],
 			System:             resultSystem,
 			Name:               result.Name,
 			Path:               result.Path,

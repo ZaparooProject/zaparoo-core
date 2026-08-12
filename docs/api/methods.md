@@ -557,6 +557,7 @@ An object:
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
 | relativePath | string               | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| hasCover  | boolean                  | Yes      | Whether media-level or title-level image properties are available. |
 | zapScript | string                   | Yes      | ZapScript command to launch this media item. Includes the disambiguating tags inline (e.g. `@Arcade/X-Men Vs. Street Fighter (region:eu) (builddate:1996-10-04)`) so the written command resolves back to this specific variant. |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 | disambiguatingTags | [TagInfo](#taginfo-object)[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Omitted when the title has nothing to disambiguate. Clients can render these to tell variants apart. |
@@ -1450,6 +1451,7 @@ Optionally, an object:
 | mediaName  | string | Yes      | Display name of the media.                             |
 | mediaPath  | string | Yes      | Path to the media file.                                |
 | relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| hasCover   | boolean | Yes     | Whether media-level or title-level image properties are available. |
 | launcherId | string | Yes      | ID of the launcher used.                               |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
@@ -1486,6 +1488,7 @@ Optionally, an object:
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
         "relativePath": "snes/Super Mario World (USA).sfc",
+        "hasCover": true,
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
