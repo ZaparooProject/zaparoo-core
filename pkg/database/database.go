@@ -837,6 +837,9 @@ type UserDBI interface {
 	UpdateMediaHistoryIdentity(dbid int64, identity *MediaIdentity) (bool, error)
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetDistinctMediaHistory(
+		ctx context.Context, systemIDs []string, lastID int64, limit int,
+	) ([]MediaHistoryEntry, error)
 	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
 	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error

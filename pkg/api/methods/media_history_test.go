@@ -216,6 +216,49 @@ func TestHandleMediaHistory_WithLimit(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestHandleMediaHistory_DistinctMedia(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	now := time.Now()
+	firstPath := filepath.Join(string(filepath.Separator), "games", "first.nes")
+	secondPath := filepath.Join(string(filepath.Separator), "games", "second.nes")
+	thirdPath := filepath.Join(string(filepath.Separator), "games", "third.nes")
+	mockUserDB.On(
+		"GetDistinctMediaHistory", mock.Anything, []string{"NES"}, int64(0), 3,
+	).Return([]database.MediaHistoryEntry{
+		{DBID: 10, SystemID: "NES", SystemName: "NES", MediaName: "First", MediaPath: firstPath, StartTime: now},
+		{DBID: 8, SystemID: "NES", SystemName: "NES", MediaName: "Second", MediaPath: secondPath, StartTime: now},
+		{DBID: 5, SystemID: "NES", SystemName: "NES", MediaName: "Third", MediaPath: thirdPath, StartTime: now},
+	}, nil)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+		Params: json.RawMessage(`{
+			"systems": ["NES"],
+			"limit": 2,
+			"distinctMedia": true
+		}`),
+	}
+
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, "First", resp.Entries[0].MediaName)
+	assert.Equal(t, "Second", resp.Entries[1].MediaName)
+	require.NotNil(t, resp.Pagination)
+	assert.True(t, resp.Pagination.HasNextPage)
+	require.NotNil(t, resp.Pagination.NextCursor)
+	cursor, err := decodeCursor(*resp.Pagination.NextCursor)
+	require.NoError(t, err)
+	require.NotNil(t, cursor)
+	assert.Equal(t, int64(8), *cursor)
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestHandleMediaHistory_WithCursor(t *testing.T) {
 	t.Parallel()
 

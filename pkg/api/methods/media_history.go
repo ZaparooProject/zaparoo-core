@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,6 +37,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	limit := defaultMediaHistoryLimit
 	var lastID int64
 	var systemIDs []string
+	var distinctMedia bool
 
 	if len(env.Params) > 0 {
 		var params models.MediaHistoryParams
@@ -49,7 +51,9 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		if params.Limit != nil {
 			limit = *params.Limit
 		}
-
+		if params.DistinctMedia != nil {
+			distinctMedia = *params.DistinctMedia
+		}
 		if params.Cursor != nil {
 			cursor, err := decodeCursor(*params.Cursor)
 			if err != nil {
@@ -73,11 +77,17 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		}
 	}
 
-	// Fetch one extra to detect next page
+	// Fetch one extra to detect next page.
 	queryStarted := time.Now()
-	entries, err := env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
+	var entries []database.MediaHistoryEntry
+	var err error
+	if distinctMedia {
+		entries, err = env.Database.UserDB.GetDistinctMediaHistory(env.Context, systemIDs, lastID, limit+1)
+	} else {
+		entries, err = env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
+	}
 	if err != nil {
-		log.Error().Err(err).Msg("error getting media history")
+		log.Error().Err(err).Bool("distinctMedia", distinctMedia).Msg("error getting media history")
 		return nil, fmt.Errorf("error getting media history: %w", err)
 	}
 	queryElapsed := time.Since(queryStarted)
@@ -126,6 +136,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 
 	log.Debug().
 		Int("entries", len(responseEntries)).
+		Bool("distinctMedia", distinctMedia).
 		Dur("queryDuration", queryElapsed).
 		Dur("enrichDuration", enrichElapsed).
 		Dur("buildDuration", time.Since(buildStarted)).

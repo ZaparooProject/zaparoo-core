@@ -1419,18 +1419,19 @@ None. Empty params may be omitted or sent as `{}`.
 
 **Access:** All clients.
 
-Return paginated media play history.
+Return paginated media play history. Set `distinctMedia` to return only the newest session for each `(systemId, mediaPath)` identity, which is useful for recents grids.
 
 #### Parameters
 
 Optionally, an object:
 
-| Key         | Type     | Required | Description                                                                                     |
-| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
-| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
-| cursor      | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages. |
-| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
-| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| Key           | Type     | Required | Description                                                                                     |
+| :------------ | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit         | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| cursor        | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same filters and `distinctMedia` value. |
+| systems       | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem   | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| distinctMedia | boolean  | No       | Return the newest session for each unique `(systemId, mediaPath)` pair. Each page contains up to `limit` unique media entries. Default is `false`. |
 
 #### Result
 
@@ -1464,7 +1465,8 @@ Optionally, an object:
   "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
   "method": "media.history",
   "params": {
-    "limit": 10
+    "limit": 10,
+    "distinctMedia": true
   }
 }
 ```

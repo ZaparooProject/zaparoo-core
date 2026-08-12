@@ -390,6 +390,20 @@ func (m *MockUserDBI) GetMediaHistory(
 	return history, nil
 }
 
+func (m *MockUserDBI) GetDistinctMediaHistory(
+	ctx context.Context, systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(ctx, systemIDs, lastID, limit)
+	history, ok := args.Get(0).([]database.MediaHistoryEntry)
+	if !ok {
+		history = []database.MediaHistoryEntry{}
+	}
+	if err := args.Error(1); err != nil {
+		return history, fmt.Errorf("mock UserDBI get distinct media history failed: %w", err)
+	}
+	return history, nil
+}
+
 func (m *MockUserDBI) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
 	args := m.Called()
 	entry, ok := args.Get(0).(database.MediaHistoryEntry)
