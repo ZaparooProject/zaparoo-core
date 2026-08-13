@@ -335,6 +335,8 @@ func (m *MockSettingsService) CancelWriteTag(ctx context.Context) error {
 }
 
 // SearchMedia mocks searching for media.
+//
+//nolint:gocritic // Value parameter implements the SettingsService interface used by TUI tests.
 func (m *MockSettingsService) SearchMedia(
 	ctx context.Context,
 	params models.SearchParams,
