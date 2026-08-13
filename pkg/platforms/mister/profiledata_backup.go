@@ -188,9 +188,10 @@ func (d *profileDataManager) prepareBackup(
 		}
 
 		alias := filepath.Join(aliasRoot, item)
-		if err = d.fs.MkdirAll(alias, 0o750); err == nil {
-			_, err = d.m.BindMount(target, alias)
-			if err == nil {
+		aliasErr := d.fs.MkdirAll(alias, 0o750)
+		if aliasErr == nil {
+			_, aliasErr = d.m.BindMount(target, alias)
+			if aliasErr == nil {
 				aliases = append(aliases, alias)
 			}
 		}
@@ -211,7 +212,7 @@ func (d *profileDataManager) prepareBackup(
 				cleanupAliases(),
 			)
 		}
-		if err != nil {
+		if aliasErr != nil {
 			plan.Definitions = append(plan.Definitions, originalDefinition)
 			plan.Warnings = append(plan.Warnings, platforms.BackupWarning{
 				Category: item, Path: item, Reason: "shared profile data unavailable during backup",

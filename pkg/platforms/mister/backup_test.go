@@ -16,6 +16,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPlatformPrepareBackupWithoutProfileManager(t *testing.T) {
+	t.Parallel()
+	platform := &Platform{}
+
+	plan, cleanup, err := platform.PrepareBackup()
+	require.NoError(t, err)
+	require.NotNil(t, cleanup)
+	assert.Equal(t, BackupDefinitions(platform.Settings()), plan.Definitions)
+	assert.Empty(t, plan.Warnings)
+	require.NoError(t, cleanup())
+}
+
 func TestBackupDefinitions(t *testing.T) {
 	t.Parallel()
 	rootDir := t.TempDir()

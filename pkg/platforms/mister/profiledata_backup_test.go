@@ -73,16 +73,24 @@ func TestPrepareBackupRealBindMountSmoke(t *testing.T) {
 		t.Skip("real bind-mount smoke test requires effective root inside mount namespace")
 	}
 
+	mounter := sysMounter{}
+	mounts, err := mounter.Mounts()
+	if err != nil {
+		t.Skipf("mount table unavailable: %v", err)
+	}
+	mediaMounts := mountsAt(mounts, mediaRootPath)
+	if len(mediaMounts) == 0 || mediaMounts[len(mediaMounts)-1].FSType != "tmpfs" {
+		t.Skip("/media is not backed by isolated tmpfs")
+	}
+
 	testRoot := t.TempDir()
 	storageRoot := misterconfig.SDRootDir
 	tempDir := filepath.Join(testRoot, "tmp")
 	settings := platforms.Settings{DataDir: filepath.Join(storageRoot, "zaparoo"), TempDir: tempDir}
 	fs := afero.NewOsFs()
-	if err := os.MkdirAll(storageRoot, 0o750); err != nil {
-		t.Skipf("real MiSTer storage root unavailable: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(storageRoot, 0o750))
 	manager := &profileDataManager{
-		fs: fs, m: sysMounter{}, ledger: loadMountLedger(fs, filepath.Join(testRoot, "mounts.json")),
+		fs: fs, m: mounter, ledger: loadMountLedger(fs, filepath.Join(testRoot, "mounts.json")),
 	}
 	for _, item := range allItems() {
 		require.NoError(t, os.MkdirAll(filepath.Join(storageRoot, item), 0o750))
@@ -194,6 +202,46 @@ func TestPrepareBackupWarnsWhenMountStateIsUnavailable(t *testing.T) {
 	require.NoError(t, cleanup())
 }
 
+func TestPrepareBackupFailsWhenTempRootCannotBeCreated(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{}
+	manager, _ := newTestManager(mounter)
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+	manager.fs = failMkdirFS{Fs: manager.fs, path: settings.TempDir}
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.ErrorContains(t, err, "creating profile backup temp root")
+	assert.Empty(t, plan)
+	assert.Nil(t, cleanup)
+	assertActiveProfile(t, manager, mounter, misterconfig.SDRootDir)
+}
+
+func TestPrepareBackupCleanupReportsUnmountFailure(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{}
+	manager, fs := newTestManager(mounter)
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+
+	_, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	require.NotNil(t, cleanup)
+	mounter.unmountErr = errors.New("injected cleanup unmount failure")
+	err = cleanup()
+	require.ErrorContains(t, err, "unmounting profile backup alias")
+	require.NoError(t, cleanup(), "cleanup remains idempotent after reporting an error")
+	entries, readErr := afero.ReadDir(fs, settings.TempDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
+}
+
 func TestPrepareBackupAliasesUnderlyingNASData(t *testing.T) {
 	t.Parallel()
 	savesTarget := filepath.Join(misterconfig.SDRootDir, profileDataItemSaves)
@@ -295,6 +343,32 @@ func TestPrepareBackupWarnsWhenSharedAliasCannotBeMounted(t *testing.T) {
 	})
 	assertActiveProfile(t, manager, mounter, misterconfig.SDRootDir)
 	require.NoError(t, cleanup())
+}
+
+func TestPrepareBackupFailsWhenProfileMountCannotBeRestored(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{}
+	manager, fs := newTestManager(mounter)
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+	mounter.bindErr = errors.New("injected restore bind failure")
+	mounter.failBindAtTry = mounter.bindAttempts + 2
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.Error(t, err)
+	assert.Empty(t, plan)
+	assert.Nil(t, cleanup)
+	require.ErrorContains(t, err, "restoring saves profile mount after preparing backup")
+	exists, existsErr := afero.Exists(fs, settings.TempDir)
+	require.NoError(t, existsErr)
+	if exists {
+		entries, readErr := afero.ReadDir(fs, settings.TempDir)
+		require.NoError(t, readErr)
+		assert.Empty(t, entries)
+	}
 }
 
 func TestPrepareBackupRestoreUnmountsAndRestoresProfileBinds(t *testing.T) {

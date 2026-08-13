@@ -803,6 +803,7 @@ func zaparooBackupDefinitions(configDir, dataDir string) []platforms.BackupDefin
 				{Glob: config.LimitSoundFilename},
 				{Glob: config.PendingSoundFilename},
 				{Glob: config.ReadySoundFilename},
+				{Glob: "*.ogg"},
 				{Glob: "*.wav"},
 				{Glob: "*.mp3"},
 				{Glob: "*.flac"},

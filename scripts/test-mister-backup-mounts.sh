@@ -1,23 +1,41 @@
 #!/bin/sh
 set -eu
 
-for command in sudo unshare mount go; do
+for command in unshare mount go; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		echo "$command is required" >&2
 		exit 1
 	fi
 done
 
-run_smoke_test='\
+module_cache=$(go env GOMODCACHE)
+
+# Command expands only inside the isolated namespace.
+# shellcheck disable=SC2016
+run_smoke_test='
 	set -eu
 	mount --make-rprivate /
 	mount -t tmpfs tmpfs /media
 	mkdir -p /media/fat
-	ZAPAROO_TEST_REAL_MOUNTS=1 go test ./pkg/platforms/mister/ \
-		-run "^TestPrepareBackupRealBindMountSmoke$" -count=1 -v
+	cache_root=$(mktemp -d)
+	export GOCACHE="$cache_root/go-build"
+	export GOMODCACHE="$MODULE_CACHE"
+	export GOPATH="$cache_root/gopath"
+	if ZAPAROO_TEST_REAL_MOUNTS=1 go test ./pkg/platforms/mister/ \
+		-run "^TestPrepareBackupRealBindMountSmoke$" -count=1 -v; then
+		status=0
+	else
+		status=$?
+	fi
+	rm -rf "$cache_root"
+	exit "$status"
 '
 
-if [ "${CI:-}" = "true" ] || sudo -n true 2>/dev/null; then
+run_privileged() {
+	if ! command -v sudo >/dev/null 2>&1; then
+		echo "sudo is required for privileged execution" >&2
+		exit 1
+	fi
 	if ! sudo -n true 2>/dev/null; then
 		echo "CI runner must provide passwordless sudo" >&2
 		exit 1
@@ -25,10 +43,16 @@ if [ "${CI:-}" = "true" ] || sudo -n true 2>/dev/null; then
 	exec sudo -n env \
 		"PATH=$PATH" \
 		"HOME=$HOME" \
-		"GOCACHE=$(go env GOCACHE)" \
-		"GOMODCACHE=$(go env GOMODCACHE)" \
-		"GOPATH=$(go env GOPATH)" \
+		"MODULE_CACHE=$module_cache" \
 		unshare --mount sh -c "$run_smoke_test"
+}
+
+if [ "${CI:-}" = "true" ]; then
+	run_privileged
+fi
+if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+	run_privileged
 fi
 
-exec unshare --user --map-root-user --mount sh -c "$run_smoke_test"
+exec env "MODULE_CACHE=$module_cache" \
+	unshare --user --map-root-user --mount sh -c "$run_smoke_test"

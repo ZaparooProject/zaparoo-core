@@ -114,9 +114,10 @@ type backupPlanningTestPlatform struct {
 }
 
 type backupPreparingTestPlatform struct {
-	prepared *bool
-	cleaned  *bool
-	plan     platforms.BackupPlan
+	prepared   *bool
+	cleaned    *bool
+	prepareErr error
+	plan       platforms.BackupPlan
 	backupPlatform
 }
 
@@ -134,6 +135,9 @@ func (p *backupPlanningTestPlatform) BackupPlan() platforms.BackupPlan {
 
 func (p *backupPreparingTestPlatform) PrepareBackup() (platforms.BackupPlan, func() error, error) {
 	*p.prepared = true
+	if p.prepareErr != nil {
+		return platforms.BackupPlan{}, nil, p.prepareErr
+	}
 	return p.plan, func() error {
 		*p.cleaned = true
 		return nil
@@ -170,6 +174,7 @@ func newBackupTestEnvWithClients(
 	writeTestFile(t, filepath.Join(dataDir, "frontend.toml"), "enabled = true\n")
 	writeTestFile(t, filepath.Join(dataDir, config.TUIFile), "theme = \"default\"\n")
 	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, config.SuccessSoundFilename), "success-audio\n")
+	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, "custom.ogg"), "custom-ogg-audio\n")
 	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, "custom.wav"), "custom-audio\n")
 	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, "ArcadeDatabase.csv"), "generated-cache\n")
 	writeTestFile(t, filepath.Join(dataDir, config.LaunchersDir, "custom.toml"), "[[launchers]]\n")
@@ -327,6 +332,7 @@ func TestManagerCreateIncludesManagedAudioAssets(t *testing.T) {
 	}
 
 	assert.Contains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, config.SuccessSoundFilename)))
+	assert.Contains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, "custom.ogg")))
 	assert.Contains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, "custom.wav")))
 	assert.NotContains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, "ArcadeDatabase.csv")))
 }
@@ -380,6 +386,27 @@ func TestManagerCreateCleansUpPreparedPlatformAfterFailure(t *testing.T) {
 	assert.True(t, cleaned)
 }
 
+func TestManagerCreateFailsWhenPlatformPreparationFails(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	basePlatform, ok := env.Manager.pl.(backupPlatform)
+	require.True(t, ok)
+	prepared := false
+	cleaned := false
+	env.Manager.pl = &backupPreparingTestPlatform{
+		backupPlatform: basePlatform,
+		prepared:       &prepared,
+		cleaned:        &cleaned,
+		prepareErr:     errors.New("injected preparation failure"),
+	}
+
+	_, err := env.Manager.Create(context.Background())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "preparing platform profile data for backup")
+	assert.True(t, prepared)
+	assert.False(t, cleaned)
+}
+
 func TestManagerCreateReportsPlatformPlanWarningsAsPartial(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)
@@ -420,7 +447,59 @@ func TestVerifyLocalArchiveRejectsCorruptCompletedPayload(t *testing.T) {
 
 	_, err = env.Manager.verifyLocalArchive(context.Background(), info.Path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "backup ZIP")
+	assert.True(t,
+		strings.Contains(err.Error(), "hash mismatch") ||
+			strings.Contains(err.Error(), "size mismatch"),
+		err,
+	)
+}
+
+func TestVerifyArchivePayload(t *testing.T) {
+	t.Parallel()
+	contents := []byte("payload")
+	hash := sha256.Sum256(contents)
+	file := FileRef{
+		ArchivePath: "files/zaparoo/payload.bin",
+		Size:        int64(len(contents)),
+		SHA256:      hex.EncodeToString(hash[:]),
+	}
+
+	t.Run("valid", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, verifyArchivePayload(context.Background(), &file, bytes.NewReader(contents)))
+	})
+	t.Run("hash mismatch", func(t *testing.T) {
+		t.Parallel()
+		badHash := file
+		badHash.SHA256 = strings.Repeat("0", sha256.Size*2)
+		err := verifyArchivePayload(context.Background(), &badHash, bytes.NewReader(contents))
+		require.ErrorContains(t, err, "payload hash mismatch")
+	})
+	t.Run("short payload", func(t *testing.T) {
+		t.Parallel()
+		err := verifyArchivePayload(context.Background(), &file, bytes.NewReader(contents[:len(contents)-1]))
+		require.ErrorContains(t, err, "payload size mismatch")
+	})
+	t.Run("long payload", func(t *testing.T) {
+		t.Parallel()
+		err := verifyArchivePayload(context.Background(), &file, bytes.NewReader(append(contents, '!')))
+		require.ErrorContains(t, err, "payload size mismatch")
+	})
+	t.Run("canceled", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := verifyArchivePayload(ctx, &file, bytes.NewReader(contents))
+		require.ErrorIs(t, err, context.Canceled)
+	})
+	t.Run("reader failure", func(t *testing.T) {
+		t.Parallel()
+		err := verifyArchivePayload(
+			context.Background(), &file,
+			io.MultiReader(bytes.NewReader(contents[:1]), &errorReader{err: errors.New("injected read failure")}),
+		)
+		require.ErrorContains(t, err, "reading backup ZIP payload")
+	})
 }
 
 func TestManagerCreateBackupSkipsUnreadableSource(t *testing.T) {
@@ -783,6 +862,7 @@ func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	assert.True(t, allowed("FRONTEND.TOML"))
 	assert.True(t, allowed("Tui.toml"))
 	assert.True(t, allowed("assets/SUCCESS.OGG"))
+	assert.True(t, allowed("assets/custom.OGG"))
 	assert.True(t, allowed("assets/custom.WAV"))
 	assert.True(t, allowed("assets/custom.MP3"))
 	assert.True(t, allowed("assets/custom.FLAC"))
