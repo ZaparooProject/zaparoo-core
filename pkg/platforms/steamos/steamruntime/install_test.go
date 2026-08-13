@@ -46,7 +46,7 @@ func TestInstallAddsSteamShortcut(t *testing.T) {
 	require.Equal(t, paths.Binary, target)
 	desktop, err := afero.ReadFile(fs, paths.Desktop)
 	require.NoError(t, err)
-	require.Contains(t, string(desktop), "Name=Zaparoo")
+	require.Contains(t, string(desktop), "Name="+runtimeDisplayName+"\n")
 	require.Contains(t, string(desktop), "Exec=\""+paths.Runtime+"\"")
 	executor.AssertExpectations(t)
 }

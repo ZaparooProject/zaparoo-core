@@ -24,7 +24,7 @@ import (
 
 const (
 	runtimeExecutableName = "zaparoo-steam-runtime"
-	runtimeDisplayName    = "Zaparoo"
+	runtimeDisplayName    = "Zaparoo Runtime"
 	statusDuplicate       = "duplicate"
 	statusMissing         = "missing"
 	statusReady           = "ready"

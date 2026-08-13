@@ -18,7 +18,7 @@ import (
 
 func runtimeShortcutFixture(appID uint32, executable string) []byte {
 	return fixtures.BuildShortcutsVDF([]fixtures.TestShortcut{{
-		AppID: appID, AppName: "Zaparoo", Exe: `"` + executable + `"`, StartDir: filepath.Dir(executable),
+		AppID: appID, AppName: runtimeDisplayName, Exe: `"` + executable + `"`, StartDir: filepath.Dir(executable),
 	}})
 }
 
