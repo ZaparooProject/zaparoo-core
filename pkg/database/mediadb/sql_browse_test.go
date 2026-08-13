@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -985,6 +986,41 @@ func TestFetchAndAttachCoverFlags_TitleLevelCover(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, results[0].HasCover)
 	assert.True(t, results[1].HasCover)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestQueryImagePropertyEntityIDs_ChunksMaximumPage(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	const maxPageSize = 1000
+	entityIDs := make([]int64, maxPageSize)
+	for i := range entityIDs {
+		entityIDs[i] = int64(i + 1)
+	}
+	firstArgs := make([]driver.Value, 0, sqliteMaxParams)
+	for _, id := range entityIDs[:sqliteMaxParams-1] {
+		firstArgs = append(firstArgs, id)
+	}
+	firstArgs = append(firstArgs, int64(901))
+	secondArgs := []driver.Value{int64(999), int64(1000), int64(901)}
+
+	queryPattern := `SELECT mtp\.MediaTitleDBID\s+FROM MediaTitleProperties mtp`
+	mock.ExpectQuery(queryPattern).
+		WithArgs(firstArgs...).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(1)))
+	mock.ExpectQuery(queryPattern).
+		WithArgs(secondArgs...).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(1000)))
+
+	covered, err := queryImagePropertyEntityIDs(
+		context.Background(), db, coverPropertyScopeTitle, entityIDs, []int64{901},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]struct{}{1: {}, 1000: {}}, covered)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

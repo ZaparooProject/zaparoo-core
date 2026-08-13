@@ -1315,51 +1315,71 @@ func queryImagePropertyEntityIDs(
 		return map[int64]struct{}{}, nil
 	}
 
-	entityPlaceholders := prepareVariadic("?", ",", len(entityIDs))
-	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
-	var query string
+	var table, alias, entityColumn string
 	switch scope {
 	case coverPropertyScopeMedia:
-		query = `SELECT mp.MediaDBID
-			FROM MediaProperties mp
-			WHERE mp.MediaDBID IN (` + entityPlaceholders + `)
-			  AND mp.TypeTagDBID IN (` + tagPlaceholders + `)`
+		table, alias, entityColumn = "MediaProperties", "mp", "MediaDBID"
 	case coverPropertyScopeTitle:
-		query = `SELECT mtp.MediaTitleDBID
-			FROM MediaTitleProperties mtp
-			WHERE mtp.MediaTitleDBID IN (` + entityPlaceholders + `)
-			  AND mtp.TypeTagDBID IN (` + tagPlaceholders + `)`
+		table, alias, entityColumn = "MediaTitleProperties", "mtp", "MediaTitleDBID"
 	default:
 		return nil, fmt.Errorf("unknown cover property scope %d", scope)
 	}
 
-	args := make([]any, 0, len(entityIDs)+len(imageTagIDs))
-	for _, id := range entityIDs {
-		args = append(args, id)
+	chunkSize := sqliteMaxParams - len(imageTagIDs)
+	if chunkSize <= 0 {
+		return nil, fmt.Errorf("too many image property tag IDs: %d", len(imageTagIDs))
 	}
-	for _, id := range imageTagIDs {
-		args = append(args, id)
-	}
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	covered := make(map[int64]struct{})
+	for start := 0; start < len(entityIDs); start += chunkSize {
+		chunk := entityIDs[start:min(start+chunkSize, len(entityIDs))]
+		entityPlaceholders := prepareVariadic("?", ",", len(chunk))
+		query := `SELECT ` + alias + `.` + entityColumn + `
+			FROM ` + table + ` ` + alias + `
+			WHERE ` + alias + `.` + entityColumn + ` IN (` + entityPlaceholders + `)
+			  AND ` + alias + `.TypeTagDBID IN (` + tagPlaceholders + `)`
 
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+		args := make([]any, 0, len(chunk)+len(imageTagIDs))
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		for _, id := range imageTagIDs {
+			args = append(args, id)
+		}
+
+		if err := queryImagePropertyEntityIDChunk(ctx, db, query, args, covered); err != nil {
+			return nil, err
+		}
+	}
+	return covered, nil
+}
+
+func queryImagePropertyEntityIDChunk(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+	covered map[int64]struct{},
+) (err error) {
+	//nolint:gosec // Caller selects table identifiers from fixed constants and generates placeholders internally.
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query cover entity IDs: %w", err)
+		return fmt.Errorf("query cover entity IDs: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close cover entity ID rows: %w", closeErr)
+		}
+	}()
 
-	covered := make(map[int64]struct{})
 	for rows.Next() {
 		var id int64
 		if scanErr := rows.Scan(&id); scanErr != nil {
-			return nil, fmt.Errorf("scan cover entity ID: %w", scanErr)
+			return fmt.Errorf("scan cover entity ID: %w", scanErr)
 		}
 		covered[id] = struct{}{}
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, rowsErr
-	}
-	return covered, nil
+	return rows.Err()
 }
 
 func fetchCoverStatuses(

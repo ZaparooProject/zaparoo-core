@@ -1023,9 +1023,13 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				MediaTitleDBID: searchResults[i].MediaTitleID,
 			}
 		}
-		coverStatuses, err = env.Database.MediaDB.GetMediaCoverStatus(ctx, coverRefs)
-		if err != nil {
-			return nil, fmt.Errorf("get media search cover status: %w", err)
+		coverCtx, cancelCoverLookup := optionalDBEnrichmentContext(ctx)
+		resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(coverCtx, coverRefs)
+		cancelCoverLookup()
+		if coverErr != nil {
+			log.Debug().Err(coverErr).Msg("could not enrich media search cover status")
+		} else {
+			coverStatuses = resolvedCoverStatuses
 		}
 	}
 	coverDuration := time.Since(coverStarted)

@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -31,6 +32,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -174,7 +176,13 @@ func TestMediaThumbCache_IsSafeLocalPath(t *testing.T) {
 	assert.False(t, cache.isSafeLocalPath(outside))
 
 	symlink := filepath.Join(cache.dir, "link.webp")
-	require.NoError(t, os.Symlink(outside, symlink))
+	if err := os.Symlink(outside, symlink); err != nil {
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.ENOSYS) ||
+			errors.Is(err, syscall.EOPNOTSUPP) {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		require.NoError(t, err)
+	}
 	assert.False(t, cache.isSafeLocalPath(symlink))
 
 	relativeCache := &mediaThumbCache{fs: afero.NewMemMapFs(), dir: "relative"}

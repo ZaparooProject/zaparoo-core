@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -191,6 +192,72 @@ func TestHandleMediaHistory_IncludesCoverStatus(t *testing.T) {
 	assert.False(t, response.Entries[1].HasCover)
 	mockUserDB.AssertExpectations(t)
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
+	t.Parallel()
+
+	mediaPath := filepath.Join(string(filepath.Separator), "games", "history.nes")
+	entry := database.MediaHistoryEntry{
+		DBID: 1, SystemID: "NES", MediaPath: mediaPath, MediaName: "History", StartTime: time.Now(),
+	}
+
+	tests := []struct {
+		setup func(*testing.T, *helpers.MockMediaDBI)
+		name  string
+	}{
+		{
+			name: "media identity lookup",
+			setup: func(_ *testing.T, mockMediaDB *helpers.MockMediaDBI) {
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+					Return(nil, errors.New("identity lookup failed"))
+			},
+		},
+		{
+			name: "cover lookup",
+			setup: func(t *testing.T, mockMediaDB *helpers.MockMediaDBI) {
+				t.Helper()
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+					Return([]database.MediaPathID{{
+						SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420,
+					}}, nil)
+				mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{{
+					MediaDBID: 42, MediaTitleDBID: 420,
+				}}).Run(func(args mock.Arguments) {
+					ctx, ok := args.Get(0).(context.Context)
+					require.True(t, ok)
+					deadline, ok := ctx.Deadline()
+					require.True(t, ok, "optional enrichment must have a deadline")
+					assert.WithinDuration(t, time.Now().Add(optionalDBEnrichmentTimeout), deadline, time.Second)
+				}).Return(nil, errors.New("cover lookup failed"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockUserDB := helpers.NewMockUserDBI()
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).
+				Return([]database.MediaHistoryEntry{entry}, nil)
+			tt.setup(t, mockMediaDB)
+
+			result, err := HandleMediaHistory(requests.RequestEnv{
+				Context: context.Background(),
+				Database: &database.Database{
+					UserDB: mockUserDB, MediaDB: mockMediaDB,
+				},
+			})
+			require.NoError(t, err)
+			response, ok := result.(models.MediaHistoryResponse)
+			require.True(t, ok)
+			require.Len(t, response.Entries, 1)
+			assert.Zero(t, response.Entries[0].MediaID)
+			assert.False(t, response.Entries[0].HasCover)
+			mockUserDB.AssertExpectations(t)
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
 }
 
 func TestMediaResponseMediaIDs_BoundsSlowLookup(t *testing.T) {

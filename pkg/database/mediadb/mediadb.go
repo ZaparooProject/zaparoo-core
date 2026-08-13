@@ -133,6 +133,14 @@ type mediaDBIDBounds struct {
 	last  int64
 }
 
+type mediaSearchBoundsLoad struct {
+	done       chan struct{}
+	err        error
+	bounds     mediaDBIDBounds
+	generation uint64
+	found      bool
+}
+
 type MediaDB struct {
 	clock                   clockwork.Clock
 	ctx                     context.Context
@@ -149,6 +157,7 @@ type MediaDB struct {
 	inMemoryTagCache        atomic.Pointer[tagCache]
 	batchInsertTag          *BatchInserter
 	mediaSearchBounds       map[int64]mediaDBIDBounds
+	mediaSearchBoundsLoads  map[int64]*mediaSearchBoundsLoad
 	stmtInsertMediaTag      *sql.Stmt
 	batchInsertMediaTitle   *BatchInserter
 	stmtInsertMediaTitle    *sql.Stmt
@@ -163,6 +172,7 @@ type MediaDB struct {
 	backgroundOpsCount      atomic.Int64
 	vacuumRetryDelay        time.Duration
 	analyzeRetryDelay       time.Duration
+	mediaSearchBoundsGen    uint64
 	batchSize               int
 	backgroundOpsMu         syncutil.RWMutex
 	mediaSearchBoundsMu     syncutil.RWMutex
@@ -273,47 +283,71 @@ func (db *MediaDB) clearMediaSearchBounds() {
 	db.mediaSearchBoundsMu.Lock()
 	defer db.mediaSearchBoundsMu.Unlock()
 	db.mediaSearchBounds = nil
+	db.mediaSearchBoundsLoads = nil
+	db.mediaSearchBoundsGen++
 }
 
 func (db *MediaDB) getMediaSearchBounds(ctx context.Context, systemDBID int64) (mediaDBIDBounds, bool, error) {
-	db.mediaSearchBoundsMu.RLock()
-	bounds, ok := db.mediaSearchBounds[systemDBID]
-	db.mediaSearchBoundsMu.RUnlock()
-	if ok {
-		return bounds, bounds.first > 0, nil
-	}
-
-	// Serialize misses so concurrent first searches for one system do not repeat
-	// the covering-index scan. Stable libraries pay this once per system; media
-	// mutations clear the map through invalidateCaches.
 	db.mediaSearchBoundsMu.Lock()
-	defer db.mediaSearchBoundsMu.Unlock()
-	if bounds, ok = db.mediaSearchBounds[systemDBID]; ok {
+	if bounds, ok := db.mediaSearchBounds[systemDBID]; ok {
+		db.mediaSearchBoundsMu.Unlock()
 		return bounds, bounds.first > 0, nil
 	}
+	if load := db.mediaSearchBoundsLoads[systemDBID]; load != nil {
+		db.mediaSearchBoundsMu.Unlock()
+		select {
+		case <-load.done:
+			return load.bounds, load.found, load.err
+		case <-ctx.Done():
+			return mediaDBIDBounds{}, false, fmt.Errorf("query media search bounds: %w", ctx.Err())
+		}
+	}
+	if db.mediaSearchBoundsLoads == nil {
+		db.mediaSearchBoundsLoads = make(map[int64]*mediaSearchBoundsLoad)
+	}
+	load := &mediaSearchBoundsLoad{
+		done:       make(chan struct{}),
+		generation: db.mediaSearchBoundsGen,
+	}
+	db.mediaSearchBoundsLoads[systemDBID] = load
+	db.mediaSearchBoundsMu.Unlock()
 
 	queryStarted := time.Now()
 	var firstMediaID, lastMediaID sql.NullInt64
-	if err := db.sql.Load().QueryRowContext(ctx, `
+	queryErr := db.sql.Load().QueryRowContext(ctx, `
 		SELECT MIN(DBID), MAX(DBID)
 		FROM Media
-		WHERE SystemDBID = ? AND IsMissing = 0`, systemDBID).Scan(&firstMediaID, &lastMediaID); err != nil {
-		return mediaDBIDBounds{}, false, fmt.Errorf("query media search bounds: %w", err)
+		WHERE SystemDBID = ? AND IsMissing = 0`, systemDBID).Scan(&firstMediaID, &lastMediaID)
+	if queryErr != nil {
+		queryErr = fmt.Errorf("query media search bounds: %w", queryErr)
+	} else if firstMediaID.Valid && lastMediaID.Valid {
+		load.bounds = mediaDBIDBounds{first: firstMediaID.Int64, last: lastMediaID.Int64}
 	}
-	if firstMediaID.Valid && lastMediaID.Valid {
-		bounds = mediaDBIDBounds{first: firstMediaID.Int64, last: lastMediaID.Int64}
+	load.found = load.bounds.first > 0
+	load.err = queryErr
+
+	db.mediaSearchBoundsMu.Lock()
+	if current := db.mediaSearchBoundsLoads[systemDBID]; current == load {
+		delete(db.mediaSearchBoundsLoads, systemDBID)
 	}
-	if db.mediaSearchBounds == nil {
-		db.mediaSearchBounds = make(map[int64]mediaDBIDBounds)
+	if queryErr == nil && load.generation == db.mediaSearchBoundsGen {
+		if db.mediaSearchBounds == nil {
+			db.mediaSearchBounds = make(map[int64]mediaDBIDBounds)
+		}
+		db.mediaSearchBounds[systemDBID] = load.bounds
 	}
-	db.mediaSearchBounds[systemDBID] = bounds
-	log.Debug().
-		Int64("systemDBID", systemDBID).
-		Int64("firstMediaID", bounds.first).
-		Int64("lastMediaID", bounds.last).
-		Dur("duration", time.Since(queryStarted)).
-		Msg("media search system bounds cached")
-	return bounds, bounds.first > 0, nil
+	close(load.done)
+	db.mediaSearchBoundsMu.Unlock()
+
+	if queryErr == nil {
+		log.Debug().
+			Int64("systemDBID", systemDBID).
+			Int64("firstMediaID", load.bounds.first).
+			Int64("lastMediaID", load.bounds.last).
+			Dur("duration", time.Since(queryStarted)).
+			Msg("media search system bounds cached")
+	}
+	return load.bounds, load.found, load.err
 }
 
 func invalidationScopeForMediaSystemIDs(systemIDs []string) invalidationScope {
@@ -2488,11 +2522,14 @@ func (db *MediaDB) SearchMediaWithFilters(
 				if len(resolvedDBIDs) == len(systemIDs) {
 					scopedSystems := make(map[int64]string, len(resolvedDBIDs))
 					var bounds mediaDBIDBounds
+					boundsReady := true
 					for i, systemDBID := range resolvedDBIDs {
-						var systemBounds mediaDBIDBounds
-						var found bool
-						systemBounds, found, streamErr = db.getMediaSearchBounds(ctx, systemDBID)
-						if streamErr != nil {
+						systemBounds, found, boundsErr := db.getMediaSearchBounds(ctx, systemDBID)
+						if boundsErr != nil {
+							log.Debug().Err(boundsErr).
+								Int64("systemDBID", systemDBID).
+								Msg("media search bounds unavailable; using grouped SQL")
+							boundsReady = false
 							break
 						}
 						if !found {
@@ -2504,19 +2541,16 @@ func (db *MediaDB) SearchMediaWithFilters(
 						}
 						bounds.last = max(bounds.last, systemBounds.last)
 					}
-					if streamErr == nil && len(scopedSystems) == 0 {
+					if boundsReady && len(scopedSystems) == 0 {
 						return []database.SearchResultWithCursor{}, nil
 					}
-					if streamErr == nil {
+					if boundsReady {
 						strategy = "system-scope"
 						streamResults, streamErr = sqlSearchMediaByLargeTitleDBIDSetInSystems(
 							ctx, db.sql.Load(), candidateIDs, scopedSystems, bounds,
 							filters.Cursor, filters.Limit)
 					}
 				}
-			}
-			if streamErr != nil && strategy == "" {
-				return nil, streamErr
 			}
 			if strategy != "" {
 				log.Debug().

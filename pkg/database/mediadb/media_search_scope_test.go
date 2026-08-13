@@ -21,10 +21,12 @@ package mediadb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -215,6 +217,53 @@ func TestMediaDB_SearchMediaWithFilters_FallsBackWhenScopedStreamIsSparse(t *tes
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestMediaDB_SearchMediaWithFilters_FallsBackWhenBoundsLookupFails(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	nes, err := systemdefs.GetSystem(systemdefs.SystemNES)
+	require.NoError(t, err)
+	entries := make([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}, sqliteMaxParams)
+	for i := range entries {
+		entries[i] = struct {
+			slug       string
+			secSlug    string
+			titleDBID  int64
+			systemDBID int64
+		}{slug: "rtype", titleDBID: int64(i + 1), systemDBID: 1}
+	}
+	cache := buildTestCache(entries, map[int64]string{1: nes.ID})
+	cache.complete = true
+
+	mediaDB := &MediaDB{}
+	mediaDB.sql.Store(db)
+	mediaDB.slugSearchCache.Store(cache)
+	mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+		WithArgs(int64(1)).
+		WillReturnError(errors.New("bounds unavailable"))
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(nes.ID, "%rtype%", "%rtype%", 10).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}))
+
+	results, err := mediaDB.SearchMediaWithFilters(context.Background(), &database.SearchFilters{
+		Systems: []systemdefs.System{*nes}, Query: "R-Type", Limit: 10,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestScopedCandidateStream_MatchesGroupedSQL(t *testing.T) {
 	t.Parallel()
 
@@ -307,6 +356,7 @@ func TestScopedCandidateStream_MatchesGroupedSQL(t *testing.T) {
 			ctx, mediaDB.sql.Load(), snesCandidates[query], map[int64]string{1: "SNES"}, bounds, cursor, limit,
 		)
 		require.NoError(t, streamErr)
+		require.Len(t, actual, len(expected))
 		assert.Equal(t, searchResultIDs(expected), searchResultIDs(actual))
 		for i := range actual {
 			assert.Equal(t, expected[i].MediaTitleID, actual[i].MediaTitleID)
@@ -345,6 +395,7 @@ func TestScopedCandidateStream_MatchesGroupedSQL(t *testing.T) {
 		mediaDBIDBounds{first: 1, last: rowsPerSystem * 2}, nil, 100,
 	)
 	require.NoError(t, err)
+	require.Len(t, multiActual, len(multiExpected))
 	assert.Equal(t, searchResultIDs(multiExpected), searchResultIDs(multiActual))
 	for i := range multiActual {
 		assert.Equal(t, multiExpected[i].SystemID, multiActual[i].SystemID)
@@ -393,6 +444,126 @@ func TestMediaSearchBounds_CachesAndClears(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, found)
 	assert.Equal(t, mediaDBIDBounds{first: 300, last: 400}, refreshed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMediaSearchBounds_CoalescesSameSystem(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+		WithArgs(int64(7)).
+		WillDelayFor(100 * time.Millisecond).
+		WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(100, 200))
+
+	mediaDB := &MediaDB{}
+	mediaDB.sql.Store(db)
+	type boundsResult struct {
+		err    error
+		bounds mediaDBIDBounds
+		found  bool
+	}
+	results := make(chan boundsResult, 2)
+	load := func() {
+		bounds, found, queryErr := mediaDB.getMediaSearchBounds(context.Background(), 7)
+		results <- boundsResult{err: queryErr, bounds: bounds, found: found}
+	}
+	go load()
+	require.Eventually(t, func() bool {
+		mediaDB.mediaSearchBoundsMu.RLock()
+		defer mediaDB.mediaSearchBoundsMu.RUnlock()
+		return mediaDB.mediaSearchBoundsLoads[7] != nil
+	}, time.Second, time.Millisecond)
+	go load()
+
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err)
+		assert.True(t, result.found)
+		assert.Equal(t, mediaDBIDBounds{first: 100, last: 200}, result.bounds)
+	}
+	assert.NoError(t, mock.ExpectationsWereMet(), "same-system misses should share one SQL query")
+}
+
+func TestMediaSearchBounds_CoalescesPerSystem(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(4)
+	mock.MatchExpectationsInOrder(false)
+
+	for _, systemDBID := range []int64{7, 8} {
+		mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+			WithArgs(systemDBID).
+			WillDelayFor(100 * time.Millisecond).
+			WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(systemDBID*10, systemDBID*10+9))
+	}
+
+	mediaDB := &MediaDB{}
+	mediaDB.sql.Store(db)
+	type boundsResult struct {
+		err    error
+		bounds mediaDBIDBounds
+		found  bool
+	}
+	results := make(chan boundsResult, 2)
+	for _, systemDBID := range []int64{7, 8} {
+		go func() {
+			bounds, found, queryErr := mediaDB.getMediaSearchBounds(context.Background(), systemDBID)
+			results <- boundsResult{err: queryErr, bounds: bounds, found: found}
+		}()
+	}
+
+	require.Eventually(t, func() bool {
+		mediaDB.mediaSearchBoundsMu.RLock()
+		defer mediaDB.mediaSearchBoundsMu.RUnlock()
+		return len(mediaDB.mediaSearchBoundsLoads) == 2
+	}, time.Second, time.Millisecond, "different systems should load concurrently")
+
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err)
+		assert.True(t, result.found)
+		assert.Positive(t, result.bounds.first)
+	}
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMediaSearchBounds_InvalidatedLoadIsNotCached(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery("SELECT MIN\\(DBID\\), MAX\\(DBID\\).*FROM Media").
+		WithArgs(int64(7)).
+		WillDelayFor(100 * time.Millisecond).
+		WillReturnRows(sqlmock.NewRows([]string{"min", "max"}).AddRow(100, 200))
+
+	mediaDB := &MediaDB{}
+	mediaDB.sql.Store(db)
+	result := make(chan mediaDBIDBounds, 1)
+	go func() {
+		bounds, _, _ := mediaDB.getMediaSearchBounds(context.Background(), 7)
+		result <- bounds
+	}()
+
+	require.Eventually(t, func() bool {
+		mediaDB.mediaSearchBoundsMu.RLock()
+		defer mediaDB.mediaSearchBoundsMu.RUnlock()
+		return mediaDB.mediaSearchBoundsLoads[7] != nil
+	}, time.Second, time.Millisecond)
+	mediaDB.clearMediaSearchBounds()
+
+	assert.Equal(t, mediaDBIDBounds{first: 100, last: 200}, <-result)
+	mediaDB.mediaSearchBoundsMu.RLock()
+	_, cached := mediaDB.mediaSearchBounds[7]
+	mediaDB.mediaSearchBoundsMu.RUnlock()
+	assert.False(t, cached, "an invalidated in-flight result must not be cached")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

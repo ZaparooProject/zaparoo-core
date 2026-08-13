@@ -616,6 +616,7 @@ An object:
         "name": "240p Test Suite (PD) v0.03 tepples",
         "path": "/media/fat/games/Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
         "relativePath": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "hasCover": false,
         "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
@@ -673,6 +674,7 @@ An object:
         "name": "Super Mario Bros.",
         "path": "/media/fat/games/NES/Super Mario Bros.nes",
         "relativePath": "NES/Super Mario Bros.nes",
+        "hasCover": true,
         "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",

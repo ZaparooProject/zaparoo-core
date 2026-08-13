@@ -104,34 +104,43 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		})
 	}
 	enrichStarted := time.Now()
-	mediaRows, err := resolveMediaPathIDs(env.Context, env.Database.MediaDB, mediaRefs)
-	if err != nil {
-		return nil, fmt.Errorf("resolve media history cover identities: %w", err)
-	}
-	mediaIDs := make(map[mediaPathRef]int64, len(mediaRows))
-	coverRefs := make([]database.MediaCoverRef, 0, len(mediaRows))
-	seenIDs := make(map[int64]struct{}, len(mediaRows))
-	for _, ref := range mediaRefs {
-		row := mediaRows[ref]
-		if row.DBID <= 0 {
-			continue
-		}
-		mediaIDs[ref] = row.DBID
-		if _, ok := seenIDs[row.DBID]; ok {
-			continue
-		}
-		seenIDs[row.DBID] = struct{}{}
-		coverRefs = append(coverRefs, database.MediaCoverRef{
-			MediaDBID:      row.DBID,
-			MediaTitleDBID: row.MediaTitleDBID,
-		})
-	}
-
+	mediaIDs := make(map[mediaPathRef]int64)
 	coverStatuses := make(map[int64]bool)
-	if len(coverRefs) > 0 {
-		coverStatuses, err = env.Database.MediaDB.GetMediaCoverStatus(env.Context, coverRefs)
-		if err != nil {
-			return nil, fmt.Errorf("get media history cover status: %w", err)
+	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
+	defer cancelEnrichment()
+
+	mediaRows, enrichErr := resolveMediaPathIDs(enrichCtx, env.Database.MediaDB, mediaRefs)
+	if enrichErr != nil {
+		log.Debug().Err(enrichErr).Msg("could not enrich media history from media database")
+	} else {
+		resolvedMediaIDs := make(map[mediaPathRef]int64, len(mediaRows))
+		coverRefs := make([]database.MediaCoverRef, 0, len(mediaRows))
+		seenIDs := make(map[int64]struct{}, len(mediaRows))
+		for _, ref := range mediaRefs {
+			row := mediaRows[ref]
+			if row.DBID <= 0 {
+				continue
+			}
+			resolvedMediaIDs[ref] = row.DBID
+			if _, ok := seenIDs[row.DBID]; ok {
+				continue
+			}
+			seenIDs[row.DBID] = struct{}{}
+			coverRefs = append(coverRefs, database.MediaCoverRef{
+				MediaDBID:      row.DBID,
+				MediaTitleDBID: row.MediaTitleDBID,
+			})
+		}
+
+		resolvedCoverStatuses := make(map[int64]bool)
+		if len(coverRefs) > 0 {
+			resolvedCoverStatuses, enrichErr = env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, coverRefs)
+		}
+		if enrichErr != nil {
+			log.Debug().Err(enrichErr).Msg("could not enrich media history cover status")
+		} else {
+			mediaIDs = resolvedMediaIDs
+			coverStatuses = resolvedCoverStatuses
 		}
 	}
 	enrichElapsed := time.Since(enrichStarted)

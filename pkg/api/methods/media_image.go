@@ -876,8 +876,8 @@ func cachedMediaImageResponse(
 			return response, true
 		}
 	}
-	data, contentType, found := cache.read(ref, system, typeTag, maxSize)
-	if !found {
+	data, err := afero.ReadFile(cache.fs, path)
+	if err != nil {
 		return models.MediaImageResponse{}, false
 	}
 	return inlineMediaImageResponse(data, contentType, sourcePath, typeTag), true

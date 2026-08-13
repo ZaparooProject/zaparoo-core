@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -293,6 +294,44 @@ func TestHandleMediaSearch_IncludesCoverStatus(t *testing.T) {
 	require.Len(t, response.Results, 2)
 	assert.True(t, response.Results[0].HasCover)
 	assert.False(t, response.Results[1].HasCover)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaSearch_CoverFailureIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+		Return([]database.SearchResultWithCursor{{
+			SystemID: "NES", Name: "Game", Path: filepath.Join("games", "game.nes"),
+			MediaID: 1, MediaTitleID: 11,
+		}}, nil)
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{{
+		MediaDBID: 1, MediaTitleDBID: 11,
+	}}).Run(func(args mock.Arguments) {
+		ctx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok, "optional enrichment must have a deadline")
+		assert.WithinDuration(t, time.Now().Add(optionalDBEnrichmentTimeout), deadline, time.Second)
+	}).Return(nil, errors.New("cover lookup failed"))
+
+	paramsJSON, err := json.Marshal(models.SearchParams{})
+	require.NoError(t, err)
+	result, err := HandleMediaSearch(requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, response.Results, 1)
+	assert.Equal(t, int64(1), response.Results[0].MediaID)
+	assert.False(t, response.Results[0].HasCover)
 	mockMediaDB.AssertExpectations(t)
 }
 

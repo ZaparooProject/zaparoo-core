@@ -248,6 +248,7 @@ type MediaPathID struct {
 	MediaTitleDBID int64
 }
 
+// MediaCoverRef identifies media and title rows for a cover-status lookup.
 type MediaCoverRef struct {
 	MediaDBID      int64
 	MediaTitleDBID int64
@@ -1045,6 +1046,8 @@ type MediaDBI interface {
 	BrowseDirectories(ctx context.Context, opts BrowseDirectoriesOptions) ([]BrowseDirectoryResult, error)
 	BrowseDirCount(ctx context.Context, opts BrowseDirCountOptions) (int, error)
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
+	// GetMediaCoverStatus returns statuses keyed by MediaDBID. True means a media-
+	// or title-level image exists; absent keys mean no cover.
 	GetMediaCoverStatus(ctx context.Context, refs []MediaCoverRef) (map[int64]bool, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
