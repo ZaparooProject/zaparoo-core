@@ -292,10 +292,11 @@ type MediaStoppedParams struct {
 }
 
 type MediaHistoryParams struct {
-	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
-	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
-	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
-	Cursor      *string   `json:"cursor,omitempty"`
+	Systems       *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem   *bool     `json:"fuzzySystem,omitempty"`
+	DistinctMedia *bool     `json:"distinctMedia,omitempty"`
+	Limit         *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor        *string   `json:"cursor,omitempty"`
 }
 
 type MediaHistoryTopParams struct {
@@ -336,6 +337,7 @@ type MediaImageParams struct {
 	MaxSize    *int32   `json:"maxSize,omitempty" validate:"omitempty,gt=0,max=8192"`
 	System     string   `json:"system"            validate:"omitempty,min=1"`
 	Path       string   `json:"path"              validate:"omitempty,min=1"`
+	Delivery   string   `json:"delivery,omitempty" validate:"omitempty,oneof=inline localPath"`
 	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
 }
 

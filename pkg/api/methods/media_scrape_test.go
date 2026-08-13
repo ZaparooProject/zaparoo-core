@@ -405,8 +405,8 @@ func TestHandleMediaScrape_WipesThumbCacheOnCompletion(t *testing.T) {
 				resolvedTypes: make(map[string]resolvedThumb),
 			}
 			mediaID := int64(1)
-			oldCache.set(
-				mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
+			setMediaThumbCacheForTest(
+				t, oldCache, mediaRefParam{MediaID: &mediaID}, "SNES", "property:image-boxart", 100,
 				[]byte("png-data"), "image/png",
 			)
 			mediaThumbCachePointer.Store(oldCache)
@@ -487,7 +487,7 @@ func TestInvalidateChangedScrapeThumbnails_NoChangesPreservesCache(t *testing.T)
 	}
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	cache.set(ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 
@@ -592,7 +592,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	}
 	mediaID := int64(1)
 	ref := mediaRefParam{MediaID: &mediaID}
-	cache.set(ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
+	setMediaThumbCacheForTest(t, cache, ref, "SNES", "property:image-boxart", 256, []byte("cached"), "image/webp")
 	mediaThumbCachePointer.Store(cache)
 	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
 

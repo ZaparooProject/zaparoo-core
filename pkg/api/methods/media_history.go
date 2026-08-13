@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,6 +37,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	limit := defaultMediaHistoryLimit
 	var lastID int64
 	var systemIDs []string
+	var distinctMedia bool
 
 	if len(env.Params) > 0 {
 		var params models.MediaHistoryParams
@@ -49,7 +51,9 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		if params.Limit != nil {
 			limit = *params.Limit
 		}
-
+		if params.DistinctMedia != nil {
+			distinctMedia = *params.DistinctMedia
+		}
 		if params.Cursor != nil {
 			cursor, err := decodeCursor(*params.Cursor)
 			if err != nil {
@@ -73,11 +77,17 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		}
 	}
 
-	// Fetch one extra to detect next page
+	// Fetch one extra to detect next page.
 	queryStarted := time.Now()
-	entries, err := env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
+	var entries []database.MediaHistoryEntry
+	var err error
+	if distinctMedia {
+		entries, err = env.Database.UserDB.GetDistinctMediaHistory(env.Context, systemIDs, lastID, limit+1)
+	} else {
+		entries, err = env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
+	}
 	if err != nil {
-		log.Error().Err(err).Msg("error getting media history")
+		log.Error().Err(err).Bool("distinctMedia", distinctMedia).Msg("error getting media history")
 		return nil, fmt.Errorf("error getting media history: %w", err)
 	}
 	queryElapsed := time.Since(queryStarted)
@@ -94,7 +104,45 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		})
 	}
 	enrichStarted := time.Now()
-	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
+	mediaIDs := make(map[mediaPathRef]int64)
+	coverStatuses := make(map[int64]bool)
+	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
+	defer cancelEnrichment()
+
+	mediaRows, enrichErr := resolveMediaPathIDs(enrichCtx, env.Database.MediaDB, mediaRefs)
+	if enrichErr != nil {
+		log.Debug().Err(enrichErr).Msg("could not enrich media history from media database")
+	} else {
+		resolvedMediaIDs := make(map[mediaPathRef]int64, len(mediaRows))
+		coverRefs := make([]database.MediaCoverRef, 0, len(mediaRows))
+		seenIDs := make(map[int64]struct{}, len(mediaRows))
+		for _, ref := range mediaRefs {
+			row := mediaRows[ref]
+			if row.DBID <= 0 {
+				continue
+			}
+			resolvedMediaIDs[ref] = row.DBID
+			if _, ok := seenIDs[row.DBID]; ok {
+				continue
+			}
+			seenIDs[row.DBID] = struct{}{}
+			coverRefs = append(coverRefs, database.MediaCoverRef{
+				MediaDBID:      row.DBID,
+				MediaTitleDBID: row.MediaTitleDBID,
+			})
+		}
+
+		resolvedCoverStatuses := make(map[int64]bool)
+		if len(coverRefs) > 0 {
+			resolvedCoverStatuses, enrichErr = env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, coverRefs)
+		}
+		if enrichErr != nil {
+			log.Debug().Err(enrichErr).Msg("could not enrich media history cover status")
+		} else {
+			mediaIDs = resolvedMediaIDs
+			coverStatuses = resolvedCoverStatuses
+		}
+	}
 	enrichElapsed := time.Since(enrichStarted)
 
 	buildStarted := time.Now()
@@ -109,10 +157,12 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			formatted := entry.EndTime.Format(time.RFC3339)
 			endedAt = &formatted
 		}
+		mediaID := mediaIDs[ref]
 
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
-			MediaID:    mediaIDs[ref],
+			MediaID:    mediaID,
 			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
+			HasCover:   coverStatuses[mediaID],
 			SystemID:   entry.SystemID,
 			SystemName: entry.SystemName,
 			MediaName:  entry.MediaName,
@@ -126,6 +176,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 
 	log.Debug().
 		Int("entries", len(responseEntries)).
+		Bool("distinctMedia", distinctMedia).
 		Dur("queryDuration", queryElapsed).
 		Dur("enrichDuration", enrichElapsed).
 		Dur("buildDuration", time.Since(buildStarted)).

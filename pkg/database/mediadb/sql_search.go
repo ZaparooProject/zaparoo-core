@@ -38,6 +38,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	largeCandidateScanFloor = 10_000
+	maxScopedStreamSystems  = 4
+	tagPreflightMaxResults  = 25
+)
+
+var errSearchCandidateSetTooSparse = errors.New("large media search candidate set is too sparse to stream")
+
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
 // Combines file-level (MediaTags) and title-level (MediaTitleTags) tags via UNION ALL
@@ -155,14 +163,25 @@ func fetchAndAttachTagsByResultIDs(
 ) error {
 	tagIDs := collectResultTagIDs(results)
 	unionStarted := time.Now()
-	hasTags, err := resultIDsHaveTags(ctx, db, tagIDs.mediaIDs, tagIDs.titleIDs)
-	if err != nil {
-		return err
-	}
-	if !hasTags {
-		finishAttachTags(results, nil)
-		logFetchAndAttachTagsTiming(results, 0, unionStarted)
-		return nil
+	var preflightDuration time.Duration
+	if len(results) <= tagPreflightMaxResults {
+		preflightStarted := time.Now()
+		hasTags, err := resultIDsHaveTags(ctx, db, tagIDs.mediaIDs, tagIDs.titleIDs)
+		preflightDuration = time.Since(preflightStarted)
+		if err != nil {
+			return err
+		}
+		if !hasTags {
+			finishAttachTags(results, nil)
+			attachZapScriptTagsFromFetchedTags(results, nil)
+			log.Debug().
+				Int("rows", len(results)).
+				Dur("preflightDuration", preflightDuration).
+				Dur("duration", time.Since(unionStarted)).
+				Msg("fetch and attach tags by result IDs timing")
+			logFetchAndAttachTagsTiming(results, 0, unionStarted)
+			return nil
+		}
 	}
 
 	mediaPlaceholders := prepareVariadic("?", ",", len(tagIDs.mediaIDs))
@@ -201,6 +220,7 @@ func fetchAndAttachTagsByResultIDs(
 		tagsArgs = append(tagsArgs, id)
 	}
 
+	tagQueryStarted := time.Now()
 	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
 	if err != nil {
 		return fmt.Errorf("failed to prepare tags query: %w", err)
@@ -223,6 +243,7 @@ func fetchAndAttachTagsByResultIDs(
 
 	tagsMap := make(map[int64][]database.TagInfo)
 	seen := make(map[int64]map[tagKey]int)
+	mediaTagKeys := make(map[int64]map[tagKey]struct{})
 	for tagsRows.Next() {
 		tagRow, scanErr := scanSourceTagRow(tagsRows)
 		if scanErr != nil {
@@ -232,6 +253,13 @@ func fetchAndAttachTagsByResultIDs(
 		mediaIDsForTag := []int64{tagRow.sourceID}
 		if tagRow.sourceKind == 1 {
 			mediaIDsForTag = tagIDs.titleToMediaIDs[tagRow.sourceID]
+		} else {
+			keys := mediaTagKeys[tagRow.sourceID]
+			if keys == nil {
+				keys = make(map[tagKey]struct{})
+				mediaTagKeys[tagRow.sourceID] = keys
+			}
+			keys[tagKey{typ: tagRow.tagType, tag: dbtags.UnpadTagValue(tagRow.tag)}] = struct{}{}
 		}
 		for _, mediaID := range mediaIDsForTag {
 			appendTagInfo(tagsMap, seen, mediaID, tagRow.tag, tagRow.tagType, tagRow.label)
@@ -242,6 +270,14 @@ func fetchAndAttachTagsByResultIDs(
 	}
 
 	finishAttachTags(results, tagsMap)
+	attachZapScriptTagsFromFetchedTags(results, mediaTagKeys)
+	log.Debug().
+		Int("rows", len(results)).
+		Int("tagPairs", len(tagsMap)).
+		Dur("preflightDuration", preflightDuration).
+		Dur("tagQueryDuration", time.Since(tagQueryStarted)).
+		Dur("duration", time.Since(unionStarted)).
+		Msg("fetch and attach tags by result IDs timing")
 	logFetchAndAttachTagsTiming(results, len(tagsMap), unionStarted)
 	return nil
 }
@@ -432,10 +468,53 @@ func attachTagsAndDisambiguation(
 	db sqlQueryable,
 	results []database.SearchResultWithCursor,
 ) error {
+	hasTitleIDs := allResultsHaveTitleIDs(results)
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return err
 	}
+	if hasTitleIDs {
+		return nil
+	}
 	return attachZapScriptTags(ctx, db, results)
+}
+
+func attachZapScriptTagsFromFetchedTags(
+	results []database.SearchResultWithCursor,
+	mediaTagKeys map[int64]map[tagKey]struct{},
+) {
+	for i := range results {
+		result := &results[i]
+		result.ZapScriptTags = []database.TagInfo{}
+		if result.DisambiguationTypes == "" {
+			continue
+		}
+
+		disambiguatingTypes := make(map[string]struct{})
+		for tagType := range strings.SplitSeq(result.DisambiguationTypes, ",") {
+			disambiguatingTypes[tagType] = struct{}{}
+		}
+		mediaKeys := mediaTagKeys[result.MediaID]
+		for _, tag := range result.Tags {
+			if _, ok := disambiguatingTypes[tag.Type]; !ok {
+				continue
+			}
+			if _, ok := mediaKeys[tagKey{typ: tag.Type, tag: tag.Tag}]; !ok {
+				continue
+			}
+			result.ZapScriptTags = append(result.ZapScriptTags, tag)
+		}
+		sortZapScriptTags(result.ZapScriptTags)
+	}
+}
+
+func sortZapScriptTags(tags []database.TagInfo) {
+	sort.SliceStable(tags, func(a, b int) bool {
+		ra, rb := database.TagTypeDisplayRank(tags[a].Type), database.TagTypeDisplayRank(tags[b].Type)
+		if ra != rb {
+			return ra < rb
+		}
+		return tags[a].Tag < tags[b].Tag
+	})
 }
 
 // attachZapScriptTags populates ZapScriptTags on each result with the tags that
@@ -450,6 +529,7 @@ func attachTagsAndDisambiguation(
 // treated as "title has no variants" and skips the lookup, so a result left empty by
 // mistake silently yields no ZapScriptTags.
 func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []database.SearchResultWithCursor) error {
+	started := time.Now()
 	for i := range results {
 		if results[i].ZapScriptTags == nil {
 			results[i].ZapScriptTags = []database.TagInfo{}
@@ -476,6 +556,10 @@ func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []databas
 		mediaIDs = append(mediaIDs, id)
 	}
 	if len(mediaIDs) == 0 {
+		log.Debug().
+			Int("rows", len(results)).
+			Dur("duration", time.Since(started)).
+			Msg("attach ZapScript tags timing")
 		return nil
 	}
 
@@ -527,16 +611,16 @@ func attachZapScriptTags(ctx context.Context, db sqlQueryable, results []databas
 		if zapTags, ok := byMedia[results[i].MediaID]; ok {
 			// Order by display importance (variant flags, region, ... credit last) so
 			// clients can render left-to-right and truncate. Within a type, sort by value.
-			sort.SliceStable(zapTags, func(a, b int) bool {
-				ra, rb := database.TagTypeDisplayRank(zapTags[a].Type), database.TagTypeDisplayRank(zapTags[b].Type)
-				if ra != rb {
-					return ra < rb
-				}
-				return zapTags[a].Tag < zapTags[b].Tag
-			})
+			sortZapScriptTags(zapTags)
 			results[i].ZapScriptTags = zapTags
 		}
 	}
+	log.Debug().
+		Int("rows", len(results)).
+		Int("queriedMedia", len(mediaIDs)).
+		Int("tagPairs", len(byMedia)).
+		Dur("duration", time.Since(started)).
+		Msg("attach ZapScript tags timing")
 	return nil
 }
 
@@ -925,6 +1009,7 @@ func sqlSearchMediaWithFiltersSorted(
 			MediaTitles.Name,
 			Media.Path,
 			Media.DBID,
+			MediaTitles.DBID,
 			MediaTitles.DisambiguationTypes` + sortValueSelect + `
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
@@ -979,6 +1064,7 @@ func sqlSearchMediaWithFiltersSorted(
 				&result.Name,
 				&result.Path,
 				&result.MediaID,
+				&result.MediaTitleID,
 				&result.DisambiguationTypes,
 			)
 		} else {
@@ -987,6 +1073,7 @@ func sqlSearchMediaWithFiltersSorted(
 				&result.Name,
 				&result.Path,
 				&result.MediaID,
+				&result.MediaTitleID,
 				&result.DisambiguationTypes,
 				&result.SortValue,
 			)
@@ -1110,6 +1197,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 			MediaTitles.Name,
 			Media.Path,
 			Media.DBID,
+			MediaTitles.DBID,
 			MediaTitles.DisambiguationTypes` + sortValueSelect + `
 		FROM MediaTitles
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
@@ -1140,6 +1228,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 				&r.Name,
 				&r.Path,
 				&r.MediaID,
+				&r.MediaTitleID,
 				&r.DisambiguationTypes,
 			)
 		} else {
@@ -1148,6 +1237,7 @@ func sqlSearchMediaByTitleDBIDsSorted(
 				&r.Name,
 				&r.Path,
 				&r.MediaID,
+				&r.MediaTitleID,
 				&r.DisambiguationTypes,
 				&r.SortValue,
 			)
@@ -1176,6 +1266,270 @@ func sqlSearchMediaByTitleDBIDsSorted(
 		Dur("queryDuration", queryElapsed).
 		Dur("tagsDuration", time.Since(tagsStarted)).
 		Msg("search media by title DBIDs step timing")
+
+	return results, nil
+}
+
+// sqlSearchMediaByLargeTitleDBIDSet streams Media in legacy DBID order and
+// filters title candidates in memory. This avoids both SQLite's bind-variable
+// limit and a full grouped LIKE scan. Streaming also stops as soon as the page
+// is full, which is critical on SD-backed libraries.
+func sqlSearchMediaByLargeTitleDBIDSet(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	pathPrefix string,
+	tags []zapscript.TagFilter,
+	letter *string,
+	cursor *int64,
+	limit int,
+) ([]database.SearchResultWithCursor, error) {
+	if len(titleDBIDs) == 0 || limit <= 0 {
+		return []database.SearchResultWithCursor{}, nil
+	}
+
+	candidateSet := make(map[int64]struct{}, len(titleDBIDs))
+	for _, titleDBID := range titleDBIDs {
+		candidateSet[titleDBID] = struct{}{}
+	}
+
+	conditions := []string{"Media.IsMissing = 0"}
+	args := make([]any, 0, 10)
+	if pathPrefix != "" {
+		pathClause, pathArgs := browsePathPrefixCondition(
+			"Media.Path", mediaRecursivePathPrefix(pathPrefix))
+		conditions = append(conditions, pathClause)
+		args = append(args, pathArgs...)
+	}
+	if cursor != nil {
+		conditions = append(conditions, "Media.DBID > ?")
+		args = append(args, *cursor)
+	}
+	tagFilterClauses, tagFilterArgs := buildCandidateTagFilterSQL(tags)
+	conditions = append(conditions, tagFilterClauses...)
+	args = append(args, tagFilterArgs...)
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	conditions = append(conditions, letterClauses...)
+	args = append(args, letterArgs...)
+
+	//nolint:gosec // Safe: WHERE clause built from sanitized components
+	query := `
+		SELECT
+			Systems.SystemID,
+			MediaTitles.Name,
+			Media.Path,
+			Media.DBID,
+			MediaTitles.DisambiguationTypes,
+			MediaTitles.DBID
+		FROM Media
+		CROSS JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		WHERE ` + strings.Join(conditions, " AND ") + `
+		ORDER BY Media.DBID`
+
+	queryStarted := time.Now()
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stream media candidate set: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
+	scannedRows := 0
+	scanLimit := max(largeCandidateScanFloor, limit*100)
+	tooSparse := false
+	for rows.Next() {
+		scannedRows++
+		var result database.SearchResultWithCursor
+		if scanErr := rows.Scan(
+			&result.SystemID,
+			&result.Name,
+			&result.Path,
+			&result.MediaID,
+			&result.DisambiguationTypes,
+			&result.MediaTitleID,
+		); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan streamed media candidate: %w", scanErr)
+		}
+		if _, ok := candidateSet[result.MediaTitleID]; ok {
+			results = append(results, result)
+			if len(results) == limit {
+				break
+			}
+		}
+		if scannedRows >= scanLimit {
+			tooSparse = true
+			break
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("streamed media candidate rows error: %w", err)
+	}
+	if err = rows.Close(); err != nil {
+		return nil, fmt.Errorf("close streamed media candidate rows: %w", err)
+	}
+	queryElapsed := time.Since(queryStarted)
+	if tooSparse {
+		log.Debug().
+			Int("titleDBIDs", len(titleDBIDs)).
+			Int("scannedRows", scannedRows).
+			Int("rows", len(results)).
+			Dur("queryDuration", queryElapsed).
+			Msg("search media large candidate set exceeded streaming scan limit")
+		return nil, errSearchCandidateSetTooSparse
+	}
+
+	tagsStarted := time.Now()
+	if err := attachTagsAndDisambiguation(ctx, db, results); err != nil {
+		return nil, err
+	}
+
+	log.Debug().
+		Int("titleDBIDs", len(titleDBIDs)).
+		Int("scannedRows", scannedRows).
+		Int("tagFilters", len(tags)).
+		Int("rows", len(results)).
+		Dur("queryDuration", queryElapsed).
+		Dur("tagsDuration", time.Since(tagsStarted)).
+		Msg("search media large candidate set step timing")
+
+	return results, nil
+}
+
+func scopedCandidateStreamQuery(systemCount int) string {
+	return `
+		SELECT
+			MediaTitles.Name,
+			Media.Path,
+			Media.DBID,
+			MediaTitles.DisambiguationTypes,
+			MediaTitles.DBID,
+			Media.SystemDBID
+		FROM Media NOT INDEXED
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE Media.DBID BETWEEN ? AND ?
+			AND Media.SystemDBID IN (` + prepareVariadic("?", ",", systemCount) + `)
+			AND Media.IsMissing = 0
+		ORDER BY Media.DBID`
+}
+
+// sqlSearchMediaByLargeTitleDBIDSetInSystems scans one bounded rowid window
+// spanning a small requested system set. System rows are normally contiguous
+// after indexing, so dense candidate sets fill a page without binding thousands
+// of title IDs or sorting the full scoped result. A sparse window returns
+// errSearchCandidateSetTooSparse so callers preserve correctness through the
+// grouped SQL fallback.
+func sqlSearchMediaByLargeTitleDBIDSetInSystems(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	systemIDsByDBID map[int64]string,
+	bounds mediaDBIDBounds,
+	cursor *int64,
+	limit int,
+) ([]database.SearchResultWithCursor, error) {
+	if len(titleDBIDs) == 0 || limit <= 0 {
+		return []database.SearchResultWithCursor{}, nil
+	}
+
+	scanStart := bounds.first
+	if cursor != nil {
+		if *cursor >= bounds.last {
+			return []database.SearchResultWithCursor{}, nil
+		}
+		scanStart = max(scanStart, *cursor+1)
+	}
+	scanEnd := bounds.last
+	if bounds.last-scanStart >= largeCandidateScanFloor {
+		scanEnd = scanStart + largeCandidateScanFloor - 1
+	}
+
+	candidateSet := make(map[int64]struct{}, len(titleDBIDs))
+	for _, titleDBID := range titleDBIDs {
+		candidateSet[titleDBID] = struct{}{}
+	}
+	systemDBIDs := make([]int64, 0, len(systemIDsByDBID))
+	for systemDBID := range systemIDsByDBID {
+		systemDBIDs = append(systemDBIDs, systemDBID)
+	}
+	sort.Slice(systemDBIDs, func(i, j int) bool { return systemDBIDs[i] < systemDBIDs[j] })
+
+	// NOT INDEXED forces the integer primary-key range scan. Without it,
+	// SQLite may choose a SystemDBID/path index and build a temporary B-tree
+	// for ORDER BY Media.DBID, recreating the grouped search bottleneck.
+	args := make([]any, 0, len(systemDBIDs)+2)
+	args = append(args, scanStart, scanEnd)
+	for _, systemDBID := range systemDBIDs {
+		args = append(args, systemDBID)
+	}
+	queryStarted := time.Now()
+	rows, err := db.QueryContext(ctx, scopedCandidateStreamQuery(len(systemDBIDs)), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query scoped media candidate stream: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
+	scannedRows := 0
+	for rows.Next() {
+		scannedRows++
+		var systemDBID int64
+		result := database.SearchResultWithCursor{}
+		if scanErr := rows.Scan(
+			&result.Name,
+			&result.Path,
+			&result.MediaID,
+			&result.DisambiguationTypes,
+			&result.MediaTitleID,
+			&systemDBID,
+		); scanErr != nil {
+			return nil, fmt.Errorf("scan scoped media candidate: %w", scanErr)
+		}
+		if _, ok := candidateSet[result.MediaTitleID]; !ok {
+			continue
+		}
+		result.SystemID = systemIDsByDBID[systemDBID]
+		results = append(results, result)
+		if len(results) == limit {
+			break
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("scoped media candidate rows: %w", err)
+	}
+	if err = rows.Close(); err != nil {
+		return nil, fmt.Errorf("close scoped media candidate rows: %w", err)
+	}
+	queryElapsed := time.Since(queryStarted)
+
+	if len(results) < limit && scanEnd < bounds.last {
+		log.Debug().
+			Int("systems", len(systemDBIDs)).
+			Int("titleDBIDs", len(titleDBIDs)).
+			Int64("scanStart", scanStart).
+			Int64("scanEnd", scanEnd).
+			Int("scannedRows", scannedRows).
+			Int("rows", len(results)).
+			Dur("queryDuration", queryElapsed).
+			Msg("scoped search candidate set exceeded streaming DBID window")
+		return nil, errSearchCandidateSetTooSparse
+	}
+
+	tagsStarted := time.Now()
+	if attachErr := attachTagsAndDisambiguation(ctx, db, results); attachErr != nil {
+		return nil, attachErr
+	}
+
+	log.Debug().
+		Int("systems", len(systemDBIDs)).
+		Int("titleDBIDs", len(titleDBIDs)).
+		Int64("scanStart", scanStart).
+		Int64("scanEnd", scanEnd).
+		Int("scannedRows", scannedRows).
+		Int("rows", len(results)).
+		Dur("queryDuration", queryElapsed).
+		Dur("tagsDuration", time.Since(tagsStarted)).
+		Msg("search media scoped candidate set step timing")
 
 	return results, nil
 }

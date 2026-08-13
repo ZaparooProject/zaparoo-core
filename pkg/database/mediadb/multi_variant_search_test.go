@@ -71,14 +71,11 @@ func TestSearchMediaWithFilters_MultipleSameMediaTypeSystems(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("NES", "SNES", "%mario%", "%mario%", 10). // Should be 5 args, not 7
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
-			AddRow("NES", "Super Mario Bros", mediaPath, int64(1), ""))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow("NES", "Super Mario Bros", mediaPath, int64(1), int64(10), ""))
 
-	// Mock tags query
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(int64(1), int64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+	expectSearchTagsQuery(mock, 1, 10)
 
 	results, err := sqlSearchMediaWithFilters(
 		context.Background(), db, systems, variantGroups, rawWords, nil, nil, nil, 10, false,
@@ -121,7 +118,9 @@ func TestSearchMediaWithFilters_DifferentMediaTypes(t *testing.T) {
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("PS2", "TVEpisode", "%losts01e05%", "%losts01e05%", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}))
 
 	// No tags query mock needed - no results means fetchAndAttachTags returns early
 
@@ -182,14 +181,11 @@ func TestSearchMediaWithFilters_MultipleWordsMultipleSystems(t *testing.T) {
 			"%mario%", "%mario%", // Word 2: Slug LIKE, SecondarySlug LIKE
 			10, // Limit
 		). // Should be 8 args, not 16
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID", "DisambiguationTypes"}).
-			AddRow("SNES", "Super Mario World", mediaPath, int64(1), ""))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"SystemID", "Name", "Path", "DBID", "MediaTitleDBID", "DisambiguationTypes",
+		}).AddRow("SNES", "Super Mario World", mediaPath, int64(1), int64(10), ""))
 
-	// Mock tags query
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
-		ExpectQuery().
-		WithArgs(int64(1), int64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+	expectSearchTagsQuery(mock, 1, 10)
 
 	results, err := sqlSearchMediaWithFilters(
 		context.Background(), db, systems, variantGroups, rawWords, nil, nil, nil, 10, false,

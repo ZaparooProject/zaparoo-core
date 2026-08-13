@@ -22,11 +22,13 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 )
@@ -257,6 +259,78 @@ func TestPropertyGetMediaHistoryLimitClamping(t *testing.T) {
 			t.Fatal("Expected non-nil result (empty slice)")
 		}
 	})
+}
+
+func TestGetDistinctMediaHistory_UniquePaginationAndSystemScope(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE MediaHistory (
+			DBID INTEGER PRIMARY KEY AUTOINCREMENT,
+			StartTime INTEGER NOT NULL,
+			EndTime INTEGER,
+			SystemID TEXT NOT NULL,
+			SystemName TEXT NOT NULL,
+			MediaPath TEXT NOT NULL,
+			MediaName TEXT NOT NULL,
+			LauncherID TEXT NOT NULL,
+			PlayTime INTEGER NOT NULL
+		)
+	`)
+	require.NoError(t, err)
+
+	samePath := filepath.Join("games", "shared.rom")
+	otherPath := filepath.Join("games", "other.rom")
+	thirdPath := filepath.Join("games", "third.rom")
+	rows := []struct {
+		systemID string
+		path     string
+		name     string
+	}{
+		{systemID: "NES", path: samePath, name: "NES old"},
+		{systemID: "SNES", path: samePath, name: "SNES shared"},
+		{systemID: "NES", path: otherPath, name: "NES other"},
+		{systemID: "NES", path: samePath, name: "NES newest"},
+		{systemID: "SNES", path: thirdPath, name: "SNES third"},
+	}
+	for i, row := range rows {
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO MediaHistory (
+				StartTime, EndTime, SystemID, SystemName, MediaPath,
+				MediaName, LauncherID, PlayTime
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, int64(100+i), int64(110+i), row.systemID, row.systemID, row.path, row.name, row.systemID, i)
+		require.NoError(t, err)
+	}
+
+	firstPage, err := sqlGetDistinctMediaHistory(ctx, db, nil, 0, 2)
+	require.NoError(t, err)
+	require.Len(t, firstPage, 2)
+	assert.Equal(t, []int64{5, 4}, []int64{firstPage[0].DBID, firstPage[1].DBID})
+	assert.Equal(t, "NES newest", firstPage[1].MediaName)
+
+	secondPage, err := sqlGetDistinctMediaHistory(ctx, db, nil, firstPage[1].DBID, 2)
+	require.NoError(t, err)
+	require.Len(t, secondPage, 2)
+	assert.Equal(t, []int64{3, 2}, []int64{secondPage[0].DBID, secondPage[1].DBID})
+	assert.Equal(t, "SNES shared", secondPage[1].MediaName,
+		"same path under another system remains a distinct identity")
+
+	nesOnly, err := sqlGetDistinctMediaHistory(ctx, db, []string{"NES"}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, nesOnly, 2)
+	assert.Equal(t, []int64{4, 3}, []int64{nesOnly[0].DBID, nesOnly[1].DBID})
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = sqlGetDistinctMediaHistory(cancelled, db, nil, 0, 10)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // TestPropertyGetMediaHistoryLastIDPagination verifies pagination token handling.

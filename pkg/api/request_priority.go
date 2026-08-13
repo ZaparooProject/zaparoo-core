@@ -101,13 +101,18 @@ func classifyAPIMethod(method string) apiRequestPriority {
 	}
 }
 
-func methodFromAPIRequestPayload(msg []byte) string {
+func requestMetadataFromAPIRequestPayload(msg []byte) (string, models.RPCID) {
 	var req models.RequestObject
 	if err := json.Unmarshal(msg, &req); err != nil {
 		log.Debug().Err(err).Msg("failed to unmarshal API request payload")
-		return ""
+		return "", models.RPCID{}
 	}
-	return strings.ToLower(req.Method)
+	return strings.ToLower(req.Method), req.ID
+}
+
+func methodFromAPIRequestPayload(msg []byte) string {
+	method, _ := requestMetadataFromAPIRequestPayload(msg)
+	return method
 }
 
 func isImageAPIMethod(method string) bool {

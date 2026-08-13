@@ -66,6 +66,7 @@ type SearchResultMedia struct {
 	Tags               []database.TagInfo `json:"tags"`
 	DisambiguatingTags []database.TagInfo `json:"disambiguatingTags,omitempty"`
 	MediaID            int64              `json:"mediaId,omitempty"`
+	HasCover           bool               `json:"hasCover"`
 }
 
 type PaginationInfo struct {
@@ -287,6 +288,7 @@ type MediaHistoryResponseEntry struct {
 	StartedAt  string  `json:"startedAt"`
 	PlayTime   int     `json:"playTime"`
 	MediaID    int64   `json:"mediaId,omitempty"`
+	HasCover   bool    `json:"hasCover"`
 }
 
 type MediaHistoryResponse struct {
@@ -380,12 +382,14 @@ type MediaMetaBatchResponse struct {
 }
 
 // MediaImageResponse is the response for the media.image method.
-// It contains the best-match image for a media record, base64-encoded.
+// Inline delivery contains Data; local-path delivery contains LocalPath.
 type MediaImageResponse struct {
 	Extension   *string `json:"extension,omitempty"`
 	ContentType string  `json:"contentType"`
-	Data        string  `json:"data"`    // base64-encoded blob
-	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
+	Data        string  `json:"data,omitempty"`      // base64-encoded blob
+	Delivery    string  `json:"delivery"`            // "inline" or "localPath"
+	LocalPath   string  `json:"localPath,omitempty"` // transient Core-owned thumbnail path
+	TypeTag     string  `json:"typeTag"`             // e.g. "property:image-boxart"
 }
 
 type ScrapeSystemProgressResponse struct {

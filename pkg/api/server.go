@@ -73,7 +73,10 @@ var allowedOrigins = []string{
 	"http://localhost",      // Fallback/development
 }
 
-const websocketMaxMessageSize = 4 * 1024 * 1024
+const (
+	websocketMaxMessageSize = 4 * 1024 * 1024
+	maxLoggedRequestIDLen   = 128
+)
 
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
@@ -113,9 +116,17 @@ func newWebSocketSession() *melody.Melody {
 	return session
 }
 
-// logSafeRequest logs a request but avoids logging sensitive or large content
+func requestIDForLog(id models.RPCID) string {
+	value := id.String()
+	if len(value) <= maxLoggedRequestIDLen {
+		return value
+	}
+	return value[:maxLoggedRequestIDLen-3] + "..."
+}
+
+// logSafeRequest logs a request but avoids logging sensitive or large content.
 func logSafeRequest(req *models.RequestObject) {
-	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
+	log.Debug().Str("method", req.Method).Str("requestId", requestIDForLog(req.ID)).Msg("received request")
 }
 
 // logSafeResponse logs a response but redacts large or binary fields. Any
@@ -143,6 +154,7 @@ func logSafeResponse(result any) {
 		log.Debug().
 			Str("typeTag", resp.TypeTag).
 			Str("contentType", resp.ContentType).
+			Str("delivery", resp.Delivery).
 			Int("data_len", len(resp.Data)).
 			Msg("sending response")
 	case models.MediaMetaResponse:
@@ -454,6 +466,28 @@ func handleRequest(
 	return resp, nil
 }
 
+func logWebSocketTransportTiming(
+	id models.RPCID,
+	responseType string,
+	encrypted bool,
+	responseBytes int,
+	marshalDuration time.Duration,
+	writeDuration time.Duration,
+	writeErr error,
+) {
+	event := log.Debug().
+		Str("requestId", requestIDForLog(id)).
+		Str("responseType", responseType).
+		Bool("encrypted", encrypted).
+		Int("responseBytes", responseBytes).
+		Dur("marshalDuration", marshalDuration).
+		Dur("writeDuration", writeDuration)
+	if writeErr != nil {
+		event = event.Err(writeErr)
+	}
+	event.Msg("websocket response transport timing")
+}
+
 // sendWSResponse marshals a method result and sends it to the client.
 func sendWSResponse(session *melody.Session, id models.RPCID, result any) error {
 	logSafeResponse(result)
@@ -464,13 +498,20 @@ func sendWSResponse(session *melody.Session, id models.RPCID, result any) error 
 		Result:  result,
 	}
 
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("error marshalling response: %w", err)
 	}
 
-	if err := session.Write(data); err != nil {
-		return fmt.Errorf("failed to write websocket response: %w", err)
+	writeStarted := time.Now()
+	writeErr := session.Write(data)
+	logWebSocketTransportTiming(
+		id, "result", false, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("failed to write websocket response: %w", writeErr)
 	}
 	return nil
 }
@@ -485,14 +526,20 @@ func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorOb
 		Error:   &errObj,
 	}
 
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("error marshalling error response: %w", err)
 	}
 
-	err = session.Write(data)
-	if err != nil {
-		return fmt.Errorf("failed to write to session: %w", err)
+	writeStarted := time.Now()
+	writeErr := session.Write(data)
+	logWebSocketTransportTiming(
+		id, "error", false, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("failed to write to session: %w", writeErr)
 	}
 	return nil
 }
@@ -513,7 +560,7 @@ func handleResponse(resp models.ResponseObject) error {
 	// whole map would flood the debug log. Error messages cross the same
 	// 4 MB WS boundary, so cap them too.
 	const maxErrorMessageLen = 200
-	ev := log.Debug().Interface("id", resp.ID)
+	ev := log.Debug().Str("requestId", requestIDForLog(resp.ID))
 	if resp.Error != nil {
 		ev = ev.Int("errorCode", resp.Error.Code)
 		msg := resp.Error.Message
@@ -966,6 +1013,7 @@ func processRequestObject(
 		resp, rpcError := handleRequest(methodMap, env, req)
 		log.Debug().
 			Str("method", req.Method).
+			Str("requestId", requestIDForLog(req.ID)).
 			Dur("duration", time.Since(started)).
 			Bool("error", rpcError != nil).
 			Msg("api request handled")
@@ -1287,12 +1335,19 @@ func sendWSEncryptedResponse(
 		ID:      id,
 		Result:  result,
 	}
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("marshal response: %w", err)
 	}
-	if err := cs.SendEncryptedFrame(data, session.Write); err != nil {
-		return fmt.Errorf("send encrypted response: %w", err)
+	writeStarted := time.Now()
+	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	logWebSocketTransportTiming(
+		id, "result", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("send encrypted response: %w", writeErr)
 	}
 	return nil
 }
@@ -1315,12 +1370,19 @@ func sendWSEncryptedError(
 		ID:      id,
 		Error:   &rpcErr,
 	}
+	marshalStarted := time.Now()
 	data, err := json.Marshal(resp)
+	marshalDuration := time.Since(marshalStarted)
 	if err != nil {
 		return fmt.Errorf("marshal error response: %w", err)
 	}
-	if err := cs.SendEncryptedFrame(data, session.Write); err != nil {
-		return fmt.Errorf("send encrypted error: %w", err)
+	writeStarted := time.Now()
+	writeErr := cs.SendEncryptedFrame(data, session.Write)
+	logWebSocketTransportTiming(
+		id, "error", true, len(data), marshalDuration, time.Since(writeStarted), writeErr,
+	)
+	if writeErr != nil {
+		return fmt.Errorf("send encrypted error: %w", writeErr)
 	}
 	return nil
 }
@@ -1417,7 +1479,10 @@ func handlePostRequest(
 		}
 
 		var respBody []byte
+		responseType := "result"
+		marshalStarted := time.Now()
 		if result.Error != nil {
+			responseType = "error"
 			errorResp := models.ResponseErrorObject{
 				JSONRPC: "2.0",
 				ID:      result.ID,
@@ -1442,16 +1507,28 @@ func handlePostRequest(
 				return
 			}
 		}
+		marshalDuration := time.Since(marshalStarted)
 
+		writeStarted := time.Now()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, err = w.Write(respBody)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to write response")
+		writtenBytes, writeErr := w.Write(respBody)
+		if writeErr != nil {
+			log.Error().Err(writeErr).Msg("failed to write response")
 		}
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
+		log.Debug().
+			Str("method", method).
+			Str("requestId", requestIDForLog(result.ID)).
+			Str("responseType", responseType).
+			Int("responseBytes", len(respBody)).
+			Int("writtenBytes", writtenBytes).
+			Dur("marshalDuration", marshalDuration).
+			Dur("writeDuration", time.Since(writeStarted)).
+			Bool("writeError", writeErr != nil).
+			Msg("http response transport timing")
 		if result.AfterWrite != nil {
 			result.AfterWrite()
 		}

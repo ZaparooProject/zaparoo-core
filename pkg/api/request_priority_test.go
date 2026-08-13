@@ -21,6 +21,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,24 @@ func TestMethodFromAPIRequestPayload(t *testing.T) {
 			assert.Equal(t, tt.want, methodFromAPIRequestPayload(tt.msg))
 		})
 	}
+}
+
+func TestRequestMetadataFromAPIRequestPayload(t *testing.T) {
+	t.Parallel()
+
+	method, requestID := requestMetadataFromAPIRequestPayload(
+		[]byte(`{"jsonrpc":"2.0","method":"Media.Search","id":"request-42"}`),
+	)
+	assert.Equal(t, models.MethodMediaSearch, method)
+	assert.Equal(t, `"request-42"`, requestID.String())
+}
+
+func TestRequestIDForLogTruncatesLongIDs(t *testing.T) {
+	t.Parallel()
+
+	logged := requestIDForLog(models.NewStringID(strings.Repeat("x", maxLoggedRequestIDLen)))
+	assert.Len(t, logged, maxLoggedRequestIDLen)
+	assert.True(t, strings.HasSuffix(logged, "..."))
 }
 
 func TestIsImageAPIMethod(t *testing.T) {

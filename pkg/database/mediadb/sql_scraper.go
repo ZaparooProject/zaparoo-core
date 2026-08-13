@@ -163,7 +163,7 @@ func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []strin
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.QueryContext(ctx, `
-		SELECT s.SystemID, m.Path, m.DBID
+		SELECT s.SystemID, m.Path, m.DBID, m.MediaTitleDBID
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE m.Path IN (`+prepareVariadic("?", ",", len(paths))+`)
@@ -180,7 +180,7 @@ func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []strin
 	results := make([]database.MediaPathID, 0, len(paths))
 	for rows.Next() {
 		var row database.MediaPathID
-		if err := rows.Scan(&row.SystemID, &row.Path, &row.DBID); err != nil {
+		if err := rows.Scan(&row.SystemID, &row.Path, &row.DBID, &row.MediaTitleDBID); err != nil {
 			return nil, fmt.Errorf("failed to scan FindMediaIDsByPaths: %w", err)
 		}
 		results = append(results, row)
@@ -1463,6 +1463,11 @@ func (db *MediaDB) UpsertMediaTitleProperties(
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
+	invalidateCoverIndex := containsImageProperty(props)
+	if invalidateCoverIndex {
+		clearCoverAvailabilityCacheFor(db.sql.Load())
+		defer clearCoverAvailabilityCacheFor(db.sql.Load())
+	}
 	tx, err := db.sql.Load().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("UpsertMediaTitleProperties: begin transaction: %w", err)
@@ -1551,6 +1556,11 @@ func upsertMediaTitleProperty(
 func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []database.MediaProperty) error {
 	if db.sql.Load() == nil {
 		return ErrNullSQL
+	}
+	invalidateCoverIndex := containsImageProperty(props)
+	if invalidateCoverIndex {
+		clearCoverAvailabilityCacheFor(db.sql.Load())
+		defer clearCoverAvailabilityCacheFor(db.sql.Load())
 	}
 	if db.inTransaction {
 		return upsertMediaProperties(ctx, db.conn(), mediaDBID, props)
@@ -2369,6 +2379,8 @@ func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID,
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
+	clearCoverAvailabilityCacheFor(db.sql.Load())
+	defer clearCoverAvailabilityCacheFor(db.sql.Load())
 	_, err := db.sql.Load().ExecContext(ctx,
 		`DELETE FROM MediaTitleProperties WHERE MediaTitleDBID = ? AND TypeTagDBID = ?`,
 		mediaTitleDBID, typeTagDBID,
@@ -2387,6 +2399,8 @@ func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDB
 	if db.sql.Load() == nil {
 		return ErrNullSQL
 	}
+	clearCoverAvailabilityCacheFor(db.sql.Load())
+	defer clearCoverAvailabilityCacheFor(db.sql.Load())
 	_, err := db.sql.Load().ExecContext(ctx,
 		`DELETE FROM MediaProperties WHERE MediaDBID = ? AND TypeTagDBID = ?`,
 		mediaDBID, typeTagDBID,
@@ -2397,6 +2411,15 @@ func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDB
 			mediaDBID, typeTagDBID, err)
 	}
 	return nil
+}
+
+func containsImageProperty(props []database.MediaProperty) bool {
+	for i := range props {
+		if isImageProperty(props[i].TypeTag) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolvePropertyTypeTag looks up the DBID of the Tags row for the given full

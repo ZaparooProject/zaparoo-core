@@ -557,6 +557,7 @@ An object:
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
 | relativePath | string               | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| hasCover  | boolean                  | Yes      | Whether media-level or title-level image properties are available. |
 | zapScript | string                   | Yes      | ZapScript command to launch this media item. Includes the disambiguating tags inline (e.g. `@Arcade/X-Men Vs. Street Fighter (region:eu) (builddate:1996-10-04)`) so the written command resolves back to this specific variant. |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 | disambiguatingTags | [TagInfo](#taginfo-object)[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Omitted when the title has nothing to disambiguate. Clients can render these to tell variants apart. |
@@ -615,6 +616,7 @@ An object:
         "name": "240p Test Suite (PD) v0.03 tepples",
         "path": "/media/fat/games/Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
         "relativePath": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "hasCover": false,
         "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
@@ -672,6 +674,7 @@ An object:
         "name": "Super Mario Bros.",
         "path": "/media/fat/games/NES/Super Mario Bros.nes",
         "relativePath": "NES/Super Mario Bros.nes",
+        "hasCover": true,
         "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",
@@ -1419,18 +1422,19 @@ None. Empty params may be omitted or sent as `{}`.
 
 **Access:** All clients.
 
-Return paginated media play history.
+Return paginated media play history. Set `distinctMedia` to return only the newest session for each `(systemId, mediaPath)` identity, which is useful for recents grids.
 
 #### Parameters
 
 Optionally, an object:
 
-| Key         | Type     | Required | Description                                                                                     |
-| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
-| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
-| cursor      | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages. |
-| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
-| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| Key           | Type     | Required | Description                                                                                     |
+| :------------ | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit         | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| cursor        | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages with the same filters and `distinctMedia` value. |
+| systems       | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem   | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| distinctMedia | boolean  | No       | Return the newest session for each unique `(systemId, mediaPath)` pair. Each page contains up to `limit` unique media entries. Default is `false`. |
 
 #### Result
 
@@ -1449,6 +1453,7 @@ Optionally, an object:
 | mediaName  | string | Yes      | Display name of the media.                             |
 | mediaPath  | string | Yes      | Path to the media file.                                |
 | relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
+| hasCover   | boolean | Yes     | Whether media-level or title-level image properties are available. |
 | launcherId | string | Yes      | ID of the launcher used.                               |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
@@ -1464,7 +1469,8 @@ Optionally, an object:
   "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
   "method": "media.history",
   "params": {
-    "limit": 10
+    "limit": 10,
+    "distinctMedia": true
   }
 }
 ```
@@ -1484,6 +1490,7 @@ Optionally, an object:
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
         "relativePath": "snes/Super Mario World (USA).sfc",
+        "hasCover": true,
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
@@ -1895,7 +1902,7 @@ An object identifying the media row by `mediaId` or by `system` and canonical `p
 
 **Access:** All clients.
 
-Return the best matching image for one indexed media row as base64-encoded data.
+Return the best matching image for one indexed media row. Inline base64 delivery remains default. Clients can explicitly request a transient path to a Core-owned cached thumbnail.
 
 `media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
 
@@ -1909,19 +1916,24 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
-| maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. |
+| maxSize    | number   | No       | Longest-edge size hint in pixels. When set, the server resizes the image to fit a `maxSize`×`maxSize` box and caches the result; omit it for the full-size image. Required for `localPath` delivery. |
+| delivery   | string   | No       | `inline` (default) or `localPath`. `localPath` requires a positive `maxSize` and returns a path on the Core host. |
 
 Supported image type values are `image`, `thumbnail`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
 Resizing is intended for grid and preview views where transferring and holding full-size art is expensive. `maxSize` is snapped up to the nearest of a small set of standard tiers (`32`, `64`, `128`, `256`, `512`, `768`) server-side. The returned image is **never larger than the snapped tier and never larger than the source** — when the source already fits the tier it is returned at its native dimensions, so the result may still be larger than the exact `maxSize` you asked for. Request your true display size (logical size × pixel ratio) and downscale to the final size on the client. The snapped tiers bound how many resized variants are cached per image. Output is re-encoded as WebP (lossy, alpha preserved) regardless of source format — including when the source already fits the box, so even a near-native request still gets the smaller WebP — and cached on disk so repeat requests are cheap. The original bytes are kept only when WebP would not shrink them (already-compact sources), when `maxSize` is omitted/non-positive (full size), or when the source cannot be decoded.
 
+`localPath` never returns an original scraper or media path. Core resolves image semantics, materializes its own bounded thumbnail cache artifact, and returns that path. Path delivery is available to any client that explicitly requests it, regardless of peer locality or Core platform; remote callers are responsible for having an appropriate shared-filesystem view of the Core host path. Treat the path as opaque, transient, and nonportable: read it immediately, never persist it or derive neighboring paths, and retry once with `delivery: "inline"` if the file is inaccessible or disappears before it is opened. If cache materialization fails, Core can safely return `delivery: "inline"` in the same response.
+
 #### Result
 
 | Key         | Type   | Required | Description                                  |
 | :---------- | :----- | :------- | :------------------------------------------- |
+| delivery    | string | Yes      | Actual delivery used: `inline` or `localPath`. Clients must inspect this field because a requested local path can fall back inline. |
 | contentType | string | Yes      | MIME type of the returned image data.        |
 | extension   | string | No       | File extension without a dot, derived from MIME type or source path. |
-| data        | string | Yes      | Base64-encoded image bytes.                  |
+| data        | string | No       | Base64-encoded image bytes. Present for `inline` delivery. |
+| localPath   | string | No       | Absolute, opaque Core-host path to a cached thumbnail. Present for `localPath` delivery. |
 | typeTag     | string | Yes      | Canonical property tag that matched.         |
 
 #### Example
@@ -1949,9 +1961,42 @@ Resizing is intended for grid and preview views where transferring and holding f
   "jsonrpc": "2.0",
   "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
   "result": {
+    "delivery": "inline",
     "contentType": "image/webp",
     "extension": "webp",
     "data": "UklGRiQAAABXRUJQVlA4...",
+    "typeTag": "property:image-boxart"
+  }
+}
+```
+
+##### Local-path request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.image",
+  "params": {
+    "mediaId": 123,
+    "imageTypes": ["boxart"],
+    "maxSize": 256,
+    "delivery": "localPath"
+  }
+}
+```
+
+##### Local-path response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "delivery": "localPath",
+    "contentType": "image/webp",
+    "extension": "webp",
+    "localPath": "/media/fat/zaparoo/cache/thumbs/v2/U05FUw/example.webp",
     "typeTag": "property:image-boxart"
   }
 }

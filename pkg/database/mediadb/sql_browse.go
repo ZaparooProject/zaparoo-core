@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -44,7 +45,23 @@ import (
 // TagTypes join on tt.Type = tags.TagTypeProperty.
 const imagePropertyValuePrefix = "image-"
 
+type coverPropertyScope uint8
+
+type coverAvailabilityIndex struct {
+	mediaIDs []int64
+	titleIDs []int64
+}
+
+type coverAvailabilityCacheEntry struct {
+	index      *coverAvailabilityIndex
+	generation uint64
+	building   bool
+}
+
 const (
+	coverPropertyScopeMedia coverPropertyScope = iota
+	coverPropertyScopeTitle
+
 	browseSortRankPrefixAsc  = "rank-prefix-asc"
 	browseSortRankPrefixDesc = "rank-prefix-desc"
 	browseSortDatePrefixAsc  = "date-prefix-asc"
@@ -146,6 +163,136 @@ func clearImagePropertyTagCacheFor(db sqlQueryable) {
 	if len(imagePropertyTagCacheMap) == 0 {
 		imagePropertyTagCacheMap = nil
 	}
+}
+
+// coverAvailabilityCache stores immutable sorted ID sets per database handle.
+// Production database handles are registered with an owner so first use can
+// build in the background while the request uses the bounded SQL fallback.
+var (
+	coverAvailabilityCacheMu  syncutil.RWMutex
+	coverAvailabilityCacheMap map[sqlQueryable]*coverAvailabilityCacheEntry
+	coverAvailabilityOwnerMap map[sqlQueryable]*MediaDB
+)
+
+func clearCoverAvailabilityCache() {
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	coverAvailabilityCacheMap = nil
+}
+
+func clearCoverAvailabilityCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	entry := coverAvailabilityCacheMap[db]
+	if entry == nil {
+		return
+	}
+	entry.generation++
+	entry.index = nil
+}
+
+func registerCoverAvailabilityCacheOwner(db sqlQueryable, owner *MediaDB) {
+	if db == nil || owner == nil {
+		return
+	}
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	if coverAvailabilityOwnerMap == nil {
+		coverAvailabilityOwnerMap = make(map[sqlQueryable]*MediaDB)
+	}
+	coverAvailabilityOwnerMap[db] = owner
+}
+
+func unregisterCoverAvailabilityCacheOwner(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+	coverAvailabilityCacheMu.Lock()
+	defer coverAvailabilityCacheMu.Unlock()
+	delete(coverAvailabilityOwnerMap, db)
+	delete(coverAvailabilityCacheMap, db)
+}
+
+func cachedCoverAvailabilityIndex(db sqlQueryable) *coverAvailabilityIndex {
+	coverAvailabilityCacheMu.RLock()
+	defer coverAvailabilityCacheMu.RUnlock()
+	entry := coverAvailabilityCacheMap[db]
+	if entry == nil {
+		return nil
+	}
+	return entry.index
+}
+
+func ensureCoverAvailabilityIndexBuild(db sqlQueryable, imageTagIDs []int64) {
+	coverAvailabilityCacheMu.Lock()
+	owner := coverAvailabilityOwnerMap[db]
+	if owner == nil {
+		coverAvailabilityCacheMu.Unlock()
+		return
+	}
+	// Avoid a full property-index scan while indexing or optimization owns the
+	// database. Requests keep using the bounded SQL fallback and a later request
+	// starts the build once background work is idle.
+	if owner.HasBackgroundOperations() {
+		coverAvailabilityCacheMu.Unlock()
+		return
+	}
+	if coverAvailabilityCacheMap == nil {
+		coverAvailabilityCacheMap = make(map[sqlQueryable]*coverAvailabilityCacheEntry)
+	}
+	entry := coverAvailabilityCacheMap[db]
+	if entry == nil {
+		entry = &coverAvailabilityCacheEntry{}
+		coverAvailabilityCacheMap[db] = entry
+	}
+	if entry.index != nil || entry.building {
+		coverAvailabilityCacheMu.Unlock()
+		return
+	}
+	entry.building = true
+	generation := entry.generation
+	coverAvailabilityCacheMu.Unlock()
+
+	tagIDs := append([]int64(nil), imageTagIDs...)
+	owner.TrackBackgroundOperation()
+	go func() {
+		defer owner.BackgroundOperationDone()
+		index, err := buildCoverAvailabilityIndex(context.WithoutCancel(owner.ctx), db, tagIDs)
+
+		coverAvailabilityCacheMu.Lock()
+		current := coverAvailabilityCacheMap[db]
+		if current == entry {
+			entry.building = false
+			if err == nil && entry.generation == generation {
+				entry.index = index
+			}
+		}
+		coverAvailabilityCacheMu.Unlock()
+
+		if err != nil {
+			log.Debug().Err(err).Msg("cover availability index build failed; retaining SQL fallback")
+		}
+	}()
+}
+
+func (index *coverAvailabilityIndex) hasMedia(id int64) bool {
+	return sortedInt64sContain(index.mediaIDs, id)
+}
+
+func (index *coverAvailabilityIndex) hasTitle(id int64) bool {
+	return sortedInt64sContain(index.titleIDs, id)
+}
+
+func sortedInt64sContain(ids []int64, id int64) bool {
+	if id <= 0 {
+		return false
+	}
+	pos := sort.Search(len(ids), func(i int) bool { return ids[i] >= id })
+	return pos < len(ids) && ids[pos] == id
 }
 
 // prefixPolicyCache memoises detected browse prefix policies per DB handle and
@@ -1002,15 +1149,22 @@ func fetchAndAttachCoverFlags(
 		return fmt.Errorf("browse cover flags backfill title ids: %w", err)
 	}
 
-	mediaIDs := make([]int64, 0, len(results))
+	if coverIndex := cachedCoverAvailabilityIndex(db); coverIndex != nil {
+		for i := range results {
+			results[i].HasCover = coverIndex.hasTitle(results[i].MediaTitleID) ||
+				coverIndex.hasMedia(results[i].MediaID)
+		}
+		return nil
+	}
+	ensureCoverAvailabilityIndexBuild(db, imageTagIDs)
+
+	// Scrapers normally store artwork at title scope. Resolve title covers first,
+	// then query media-scope properties only for entries that remain uncovered.
+	// This preserves media-level overrides without probing both property tables
+	// for every result.
 	titleIDs := make([]int64, 0, len(results))
-	mediaIndex := make(map[int64][]int, len(results))
 	titleIndex := make(map[int64][]int, len(results))
 	for i := range results {
-		if _, ok := mediaIndex[results[i].MediaID]; !ok {
-			mediaIDs = append(mediaIDs, results[i].MediaID)
-		}
-		mediaIndex[results[i].MediaID] = append(mediaIndex[results[i].MediaID], i)
 		if results[i].MediaTitleID == 0 {
 			continue
 		}
@@ -1020,65 +1174,241 @@ func fetchAndAttachCoverFlags(
 		titleIndex[results[i].MediaTitleID] = append(titleIndex[results[i].MediaTitleID], i)
 	}
 
-	mediaPlaceholders := prepareVariadic("?", ",", len(mediaIDs))
-	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
-	args := make([]any, 0, len(mediaIDs)+len(titleIDs)+len(imageTagIDs)*2)
-	queryParts := []string{`
-		SELECT 'media' AS Scope, mp.MediaDBID AS ID
-		FROM MediaProperties mp
-		WHERE mp.MediaDBID IN (` + mediaPlaceholders + `)
-		  AND mp.TypeTagDBID IN (` + tagPlaceholders + `)`}
-	for _, id := range mediaIDs {
-		args = append(args, id)
-	}
-	for _, id := range imageTagIDs {
-		args = append(args, id)
-	}
 	if len(titleIDs) > 0 {
-		titlePlaceholders := prepareVariadic("?", ",", len(titleIDs))
-		queryParts = append(queryParts, `
-		SELECT 'title' AS Scope, mtp.MediaTitleDBID AS ID
-		FROM MediaTitleProperties mtp
-		WHERE mtp.MediaTitleDBID IN (`+titlePlaceholders+`)
-		  AND mtp.TypeTagDBID IN (`+tagPlaceholders+`)`)
-		for _, id := range titleIDs {
-			args = append(args, id)
+		coveredTitleIDs, queryErr := queryImagePropertyEntityIDs(
+			ctx, db, coverPropertyScopeTitle, titleIDs, imageTagIDs,
+		)
+		if queryErr != nil {
+			return fmt.Errorf("browse cover flags query: %w", queryErr)
 		}
-		for _, id := range imageTagIDs {
-			args = append(args, id)
-		}
-	}
-
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
-	query := strings.Join(queryParts, "\n\t\tUNION ALL\n")
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("browse cover flags query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var scope string
-		var id int64
-		if scanErr := rows.Scan(&scope, &id); scanErr != nil {
-			return fmt.Errorf("browse cover flags scan: %w", scanErr)
-		}
-		switch scope {
-		case "media":
-			for _, idx := range mediaIndex[id] {
-				results[idx].HasCover = true
-			}
-		case "title":
+		for id := range coveredTitleIDs {
 			for _, idx := range titleIndex[id] {
 				results[idx].HasCover = true
 			}
 		}
 	}
-	if err = rows.Err(); err != nil {
-		return fmt.Errorf("browse cover flags rows: %w", err)
+
+	mediaIDs := make([]int64, 0, len(results))
+	mediaIndex := make(map[int64][]int, len(results))
+	for i := range results {
+		if results[i].HasCover || results[i].MediaID <= 0 {
+			continue
+		}
+		if _, ok := mediaIndex[results[i].MediaID]; !ok {
+			mediaIDs = append(mediaIDs, results[i].MediaID)
+		}
+		mediaIndex[results[i].MediaID] = append(mediaIndex[results[i].MediaID], i)
+	}
+	if len(mediaIDs) == 0 {
+		return nil
+	}
+
+	coveredMediaIDs, err := queryImagePropertyEntityIDs(
+		ctx, db, coverPropertyScopeMedia, mediaIDs, imageTagIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("browse cover flags query: %w", err)
+	}
+	for id := range coveredMediaIDs {
+		for _, idx := range mediaIndex[id] {
+			results[idx].HasCover = true
+		}
 	}
 	return nil
+}
+
+func buildCoverAvailabilityIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	imageTagIDs []int64,
+) (*coverAvailabilityIndex, error) {
+	started := time.Now()
+	titleIDs, err := queryAllImagePropertyEntityIDs(ctx, db, coverPropertyScopeTitle, imageTagIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load title cover IDs: %w", err)
+	}
+	mediaIDs, err := queryAllImagePropertyEntityIDs(ctx, db, coverPropertyScopeMedia, imageTagIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load media cover IDs: %w", err)
+	}
+	index := &coverAvailabilityIndex{
+		titleIDs: sortAndCompactInt64s(titleIDs),
+		mediaIDs: sortAndCompactInt64s(mediaIDs),
+	}
+	log.Debug().
+		Int("titleIDs", len(index.titleIDs)).
+		Int("mediaIDs", len(index.mediaIDs)).
+		Int("bytes", (cap(index.titleIDs)+cap(index.mediaIDs))*8).
+		Dur("duration", time.Since(started)).
+		Msg("cover availability index built")
+	return index, nil
+}
+
+func queryAllImagePropertyEntityIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	scope coverPropertyScope,
+	imageTagIDs []int64,
+) ([]int64, error) {
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	var query string
+	switch scope {
+	case coverPropertyScopeMedia:
+		query = `SELECT json_group_array(MediaDBID) FROM (
+			SELECT mp.MediaDBID, mp.TypeTagDBID
+			FROM MediaProperties mp
+			WHERE mp.TypeTagDBID IN (` + tagPlaceholders + `)
+			ORDER BY mp.MediaDBID, mp.TypeTagDBID)`
+	case coverPropertyScopeTitle:
+		query = `SELECT json_group_array(MediaTitleDBID) FROM (
+			SELECT mtp.MediaTitleDBID, mtp.TypeTagDBID
+			FROM MediaTitleProperties mtp
+			WHERE mtp.TypeTagDBID IN (` + tagPlaceholders + `)
+			ORDER BY mtp.MediaTitleDBID, mtp.TypeTagDBID)`
+	default:
+		return nil, fmt.Errorf("unknown cover property scope %d", scope)
+	}
+
+	args := make([]any, len(imageTagIDs))
+	for i, id := range imageTagIDs {
+		args[i] = id
+	}
+	// ORDER BY matches each table's unique covering index. SQLite scans that
+	// compact index sequentially and returns one aggregate value, avoiding both
+	// random table reads and one CGO row crossing per stored property.
+	var rawIDs string
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&rawIDs); err != nil {
+		return nil, fmt.Errorf("query all cover IDs: %w", err)
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(rawIDs), &ids); err != nil {
+		return nil, fmt.Errorf("decode cover IDs: %w", err)
+	}
+	return ids, nil
+}
+
+func sortAndCompactInt64s(ids []int64) []int64 {
+	if len(ids) < 2 {
+		return ids
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	write := 1
+	for read := 1; read < len(ids); read++ {
+		if ids[read] == ids[write-1] {
+			continue
+		}
+		ids[write] = ids[read]
+		write++
+	}
+	return ids[:write]
+}
+
+func queryImagePropertyEntityIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	scope coverPropertyScope,
+	entityIDs []int64,
+	imageTagIDs []int64,
+) (map[int64]struct{}, error) {
+	if len(entityIDs) == 0 || len(imageTagIDs) == 0 {
+		return map[int64]struct{}{}, nil
+	}
+
+	var table, alias, entityColumn string
+	switch scope {
+	case coverPropertyScopeMedia:
+		table, alias, entityColumn = "MediaProperties", "mp", "MediaDBID"
+	case coverPropertyScopeTitle:
+		table, alias, entityColumn = "MediaTitleProperties", "mtp", "MediaTitleDBID"
+	default:
+		return nil, fmt.Errorf("unknown cover property scope %d", scope)
+	}
+
+	chunkSize := sqliteMaxParams - len(imageTagIDs)
+	if chunkSize <= 0 {
+		return nil, fmt.Errorf("too many image property tag IDs: %d", len(imageTagIDs))
+	}
+	tagPlaceholders := prepareVariadic("?", ",", len(imageTagIDs))
+	covered := make(map[int64]struct{})
+	for start := 0; start < len(entityIDs); start += chunkSize {
+		chunk := entityIDs[start:min(start+chunkSize, len(entityIDs))]
+		entityPlaceholders := prepareVariadic("?", ",", len(chunk))
+		query := `SELECT ` + alias + `.` + entityColumn + `
+			FROM ` + table + ` ` + alias + `
+			WHERE ` + alias + `.` + entityColumn + ` IN (` + entityPlaceholders + `)
+			  AND ` + alias + `.TypeTagDBID IN (` + tagPlaceholders + `)`
+
+		args := make([]any, 0, len(chunk)+len(imageTagIDs))
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		for _, id := range imageTagIDs {
+			args = append(args, id)
+		}
+
+		if err := queryImagePropertyEntityIDChunk(ctx, db, query, args, covered); err != nil {
+			return nil, err
+		}
+	}
+	return covered, nil
+}
+
+func queryImagePropertyEntityIDChunk(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+	covered map[int64]struct{},
+) (err error) {
+	//nolint:gosec // Caller selects table identifiers from fixed constants and generates placeholders internally.
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("query cover entity IDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close cover entity ID rows: %w", closeErr)
+		}
+	}()
+
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("scan cover entity ID: %w", scanErr)
+		}
+		covered[id] = struct{}{}
+	}
+	return rows.Err()
+}
+
+func fetchCoverStatuses(
+	ctx context.Context, db sqlQueryable, refs []database.MediaCoverRef,
+) (map[int64]bool, error) {
+	statuses := make(map[int64]bool, len(refs))
+	results := make([]database.SearchResultWithCursor, 0, len(refs))
+	seen := make(map[int64]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.MediaDBID <= 0 {
+			continue
+		}
+		if _, ok := seen[ref.MediaDBID]; ok {
+			continue
+		}
+		seen[ref.MediaDBID] = struct{}{}
+		statuses[ref.MediaDBID] = false
+		results = append(results, database.SearchResultWithCursor{
+			MediaID:      ref.MediaDBID,
+			MediaTitleID: ref.MediaTitleDBID,
+		})
+	}
+	if err := fetchAndAttachCoverFlags(ctx, db, results); err != nil {
+		return nil, err
+	}
+	for i := range results {
+		statuses[results[i].MediaID] = results[i].HasCover
+	}
+	return statuses, nil
 }
 
 // backfillMissingTitleIDs populates MediaTitleID for any result that has a MediaID

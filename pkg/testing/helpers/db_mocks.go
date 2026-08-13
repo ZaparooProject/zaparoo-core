@@ -390,6 +390,20 @@ func (m *MockUserDBI) GetMediaHistory(
 	return history, nil
 }
 
+func (m *MockUserDBI) GetDistinctMediaHistory(
+	ctx context.Context, systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(ctx, systemIDs, lastID, limit)
+	history, ok := args.Get(0).([]database.MediaHistoryEntry)
+	if !ok {
+		history = []database.MediaHistoryEntry{}
+	}
+	if err := args.Error(1); err != nil {
+		return history, fmt.Errorf("mock UserDBI get distinct media history failed: %w", err)
+	}
+	return history, nil
+}
+
 func (m *MockUserDBI) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
 	args := m.Called()
 	entry, ok := args.Get(0).(database.MediaHistoryEntry)
@@ -2681,6 +2695,23 @@ func (m *MockMediaDBI) BrowseFiles(
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return []database.SearchResultWithCursor{}, nil
+}
+
+func (m *MockMediaDBI) GetMediaCoverStatus(
+	ctx context.Context, refs []database.MediaCoverRef,
+) (map[int64]bool, error) {
+	if !m.hasExpectedCall("GetMediaCoverStatus") {
+		return map[int64]bool{}, nil
+	}
+	args := m.Called(ctx, refs)
+	statuses, ok := args.Get(0).(map[int64]bool)
+	if !ok {
+		statuses = map[int64]bool{}
+	}
+	if err := args.Error(1); err != nil {
+		return statuses, fmt.Errorf("mock get media cover status failed: %w", err)
+	}
+	return statuses, nil
 }
 
 func (m *MockMediaDBI) BrowseFileCount(

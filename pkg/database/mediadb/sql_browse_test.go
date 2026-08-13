@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -919,13 +920,14 @@ func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
 		{MediaID: 2, MediaTitleID: 102, Name: "AnotherNoCoverGame"},
 	}
 
-	// Query returns no rows — neither media ID has any image property. Title IDs
-	// are populated so no backfill query runs; the media leg binds mediaIDs and
-	// the title leg binds titleIDs.
+	// Neither title has an image, so both media IDs proceed to fallback.
 	expectImagePropertyTagLookup(mock, 901)
-	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(1), int64(2), int64(901), int64(101), int64(102), int64(901)).
-		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}))
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(101), int64(102), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}))
+	mock.ExpectQuery(`SELECT mp\.MediaDBID`).
+		WithArgs(int64(1), int64(2), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -945,11 +947,14 @@ func TestFetchAndAttachCoverFlags_MediaLevelCover(t *testing.T) {
 		{MediaID: 20, MediaTitleID: 120, Name: "GameWithoutCover"},
 	}
 
-	// Query returns mediaID 10 as having a cover (media-level property).
+	// Neither title has an image; media fallback finds mediaID 10 only.
 	expectImagePropertyTagLookup(mock, 901)
-	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(10), int64(20), int64(901), int64(110), int64(120), int64(901)).
-		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("media", int64(10)))
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(110), int64(120), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}))
+	mock.ExpectQuery(`SELECT mp\.MediaDBID`).
+		WithArgs(int64(10), int64(20), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(10)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
@@ -971,16 +976,51 @@ func TestFetchAndAttachCoverFlags_TitleLevelCover(t *testing.T) {
 		{MediaID: 31, MediaTitleID: 100, Name: "GameA (Rev B)"},
 	}
 
-	// Query returns the shared title ID from the title-level UNION ALL leg.
+	// Shared title cover resolves both entries, so no media fallback runs.
 	expectImagePropertyTagLookup(mock, 901)
-	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(30), int64(31), int64(901), int64(100), int64(901)).
-		WillReturnRows(sqlmock.NewRows([]string{"Scope", "ID"}).AddRow("title", int64(100)))
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(100), int64(901)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(100)))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
 	require.NoError(t, err)
 	assert.True(t, results[0].HasCover)
 	assert.True(t, results[1].HasCover)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestQueryImagePropertyEntityIDs_ChunksMaximumPage(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	const maxPageSize = 1000
+	entityIDs := make([]int64, maxPageSize)
+	for i := range entityIDs {
+		entityIDs[i] = int64(i + 1)
+	}
+	firstArgs := make([]driver.Value, 0, sqliteMaxParams)
+	for _, id := range entityIDs[:sqliteMaxParams-1] {
+		firstArgs = append(firstArgs, id)
+	}
+	firstArgs = append(firstArgs, int64(901))
+	secondArgs := []driver.Value{int64(999), int64(1000), int64(901)}
+
+	queryPattern := `SELECT mtp\.MediaTitleDBID\s+FROM MediaTitleProperties mtp`
+	mock.ExpectQuery(queryPattern).
+		WithArgs(firstArgs...).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(1)))
+	mock.ExpectQuery(queryPattern).
+		WithArgs(secondArgs...).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaTitleDBID"}).AddRow(int64(1000)))
+
+	covered, err := queryImagePropertyEntityIDs(
+		context.Background(), db, coverPropertyScopeTitle, entityIDs, []int64{901},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]struct{}{1: {}, 1000: {}}, covered)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -995,8 +1035,8 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 	}
 
 	expectImagePropertyTagLookup(mock, 901)
-	mock.ExpectQuery(`SELECT 'media' AS Scope, mp\.MediaDBID AS ID`).
-		WithArgs(int64(5), int64(901), int64(105), int64(901)).
+	mock.ExpectQuery(`SELECT mtp\.MediaTitleDBID`).
+		WithArgs(int64(105), int64(901)).
 		WillReturnError(errors.New("db unavailable"))
 
 	err = fetchAndAttachCoverFlags(context.Background(), db, results)
@@ -1079,6 +1119,83 @@ func TestFetchAndAttachCoverFlags_Integration_MediaLevelProperty(t *testing.T) {
 	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), results))
 	assert.True(t, results[0].HasCover, "media with image property should have HasCover=true")
 	assert.False(t, results[1].HasCover, "media without image property should have HasCover=false")
+
+	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaCoverRef{
+		{MediaDBID: mediaA.DBID, MediaTitleDBID: titleA.DBID},
+		{MediaDBID: mediaB.DBID, MediaTitleDBID: titleB.DBID},
+		{MediaDBID: mediaA.DBID, MediaTitleDBID: titleA.DBID},
+		{},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]bool{mediaA.DBID: true, mediaB.DBID: false}, statuses)
+}
+
+func TestCoverAvailabilityIndex_AsyncBuildAndInvalidation(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Cached Cover"),
+		Name:       "Cached Cover",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "cached_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "cached.png")},
+	}))
+
+	mediaDB.TrackBackgroundOperation()
+	firstPass := []database.SearchResultWithCursor{{MediaID: media.DBID, MediaTitleID: title.DBID}}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), firstPass))
+	require.True(t, firstPass[0].HasCover, "SQL fallback must serve first request")
+	assert.Nil(t, cachedCoverAvailabilityIndex(mediaDB.sql.Load()),
+		"cache build must not compete with existing background work")
+	mediaDB.BackgroundOperationDone()
+
+	buildPass := []database.SearchResultWithCursor{{MediaID: media.DBID, MediaTitleID: title.DBID}}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), buildPass))
+	require.True(t, buildPass[0].HasCover)
+	mediaDB.WaitForBackgroundOperations()
+
+	index := cachedCoverAvailabilityIndex(mediaDB.sql.Load())
+	require.NotNil(t, index)
+	assert.True(t, index.hasTitle(title.DBID))
+	assert.False(t, index.hasMedia(media.DBID))
+
+	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaCoverRef{
+		{MediaDBID: media.DBID, MediaTitleDBID: title.DBID},
+		{MediaDBID: media.DBID + 1, MediaTitleDBID: title.DBID + 1},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]bool{media.DBID: true, media.DBID + 1: false}, statuses)
+
+	require.NoError(t, mediaDB.DeleteMediaTitleProperty(ctx, title.DBID, 901))
+	assert.Nil(t, cachedCoverAvailabilityIndex(mediaDB.sql.Load()), "image deletion must invalidate index")
+
+	secondPass := []database.SearchResultWithCursor{{MediaID: media.DBID, MediaTitleID: title.DBID}}
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql.Load(), secondPass))
+	assert.False(t, secondPass[0].HasCover, "fallback must observe deleted cover")
+	mediaDB.WaitForBackgroundOperations()
+
+	index = cachedCoverAvailabilityIndex(mediaDB.sql.Load())
+	require.NotNil(t, index)
+	assert.False(t, index.hasTitle(title.DBID))
 }
 
 func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {

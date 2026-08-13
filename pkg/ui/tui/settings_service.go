@@ -441,6 +441,8 @@ func (s *DefaultSettingsService) CancelWriteTag(ctx context.Context) error {
 }
 
 // SearchMedia searches for media matching the given parameters.
+//
+//nolint:gocritic // Value parameter preserves the SettingsService interface contract.
 func (s *DefaultSettingsService) SearchMedia(
 	ctx context.Context,
 	params models.SearchParams,

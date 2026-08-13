@@ -156,8 +156,8 @@ func TestFindMediaIDsByPaths_ReturnsSamePathAcrossSystems(t *testing.T) {
 	results, err := mediaDB.FindMediaIDsByPaths(ctx, []string{mediaPath})
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []database.MediaPathID{
-		{SystemID: "NES", Path: mediaPath, DBID: 1},
-		{SystemID: "SNES", Path: mediaPath, DBID: 2},
+		{SystemID: "NES", Path: mediaPath, DBID: 1, MediaTitleDBID: 1},
+		{SystemID: "SNES", Path: mediaPath, DBID: 2, MediaTitleDBID: 2},
 	}, results)
 }
 
@@ -185,8 +185,8 @@ func TestFindMediaIDsByPaths_ChunksLargeInput(t *testing.T) {
 	results, err := mediaDB.FindMediaIDsByPaths(ctx, paths)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []database.MediaPathID{
-		{SystemID: "NES", Path: marioPath, DBID: 1},
-		{SystemID: "NES", Path: zeldaPath, DBID: 2},
+		{SystemID: "NES", Path: marioPath, DBID: 1, MediaTitleDBID: 1},
+		{SystemID: "NES", Path: zeldaPath, DBID: 2, MediaTitleDBID: 2},
 	}, results)
 }
 

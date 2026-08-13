@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -78,6 +79,7 @@ func TestHandleMediaHistory_NoParams(t *testing.T) {
 	assert.Equal(t, "Super Mario Bros", resp.Entries[0].MediaName)
 	assert.Equal(t, 1800, resp.Entries[0].PlayTime)
 	assert.NotNil(t, resp.Entries[0].EndedAt)
+	assert.False(t, resp.Entries[0].HasCover)
 	assert.NotNil(t, resp.Pagination)
 	assert.False(t, resp.Pagination.HasNextPage)
 	assert.Equal(t, 25, resp.Pagination.PageSize)
@@ -153,6 +155,111 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaHistory_IncludesCoverStatus(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	now := time.Now()
+	coveredPath := filepath.Join(string(filepath.Separator), "games", "covered.nes")
+	uncoveredPath := filepath.Join(string(filepath.Separator), "games", "uncovered.nes")
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).
+		Return([]database.MediaHistoryEntry{
+			{DBID: 2, SystemID: "NES", MediaPath: coveredPath, MediaName: "Covered", StartTime: now},
+			{DBID: 1, SystemID: "NES", MediaPath: uncoveredPath, MediaName: "Uncovered", StartTime: now},
+		}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{coveredPath, uncoveredPath}).
+		Return([]database.MediaPathID{
+			{SystemID: "NES", Path: coveredPath, DBID: 20, MediaTitleDBID: 200},
+			{SystemID: "NES", Path: uncoveredPath, DBID: 10, MediaTitleDBID: 100},
+		}, nil)
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{
+		{MediaDBID: 20, MediaTitleDBID: 200},
+		{MediaDBID: 10, MediaTitleDBID: 100},
+	}).Return(map[int64]bool{20: true, 10: false}, nil)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Params:   json.RawMessage(`{}`),
+	}
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+	response, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, response.Entries, 2)
+	assert.True(t, response.Entries[0].HasCover)
+	assert.False(t, response.Entries[1].HasCover)
+	mockUserDB.AssertExpectations(t)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
+	t.Parallel()
+
+	mediaPath := filepath.Join(string(filepath.Separator), "games", "history.nes")
+	entry := database.MediaHistoryEntry{
+		DBID: 1, SystemID: "NES", MediaPath: mediaPath, MediaName: "History", StartTime: time.Now(),
+	}
+
+	tests := []struct {
+		setup func(*testing.T, *helpers.MockMediaDBI)
+		name  string
+	}{
+		{
+			name: "media identity lookup",
+			setup: func(_ *testing.T, mockMediaDB *helpers.MockMediaDBI) {
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+					Return(nil, errors.New("identity lookup failed"))
+			},
+		},
+		{
+			name: "cover lookup",
+			setup: func(t *testing.T, mockMediaDB *helpers.MockMediaDBI) {
+				t.Helper()
+				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+					Return([]database.MediaPathID{{
+						SystemID: "NES", Path: mediaPath, DBID: 42, MediaTitleDBID: 420,
+					}}, nil)
+				mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{{
+					MediaDBID: 42, MediaTitleDBID: 420,
+				}}).Run(func(args mock.Arguments) {
+					ctx, ok := args.Get(0).(context.Context)
+					require.True(t, ok)
+					deadline, ok := ctx.Deadline()
+					require.True(t, ok, "optional enrichment must have a deadline")
+					assert.WithinDuration(t, time.Now().Add(optionalDBEnrichmentTimeout), deadline, time.Second)
+				}).Return(nil, errors.New("cover lookup failed"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockUserDB := helpers.NewMockUserDBI()
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).
+				Return([]database.MediaHistoryEntry{entry}, nil)
+			tt.setup(t, mockMediaDB)
+
+			result, err := HandleMediaHistory(requests.RequestEnv{
+				Context: context.Background(),
+				Database: &database.Database{
+					UserDB: mockUserDB, MediaDB: mockMediaDB,
+				},
+			})
+			require.NoError(t, err)
+			response, ok := result.(models.MediaHistoryResponse)
+			require.True(t, ok)
+			require.Len(t, response.Entries, 1)
+			assert.Zero(t, response.Entries[0].MediaID)
+			assert.False(t, response.Entries[0].HasCover)
+			mockUserDB.AssertExpectations(t)
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
+}
+
 func TestMediaResponseMediaIDs_BoundsSlowLookup(t *testing.T) {
 	t.Parallel()
 
@@ -213,6 +320,49 @@ func TestHandleMediaHistory_WithLimit(t *testing.T) {
 	assert.NotNil(t, resp.Pagination.NextCursor)
 	assert.Equal(t, 5, resp.Pagination.PageSize)
 
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_DistinctMedia(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	now := time.Now()
+	firstPath := filepath.Join(string(filepath.Separator), "games", "first.nes")
+	secondPath := filepath.Join(string(filepath.Separator), "games", "second.nes")
+	thirdPath := filepath.Join(string(filepath.Separator), "games", "third.nes")
+	mockUserDB.On(
+		"GetDistinctMediaHistory", mock.Anything, []string{"NES"}, int64(0), 3,
+	).Return([]database.MediaHistoryEntry{
+		{DBID: 10, SystemID: "NES", SystemName: "NES", MediaName: "First", MediaPath: firstPath, StartTime: now},
+		{DBID: 8, SystemID: "NES", SystemName: "NES", MediaName: "Second", MediaPath: secondPath, StartTime: now},
+		{DBID: 5, SystemID: "NES", SystemName: "NES", MediaName: "Third", MediaPath: thirdPath, StartTime: now},
+	}, nil)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB},
+		Params: json.RawMessage(`{
+			"systems": ["NES"],
+			"limit": 2,
+			"distinctMedia": true
+		}`),
+	}
+
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, "First", resp.Entries[0].MediaName)
+	assert.Equal(t, "Second", resp.Entries[1].MediaName)
+	require.NotNil(t, resp.Pagination)
+	assert.True(t, resp.Pagination.HasNextPage)
+	require.NotNil(t, resp.Pagination.NextCursor)
+	cursor, err := decodeCursor(*resp.Pagination.NextCursor)
+	require.NoError(t, err)
+	require.NotNil(t, cursor)
+	assert.Equal(t, int64(8), *cursor)
 	mockUserDB.AssertExpectations(t)
 }
 

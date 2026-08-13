@@ -73,6 +73,17 @@ func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) (
 	return sqlGetMediaHistory(db.ctx, db.sql.Load(), systemIDs, nil, lastID, limit)
 }
 
+// GetDistinctMediaHistory returns the newest lean history row for each
+// (system, media path) identity, ordered for stable cursor pagination.
+func (db *UserDB) GetDistinctMediaHistory(
+	ctx context.Context, systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	if db.sql.Load() == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlGetDistinctMediaHistory(ctx, db.sql.Load(), systemIDs, lastID, limit)
+}
+
 // GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
 func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
 	if db.sql.Load() == nil {
@@ -451,6 +462,106 @@ func sqlGetMediaHistory(
 		Dur("queryDuration", time.Since(queryStarted)).
 		Msg("media history query timing")
 
+	return list, nil
+}
+
+func sqlGetDistinctMediaHistory(
+	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if lastID == 0 {
+		lastID = math.MaxInt64
+	}
+
+	args := make([]any, 0, len(systemIDs)+2)
+	latestWhere := ""
+	switch len(systemIDs) {
+	case 1:
+		latestWhere = "WHERE SystemID = ?"
+		args = append(args, systemIDs[0])
+	default:
+		if len(systemIDs) > 1 {
+			placeholders := make([]string, len(systemIDs))
+			for i, systemID := range systemIDs {
+				placeholders[i] = "?"
+				args = append(args, systemID)
+			}
+			latestWhere = "WHERE SystemID IN (" + strings.Join(placeholders, ", ") + ")"
+		}
+	}
+	args = append(args, lastID, limit)
+
+	// Group before applying the cursor. Filtering raw history rows first would
+	// let an older session for a media identity reappear on a later page.
+	//nolint:gosec // latestWhere contains only fixed SQL and placeholders.
+	query := fmt.Sprintf(`
+		WITH LatestMedia AS (
+			SELECT MAX(DBID) AS DBID
+			FROM MediaHistory
+			%s
+			GROUP BY SystemID, MediaPath
+		)
+		SELECT
+			history.DBID, history.StartTime, history.EndTime,
+			history.SystemID, history.SystemName, history.MediaPath,
+			history.MediaName, history.LauncherID, history.PlayTime
+		FROM MediaHistory AS history
+		INNER JOIN LatestMedia AS latest ON latest.DBID = history.DBID
+		WHERE history.DBID < ?
+		ORDER BY history.DBID DESC
+		LIMIT ?;
+	`, latestWhere)
+
+	list := make([]database.MediaHistoryEntry, 0, limit)
+	queryStarted := time.Now()
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return list, fmt.Errorf("failed to query distinct media history: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close distinct media history rows")
+		}
+	}()
+
+	for rows.Next() {
+		var entry database.MediaHistoryEntry
+		var startTimeUnix int64
+		var endTimeUnix sql.NullInt64
+		if scanErr := rows.Scan(
+			&entry.DBID,
+			&startTimeUnix,
+			&endTimeUnix,
+			&entry.SystemID,
+			&entry.SystemName,
+			&entry.MediaPath,
+			&entry.MediaName,
+			&entry.LauncherID,
+			&entry.PlayTime,
+		); scanErr != nil {
+			return list, fmt.Errorf("failed to scan distinct media history row: %w", scanErr)
+		}
+		entry.StartTime = time.Unix(startTimeUnix, 0)
+		if endTimeUnix.Valid {
+			endTime := time.Unix(endTimeUnix.Int64, 0)
+			entry.EndTime = &endTime
+		}
+		list = append(list, entry)
+	}
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating distinct media history rows: %w", err)
+	}
+
+	log.Debug().
+		Int("systems", len(systemIDs)).
+		Int("rows", len(list)).
+		Dur("queryDuration", time.Since(queryStarted)).
+		Msg("distinct media history query timing")
 	return list, nil
 }
 
