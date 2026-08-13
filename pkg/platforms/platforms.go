@@ -362,6 +362,10 @@ type BackupPlanningProvider interface {
 	BackupPlan() BackupPlan
 }
 
+type BackupPreparingProvider interface {
+	PrepareBackup() (BackupPlan, func() error, error)
+}
+
 type BackupRestoreRootProvider interface {
 	BackupRestoreRoot() string
 }

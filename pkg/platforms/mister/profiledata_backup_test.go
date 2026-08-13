@@ -23,44 +23,160 @@ package mister
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestProfileBackupPlanOmitsLiveAliasAndIncludesProfilePools(t *testing.T) {
-	t.Parallel()
-	mounter := &fakeMounter{}
-	manager, _ := newTestManager(mounter)
-	require.NoError(t, manager.apply(kidA(), allItems()))
-	settings := platforms.Settings{DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo")}
-	plan := manager.backupPlan(settings, BackupDefinitions(settings))
-
-	for _, definition := range plan.Definitions {
-		assert.False(t, definition.Category == profileDataItemSaves &&
-			filepath.Clean(definition.SourceRoot) == filepath.Join(misterconfig.SDRootDir, "saves") &&
-			filepath.Clean(definition.RestoreRoot) == profileDataItemSaves)
+func assertActiveProfile(t *testing.T, manager *profileDataManager, mounter *fakeMounter, root string) {
+	t.Helper()
+	for _, item := range allItems() {
+		stack := mountsAt(mounter.mounts, filepath.Join(root, item))
+		require.NotEmpty(t, stack)
+		entry := manager.ledger.find(&stack[len(stack)-1])
+		require.NotNil(t, entry)
+		assert.Equal(t, kidA().ID, entry.ProfileID)
 	}
-	assert.Contains(t, plan.Warnings, platforms.BackupWarning{
-		Category: profileDataItemSaves, Path: profileDataItemSaves,
-		Reason: "shared profile data hidden by active profile mount",
-	})
-	assert.Contains(t, plan.Warnings, platforms.BackupWarning{
-		Category: profileDataItemSavestates, Path: profileDataItemSavestates,
-		Reason: "shared profile data hidden by active profile mount",
-	})
 }
 
-func TestProfileBackupPlanWarnsWhenMountStateIsUnavailable(t *testing.T) {
+func TestPrepareBackupWithoutActiveProfileUsesStaticLocations(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{}
+	manager, fs := newTestManager(mounter)
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	assert.Empty(t, plan.Warnings)
+	assert.Equal(t, BackupDefinitions(settings), plan.Definitions)
+	assert.Empty(t, mounter.mounts)
+	exists, err := afero.Exists(fs, settings.TempDir)
+	require.NoError(t, err)
+	assert.False(t, exists)
+	require.NoError(t, cleanup())
+}
+
+func TestPrepareBackupRealBindMountSmoke(t *testing.T) {
+	if os.Getenv("ZAPAROO_TEST_REAL_MOUNTS") != "1" {
+		t.Skip("set ZAPAROO_TEST_REAL_MOUNTS=1 in an isolated mount namespace")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("real bind-mount smoke test requires effective root inside mount namespace")
+	}
+
+	testRoot := t.TempDir()
+	storageRoot := misterconfig.SDRootDir
+	tempDir := filepath.Join(testRoot, "tmp")
+	settings := platforms.Settings{DataDir: filepath.Join(storageRoot, "zaparoo"), TempDir: tempDir}
+	fs := afero.NewOsFs()
+	if err := os.MkdirAll(storageRoot, 0o750); err != nil {
+		t.Skipf("real MiSTer storage root unavailable: %v", err)
+	}
+	manager := &profileDataManager{
+		fs: fs, m: sysMounter{}, ledger: loadMountLedger(fs, filepath.Join(testRoot, "mounts.json")),
+	}
+	for _, item := range allItems() {
+		require.NoError(t, os.MkdirAll(filepath.Join(storageRoot, item), 0o750))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(storageRoot, item, "shared.txt"), []byte("shared-"+item), 0o600,
+		))
+	}
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	t.Cleanup(func() {
+		for _, item := range allItems() {
+			_ = manager.m.Unmount(filepath.Join(storageRoot, item))
+		}
+	})
+	for _, item := range allItems() {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(storageRoot, item, "personal.txt"), []byte("personal-"+item), 0o600,
+		))
+	}
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cleanup() })
+	assert.Empty(t, plan.Warnings)
+	for _, item := range allItems() {
+		// #nosec G304 -- storageRoot is an isolated tmpfs created by the smoke-test runner.
+		personal, readErr := os.ReadFile(filepath.Join(storageRoot, item, "personal.txt"))
+		require.NoError(t, readErr)
+		assert.Equal(t, "personal-"+item, string(personal))
+		var alias string
+		for _, definition := range plan.Definitions {
+			if definition.Category == item && definition.RestoreRoot == item &&
+				len(definition.SourceTrustedRoots) == 1 {
+				alias = definition.SourceRoot
+				break
+			}
+		}
+		require.NotEmpty(t, alias)
+		// #nosec G304 -- alias is returned by the backup plan under the isolated test root.
+		shared, readErr := os.ReadFile(filepath.Join(alias, "shared.txt"))
+		require.NoError(t, readErr)
+		assert.Equal(t, "shared-"+item, string(shared))
+		_, statErr := os.Stat(filepath.Join(alias, "personal.txt"))
+		require.ErrorIs(t, statErr, os.ErrNotExist)
+	}
+	require.NoError(t, cleanup())
+	entries, err := os.ReadDir(tempDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestPrepareBackupAliasesSharedDataAndPreservesActiveProfile(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{}
+	manager, fs := newTestManager(mounter)
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	require.NotNil(t, cleanup)
+	assert.Empty(t, plan.Warnings)
+	assertActiveProfile(t, manager, mounter, misterconfig.SDRootDir)
+
+	for _, item := range allItems() {
+		var alias string
+		for _, definition := range plan.Definitions {
+			if definition.Category == item && definition.RestoreRoot == item &&
+				filepath.Dir(definition.SourceRoot) != misterconfig.SDRootDir {
+				alias = definition.SourceRoot
+				break
+			}
+		}
+		require.NotEmpty(t, alias)
+		assert.Len(t, mountsAt(mounter.mounts, alias), 1)
+	}
+
+	require.NoError(t, cleanup())
+	require.NoError(t, cleanup())
+	assertActiveProfile(t, manager, mounter, misterconfig.SDRootDir)
+	entries, err := afero.ReadDir(fs, settings.TempDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestPrepareBackupWarnsWhenMountStateIsUnavailable(t *testing.T) {
 	t.Parallel()
 	mounter := &fakeMounter{mountsErr: errors.New("mount table unavailable")}
 	manager, _ := newTestManager(mounter)
 	settings := platforms.Settings{DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo")}
-	plan := manager.backupPlan(settings, BackupDefinitions(settings))
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
 
 	for _, item := range allItems() {
 		assert.Contains(t, plan.Warnings, platforms.BackupWarning{
@@ -75,9 +191,10 @@ func TestProfileBackupPlanWarnsWhenMountStateIsUnavailable(t *testing.T) {
 			)
 		}
 	}
+	require.NoError(t, cleanup())
 }
 
-func TestProfileBackupPlanMapsActiveNASPoolToOwnedPath(t *testing.T) {
+func TestPrepareBackupAliasesUnderlyingNASData(t *testing.T) {
 	t.Parallel()
 	savesTarget := filepath.Join(misterconfig.SDRootDir, profileDataItemSaves)
 	statesTarget := filepath.Join(misterconfig.SDRootDir, profileDataItemSavestates)
@@ -87,18 +204,97 @@ func TestProfileBackupPlanMapsActiveNASPoolToOwnedPath(t *testing.T) {
 	}}
 	manager, _ := newTestManager(mounter)
 	require.NoError(t, manager.apply(kidA(), allItems()))
-	settings := platforms.Settings{DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo")}
-	plan := manager.backupPlan(settings, BackupDefinitions(settings))
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
 
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	assert.Empty(t, plan.Warnings)
+	assertActiveProfile(t, manager, mounter, misterconfig.SDRootDir)
 	for _, item := range allItems() {
-		expectedRestoreRoot := filepath.Join(item, nasPoolDirName, kidA().ID, item)
+		var aliasDefinition platforms.BackupDefinition
+		for _, definition := range plan.Definitions {
+			if definition.Category == item && definition.RestoreRoot == item &&
+				filepath.Dir(definition.SourceRoot) != misterconfig.SDRootDir {
+				aliasDefinition = definition
+				break
+			}
+		}
+		require.NotEmpty(t, aliasDefinition.SourceRoot)
+		aliasMounts := mountsAt(mounter.mounts, aliasDefinition.SourceRoot)
+		require.Len(t, aliasMounts, 1)
+		assert.Equal(t, "cifs", aliasMounts[0].FSType)
+	}
+	require.NoError(t, cleanup())
+}
+
+func TestPrepareBackupUsesUSBStorageRoot(t *testing.T) {
+	t.Parallel()
+	usbRoot := filepath.Join(mediaRootPath, "usb1")
+	mounter := &fakeMounter{mounts: []mountEntry{
+		{Root: "/", Mountpoint: usbRoot, FSType: "vfat", Source: "/dev/sdb1"},
+	}}
+	manager, fs := newTestManager(mounter)
+	writeDeviceBin(t, fs, 1)
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	assert.Empty(t, plan.Warnings)
+	assertActiveProfile(t, manager, mounter, usbRoot)
+	assert.Contains(t, plan.Definitions, platforms.BackupDefinition{
+		Category: profileDataItemSaves, SourceRoot: filepath.Join(usbRoot, "zaparoo", "profiles"),
+		RestoreRoot: filepath.Join("zaparoo", "profiles"),
+		Include: []platforms.BackupPattern{
+			{Contains: "/" + profileDataItemSaves + "/"},
+			{Glob: profileNameFile},
+		},
+	})
+	for _, item := range allItems() {
+		if item == profileDataItemSaves {
+			continue
+		}
 		assert.Contains(t, plan.Definitions, platforms.BackupDefinition{
-			Category: item, SourceRoot: filepath.Join(misterconfig.SDRootDir, item),
-			RestoreRoot:        expectedRestoreRoot,
-			SourceTrustedRoots: []string{filepath.Join(misterconfig.SDRootDir, item)},
-			Include:            []platforms.BackupPattern{{All: true}},
+			Category: item, SourceRoot: filepath.Join(usbRoot, "zaparoo", "profiles"),
+			RestoreRoot: filepath.Join("zaparoo", "profiles"),
+			Include:     []platforms.BackupPattern{{Contains: "/" + item + "/"}},
 		})
 	}
+	require.NoError(t, cleanup())
+}
+
+func TestPrepareBackupWarnsWhenSharedAliasCannotBeMounted(t *testing.T) {
+	t.Parallel()
+	mounter := &fakeMounter{}
+	manager, _ := newTestManager(mounter)
+	require.NoError(t, manager.apply(kidA(), allItems()))
+	mounter.bindErr = errors.New("injected alias bind failure")
+	mounter.failBindAtTry = mounter.bindAttempts + 1
+	settings := platforms.Settings{
+		DataDir: filepath.Join(misterconfig.SDRootDir, "zaparoo"),
+		TempDir: filepath.Join(string(filepath.Separator), "tmp", "zaparoo"),
+	}
+
+	plan, cleanup, err := manager.prepareBackup(settings, BackupDefinitions(settings))
+	require.NoError(t, err)
+	assert.Contains(t, plan.Warnings, platforms.BackupWarning{
+		Category: profileDataItemSaves, Path: profileDataItemSaves,
+		Reason: "shared profile data unavailable during backup",
+	})
+	assert.Contains(t, plan.Definitions, platforms.BackupDefinition{
+		Category:    profileDataItemSaves,
+		SourceRoot:  filepath.Join(misterconfig.SDRootDir, profileDataItemSaves),
+		RestoreRoot: profileDataItemSaves,
+		Include:     []platforms.BackupPattern{{All: true}},
+	})
+	assertActiveProfile(t, manager, mounter, misterconfig.SDRootDir)
+	require.NoError(t, cleanup())
 }
 
 func TestPrepareBackupRestoreUnmountsAndRestoresProfileBinds(t *testing.T) {

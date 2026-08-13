@@ -54,6 +54,7 @@ import (
 )
 
 const (
+	misterNamesFile           = "names.txt"
 	amigaVisionGamesListing   = "listings/games.txt"
 	amigaVisionDemosListing   = "listings/demos.txt"
 	amigaVisionGamesBrowseDir = "Games"
@@ -607,12 +608,12 @@ func (p *Platform) BackupDefinitions() []platforms.BackupDefinition {
 	return BackupDefinitions(p.Settings())
 }
 
-func (p *Platform) BackupPlan() platforms.BackupPlan {
+func (p *Platform) PrepareBackup() (platforms.BackupPlan, func() error, error) {
 	definitions := BackupDefinitions(p.Settings())
 	if p.profileData == nil {
-		return platforms.BackupPlan{Definitions: definitions}
+		return platforms.BackupPlan{Definitions: definitions}, func() error { return nil }, nil
 	}
-	return p.profileData.backupPlan(p.Settings(), definitions)
+	return p.profileData.prepareBackup(p.Settings(), definitions)
 }
 
 func (p *Platform) PrepareBackupRestore() (func(bool) error, error) {
@@ -644,6 +645,8 @@ func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition
 				{Glob: "MiSTer_*.ini"},
 				{Glob: "MiSTer.ini.*"},
 				{Glob: "downloader.ini"},
+				{Glob: filepath.Base(misterconfig.LegacyMappingsPath)},
+				{Glob: misterNamesFile},
 			},
 			Exclude: []platforms.BackupPattern{{Glob: "MiSTer_example.ini"}},
 		},
@@ -690,7 +693,10 @@ func BackupDefinitions(settings platforms.Settings) []platforms.BackupDefinition
 			Category:    "saves",
 			SourceRoot:  filepath.Join(root, "zaparoo", "profiles"),
 			RestoreRoot: filepath.Join("zaparoo", "profiles"),
-			Include:     []platforms.BackupPattern{{Contains: "/saves/"}},
+			Include: []platforms.BackupPattern{
+				{Contains: "/saves/"},
+				{Glob: profileNameFile},
+			},
 		},
 		{
 			Category:    "savestates",

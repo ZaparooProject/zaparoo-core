@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +26,10 @@ func TestBackupDefinitions(t *testing.T) {
 	assert.Equal(t, "settings", definitions[0].Category)
 	assert.True(t, definitions[0].NonRecursive)
 	assert.Contains(t, definitions[0].Include, platforms.BackupPattern{Glob: "MiSTer.ini"})
+	assert.Contains(t, definitions[0].Include, platforms.BackupPattern{
+		Glob: filepath.Base(misterconfig.LegacyMappingsPath),
+	})
+	assert.Contains(t, definitions[0].Include, platforms.BackupPattern{Glob: misterNamesFile})
 	assert.NotContains(t, definitions[0].Include, platforms.BackupPattern{Glob: retroAchievementsConfigFile})
 	assert.Contains(t, definitions[0].Exclude, platforms.BackupPattern{Glob: "MiSTer_example.ini"})
 
@@ -46,6 +51,7 @@ func TestBackupDefinitions(t *testing.T) {
 	assert.Equal(t, profileRoot, definitions[5].SourceRoot)
 	assert.Equal(t, "saves", definitions[5].Category)
 	assert.Contains(t, definitions[5].Include, platforms.BackupPattern{Contains: "/saves/"})
+	assert.Contains(t, definitions[5].Include, platforms.BackupPattern{Glob: profileNameFile})
 	assert.NotContains(t, definitions[5].Include, platforms.BackupPattern{Glob: retroAchievementsConfigFile})
 	assert.Equal(t, profileRoot, definitions[6].SourceRoot)
 	assert.Equal(t, "savestates", definitions[6].Category)

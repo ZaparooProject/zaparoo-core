@@ -12,6 +12,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,6 +20,8 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 	t.Parallel()
 	rootDir := t.TempDir()
 	writeTestFile(t, filepath.Join(rootDir, "MiSTer.ini"), "user ini\n")
+	writeTestFile(t, filepath.Join(rootDir, filepath.Base(misterconfig.LegacyMappingsPath)), "match_uid,text\n")
+	writeTestFile(t, filepath.Join(rootDir, "names.txt"), "NES=My Nintendo\n")
 	writeTestFile(t, filepath.Join(rootDir, "MiSTer_example.ini"), "example ini\n")
 	writeTestFile(t, filepath.Join(rootDir, "config", "core.cfg"), "core settings\n")
 	writeTestFile(t, filepath.Join(rootDir, "config", "core_recent.cfg"), "recent\n")
@@ -41,6 +44,7 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 	writeTestFile(t, filepath.Join(
 		rootDir, "zaparoo", "profiles", profileID, "retroachievements.cfg",
 	), "password=profile-secret\n")
+	writeTestFile(t, filepath.Join(rootDir, "zaparoo", "profiles", profileID, "name.txt"), "Kid A\n")
 	nasProfileID := "22222222-aaaa-bbbb-cccc-000000000002"
 	writeTestFile(t, filepath.Join(rootDir, "saves", ".zaparoo-profiles", nasProfileID, "saves", "nas.sav"),
 		"nas save\n")
@@ -53,6 +57,8 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 	}
 
 	assert.Contains(t, byArchive, platformArchive("MiSTer.ini"))
+	assert.Contains(t, byArchive, platformArchive(filepath.Base(misterconfig.LegacyMappingsPath)))
+	assert.Contains(t, byArchive, platformArchive("names.txt"))
 	assert.Contains(t, byArchive, platformArchive(filepath.Join("config", "core.cfg")))
 	assert.Contains(t, byArchive, platformArchive(filepath.Join("config", "nested", "video.cfg")))
 	assert.Contains(t, byArchive, platformArchive(filepath.Join("config", "inputs", "nested", "arcade.map")))
@@ -63,6 +69,9 @@ func TestMiSTerBackupDefinitionsCollectorExcludesPrivateAndGeneratedFiles(t *tes
 	)))
 	assert.Contains(t, byArchive, platformArchive(filepath.Join(
 		"zaparoo", "profiles", profileID, "savestates", "game.ss",
+	)))
+	assert.Contains(t, byArchive, platformArchive(filepath.Join(
+		"zaparoo", "profiles", profileID, "name.txt",
 	)))
 	assert.Contains(t, byArchive, platformArchive(filepath.Join(
 		"saves", ".zaparoo-profiles", nasProfileID, "saves", "nas.sav",

@@ -113,6 +113,13 @@ type backupPlanningTestPlatform struct {
 	plan platforms.BackupPlan
 }
 
+type backupPreparingTestPlatform struct {
+	prepared *bool
+	cleaned  *bool
+	plan     platforms.BackupPlan
+	backupPlatform
+}
+
 func (p backupPlatform) BackupDefinitions() []platforms.BackupDefinition {
 	return p.definitions
 }
@@ -123,6 +130,14 @@ func (p backupRestoreRootPlatform) BackupRestoreRoot() string {
 
 func (p *backupPlanningTestPlatform) BackupPlan() platforms.BackupPlan {
 	return p.plan
+}
+
+func (p *backupPreparingTestPlatform) PrepareBackup() (platforms.BackupPlan, func() error, error) {
+	*p.prepared = true
+	return p.plan, func() error {
+		*p.cleaned = true
+		return nil
+	}, nil
 }
 
 func (p *backupRestorePreparingPlatform) PrepareBackupRestore() (func(bool) error, error) {
@@ -154,10 +169,15 @@ func newBackupTestEnvWithClients(
 	writeTestFile(t, filepath.Join(configDir, config.CfgFile), "debug_logging = false\n")
 	writeTestFile(t, filepath.Join(dataDir, "frontend.toml"), "enabled = true\n")
 	writeTestFile(t, filepath.Join(dataDir, config.TUIFile), "theme = \"default\"\n")
+	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, config.SuccessSoundFilename), "success-audio\n")
+	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, "custom.wav"), "custom-audio\n")
+	writeTestFile(t, filepath.Join(dataDir, config.AssetsDir, "ArcadeDatabase.csv"), "generated-cache\n")
 	writeTestFile(t, filepath.Join(dataDir, config.LaunchersDir, "custom.toml"), "[[launchers]]\n")
 	writeTestFile(t, filepath.Join(dataDir, config.MappingsDir, "tokens.toml"), "[[mappings]]\n")
 
 	writeTestFile(t, filepath.Join(rootDir, "MiSTer.ini"), "video_mode=0\n")
+	writeTestFile(t, filepath.Join(rootDir, "nfc.csv"), "match_uid,text\n")
+	writeTestFile(t, filepath.Join(rootDir, "names.txt"), "NES=My Nintendo\n")
 	writeTestFile(t, filepath.Join(rootDir, "config", "core.cfg"), "setting=1\n")
 	writeTestFile(t, filepath.Join(rootDir, "config", "core_recent.cfg"), "recent=1\n")
 	writeTestFile(t, filepath.Join(rootDir, "config", "inputs", "pad.map"), "map\n")
@@ -246,6 +266,8 @@ func testPlatformDefinitions(rootDir string) []platforms.BackupDefinition {
 			NonRecursive: true,
 			Include: []platforms.BackupPattern{
 				{Glob: "MiSTer.ini"},
+				{Glob: "nfc.csv"},
+				{Glob: "names.txt"},
 			},
 		},
 		{
@@ -266,7 +288,10 @@ func testPlatformDefinitions(rootDir string) []platforms.BackupDefinition {
 			Category:    CategorySaves,
 			SourceRoot:  filepath.Join(rootDir, "zaparoo", "profiles"),
 			RestoreRoot: filepath.Join("zaparoo", "profiles"),
-			Include:     []platforms.BackupPattern{{Contains: "/saves/"}},
+			Include: []platforms.BackupPattern{
+				{Contains: "/saves/"},
+				{Glob: "name.txt"},
+			},
 		},
 		{
 			Category:    CategorySavestates,
@@ -287,6 +312,72 @@ func testPlatformDefinitions(rootDir string) []platforms.BackupDefinition {
 			Include:     []platforms.BackupPattern{{All: true}},
 		},
 	}
+}
+
+func TestManagerCreateIncludesManagedAudioAssets(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+	result := stageTestZip(t, info.Path)
+	paths := make(map[string]struct{}, len(result.Manifest.Files))
+	for _, file := range result.Manifest.Files {
+		paths[file.RestorePath] = struct{}{}
+	}
+
+	assert.Contains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, config.SuccessSoundFilename)))
+	assert.Contains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, "custom.wav")))
+	assert.NotContains(t, paths, filepath.ToSlash(filepath.Join(config.AssetsDir, "ArcadeDatabase.csv")))
+}
+
+func TestManagerCreateUsesPreparedPlatformPlanAndCleansUp(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	basePlatform, ok := env.Manager.pl.(backupPlatform)
+	require.True(t, ok)
+	prepared := false
+	cleaned := false
+	env.Manager.pl = &backupPreparingTestPlatform{
+		backupPlatform: basePlatform,
+		plan:           platforms.BackupPlan{Definitions: basePlatform.BackupDefinitions()},
+		prepared:       &prepared,
+		cleaned:        &cleaned,
+	}
+	defaultOpener := env.Manager.sourceOpener
+	env.Manager.sourceOpener = func(ctx context.Context, file *FileRef) (io.ReadCloser, error) {
+		assert.True(t, prepared)
+		assert.False(t, cleaned)
+		return defaultOpener(ctx, file)
+	}
+
+	_, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+	assert.True(t, prepared)
+	assert.True(t, cleaned)
+}
+
+func TestManagerCreateCleansUpPreparedPlatformAfterFailure(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	basePlatform, ok := env.Manager.pl.(backupPlatform)
+	require.True(t, ok)
+	prepared := false
+	cleaned := false
+	env.Manager.pl = &backupPreparingTestPlatform{
+		backupPlatform: basePlatform,
+		plan:           platforms.BackupPlan{Definitions: basePlatform.BackupDefinitions()},
+		prepared:       &prepared,
+		cleaned:        &cleaned,
+	}
+	env.Manager.sourceOpener = func(context.Context, *FileRef) (io.ReadCloser, error) {
+		return nil, errors.New("injected source failure")
+	}
+
+	_, err := env.Manager.Create(context.Background())
+	require.Error(t, err)
+	assert.True(t, prepared)
+	assert.True(t, cleaned)
 }
 
 func TestManagerCreateReportsPlatformPlanWarningsAsPartial(t *testing.T) {
@@ -315,6 +406,21 @@ func TestManagerCreateReportsPlatformPlanWarningsAsPartial(t *testing.T) {
 	status := env.Manager.Status()
 	assert.Equal(t, StatusPartial, status.Local.LastStatus)
 	assert.Equal(t, 1, status.Local.SkippedFiles)
+}
+
+func TestVerifyLocalArchiveRejectsCorruptCompletedPayload(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+
+	result := stageTestZip(t, info.Path)
+	require.NotEmpty(t, result.Manifest.Files)
+	corruptZipPayload(t, info.Path, result.Manifest.Files[0].ArchivePath, "corrupt payload")
+
+	_, err = env.Manager.verifyLocalArchive(context.Background(), info.Path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "backup ZIP")
 }
 
 func TestManagerCreateBackupSkipsUnreadableSource(t *testing.T) {
@@ -494,6 +600,112 @@ func TestValidateManifestPolicyRequiresExactlyOneUserDB(t *testing.T) {
 	assert.Contains(t, err.Error(), "exactly one files/zaparoo/user.db payload")
 }
 
+func TestManagerCanonicalLocalBackupRoundTrip(t *testing.T) {
+	t.Parallel()
+	env := newBackupTestEnv(t, platformids.Mister)
+	profileID := "11111111-aaaa-bbbb-cccc-000000000001"
+	durable := map[string]string{
+		filepath.Join(env.ConfigDir, config.CfgFile):                                  "debug_logging = false\n",
+		filepath.Join(env.DataDir, "frontend.toml"):                                   "enabled = true\n",
+		filepath.Join(env.DataDir, config.TUIFile):                                    "theme = \"default\"\n",
+		filepath.Join(env.DataDir, config.AssetsDir, config.SuccessSoundFilename):     "success-audio\n",
+		filepath.Join(env.DataDir, config.AssetsDir, "custom.wav"):                    "custom-audio\n",
+		filepath.Join(env.DataDir, config.LaunchersDir, "custom.toml"):                "[[launchers]]\n",
+		filepath.Join(env.DataDir, config.MappingsDir, "tokens.toml"):                 "[[mappings]]\n",
+		filepath.Join(env.RootDir, "MiSTer.ini"):                                      "video_mode=0\n",
+		filepath.Join(env.RootDir, "nfc.csv"):                                         "match_uid,text\n",
+		filepath.Join(env.RootDir, "names.txt"):                                       "NES=My Nintendo\n",
+		filepath.Join(env.RootDir, "config", "core.cfg"):                              "setting=1\n",
+		filepath.Join(env.RootDir, "config", "inputs", "pad.map"):                     "map\n",
+		filepath.Join(env.RootDir, "saves", "game.sav"):                               "save-data\n",
+		filepath.Join(env.RootDir, "savestates", "game.ss"):                           "state-data\n",
+		filepath.Join(env.DataDir, "profiles", profileID, "name.txt"):                 "Kid A\n",
+		filepath.Join(env.DataDir, "profiles", profileID, "saves", "profile.sav"):     "profile-save\n",
+		filepath.Join(env.DataDir, "profiles", profileID, "savestates", "profile.ss"): "profile-state\n",
+	}
+	for filePath, contents := range durable {
+		writeTestFile(t, filePath, contents)
+	}
+	excluded := map[string]string{
+		filepath.Join(env.ConfigDir, config.AuthFile):                              "secret\n",
+		filepath.Join(env.DataDir, config.AssetsDir, "ArcadeDatabase.csv"):         "generated-cache\n",
+		filepath.Join(env.DataDir, "profiles", profileID, "retroachievements.cfg"): "password=secret\n",
+		filepath.Join(env.RootDir, "config", "core_recent.cfg"):                    "recent=1\n",
+		filepath.Join(env.RootDir, "games", "game.rom"):                            "rom\n",
+	}
+	for filePath, contents := range excluded {
+		writeTestFile(t, filePath, contents)
+	}
+
+	info, err := env.Manager.Create(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, IntegrityValid, info.Integrity)
+	assert.Empty(t, info.Warnings)
+	result := stageTestZip(t, info.Path)
+	manifestPaths := make(map[string]struct{}, len(result.Manifest.Files))
+	for _, file := range result.Manifest.Files {
+		manifestPaths[file.RestorePath] = struct{}{}
+	}
+	for filePath := range durable {
+		rel, relErr := canonicalFixtureRestorePath(&env, filePath)
+		require.NoError(t, relErr)
+		assert.Contains(t, manifestPaths, filepath.ToSlash(rel))
+	}
+	for filePath := range excluded {
+		rel, relErr := canonicalFixtureRestorePath(&env, filePath)
+		require.NoError(t, relErr)
+		assert.NotContains(t, manifestPaths, filepath.ToSlash(rel))
+	}
+
+	for filePath := range durable {
+		writeTestFile(t, filePath, "changed\n")
+	}
+	for filePath := range excluded {
+		require.NoError(t, os.Remove(filePath))
+	}
+	_, err = env.Manager.Restore(context.Background(), info.Name)
+	require.NoError(t, err)
+	for filePath, contents := range durable {
+		// #nosec G304 -- paths belong to test-owned temporary directories.
+		data, readErr := os.ReadFile(filePath)
+		require.NoError(t, readErr, filePath)
+		if filePath == filepath.Join(env.ConfigDir, config.CfgFile) {
+			assert.Contains(t, string(data), contents, filePath)
+			continue
+		}
+		assert.Equal(t, contents, string(data), filePath)
+	}
+	for filePath := range excluded {
+		_, statErr := os.Stat(filePath)
+		assert.ErrorIs(t, statErr, os.ErrNotExist, filePath)
+	}
+}
+
+func canonicalFixtureRestorePath(env *backupTestEnv, sourcePath string) (string, error) {
+	profileRoot := filepath.Join(env.DataDir, "profiles")
+	if rel, err := filepath.Rel(profileRoot, sourcePath); err == nil &&
+		rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		restorePath, restoreErr := filepath.Rel(env.RootDir, sourcePath)
+		if restoreErr != nil {
+			return "", fmt.Errorf("resolving profile fixture restore path: %w", restoreErr)
+		}
+		return restorePath, nil
+	}
+	if rel, err := filepath.Rel(env.ConfigDir, sourcePath); err == nil &&
+		rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel, nil
+	}
+	if rel, err := filepath.Rel(env.DataDir, sourcePath); err == nil &&
+		rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel, nil
+	}
+	restorePath, err := filepath.Rel(env.RootDir, sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("resolving fixture restore path: %w", err)
+	}
+	return restorePath, nil
+}
+
 func TestManagerCreateListRestore(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)
@@ -570,6 +782,10 @@ func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	assert.True(t, allowed("Config.toml"))
 	assert.True(t, allowed("FRONTEND.TOML"))
 	assert.True(t, allowed("Tui.toml"))
+	assert.True(t, allowed("assets/SUCCESS.OGG"))
+	assert.True(t, allowed("assets/custom.WAV"))
+	assert.True(t, allowed("assets/custom.MP3"))
+	assert.True(t, allowed("assets/custom.FLAC"))
 	assert.True(t, allowed("mappings/group/CARDS.TOML"))
 	assert.True(t, allowed("launchers/Custom.toml"))
 	assert.True(t, allowed("mappings/deep/nested/dirs/file.toml"))
@@ -578,6 +794,8 @@ func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	assert.False(t, allowed("USER.DB"))
 	assert.False(t, allowed("user.db"))
 	assert.False(t, allowed("mappings/notes.txt"))
+	assert.False(t, allowed("assets/ArcadeDatabase.csv"))
+	assert.False(t, allowed("assets/tty2oled_pics/NES.png"))
 	assert.False(t, allowed("other/file.toml"))
 	assert.False(t, allowed("auth.toml"))
 }
@@ -2537,6 +2755,121 @@ func TestStatusEntrySanitizesStoredError(t *testing.T) {
 
 	assert.Equal(t, "backup failed", entry.LastError)
 	assert.NotContains(t, entry.LastError, "/media/fat")
+}
+
+func TestManagerCanonicalRemoteBackupRoundTrip(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	objects := make(map[string][]byte)
+	var committed remoteBackupResponse
+	var committedRequest remoteSnapshotRequest
+	var restorePack *testPackFixture
+	restoreCompleted := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
+			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", BackupActive: true})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/check":
+			var req remoteCheckRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); !assert.NoError(t, err) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			missing := make([]string, 0, len(req.Hashes))
+			for _, hash := range req.Hashes {
+				if hash == remoteEmptyContentSHA256 {
+					continue
+				}
+				if _, ok := objects[hash]; !ok {
+					missing = append(missing, hash)
+				}
+			}
+			writeJSON(t, w, remoteCheckResponse{Missing: missing})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
+			body, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			for hash, payload := range parseTestPack(t, body) {
+				objects[hash] = payload
+			}
+			writeJSON(t, w, remotePackResponse{
+				PackHash: sha256Hex(body), ObjectCount: len(objects), CreatedAt: time.Now().UTC(),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups":
+			if err := json.NewDecoder(r.Body).Decode(&committedRequest); !assert.NoError(t, err) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			committed = testCommittedRemoteResponse(t, "canonical", platformids.Mister, &committedRequest)
+			writeJSON(t, w, committed)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups":
+			writeJSON(t, w, remoteListResponse{StorageQuotaBytes: 1 << 30})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/backups/canonical":
+			writeJSON(t, w, committed)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backup-objects/locate":
+			var req remoteLocateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); !assert.NoError(t, err) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			payloads := make([][]byte, 0, len(req.Hashes))
+			for _, hash := range req.Hashes {
+				payload, ok := objects[hash]
+				if !assert.True(t, ok, hash) {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				payloads = append(payloads, payload)
+			}
+			restorePack = newTestPackFixture(t, payloads...)
+			writeJSON(t, w, restorePack.locateResponse(req.Hashes))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/device/backup-packs/"):
+			if !assert.NotNil(t, restorePack) {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			assert.Equal(t, "/v1/device/backup-packs/"+restorePack.packHash, r.URL.Path)
+			_, _ = w.Write(restorePack.body)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/backups/canonical/restore-complete":
+			restoreCompleted = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	run, err := env.Manager.RunRemote(context.Background(), RemoteBackupTypeManual)
+	require.NoError(t, err)
+	assert.Equal(t, "canonical", run.Backup.ID)
+	assert.NotEmpty(t, committedRequest.Categories[CategoryZaparoo])
+	assert.NotEmpty(t, committedRequest.Categories[CategorySaves])
+	assert.NotEmpty(t, committedRequest.Categories[CategorySavestates])
+
+	changed := map[string]string{
+		filepath.Join(env.DataDir, config.AssetsDir, config.SuccessSoundFilename): "success-audio\n",
+		filepath.Join(env.RootDir, "nfc.csv"):                                     "match_uid,text\n",
+		filepath.Join(env.RootDir, "names.txt"):                                   "NES=My Nintendo\n",
+		filepath.Join(env.RootDir, "saves", "game.sav"):                           "save-data\n",
+		filepath.Join(env.RootDir, "savestates", "game.ss"):                       "state-data\n",
+	}
+	for filePath := range changed {
+		writeTestFile(t, filePath, "changed\n")
+	}
+	_, err = env.Manager.RestoreRemote(context.Background(), "canonical")
+	require.NoError(t, err)
+	assert.True(t, restoreCompleted)
+	for filePath, expected := range changed {
+		// #nosec G304 -- paths belong to test-owned temporary directories.
+		data, readErr := os.ReadFile(filePath)
+		require.NoError(t, readErr)
+		assert.Equal(t, expected, string(data), filePath)
+	}
 }
 
 func TestManagerRunRemoteBackupUploadsPackedSnapshot(t *testing.T) {
