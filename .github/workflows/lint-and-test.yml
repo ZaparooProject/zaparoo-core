@@ -196,6 +196,39 @@ jobs:
           path: D:\go-mod-cache
           key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
 
+  mister-backup-mount-smoke:
+    name: MiSTer Backup Mount Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev \
+            libnfc-dev \
+            libpcsclite-dev
+
+      - name: Verify runner prerequisites
+        run: |
+          command -v unshare
+          sudo -n true
+
+      - name: Run MiSTer backup mount smoke test
+        run: scripts/test-mister-backup-mounts.sh
+
   cross-lint:
     name: Cross Lint
     if: github.event_name == 'pull_request'

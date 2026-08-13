@@ -351,10 +351,12 @@ func (m *Manager) createBackup(ctx context.Context, preRestore bool) (result Inf
 		_ = os.Remove(tmpPath)
 		return Info{}, fmt.Errorf("finalizing backup ZIP: %w", renameErr)
 	}
-	info, err := infoFromManifest(finalPath, &manifest)
-	if err != nil {
-		return Info{}, err
+	verified, verifyErr := m.verifyLocalArchive(ctx, finalPath)
+	if verifyErr != nil {
+		_ = os.Remove(finalPath)
+		return Info{}, fmt.Errorf("verifying completed backup ZIP: %w", verifyErr)
 	}
+	info := verified.Info
 	log.Info().Str("path", finalPath).Int64("size", info.Size).Msg("created local backup ZIP")
 	if preRestore {
 		// Never fail the backup that was just created over a prune error.
@@ -706,19 +708,32 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 	dataDir := helpers.DataDir(m.pl)
 	configDir := helpers.ConfigDir(m.pl)
 	var platformPlan platforms.BackupPlan
+	platformCleanup := func() error { return nil }
 	if provider, ok := m.pl.(platforms.BackupProvider); scope == config.BackupScopePlatform && ok {
 		platformPlan = platforms.BackupPlan{Definitions: provider.BackupDefinitions()}
-		if planner, planning := m.pl.(platforms.BackupPlanningProvider); planning {
-			platformPlan = planner.BackupPlan()
+		switch backupProvider := m.pl.(type) {
+		case platforms.BackupPreparingProvider:
+			var err error
+			platformPlan, platformCleanup, err = backupProvider.PrepareBackup()
+			if err != nil {
+				return fileCollection{}, fmt.Errorf("preparing platform profile data for backup: %w", err)
+			}
+		case platforms.BackupPlanningProvider:
+			platformPlan = backupProvider.BackupPlan()
 		}
 	}
 
 	if m.database == nil || m.database.UserDB == nil {
-		return fileCollection{}, errors.New("database is not available")
+		return fileCollection{}, errors.Join(errors.New("database is not available"), platformCleanup())
 	}
 	userBackup, cleanup, err := m.database.UserDB.BackupForTransfer(ctx, reason)
 	if err != nil {
-		return fileCollection{}, fmt.Errorf("snapshotting transfer user database: %w", err)
+		return fileCollection{}, errors.Join(
+			fmt.Errorf("snapshotting transfer user database: %w", err), platformCleanup(),
+		)
+	}
+	cleanupAll := func() error {
+		return errors.Join(cleanup(), platformCleanup())
 	}
 
 	canonicalConfigRoots := canonicalCategoryRoots([]string{configDir}, "")
@@ -728,7 +743,7 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 	}
 	excludedIdentities, err := sourceIdentities(excludedSources)
 	if err != nil {
-		return fileCollection{}, errors.Join(err, cleanup())
+		return fileCollection{}, errors.Join(err, cleanupAll())
 	}
 	collector := newSourceCollector(ctx, excludedSources)
 	collector.excludedIdentities = excludedIdentities
@@ -736,7 +751,7 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 	if err = collector.addTrustedFile(
 		userBackup.Path, CategoryZaparoo, zaparooArchive("user.db"), "user.db",
 	); err != nil {
-		return fileCollection{}, errors.Join(err, cleanup())
+		return fileCollection{}, errors.Join(err, cleanupAll())
 	}
 	zaparooDefs := zaparooBackupDefinitions(configDir, dataDir)
 	zaparooDefinitions := make([]collectorDefinition, 0, len(zaparooDefs))
@@ -758,9 +773,9 @@ func (m *Manager) collectFiles(ctx context.Context, reason, scope string) (fileC
 		collector.warn(warning.Category, warning.Path, warning.Reason)
 	}
 	if collector.err != nil {
-		return fileCollection{}, errors.Join(collector.err, cleanup())
+		return fileCollection{}, errors.Join(collector.err, cleanupAll())
 	}
-	return fileCollection{Files: collector.files, Warnings: collector.warnings, Cleanup: cleanup}, nil
+	return fileCollection{Files: collector.files, Warnings: collector.warnings, Cleanup: cleanupAll}, nil
 }
 
 // zaparooBackupDefinitions describes which Zaparoo-owned files backups
@@ -777,6 +792,22 @@ func zaparooBackupDefinitions(configDir, dataDir string) []platforms.BackupDefin
 		{
 			SourceRoot: dataDir, Category: CategoryZaparoo, NonRecursive: true,
 			Include: []platforms.BackupPattern{{Glob: "frontend.toml"}, {Glob: config.TUIFile}},
+		},
+		{
+			SourceRoot:  filepath.Join(dataDir, config.AssetsDir),
+			RestoreRoot: config.AssetsDir,
+			Category:    CategoryZaparoo,
+			Include: []platforms.BackupPattern{
+				{Glob: config.SuccessSoundFilename},
+				{Glob: config.FailSoundFilename},
+				{Glob: config.LimitSoundFilename},
+				{Glob: config.PendingSoundFilename},
+				{Glob: config.ReadySoundFilename},
+				{Glob: "*.ogg"},
+				{Glob: "*.wav"},
+				{Glob: "*.mp3"},
+				{Glob: "*.flac"},
+			},
 		},
 		{
 			SourceRoot:  filepath.Join(dataDir, config.LaunchersDir),
@@ -1367,6 +1398,70 @@ func inspectZipManifest(zipPath string) (Info, error) {
 	}
 	info.Integrity = IntegrityUnchecked
 	return info, nil
+}
+
+func (m *Manager) verifyLocalArchive(ctx context.Context, zipPath string) (*zipReadResult, error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening backup ZIP: %w", err)
+	}
+	defer func() { _ = zr.Close() }()
+	entries, err := validateZipHeaders(zr.File)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := readManifestFromZip(zr.File, entries)
+	if err != nil {
+		return nil, err
+	}
+	policyErr := m.validateManifestPolicy(manifest)
+	if policyErr != nil {
+		return nil, policyErr
+	}
+	for i := range manifest.Files {
+		file := &manifest.Files[i]
+		entry := entries[file.ArchivePath]
+		payload, openErr := entry.Open()
+		if openErr != nil {
+			return nil, fmt.Errorf("opening backup ZIP payload %s: %w", file.ArchivePath, openErr)
+		}
+		verifyErr := verifyArchivePayload(ctx, file, payload)
+		closeErr := payload.Close()
+		if closeErr != nil {
+			closeErr = fmt.Errorf("closing backup ZIP payload %s: %w", file.ArchivePath, closeErr)
+		}
+		if verifyErr != nil || closeErr != nil {
+			return nil, errors.Join(verifyErr, closeErr)
+		}
+	}
+	info, err := infoFromManifest(zipPath, manifest)
+	if err != nil {
+		return nil, err
+	}
+	info.Integrity = IntegrityValid
+	return &zipReadResult{Manifest: *manifest, Info: info}, nil
+}
+
+func verifyArchivePayload(ctx context.Context, file *FileRef, payload io.Reader) error {
+	hash := sha256.New()
+	reader := &contextReader{ctx: ctx, reader: payload}
+	limited := &io.LimitedReader{R: reader, N: file.Size}
+	written, err := io.Copy(hash, limited)
+	if err != nil {
+		return fmt.Errorf("reading backup ZIP payload %s: %w", file.ArchivePath, err)
+	}
+	var extra [1]byte
+	extraSize, extraErr := reader.Read(extra[:])
+	if extraErr != nil && !errors.Is(extraErr, io.EOF) {
+		return fmt.Errorf("checking backup ZIP payload size %s: %w", file.ArchivePath, extraErr)
+	}
+	if written != file.Size || extraSize != 0 {
+		return fmt.Errorf("backup ZIP payload size mismatch: %s", file.ArchivePath)
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != file.SHA256 {
+		return fmt.Errorf("backup ZIP payload hash mismatch: %s", file.ArchivePath)
+	}
+	return nil
 }
 
 func (m *Manager) validateLocalArchiveManifest(zipPath string) error {

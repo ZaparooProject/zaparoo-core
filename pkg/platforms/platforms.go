@@ -362,6 +362,12 @@ type BackupPlanningProvider interface {
 	BackupPlan() BackupPlan
 }
 
+type BackupPreparingProvider interface {
+	// PrepareBackup returns a non-nil, idempotent cleanup callback on success.
+	// When it returns an error, cleanup is nil and must not be called.
+	PrepareBackup() (BackupPlan, func() error, error)
+}
+
 type BackupRestoreRootProvider interface {
 	BackupRestoreRoot() string
 }

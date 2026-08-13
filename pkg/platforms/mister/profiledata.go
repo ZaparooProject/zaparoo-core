@@ -64,6 +64,7 @@ const (
 	profileDataItemSavestates        = "savestates"
 	profileDataItemRetroAchievements = "retroachievements"
 	retroAchievementsConfigFile      = "retroachievements.cfg"
+	profileNameFile                  = "name.txt"
 
 	// nasPoolDirName is the pool directory created inside a foreign mount
 	// (e.g. a NAS share bind-mounted over saves/ by cifs_mount.sh). The
@@ -453,7 +454,7 @@ func (d *profileDataManager) writeNameFile(profileDir string, ref platforms.Prof
 	if ref.Name == "" {
 		return
 	}
-	path := filepath.Join(profileDir, "name.txt")
+	path := filepath.Join(profileDir, profileNameFile)
 	if err := afero.WriteFile(d.fs, path, []byte(ref.Name+"\n"), 0o644); err != nil {
 		log.Warn().Err(err).Str("path", path).
 			Msg("profiles: failed to write profile name file")
