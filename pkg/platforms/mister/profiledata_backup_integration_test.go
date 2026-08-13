@@ -44,14 +44,14 @@ func TestPrepareBackupRealBindMountSmoke(t *testing.T) {
 	tempDir := filepath.Join(testRoot, "tmp")
 	settings := platforms.Settings{DataDir: filepath.Join(storageRoot, "zaparoo"), TempDir: tempDir}
 	fs := afero.NewOsFs()
-	require.NoError(t, os.MkdirAll(storageRoot, 0o750))
+	require.NoError(t, fs.MkdirAll(storageRoot, 0o750))
 	manager := &profileDataManager{
 		fs: fs, m: mounter, ledger: loadMountLedger(fs, filepath.Join(testRoot, "mounts.json")),
 	}
 	for _, item := range allItems() {
-		require.NoError(t, os.MkdirAll(filepath.Join(storageRoot, item), 0o750))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(storageRoot, item, "shared.txt"), []byte("shared-"+item), 0o600,
+		require.NoError(t, fs.MkdirAll(filepath.Join(storageRoot, item), 0o750))
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(storageRoot, item, "shared.txt"), []byte("shared-"+item), 0o600,
 		))
 	}
 	require.NoError(t, manager.apply(kidA(), allItems()))
@@ -61,8 +61,8 @@ func TestPrepareBackupRealBindMountSmoke(t *testing.T) {
 		}
 	})
 	for _, item := range allItems() {
-		require.NoError(t, os.WriteFile(
-			filepath.Join(storageRoot, item, "personal.txt"), []byte("personal-"+item), 0o600,
+		require.NoError(t, afero.WriteFile(
+			fs, filepath.Join(storageRoot, item, "personal.txt"), []byte("personal-"+item), 0o600,
 		))
 	}
 
@@ -72,7 +72,7 @@ func TestPrepareBackupRealBindMountSmoke(t *testing.T) {
 	assert.Empty(t, plan.Warnings)
 	for _, item := range allItems() {
 		// #nosec G304 -- storageRoot is an isolated tmpfs created by the smoke-test runner.
-		personal, readErr := os.ReadFile(filepath.Join(storageRoot, item, "personal.txt"))
+		personal, readErr := afero.ReadFile(fs, filepath.Join(storageRoot, item, "personal.txt"))
 		require.NoError(t, readErr)
 		assert.Equal(t, "personal-"+item, string(personal))
 		var alias string
@@ -85,14 +85,14 @@ func TestPrepareBackupRealBindMountSmoke(t *testing.T) {
 		}
 		require.NotEmpty(t, alias)
 		// #nosec G304 -- alias is returned by the backup plan under the isolated test root.
-		shared, readErr := os.ReadFile(filepath.Join(alias, "shared.txt"))
+		shared, readErr := afero.ReadFile(fs, filepath.Join(alias, "shared.txt"))
 		require.NoError(t, readErr)
 		assert.Equal(t, "shared-"+item, string(shared))
-		_, statErr := os.Stat(filepath.Join(alias, "personal.txt"))
+		_, statErr := fs.Stat(filepath.Join(alias, "personal.txt"))
 		require.ErrorIs(t, statErr, os.ErrNotExist)
 	}
 	require.NoError(t, cleanup())
-	entries, err := os.ReadDir(tempDir)
+	entries, err := afero.ReadDir(fs, tempDir)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
