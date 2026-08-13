@@ -21,7 +21,7 @@ run_smoke_test='
 	export GOCACHE="$cache_root/go-build"
 	export GOMODCACHE="$MODULE_CACHE"
 	export GOPATH="$cache_root/gopath"
-	if ZAPAROO_TEST_REAL_MOUNTS=1 go test ./pkg/platforms/mister/ \
+	if ZAPAROO_TEST_REAL_MOUNTS=1 go test -tags=integration ./pkg/platforms/mister/ \
 		-run "^TestPrepareBackupRealBindMountSmoke$" -count=1 -v; then
 		status=0
 	else
