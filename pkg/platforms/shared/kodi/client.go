@@ -302,7 +302,7 @@ func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
 // GetTVShows retrieves all TV shows from Kodi's library
 func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
 	params := VideoLibraryGetTVShowsParams{
-		Properties: []string{"title"},
+		Properties: []string{"title", "uniqueid"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetTVShows, params)
@@ -466,17 +466,20 @@ func (c *Client) LaunchArtist(path string) error {
 	return err
 }
 
-// LaunchTVShow launches a TV show by ID using playlist generation
+// LaunchTVShow resolves a durable show identity and launches its episodes as a playlist.
 func (c *Client) LaunchTVShow(path string) error {
-	// Parse show ID
-	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiShow)
+	reference, err := parseTVShowReference(path)
 	if err != nil {
-		return fmt.Errorf("failed to extract show ID from path: %w", err)
+		return err
 	}
 
-	showID, err := strconv.Atoi(idStr)
+	shows, err := c.GetTVShows(context.Background())
 	if err != nil {
-		return fmt.Errorf("failed to parse show ID %q: %w", idStr, err)
+		return fmt.Errorf("failed to resolve current Kodi TV show ID: %w", err)
+	}
+	showID, err := resolveTVShowID(reference, shows)
+	if err != nil {
+		return err
 	}
 
 	// Step 1: Clear video playlist (playlistid=1)
