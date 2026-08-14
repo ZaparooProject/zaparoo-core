@@ -124,6 +124,10 @@ func (db *UserDB) openSQLConnection(dbPath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user database: %w", err)
 	}
+	if err = sqlInstance.PingContext(db.ctx); err != nil {
+		_ = sqlInstance.Close()
+		return nil, fmt.Errorf("failed to connect to user database: %w", err)
+	}
 	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
 		if database.IsCorruptionError(err) {
 			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
