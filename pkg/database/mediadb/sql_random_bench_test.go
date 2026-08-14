@@ -49,6 +49,14 @@ func benchmarkRandomGameQuery(b *testing.B, rows int) {
 	mediaDB, cleanup := setupBrowseBenchMediaDB(b)
 	defer cleanup()
 	rootDir := seedRandomGameBenchmark(b, mediaDB, rows)
+	seedRandomGameBrowseCounts(b, mediaDB, rows)
+	broadSystems := []string{
+		"3DO", "AdventureVision", "AmigaCD32", "Arcadia", "Atari2600", "Atari5200", "Atari7800", "Astrocade",
+		"CasioPV1000", "CDI", "ChannelF", "ColecoVision", "FDS", "Genesis", "Sega32X", "Intellivision",
+		"Jaguar", "JaguarCD", "Odyssey2", "MasterSystem", "NeoGeo", "NeoGeoCD", "NES", "Nintendo64", "PSX",
+		"Saturn", "MegaCD", "SG1000", "SNES", "SuperGameboy", "SuperGrafx", "TurboGrafx16", "TurboGrafx16CD",
+		"VC4000", "Vectrex", "VirtualBoy", "CreatiVision",
+	}
 
 	queries := []struct {
 		name  string
@@ -57,6 +65,7 @@ func benchmarkRandomGameQuery(b *testing.B, rows int) {
 	}{
 		{name: "all", query: database.MediaQuery{Systems: []string{"NES"}}},
 		{name: "all-cold", cold: true, query: database.MediaQuery{Systems: []string{"NES"}}},
+		{name: "broad-systems-cold", cold: true, query: database.MediaQuery{Systems: broadSystems}},
 		{name: "favorite-sparse", query: database.MediaQuery{
 			Systems: []string{"NES"},
 			Tags:    []zapscript.TagFilter{{Type: "user", Value: "favorite"}},
@@ -164,6 +173,29 @@ func seedRandomGameBenchmark(b testing.TB, mediaDB *MediaDB, rows int) string {
 	return rootDir
 }
 
+func seedRandomGameBrowseCounts(b testing.TB, mediaDB *MediaDB, rows int) {
+	b.Helper()
+	ctx := context.Background()
+	db := mediaDB.sql.Load()
+
+	_, err := db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO BrowseDirs (Path, Name, IsVirtual) VALUES ('/', '/', 0)`)
+	require.NoError(b, err)
+	var rootDirDBID int64
+	require.NoError(b, db.QueryRowContext(ctx,
+		"SELECT DBID FROM BrowseDirs WHERE Path = '/'",
+	).Scan(&rootDirDBID))
+	_, err = db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO BrowseDirCounts
+			(ParentDirDBID, ChildDirDBID, SystemDBID, FileCount)
+		VALUES (?, ?, 1, ?)`, rootDirDBID, rootDirDBID, rows)
+	require.NoError(b, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)`,
+		DBConfigBrowseIndexVersion, browseCacheSchemaVersion)
+	require.NoError(b, err)
+}
+
 func TestRandomGameQueryPlansUseExistingIndexes(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +207,14 @@ func TestRandomGameQueryPlansUseExistingIndexes(t *testing.T) {
 	pathPlan := randomQueryPlan(t, mediaDB.sql.Load(),
 		"SELECT COUNT(*), MIN(Media.DBID), MAX(Media.DBID) FROM Media "+pathWhere, pathArgs...)
 	assertRandomPlanContains(t, pathPlan, "path_idx")
+
+	broadSystems := &database.MediaQuery{Systems: []string{
+		"NES", "SNES", "Genesis", "Saturn", "PSX", "Nintendo64", "Atari2600", "AmigaCD32",
+	}}
+	systemWhere, systemArgs := buildMediaQueryWhereClause(broadSystems)
+	systemPlan := randomQueryPlan(t, mediaDB.sql.Load(),
+		"SELECT COUNT(*), MIN(Media.DBID), MAX(Media.DBID) FROM Media "+systemWhere, systemArgs...)
+	assertRandomPlanContains(t, systemPlan, "media_system_present_path_idx")
 
 	tagQuery := &database.MediaQuery{
 		Systems: []string{"NES"},

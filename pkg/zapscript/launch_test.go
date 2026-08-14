@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	pathhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -1291,6 +1292,18 @@ func TestMediaDBLookupContext_UsesTimeoutWithoutServiceContext(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(mediaDBLookupTimeout), deadline, 200*time.Millisecond)
 }
 
+func TestRandomMediaDBLookupContext_UsesExtendedTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := randomMediaDBLookupContext(&platforms.CmdEnv{})
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(randomMediaDBLookupTimeout), deadline, 200*time.Millisecond)
+	assert.Greater(t, randomMediaDBLookupTimeout, mediaDBLookupTimeout)
+}
+
 func TestMediaDBLookupContext_IgnoresCanceledLauncherContext(t *testing.T) {
 	t.Parallel()
 
@@ -1618,6 +1631,68 @@ func TestSearchMediaBySystemTierReturnsDatabaseError(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestLaunchRandomGameWithRetry_StopContracts(t *testing.T) {
+	t.Parallel()
+
+	terminalErr := errors.New("terminal launch failure")
+	selectionErr := errors.New("reselection failure")
+	tests := []struct {
+		launchErr      error
+		selectErr      error
+		wantErr        error
+		name           string
+		wantLaunches   int
+		wantSelections int
+	}{
+		{
+			name:         "terminal launch error",
+			launchErr:    terminalErr,
+			wantErr:      terminalErr,
+			wantLaunches: 1,
+		},
+		{
+			name:           "reselection error",
+			launchErr:      pathhelpers.ErrNoLauncher,
+			selectErr:      selectionErr,
+			wantErr:        selectionErr,
+			wantLaunches:   1,
+			wantSelections: 1,
+		},
+		{
+			name:           "retry limit",
+			launchErr:      pathhelpers.ErrNoLauncher,
+			wantErr:        pathhelpers.ErrNoLauncher,
+			wantLaunches:   randomLaunchSelectionAttempts,
+			wantSelections: randomLaunchSelectionAttempts - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launches := 0
+			selections := 0
+			_, err := launchRandomGameWithRetry(
+				database.SearchResult{Path: filepath.Join("games", "first.rom")},
+				func() (database.SearchResult, error) {
+					selections++
+					if tt.selectErr != nil {
+						return database.SearchResult{}, tt.selectErr
+					}
+					return database.SearchResult{Path: filepath.Join("games", "next.rom")}, nil
+				},
+				func(database.SearchResult) error {
+					launches++
+					return tt.launchErr
+				},
+			)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantLaunches, launches)
+			assert.Equal(t, tt.wantSelections, selections)
+		})
+	}
+}
+
 func TestCmdRandomSystemWildcardUsesOrderedFallback(t *testing.T) {
 	t.Parallel()
 
@@ -1872,6 +1947,47 @@ launcher = "RA"
 	}
 
 	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathRetriesUnlaunchableMedia(t *testing.T) {
+	t.Parallel()
+
+	queryPath := filepath.Join(launchTestAbsPath("games"), "SNES")
+	metadataPath := filepath.Join(queryPath, "gamelist.xml")
+	gamePath := filepath.Join(queryPath, "Super Mario World.sfc")
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{SystemID: systemdefs.SystemSNES, Path: metadataPath}, nil).Once()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Return(database.SearchResult{SystemID: systemdefs.SystemSNES, Path: gamePath}, nil).Once()
+
+	mockPlatform.On(
+		"LaunchMedia", cfg, metadataPath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(pathhelpers.ErrNoLauncher).Once()
+	mockPlatform.On(
+		"LaunchMedia", cfg, gamePath, (*platforms.Launcher)(nil),
+		mock.Anything, (*platforms.LaunchOptions)(nil),
+	).Return(nil).Once()
+
+	result, err := cmdRandom(mockPlatform, platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{queryPath},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	})
 
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)

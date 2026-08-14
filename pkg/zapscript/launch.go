@@ -41,6 +41,8 @@ import (
 	"github.com/spf13/afero"
 )
 
+const randomLaunchSelectionAttempts = 16
+
 func launcherOverridePropertyTypeTag() string {
 	return tags.PropertyTypeTag(tags.TagPropertyLauncherOverride)
 }
@@ -391,7 +393,7 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
-	ctx, cancel := mediaDBLookupContext(env)
+	ctx, cancel := randomMediaDBLookupContext(env)
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
@@ -404,14 +406,20 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 			Systems: systemIDs,
 			Tags:    tagFilters,
 		}
-		game, gameErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
+		selectGame := func() (database.SearchResult, error) {
+			return gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
+		}
+		game, gameErr := selectGame()
 		if gameErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
 
-		if launchErr := launch(launchTarget{
-			path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
-		}); launchErr != nil {
+		_, launchErr := launchRandomGameWithRetry(game, selectGame, func(candidate database.SearchResult) error {
+			return launch(launchTarget{
+				path: candidate.Path, systemID: candidate.SystemID, mediaID: candidate.MediaID,
+			})
+		})
+		if launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to launch random game: %w", launchErr)
@@ -437,7 +445,10 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 			PathPrefix: cleanedPath,
 			Tags:       tagFilters,
 		}
-		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
+		selectGame := func() (database.SearchResult, error) {
+			return gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
+		}
+		searchResult, searchErr := selectGame()
 		fallbackToFilesystem := isFilesystemPath && len(tagFilters) == 0 &&
 			(errors.Is(searchErr, sql.ErrNoRows) || errors.Is(searchErr, context.DeadlineExceeded))
 		if fallbackToFilesystem {
@@ -455,14 +466,24 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 			if len(files) == 0 {
 				return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", cleanedPath)
 			}
-			file, randomErr := helpers.RandomElem(files)
-			if randomErr != nil {
-				return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
+			selectFile := func() (database.SearchResult, error) {
+				file, randomErr := helpers.RandomElem(files)
+				if randomErr != nil {
+					return database.SearchResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
+				}
+				return database.SearchResult{Path: file}, nil
 			}
-			if launchErr := launch(launchTarget{path: file}); launchErr != nil {
+			file, randomErr := selectFile()
+			if randomErr != nil {
+				return platforms.CmdResult{}, randomErr
+			}
+			file, launchErr := launchRandomGameWithRetry(file, selectFile, func(candidate database.SearchResult) error {
+				return launch(launchTarget{path: candidate.Path})
+			})
+			if launchErr != nil {
 				return platforms.CmdResult{
 					MediaChanged: true,
-				}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
+				}, fmt.Errorf("failed to launch file '%s': %w", file.Path, launchErr)
 			}
 			return platforms.CmdResult{
 				MediaChanged: true,
@@ -471,9 +492,16 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 
-		if launchErr := launch(launchTarget{
-			path: searchResult.Path, systemID: searchResult.SystemID, mediaID: searchResult.MediaID,
-		}); launchErr != nil {
+		searchResult, launchErr := launchRandomGameWithRetry(
+			searchResult,
+			selectGame,
+			func(candidate database.SearchResult) error {
+				return launch(launchTarget{
+					path: candidate.Path, systemID: candidate.SystemID, mediaID: candidate.MediaID,
+				})
+			},
+		)
+		if launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to launch file '%s': %w", searchResult.Path, launchErr)
@@ -510,15 +538,21 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 		if searchQuery == "*" {
 			mediaQuery.PathGlob = ""
 		}
-		game, randomErr := randomGameBySystemTier(ctx, gamesdb, &mediaQuery, systemTiers)
+		selectGame := func() (database.SearchResult, error) {
+			return randomGameBySystemTier(ctx, gamesdb, &mediaQuery, systemTiers)
+		}
+		game, randomErr := selectGame()
 		if randomErr != nil {
 			return platforms.CmdResult{},
 				fmt.Errorf("failed to get random game matching '%s': %w", searchQuery, randomErr)
 		}
 
-		if launchErr := launch(launchTarget{
-			path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
-		}); launchErr != nil {
+		game, launchErr := launchRandomGameWithRetry(game, selectGame, func(candidate database.SearchResult) error {
+			return launch(launchTarget{
+				path: candidate.Path, systemID: candidate.SystemID, mediaID: candidate.MediaID,
+			})
+		})
+		if launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to launch game '%s': %w", game.Path, launchErr)
@@ -542,14 +576,21 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	}
 
 	mediaQuery := database.MediaQuery{Tags: tagFilters}
-	game, err := randomGameBySystemTier(ctx, gamesdb, &mediaQuery, orderedSystemTiers(systems))
+	systemTiers := orderedSystemTiers(systems)
+	selectGame := func() (database.SearchResult, error) {
+		return randomGameBySystemTier(ctx, gamesdb, &mediaQuery, systemTiers)
+	}
+	game, err := selectGame()
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
 
-	if err := launch(launchTarget{
-		path: game.Path, systemID: game.SystemID, mediaID: game.MediaID,
-	}); err != nil {
+	game, err = launchRandomGameWithRetry(game, selectGame, func(candidate database.SearchResult) error {
+		return launch(launchTarget{
+			path: candidate.Path, systemID: candidate.SystemID, mediaID: candidate.MediaID,
+		})
+	})
+	if err != nil {
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, err)
@@ -557,6 +598,35 @@ func cmdRandomWithFS(fs afero.Fs, pl platforms.Platform, env *platforms.CmdEnv) 
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, nil
+}
+
+func launchRandomGameWithRetry(
+	game database.SearchResult,
+	selectGame func() (database.SearchResult, error),
+	launchGame func(database.SearchResult) error,
+) (database.SearchResult, error) {
+	var launchErr error
+	for attempt := range randomLaunchSelectionAttempts {
+		launchErr = launchGame(game)
+		if launchErr == nil || !errors.Is(launchErr, helpers.ErrNoLauncher) {
+			return game, launchErr
+		}
+		if attempt == randomLaunchSelectionAttempts-1 {
+			break
+		}
+
+		var selectErr error
+		game, selectErr = selectGame()
+		if selectErr != nil {
+			return game, fmt.Errorf("failed to select another random media entry: %w", selectErr)
+		}
+	}
+
+	return game, fmt.Errorf(
+		"no launchable random media found after %d selections: %w",
+		randomLaunchSelectionAttempts,
+		launchErr,
+	)
 }
 
 func orderedSystemTiers(systems []systemdefs.System) [][]systemdefs.System {

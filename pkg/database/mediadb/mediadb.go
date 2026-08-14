@@ -2946,6 +2946,30 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 		return result, ErrNullSQL
 	}
 
+	// Per-system counts preserve uniform media-row weighting while narrowing
+	// broad system scopes before random row selection touches the Media table.
+	if query.PathPrefix == "" && query.PathGlob == "" && len(query.Systems) > 1 {
+		started := time.Now()
+		counts, err := db.SystemMediaCounts(ctx, query.Tags)
+		if err != nil {
+			return result, fmt.Errorf("failed to get system media counts for random selection: %w", err)
+		}
+		selectedSystem, err := selectWeightedSystem(counts, query.Systems)
+		if err != nil {
+			return result, err
+		}
+		log.Debug().
+			Int("systems", len(query.Systems)).
+			Int("tagFilters", len(query.Tags)).
+			Str("selectedSystem", selectedSystem).
+			Dur("duration", time.Since(started)).
+			Msg("narrowed weighted random media scope")
+
+		narrowed := *query
+		narrowed.Systems = []string{selectedSystem}
+		return db.RandomGameWithQuery(ctx, &narrowed)
+	}
+
 	// Use one full matching scope so systems are weighted by their matching
 	// media rows and tag filters cannot choose an empty system first.
 	// Check MediaCountCache before repeating the count query.
@@ -2964,6 +2988,49 @@ func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.Medi
 	}
 
 	return db.randomGameWithFreshStats(ctx, query)
+}
+
+func selectWeightedSystem(
+	counts []database.SystemMediaCount,
+	systems []string,
+) (string, error) {
+	return selectWeightedSystemUsing(counts, systems, helpers.RandomInt)
+}
+
+func selectWeightedSystemUsing(
+	counts []database.SystemMediaCount,
+	systems []string,
+	randomInt func(int) (int, error),
+) (string, error) {
+	requested := make(map[string]struct{}, len(systems))
+	for _, systemID := range systems {
+		requested[systemID] = struct{}{}
+	}
+
+	eligible := make([]database.SystemMediaCount, 0, len(systems))
+	total := 0
+	for _, count := range counts {
+		if _, ok := requested[count.SystemID]; !ok || count.Count <= 0 {
+			continue
+		}
+		eligible = append(eligible, count)
+		total += count.Count
+	}
+	if total == 0 {
+		return "", sql.ErrNoRows
+	}
+
+	offset, err := randomInt(total)
+	if err != nil {
+		return "", fmt.Errorf("failed to select weighted random system: %w", err)
+	}
+	for _, count := range eligible {
+		if offset < count.Count {
+			return count.SystemID, nil
+		}
+		offset -= count.Count
+	}
+	return "", sql.ErrNoRows
 }
 
 func (db *MediaDB) randomGameWithFreshStats(

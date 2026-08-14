@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	stdpath "path"
 	"path/filepath"
@@ -36,6 +37,9 @@ import (
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrNoLauncher indicates that no configured launcher can handle a media path.
+var ErrNoLauncher = errors.New("no launcher found")
 
 // NormalizePathForComparison normalizes a path for cross-platform case-insensitive comparison.
 // Converts to forward slashes and lowercases for consistent matching across all platforms.
@@ -615,7 +619,7 @@ func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) 
 	if len(launchers) == 0 {
 		log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
 			Msg("no launcher matched path")
-		return platforms.Launcher{}, errors.New("no launcher found for: " + path)
+		return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 	}
 
 	best := 0
@@ -915,7 +919,7 @@ func FindLauncher(
 		if !guessed {
 			log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
 				Msg("no launcher matched path")
-			return platforms.Launcher{}, errors.New("no launcher found for: " + path)
+			return platforms.Launcher{}, fmt.Errorf("%w for: %s", ErrNoLauncher, path)
 		}
 	} else {
 		best := 0
