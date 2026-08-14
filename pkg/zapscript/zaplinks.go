@@ -56,6 +56,7 @@ const (
 
 	preWarmMaxConcurrent = 5
 	preWarmTimeout       = 2 * time.Second
+	maxZapLinkRedirects  = 10
 )
 
 var AcceptedMimeTypes = []string{
@@ -92,15 +93,30 @@ var zapFetchTransport = &http.Transport{
 
 var zapFetchClientMu syncutil.RWMutex
 
-var zapFetchClient = newZapFetchClient(zapFetchTransport)
+var (
+	wellKnownFetchClient = newHTTPFetchClient(zapFetchTransport)
+	zapFetchClient       = newZapFetchClient(zapFetchTransport)
+)
 
-func newZapFetchClient(transport http.RoundTripper) *http.Client {
+func newHTTPFetchClient(transport http.RoundTripper) *http.Client {
 	return &http.Client{
 		Transport: &installer.AuthTransport{
 			Base: transport,
 		},
 		Timeout: 10 * time.Second,
 	}
+}
+
+func newZapFetchClient(transport http.RoundTripper) *http.Client {
+	client := newHTTPFetchClient(transport)
+	client.CheckRedirect = checkZapLinkRedirect
+	return client
+}
+
+func currentWellKnownFetchClient() *http.Client {
+	zapFetchClientMu.RLock()
+	defer zapFetchClientMu.RUnlock()
+	return wellKnownFetchClient
 }
 
 func currentZapFetchClient() *http.Client {
@@ -114,6 +130,7 @@ func currentZapFetchClient() *http.Client {
 func ConfigureHTTPTransport() {
 	transport := tlsroots.Transport(zapFetchTransport)
 	zapFetchClientMu.Lock()
+	wellKnownFetchClient = newHTTPFetchClient(transport)
 	zapFetchClient = newZapFetchClient(transport)
 	zapFetchClientMu.Unlock()
 }
@@ -125,7 +142,7 @@ var ErrWellKnownNotFound = errors.New("well-known endpoint not found")
 // FetchWellKnown fetches and parses the .well-known/zaparoo file from a base URL.
 // Returns ErrWellKnownNotFound if the host returned 404.
 func FetchWellKnown(baseURL string) (*WellKnown, error) {
-	return doFetchWellKnown(baseURL, currentZapFetchClient())
+	return doFetchWellKnown(baseURL, currentWellKnownFetchClient())
 }
 
 func doFetchWellKnown(baseURL string, client httpDoer) (*WellKnown, error) {
@@ -173,6 +190,9 @@ func doFetchWellKnown(baseURL string, client httpDoer) (*WellKnown, error) {
 }
 
 func queryZapLinkSupport(u *url.URL) (int, error) {
+	if err := validateZapLinkURL(u); err != nil {
+		return 0, err
+	}
 	baseURL := u.Scheme + "://" + u.Host
 	wk, err := doFetchWellKnown(baseURL, currentZapFetchClient())
 	if errors.Is(err, ErrWellKnownNotFound) {
@@ -190,7 +210,7 @@ func isZapLink(link string, db *database.Database) bool {
 		return false
 	}
 
-	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+	if validationErr := validateZapLinkURL(u); validationErr != nil {
 		return false
 	}
 
@@ -232,6 +252,9 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request for '%s': %w", urlStr, err)
+	}
+	if validationErr := validateZapLinkURL(req.URL); validationErr != nil {
+		return nil, validationErr
 	}
 	setZapLinkHeaders(req, platform)
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
@@ -283,6 +306,45 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 	log.Debug().Int("size", len(body)).Msg("received zap link body")
 
 	return body, nil
+}
+
+// validateZapLinkURL enforces HTTPS except for localhost and literal
+// local-network addresses.
+func validateZapLinkURL(u *url.URL) error {
+	if u == nil || u.Host == "" || u.User != nil {
+		return errors.New("ZapLink URL must include a host and cannot include userinfo")
+	}
+
+	switch {
+	case strings.EqualFold(u.Scheme, "https"):
+		return nil
+	case strings.EqualFold(u.Scheme, "http") && config.IsAllowedHTTPRemoteHost(u.Hostname()):
+		return nil
+	case strings.EqualFold(u.Scheme, "http"):
+		return errors.New("public ZapLink URLs must use HTTPS")
+	default:
+		return errors.New("ZapLink URL must use HTTP or HTTPS")
+	}
+}
+
+func checkZapLinkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxZapLinkRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxZapLinkRedirects)
+	}
+	if err := validateZapLinkURL(req.URL); err != nil {
+		return fmt.Errorf("invalid ZapLink redirect: %w", err)
+	}
+	if len(via) == 0 {
+		return nil
+	}
+
+	initial := via[0].URL
+	if strings.EqualFold(initial.Scheme, "https") &&
+		!config.IsAllowedHTTPRemoteHost(initial.Hostname()) &&
+		strings.EqualFold(req.URL.Scheme, "http") {
+		return errors.New("refusing ZapLink redirect downgrade from public HTTPS to HTTP")
+	}
+	return nil
 }
 
 // isOfflineError returns true if the error is some network connectivity
@@ -438,6 +500,11 @@ func PreWarmZapLinkHostsContext(
 
 // preWarmHost makes a HEAD request to a base URL's well-known endpoint to warm caches.
 func preWarmHost(ctx context.Context, baseURL string, db *database.Database, client httpDoer) {
+	parsedBaseURL, err := url.Parse(baseURL)
+	if err != nil || validateZapLinkURL(parsedBaseURL) != nil {
+		log.Debug().Msgf("skipping invalid zaplink host during pre-warm: %s", baseURL)
+		return
+	}
 	wellKnownURL := baseURL + WellKnownPath
 
 	ctx, cancel := context.WithTimeout(ctx, preWarmTimeout)
