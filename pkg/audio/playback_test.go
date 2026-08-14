@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/gopxl/beep/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -319,15 +320,37 @@ func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
 	assert.Len(t, s.ring, ringBufferFrames)
 	assert.Len(t, s.chunk, decodeChunkFrames)
 	assert.NotNil(t, s.wakeCh)
-	assert.NotNil(t, s.resampler)
+	assert.IsType(t, (*beep.Resampler)(nil), s.streamer)
+}
+
+func TestNewStreamingSource_TargetRateUsesDecoderDirectly(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(0, targetSampleRate), 0o600))
+
+	s, err := newStreamingSource(path, 1.0, resampleQuality)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.decoder.Close())
+	}()
+
+	assert.Equal(t, targetSampleRate, s.sourceRate)
+	assert.Same(t, s.decoder, s.streamer)
 }
 
 // wavWithSamples builds a minimal mono 16-bit 44.1 kHz WAV containing n silent samples.
 func wavWithSamples(n uint32) []byte {
+	return wavWithSamplesAtRate(n, 44100)
+}
+
+func wavWithSamplesAtRate(n, sampleRate uint32) []byte {
 	dataSize := n * 2
 	header := validWAVHeader()
-	// Patch RIFF size and data chunk size for the sample payload.
+	// Patch sample rate, byte rate, RIFF size, and data chunk size for the sample payload.
 	binary.LittleEndian.PutUint32(header[4:8], 36+dataSize)
+	binary.LittleEndian.PutUint32(header[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(header[28:32], sampleRate*2)
 	binary.LittleEndian.PutUint32(header[40:44], dataSize)
 	return append(header, make([]byte, dataSize)...)
 }
@@ -335,25 +358,41 @@ func wavWithSamples(n uint32) []byte {
 func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 	t.Parallel()
 
-	// Both qualities: the seek path rebuilds the resampler from the source's
-	// stored quality, which must work for low-power platforms too.
+	// Both qualities and sample-rate paths: seek must preserve low-power
+	// resampling and continue bypassing resampling for target-rate sources.
 	for _, tc := range []struct {
-		name    string
-		quality int
+		name       string
+		quality    int
+		sourceRate uint32
+		direct     bool
 	}{
-		{name: "default quality", quality: resampleQuality},
-		{name: "low power quality", quality: lowPowerResampleQuality},
+		{name: "default quality resampled", quality: resampleQuality, sourceRate: 44100},
+		{name: "low power quality resampled", quality: lowPowerResampleQuality, sourceRate: 44100},
+		{
+			name: "default quality direct", quality: resampleQuality,
+			sourceRate: targetSampleRate, direct: true,
+		},
+		{
+			name: "low power quality direct", quality: lowPowerResampleQuality,
+			sourceRate: targetSampleRate, direct: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			path := filepath.Join(t.TempDir(), "audio.wav")
-			require.NoError(t, os.WriteFile(path, wavWithSamples(4410), 0o600)) // 0.1 s of audio
+			sampleCount := tc.sourceRate / 10
+			require.NoError(t, os.WriteFile(path, wavWithSamplesAtRate(sampleCount, tc.sourceRate), 0o600))
 
 			s, err := newStreamingSource(path, 1.0, tc.quality)
 			require.NoError(t, err)
 			s.startPrefetch()
-			t.Cleanup(s.stopAndDeregister)
+			stopped := false
+			t.Cleanup(func() {
+				if !stopped {
+					s.stopAndDeregister()
+				}
+			})
 
 			// Wait for the prefetch goroutine to fully decode the file.
 			require.Eventually(t, func() bool {
@@ -372,6 +411,13 @@ func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
 			}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
 
 			assert.Equal(t, tc.quality, s.quality, "seek must preserve the source's resample quality")
+			s.stopAndDeregister()
+			stopped = true
+			if tc.direct {
+				assert.Same(t, s.decoder, s.streamer)
+			} else {
+				assert.IsType(t, (*beep.Resampler)(nil), s.streamer)
+			}
 		})
 	}
 }
