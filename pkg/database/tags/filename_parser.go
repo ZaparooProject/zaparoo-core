@@ -2269,22 +2269,40 @@ func stripMetadataBracketsForDisplay(s string) string {
 // code duplication. However, it only applies transformations appropriate for display
 // titles (no Roman numeral conversion, edition stripping, etc.).
 func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
-	return parseFilenameTitle(filename, stripLeadingNumbers, false)
+	return ParseTitleFromFilenameForMedia(filename, stripLeadingNumbers, slugs.MediaTypeGame)
+}
+
+// ParseTitleFromFilenameForMedia extracts a canonical title using media-specific cleanup.
+func ParseTitleFromFilenameForMedia(
+	filename string, stripLeadingNumbers bool, mediaType slugs.MediaType,
+) string {
+	return parseFilenameTitle(filename, stripLeadingNumbers, false, mediaType)
 }
 
 // ParseDisplayTitleFromFilename extracts a per-file display title while preserving
 // structural set markers such as "(Disc 1)", "(Disk 2 of 4)", and "(File 3)".
 // The canonical title parser still strips those markers before slug generation.
 func ParseDisplayTitleFromFilename(filename string, stripLeadingNumbers bool) string {
-	return parseFilenameTitle(filename, stripLeadingNumbers, true)
+	return ParseDisplayTitleFromFilenameForMedia(filename, stripLeadingNumbers, slugs.MediaTypeGame)
 }
 
-func parseFilenameTitle(filename string, stripLeadingNumbers, preserveStructuralTags bool) string {
+// ParseDisplayTitleFromFilenameForMedia extracts a media-specific per-file display title.
+func ParseDisplayTitleFromFilenameForMedia(
+	filename string, stripLeadingNumbers bool, mediaType slugs.MediaType,
+) string {
+	return parseFilenameTitle(filename, stripLeadingNumbers, true, mediaType)
+}
+
+func parseFilenameTitle(
+	filename string, stripLeadingNumbers, preserveStructuralTags bool, mediaType slugs.MediaType,
+) string {
 	// Import the slugs package for shared normalization functions
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
-	if _, withoutPatchSuffix, matched := parseHTGDBPatchSuffix(title); matched {
-		title = withoutPatchSuffix
+	if mediaType == "" || mediaType == slugs.MediaTypeGame {
+		if _, withoutPatchSuffix, matched := parseHTGDBPatchSuffix(title); matched {
+			title = withoutPatchSuffix
+		}
 	}
 
 	// Step 1: Remove file extension first (simplifies later processing)

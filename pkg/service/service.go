@@ -76,6 +76,7 @@ type StartResult struct {
 func resumeAndScheduleStartupMediaWork(
 	ctx context.Context,
 	scheduler *idle.Scheduler,
+	db *database.Database,
 	resumeIndexing func() bool,
 	runDeferred func(context.Context, bool),
 ) {
@@ -88,6 +89,10 @@ func resumeAndScheduleStartupMediaWork(
 		startupMediaIdleQuietWindow,
 		startupMediaIdleMaximumWait,
 		func(taskCtx context.Context) {
+			if db == nil || db.MediaDB == nil {
+				log.Warn().Msg("skipping deferred startup media work: media database is nil")
+				return
+			}
 			runDeferred(taskCtx, resumeStarted)
 		},
 	)
@@ -526,6 +531,7 @@ func Start(
 	resumeAndScheduleStartupMediaWork(
 		st.GetContext(),
 		idleSched,
+		db,
 		func() bool {
 			if db == nil || db.MediaDB == nil {
 				log.Warn().Msg("skipping startup index resume: database is nil")
@@ -534,8 +540,8 @@ func Start(
 			return checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
 		},
 		func(_ context.Context, resumeStarted bool) {
-			if db == nil {
-				log.Warn().Msg("skipping startup media work: database is nil")
+			if db == nil || db.MediaDB == nil {
+				log.Warn().Msg("skipping startup media work: media database is nil")
 				return
 			}
 

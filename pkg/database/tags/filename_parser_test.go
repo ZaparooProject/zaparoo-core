@@ -2043,6 +2043,7 @@ func TestParseFilenameToCanonicalTags_Patches(t *testing.T) {
 			},
 		},
 		{
+			// parseHTGDBPatchSuffix applies one captured version to every recognized suffix label.
 			name: "HTGDB composite suffix",
 			filename: "Final Fantasy V GBA Script Port+Ginger Battle Galuf+Bugfixes, Sprite Touch-Ups " +
 				"(Hack) v1.15 J121, v1.03 Chicken Knife.sfc",

@@ -1426,11 +1426,12 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 
 	// Create test media titles and media with various slug patterns
 	testGames := []struct {
-		systemID   string
-		name       string
-		path       string
-		tags       []database.TagInfo
-		systemDBID int64
+		systemID      string
+		name          string
+		secondarySlug string
+		path          string
+		tags          []database.TagInfo
+		systemDBID    int64
 	}{
 		{
 			systemID:   snesSystem.ID,
@@ -1447,11 +1448,12 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
 		},
 		{
-			systemID:   snesSystem.ID,
-			systemDBID: insertedSNESSystem.DBID,
-			name:       "The Legend of Zelda: A Link to the Past",
-			path:       "/roms/snes/Zelda - A Link to the Past.smc",
-			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
+			systemID:      snesSystem.ID,
+			systemDBID:    insertedSNESSystem.DBID,
+			name:          "The Legend of Zelda: A Link to the Past",
+			secondarySlug: "zelda3",
+			path:          "/roms/snes/Zelda - A Link to the Past.smc",
+			tags:          []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
 		},
 		{
 			systemID:   nesSystem.ID,
@@ -1484,10 +1486,15 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	}
 
 	for _, game := range testGames {
+		secondarySlug := sql.NullString{}
+		if game.secondarySlug != "" {
+			secondarySlug = sql.NullString{String: game.secondarySlug, Valid: true}
+		}
 		title := database.MediaTitle{
-			SystemDBID: game.systemDBID,
-			Slug:       slugs.Slugify(slugs.MediaTypeGame, game.name),
-			Name:       game.name,
+			SystemDBID:    game.systemDBID,
+			Slug:          slugs.Slugify(slugs.MediaTypeGame, game.name),
+			Name:          game.name,
+			SecondarySlug: secondarySlug,
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
@@ -1567,6 +1574,10 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 
 	// Cache hits must preserve the strict tag-filter behavior of the SQL fallback.
 	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	cache := mediaDB.slugSearchCache.Load()
+	require.NotNil(t, cache)
+	require.True(t, cache.CanServeSystems([]string{"SNES"}))
+
 	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
@@ -1576,6 +1587,28 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
+
+	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	results, err = mediaDB.SearchMediaBySecondarySlug(ctx, "SNES", "zelda3", tags)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	results, err = mediaDB.SearchMediaBySecondarySlug(ctx, "SNES", "zelda3", tags)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "The Legend of Zelda: A Link to the Past", results[0].Name)
+
+	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	results, err = mediaDB.SearchMediaBySlugPrefix(ctx, "SNES", "supermarioworld2", tags)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	results, err = mediaDB.SearchMediaBySlugPrefix(ctx, "SNES", "supermarioworld2", tags)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Super Mario World 2: Yoshi's Island", results[0].Name)
 
 	// Test 6: Slug search across different systems
 	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "supermariobrothers", nil)

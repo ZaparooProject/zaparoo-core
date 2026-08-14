@@ -69,6 +69,7 @@ func TestResumeAndScheduleStartupMediaWork_ResumeBypassesAPIIdleWait(t *testing.
 	resumeAndScheduleStartupMediaWork(
 		ctx,
 		scheduler,
+		&database.Database{MediaDB: testhelpers.NewMockMediaDBI()},
 		func() bool {
 			resumeCalls++
 			return true
@@ -92,6 +93,41 @@ func TestResumeAndScheduleStartupMediaWork_ResumeBypassesAPIIdleWait(t *testing.
 		assert.True(t, resumeStarted)
 	case <-time.After(2 * time.Second):
 		t.Fatal("deferred startup work did not run after maximum idle wait")
+	}
+}
+
+func TestResumeAndScheduleStartupMediaWork_SkipsDeferredWithNilMediaDB(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	scheduler := idle.NewWithClock(clock)
+	deferred := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resumeCalls := 0
+	resumeAndScheduleStartupMediaWork(
+		ctx,
+		scheduler,
+		&database.Database{},
+		func() bool {
+			resumeCalls++
+			return false
+		},
+		func(context.Context, bool) {
+			deferred <- struct{}{}
+		},
+	)
+
+	assert.Equal(t, 1, resumeCalls)
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	clock.Advance(startupMediaIdleQuietWindow + time.Second)
+	scheduler.Wait()
+
+	select {
+	case <-deferred:
+		t.Fatal("deferred startup work ran with nil media database")
+	default:
 	}
 }
 

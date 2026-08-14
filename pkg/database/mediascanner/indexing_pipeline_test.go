@@ -454,6 +454,30 @@ func TestGetPathFragments_HTGDBPatchSuffix(t *testing.T) {
 	assert.Contains(t, result.Tags, "unlicensed:hack")
 	assert.Contains(t, result.Tags, "patch:fastrom:1-1")
 	assert.NotContains(t, result.Tags, "rev:1-1")
+
+	for _, test := range []struct {
+		mediaType slugs.MediaType
+		extension string
+	}{
+		{mediaType: slugs.MediaTypeMovie, extension: ".mkv"},
+		{mediaType: slugs.MediaTypeMusic, extension: ".flac"},
+	} {
+		t.Run(string(test.mediaType), func(t *testing.T) {
+			t.Parallel()
+			mediaPath := filepath.Join(
+				string(filepath.Separator), "media", "fat",
+				"Super Castlevania IV (U) FastROM (Hack) v1.1 Vitor Vilela"+test.extension,
+			)
+			mediaResult := GetPathFragments(&PathFragmentParams{
+				Path:      mediaPath,
+				MediaType: test.mediaType,
+			})
+
+			assert.Equal(t, "Super Castlevania IV FastROM v1.1 Vitor Vilela", mediaResult.Title)
+			assert.Equal(t, mediaResult.Title, mediaResult.DisplayTitle)
+			assert.NotContains(t, mediaResult.Tags, "patch:fastrom:1-1")
+		})
+	}
 }
 
 // TestGetPathFragments_ProvidedName verifies that a non-empty ProvidedName

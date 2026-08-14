@@ -261,6 +261,17 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
+	// Use pre-resolved media type if provided, otherwise look up from system ID.
+	mediaType := params.MediaType
+	if mediaType == "" {
+		mediaType = slugs.MediaTypeGame // Default to Game
+		if params.SystemID != "" {
+			if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
+				mediaType = system.GetMediaType()
+			}
+		}
+	}
+
 	fileNameForTitle := f.FileName
 	trimmedName := strings.TrimSpace(params.ProvidedName)
 	if trimmedName != "" {
@@ -274,22 +285,11 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		if stripped, ok := browseprefix.StripWithPolicy(f.FileName, prefixPolicy); ok {
 			fileNameForTitle = stripped
 		}
-		f.Title = tags.ParseTitleFromFilename(fileNameForTitle, false)
-		f.DisplayTitle = tags.ParseDisplayTitleFromFilename(fileNameForTitle, false)
+		f.Title = tags.ParseTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
+		f.DisplayTitle = tags.ParseDisplayTitleFromFilenameForMedia(fileNameForTitle, false, mediaType)
 	}
 	if f.DisplayTitle == "" {
 		f.DisplayTitle = f.Title
-	}
-
-	// Use pre-resolved media type if provided, otherwise look up from system ID
-	mediaType := params.MediaType
-	if mediaType == "" {
-		mediaType = slugs.MediaTypeGame // Default to Game
-		if params.SystemID != "" {
-			if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
-				mediaType = system.GetMediaType()
-			}
-		}
 	}
 
 	// SlugifyWithTokens computes both slug and tokens in a single pass,
