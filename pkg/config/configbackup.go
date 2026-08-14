@@ -163,15 +163,7 @@ func validateRemoteBaseURL(rawURL, setting string) error {
 		return nil
 	}
 
-	host := parsed.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return fmt.Errorf("http %s base URL must use localhost or a private IP literal", setting)
-	}
-	if isAllowedHTTPRemoteAddr(addr) {
+	if IsAllowedHTTPRemoteHost(parsed.Hostname()) {
 		return nil
 	}
 	return fmt.Errorf("http %s base URL must use localhost or a private IP literal", setting)
@@ -186,6 +178,17 @@ func normalizeRemoteBaseURL(rawURL string) string {
 	parsed.Fragment = ""
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	return parsed.String()
+}
+
+// IsAllowedHTTPRemoteHost reports whether host may use plain HTTP for a
+// remote service. Hostnames other than localhost are rejected to avoid DNS
+// changes bypassing the local-network boundary.
+func IsAllowedHTTPRemoteHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && isAllowedHTTPRemoteAddr(addr)
 }
 
 func isAllowedHTTPRemoteAddr(addr netip.Addr) bool {

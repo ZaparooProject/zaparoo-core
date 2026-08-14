@@ -35,6 +35,7 @@ import (
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
@@ -223,6 +224,201 @@ func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		return nil, args.Error(1) //nolint:wrapcheck // test mock
 	}
 	return resp, args.Error(1) //nolint:wrapcheck // test mock
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestValidateZapLinkURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantErr bool
+	}{
+		{name: "public HTTPS hostname", rawURL: "https://example.com/token"},
+		{name: "public HTTPS IP", rawURL: "https://8.8.8.8/token"},
+		{name: "localhost HTTP", rawURL: "http://localhost:8080/token"},
+		{name: "case insensitive localhost HTTP", rawURL: "http://LOCALHOST:8080/token"},
+		{name: "IPv4 loopback HTTP", rawURL: "http://127.42.0.1:8080/token"},
+		{name: "IPv6 loopback HTTP", rawURL: "http://[::1]:8080/token"},
+		{name: "RFC1918 10 HTTP", rawURL: "http://10.0.0.1:8080/token"},
+		{name: "RFC1918 172 HTTP", rawURL: "http://172.16.0.1:8080/token"},
+		{name: "RFC1918 192 HTTP", rawURL: "http://192.168.0.1:8080/token"},
+		{name: "IPv4 link-local HTTP", rawURL: "http://169.254.1.1:8080/token"},
+		{name: "IPv6 ULA HTTP", rawURL: "http://[fd00::1]:8080/token"},
+		{name: "IPv6 link-local HTTP", rawURL: "http://[fe80::1]:8080/token"},
+		{name: "local HTTP query", rawURL: "http://192.168.1.2:8080/token?id=1"},
+		{name: "public HTTP hostname", rawURL: "http://example.com/token", wantErr: true},
+		{name: "public HTTP IP", rawURL: "http://8.8.8.8/token", wantErr: true},
+		{name: "LAN hostname HTTP", rawURL: "http://console.local/token", wantErr: true},
+		{name: "official Edge HTTP", rawURL: "http://edge.zaparoo.com/token", wantErr: true},
+		{name: "official short link HTTP", rawURL: "http://zpr.au/token", wantErr: true},
+		{name: "userinfo rejected", rawURL: "https://user@example.com/token", wantErr: true},
+		{name: "non-HTTP scheme", rawURL: "ftp://example.com/token", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			u, err := url.Parse(tt.rawURL)
+			require.NoError(t, err)
+			err = validateZapLinkURL(u)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestPublicHTTPZapLinkRejectedBeforeNetworkAccess(t *testing.T) {
+	t.Parallel()
+
+	const publicURL = "http://edge.zaparoo.com/token"
+	u, err := url.Parse(publicURL)
+	require.NoError(t, err)
+
+	_, err = queryZapLinkSupport(u)
+	require.ErrorContains(t, err, "must use HTTPS")
+
+	_, err = getRemoteZapScript(publicURL, "test")
+	require.ErrorContains(t, err, "must use HTTPS")
+
+	mockClient := &mockHTTPClient{}
+	mockUserDB := &testhelpers.MockUserDBI{}
+	preWarmHost(t.Context(), "http://edge.zaparoo.com", &database.Database{UserDB: mockUserDB}, mockClient)
+	mockClient.AssertNotCalled(t, "Do")
+}
+
+func TestZapLinkRedirectPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		startURL       string
+		location       string
+		wantErr        string
+		wantCalls      int
+		repeatRedirect bool
+	}{
+		{
+			name:     "public HTTPS downgrade to public HTTP",
+			startURL: "https://example.com/start", location: "http://example.net/final",
+			wantErr: "public ZapLink URLs must use HTTPS", wantCalls: 1,
+		},
+		{
+			name:     "public HTTPS downgrade to local HTTP",
+			startURL: "https://example.com/start", location: "http://127.0.0.1/final",
+			wantErr: "redirect downgrade", wantCalls: 1,
+		},
+		{
+			name:     "official HTTPS downgrade to local HTTP",
+			startURL: "https://edge.zaparoo.com/start", location: "http://192.168.1.2/final",
+			wantErr: "redirect downgrade", wantCalls: 1,
+		},
+		{
+			name:     "local HTTPS downgrade to local HTTP allowed",
+			startURL: "https://127.0.0.1/start", location: "http://127.0.0.1/final",
+			wantCalls: 2,
+		},
+		{
+			name:     "public HTTPS redirect allowed",
+			startURL: "https://example.com/start", location: "https://example.net/final",
+			wantCalls: 2,
+		},
+		{
+			name:           "redirect limit enforced",
+			startURL:       "https://example.com/start",
+			location:       "https://example.com/again",
+			wantErr:        "stopped after 10 redirects",
+			wantCalls:      10,
+			repeatRedirect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			client := newZapFetchClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if tt.repeatRedirect || calls == 1 {
+					return &http.Response{
+						StatusCode: http.StatusFound,
+						Header:     http.Header{"Location": []string{tt.location}},
+						Body:       http.NoBody,
+						Request:    req,
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       http.NoBody,
+					Request:    req,
+				}, nil
+			}))
+
+			resp, err := client.Get(tt.startURL) //nolint:noctx // Test exercises redirect policy.
+			if resp != nil {
+				require.NoError(t, resp.Body.Close())
+			}
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantCalls, calls)
+		})
+	}
+}
+
+func TestZapFetchClientAuthenticationBoundary(t *testing.T) {
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		"https://example.com": {Bearer: "test-token"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	var wellKnownAuth string
+	var payloadAuth string
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case WellKnownPath:
+			wellKnownAuth = req.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"zapscript":1}`)),
+				Request:    req,
+			}, nil
+		case "/token":
+			payloadAuth = req.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		default:
+			return nil, errors.New("unexpected request path")
+		}
+	})
+
+	wk, err := doFetchWellKnown("https://example.com", newWellKnownFetchClient(transport))
+	require.NoError(t, err)
+	require.NotNil(t, wk)
+
+	resp, err := newZapFetchClient(transport).Get("https://example.com/token") //nolint:noctx // Local test transport.
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	assert.Empty(t, wellKnownAuth)
+	assert.Equal(t, "Bearer test-token", payloadAuth)
 }
 
 func TestPreWarmZapLinkHosts_NoInternet(t *testing.T) {
@@ -518,6 +714,17 @@ func TestQueryZapLinkSupport_200WithZapScript1(t *testing.T) {
 
 // isZapLink Tests
 
+func TestIsZapLinkRejectsPublicHTTPBeforeCacheLookup(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+
+	assert.False(t, isZapLink("http://edge.zaparoo.com/token", db))
+	mockUserDB.AssertNotCalled(t, "GetZapLinkHost")
+	mockUserDB.AssertNotCalled(t, "GetZapLinkCache")
+}
+
 func TestIsZapLink_TransientErrorNotCached(t *testing.T) {
 	t.Parallel()
 
@@ -643,6 +850,51 @@ func TestCheckZapLinkFetchesSupportedRemoteScript(t *testing.T) {
 
 // FetchWellKnown Tests
 
+func TestFetchWellKnownRejectsInvalidBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "public HTTP", baseURL: "http://example.com"},
+		{name: "official Edge HTTP", baseURL: "http://edge.zaparoo.com"},
+		{name: "unsupported scheme", baseURL: "ftp://example.com"},
+		{name: "missing host", baseURL: "https:///path"},
+		{name: "userinfo", baseURL: "https://user@example.com"},
+		{name: "malformed", baseURL: "https://%zz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			wk, err := FetchWellKnown(tt.baseURL)
+			require.Error(t, err)
+			assert.Nil(t, wk)
+		})
+	}
+}
+
+func TestWellKnownRedirectPolicy(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	client := newWellKnownFetchClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": []string{"http://127.0.0.1/final"}},
+			Body:       http.NoBody,
+			Request:    req,
+		}, nil
+	}))
+
+	wk, err := doFetchWellKnown("https://example.com", client)
+	require.ErrorContains(t, err, "redirect downgrade")
+	assert.Nil(t, wk)
+	assert.Equal(t, 1, calls)
+}
+
 func TestFetchWellKnown_BasicZapScriptOnly(t *testing.T) {
 	t.Parallel()
 
@@ -667,10 +919,12 @@ func TestConfigureHTTPTransport_TrustsConfiguredTLSRoots(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldClient := currentZapFetchClient()
+	oldWellKnownClient := currentWellKnownFetchClient()
+	oldZapClient := currentZapFetchClient()
 	t.Cleanup(func() {
 		zapFetchClientMu.Lock()
-		zapFetchClient = oldClient
+		wellKnownFetchClient = oldWellKnownClient
+		zapFetchClient = oldZapClient
 		zapFetchClientMu.Unlock()
 	})
 
