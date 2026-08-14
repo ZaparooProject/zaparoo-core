@@ -33,7 +33,22 @@ import (
 // These are compiled once at initialization for optimal performance.
 var (
 	// Special pattern extraction (complex patterns that still use regex)
-	reTransBracketed = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
+	reTransBracketed    = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
+	reSquareBracket     = regexp.MustCompile(`\[([^\[\]]+)]`)
+	rePatchVersion      = regexp.MustCompile(`(?:^|-)v(\d+(?:-\d+)*)$`)
+	reFontPatch         = regexp.MustCompile(`^([a-z]{2})-font$`)
+	reHTGDBHackMarker   = regexp.MustCompile(`(?i)\((?:hack|patch)\)`)
+	reHTGDBPatchVersion = regexp.MustCompile(`(?i)(?:^|[\s_+\-])v(\d+(?:\.\d+)*)`)
+	reHTGDBPatchLabel   = regexp.MustCompile(`(?i)\b(?:` +
+		`(?:ted[\s_-]+)?woolsey[\s_-]+uncensored[\s_-]+edition|` +
+		`stereo\s*\+\s*bug[\s_-]*fix(?:es)?|gba[\s_-]+script[\s_-]+port|` +
+		`splash[\s_-]+screen[\s_-]+removed|quality[\s_-]+of[\s_-]+life|` +
+		`music[\s_-]+restore|sram[\s_-]+expansion|faster[\s_-]+rom|` +
+		`fast[\s_-]*rom|slow[\s_-]*rom|all[\s_-]+bugs[\s_-]+fix|` +
+		`bug[\s_-]*fix(?:es)?|uncensor(?:ed)?|relocalized|restoration|` +
+		`performance|retouch|overhaul|tweak|wide[\s_-]*screen|` +
+		`msu[\s_-]*1|sa[\s_-]*1|colori[sz](?:ation|ed)|redux|qol` +
+		`)\b`)
 
 	// "side-N-of-M" — a disk side plus the total disk/side count.
 	reSideOf = regexp.MustCompile(`^side-(\d+)-of-(\d+)$`)
@@ -72,6 +87,57 @@ var editionSuffixFallbacks = map[string]TagValue{
 	"remake":  TagEditionRemake,
 	"remix":   TagEditionRemix,
 	"cut":     TagEditionCut,
+}
+
+// patchLabelAliases contains patch labels observed in ROM-hack collections.
+// Unknown bracket labels remain available to the general filename parser.
+var patchLabelAliases = map[string]TagValue{
+	"all-bugs-fix":                   "bugfix",
+	"bug-fix":                        "bugfix",
+	"bug-fixes":                      "bugfix",
+	"bugfix":                         "bugfix",
+	"bugfixes":                       "bugfix",
+	"color":                          "color",
+	"colorisation":                   "color",
+	"colorised":                      "color",
+	"colorization":                   "color",
+	"colorized":                      "color",
+	"fast-rom":                       "fastrom",
+	"faster-rom":                     "fastrom",
+	"fastrom":                        "fastrom",
+	"fix":                            "fix",
+	"fixes":                          "fix",
+	"gba-script-port":                "script-port",
+	"hack":                           "hack",
+	"msu-1":                          "msu1",
+	"msu1":                           "msu1",
+	"music":                          "music",
+	"music-restore":                  "music",
+	"no-sram":                        "no-sram",
+	"overhaul":                       "overhaul",
+	"performance":                    "performance",
+	"quality-of-life":                "qol",
+	"qol":                            "qol",
+	"redux":                          "redux",
+	"relocalized":                    "relocalized",
+	"restoration":                    "restoration",
+	"retouch":                        "retouch",
+	"sa-1":                           "sa1",
+	"sa1":                            "sa1",
+	"script-port":                    "script-port",
+	"slow-rom":                       "slowrom",
+	"slowrom":                        "slowrom",
+	"splash-screen-removed":          "splash-screen-removed",
+	"sram":                           "sram",
+	"sram-expansion":                 "sram",
+	"stereo-bug-fixes":               "bugfix",
+	"tweak":                          "tweak",
+	"uncensor":                       "uncensored",
+	"uncensored":                     "uncensored",
+	"wide-screen":                    "widescreen",
+	"widescreen":                     "widescreen",
+	"woolsey-uncensored-edition":     "uncensored",
+	"ted-woolsey-uncensored-edition": "uncensored",
 }
 
 // editionQualifiers maps recognized qualifier strings (after stripping the suffix and "the-")
@@ -668,6 +734,208 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	return extractSpecialPatternsForMedia(filename, "")
 }
 
+// splitPatchVersion removes a trailing patch version such as "-v1-1".
+func splitPatchVersion(normalized string) (label, version string) {
+	match := rePatchVersion.FindStringSubmatchIndex(normalized)
+	if match == nil {
+		return normalized, ""
+	}
+	return strings.TrimRight(normalized[:match[0]], "-"), normalized[match[2]:match[3]]
+}
+
+func canonicalPatchLabel(label string) (TagValue, bool) {
+	value, ok := patchLabelAliases[label]
+	return value, ok
+}
+
+func versionedPatchValue(value TagValue, version string) TagValue {
+	if version == "" {
+		return value
+	}
+	return TagValue(string(value) + ":" + version)
+}
+
+// parsePatchBracket maps explicit patch naming conventions such as
+// "[FastROM hack by Author v1.1]", "[Performance by Author (v1.0)]",
+// "[FastROM]", and "[US font]" to stable, additive values. Unknown bracket
+// labels are not treated as patches. Credits are intentionally omitted because
+// patch identity and version select media without author-specific tag noise.
+func parsePatchBracket(content string) ([]CanonicalTag, bool) {
+	normalized := cachedNormalizeTag(content)
+
+	if match := reFontPatch.FindStringSubmatch(normalized); match != nil {
+		return []CanonicalTag{{
+			Type:   TagTypePatch,
+			Value:  TagValue("font:" + match[1]),
+			Source: TagSourceBracketed,
+		}}, true
+	}
+
+	label, version := splitPatchVersion(normalized)
+	patchValue, matched := canonicalPatchLabel(label)
+
+	if !matched {
+		if descriptor, _, found := strings.Cut(label, "-by-"); found {
+			patchValue, matched = canonicalPatchLabel(descriptor)
+		}
+	}
+
+	if !matched {
+		for _, marker := range []string{"-hack", "-patch"} {
+			markerIndex := strings.Index(label, marker)
+			if markerIndex <= 0 {
+				continue
+			}
+
+			suffix := label[markerIndex+len(marker):]
+			if suffix != "" && !strings.HasPrefix(suffix, "-by-") {
+				continue
+			}
+
+			patchName := strings.Trim(label[:markerIndex], "-")
+			if patchName == "" {
+				continue
+			}
+			if canonical, ok := canonicalPatchLabel(patchName); ok {
+				patchValue = canonical
+			} else {
+				patchValue = TagValue(patchName)
+			}
+			matched = true
+			break
+		}
+	}
+
+	if !matched {
+		return nil, false
+	}
+
+	return []CanonicalTag{
+		{Type: TagTypeUnlicensed, Value: TagUnlicensedHack, Source: TagSourceBracketed},
+		{
+			Type:   TagTypePatch,
+			Value:  versionedPatchValue(patchValue, version),
+			Source: TagSourceBracketed,
+		},
+	}, true
+}
+
+func hasHTGDBPatchMarker(filename string) bool {
+	for offset := 0; offset < len(filename); {
+		markerStart := strings.IndexByte(filename[offset:], '(')
+		if markerStart < 0 {
+			return false
+		}
+		markerStart += offset
+		remaining := filename[markerStart:]
+		if len(remaining) >= len("(hack)") && strings.EqualFold(remaining[:len("(hack)")], "(hack)") {
+			return true
+		}
+		if len(remaining) >= len("(patch)") && strings.EqualFold(remaining[:len("(patch)")], "(patch)") {
+			return true
+		}
+		offset = markerStart + 1
+	}
+	return false
+}
+
+func splitPatchFilenameExtension(filename string) (stem, extension string) {
+	lastSlash := strings.LastIndexAny(filename, `/\\`)
+	lastDot := strings.LastIndex(filename, ".")
+	if lastDot <= lastSlash {
+		return filename, ""
+	}
+
+	extensionBody := filename[lastDot+1:]
+	if len(extensionBody) < 2 || len(extensionBody) > 4 || strings.ContainsAny(extensionBody, " \t") {
+		return filename, ""
+	}
+	return filename[:lastDot], filename[lastDot:]
+}
+
+// parseHTGDBPatchSuffix handles HTGDB/SmokeMonster names such as
+// "Axelay (U) FastROM (Hack) v1.0 Vitor Vilela". Only researched patch
+// labels are recognized; arbitrary names containing "(Hack)" retain their
+// existing title and revision behavior.
+func parseHTGDBPatchSuffix(filename string) ([]CanonicalTag, string, bool) {
+	if !hasHTGDBPatchMarker(filename) {
+		return nil, filename, false
+	}
+
+	stem, extension := splitPatchFilenameExtension(filename)
+	markers := reHTGDBHackMarker.FindAllStringIndex(stem, -1)
+	if len(markers) == 0 {
+		return nil, filename, false
+	}
+
+	marker := markers[len(markers)-1]
+	prefix := stem[:marker[0]]
+	labelMatches := reHTGDBPatchLabel.FindAllStringIndex(prefix, -1)
+	if len(labelMatches) == 0 {
+		return nil, filename, false
+	}
+
+	stripStart := labelMatches[0][0]
+	version := ""
+	if match := reHTGDBPatchVersion.FindStringSubmatch(stem[stripStart:]); match != nil {
+		version = strings.ReplaceAll(match[1], ".", "-")
+	}
+
+	tags := []CanonicalTag{{
+		Type:   TagTypeUnlicensed,
+		Value:  TagUnlicensedHack,
+		Source: TagSourceBracketed,
+	}}
+	seen := make(map[TagValue]struct{}, len(labelMatches))
+	for _, match := range labelMatches {
+		normalized := cachedNormalizeTag(prefix[match[0]:match[1]])
+		patchValue, ok := canonicalPatchLabel(normalized)
+		if !ok {
+			continue
+		}
+		patchValue = versionedPatchValue(patchValue, version)
+		if _, exists := seen[patchValue]; exists {
+			continue
+		}
+		seen[patchValue] = struct{}{}
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypePatch,
+			Value:  patchValue,
+			Source: TagSourceBracketed,
+		})
+	}
+	if len(tags) == 1 {
+		return nil, filename, false
+	}
+
+	remaining := strings.TrimRight(prefix[:stripStart], " \t-_+") + extension
+	return tags, remaining, true
+}
+
+// extractPatchBrackets removes recognized patch-only square brackets before generic
+// version extraction. This keeps patch versions attached to their patch identity instead
+// of misclassifying the first bracketed version as the base ROM revision.
+func extractPatchBrackets(filename string) (patchTags []CanonicalTag, remaining string) {
+	patchTags = make([]CanonicalTag, 0)
+	seen := make(map[string]struct{})
+	remaining = reSquareBracket.ReplaceAllStringFunc(filename, func(group string) string {
+		parsed, ok := parsePatchBracket(group[1 : len(group)-1])
+		if !ok {
+			return group
+		}
+		for _, tag := range parsed {
+			key := tag.String()
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			patchTags = append(patchTags, tag)
+		}
+		return " "
+	})
+	return patchTags, remaining
+}
+
 // extractSpecialPatternsForMedia is the media-type-aware variant of extractSpecialPatterns.
 // Patterns irrelevant to the given mediaType are skipped to reduce regex overhead.
 // Pass an empty mediaType to run all patterns (equivalent to extractSpecialPatterns).
@@ -682,6 +950,18 @@ func extractSpecialPatternsForMedia(
 	}
 
 	remaining = filename
+
+	if mediaType == "" || mediaType == slugs.MediaTypeGame {
+		patchTags, withoutPatchBrackets := extractPatchBrackets(remaining)
+		tags = append(tags, patchTags...)
+		remaining = withoutPatchBrackets
+
+		suffixTags, withoutPatchSuffix, matched := parseHTGDBPatchSuffix(remaining)
+		if matched {
+			tags = append(tags, suffixTags...)
+			remaining = withoutPatchSuffix
+		}
+	}
 
 	// Pattern 1: "Disc/Disk X of Y [Side A/B/C/D]" - most common multi-disc format
 	if m := findDiscPattern(remaining); m.ok {
@@ -2003,6 +2283,9 @@ func parseFilenameTitle(filename string, stripLeadingNumbers, preserveStructural
 	// Import the slugs package for shared normalization functions
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
+	if _, withoutPatchSuffix, matched := parseHTGDBPatchSuffix(title); matched {
+		title = withoutPatchSuffix
+	}
 
 	// Step 1: Remove file extension first (simplifies later processing)
 	// Find the last dot that's likely an extension (after the last slash if any)

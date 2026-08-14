@@ -60,8 +60,10 @@ import (
 )
 
 const (
-	backupShutdownWarningAfter = 30 * time.Second
-	backupShutdownHardDeadline = 2 * time.Minute
+	backupShutdownWarningAfter  = 30 * time.Second
+	backupShutdownHardDeadline  = 2 * time.Minute
+	startupMediaIdleQuietWindow = 5 * time.Second
+	startupMediaIdleMaximumWait = 300 * time.Second
 )
 
 // StartResult holds the return values from Start.
@@ -69,6 +71,26 @@ type StartResult struct {
 	Stop             func() error
 	Done             <-chan struct{}
 	RestartRequested func() bool
+}
+
+func resumeAndScheduleStartupMediaWork(
+	ctx context.Context,
+	scheduler *idle.Scheduler,
+	resumeIndexing func() bool,
+	runDeferred func(context.Context, bool),
+) {
+	// Interrupted indexing is recovery work. Resume it synchronously; API
+	// activity must not postpone visible database progress.
+	resumeStarted := resumeIndexing()
+	scheduler.Schedule(
+		ctx,
+		"startup-media-work",
+		startupMediaIdleQuietWindow,
+		startupMediaIdleMaximumWait,
+		func(taskCtx context.Context) {
+			runDeferred(taskCtx, resumeStarted)
+		},
+	)
 }
 
 func waitForBackupShutdown(
@@ -499,10 +521,19 @@ func Start(
 	checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
 	checkAndResumeScraping(pl, cfg, db, st, scrapePauser)
 
-	idleSched.Schedule(
-		st.GetContext(), "startup-media-work",
-		5*time.Second, 300*time.Second,
-		func(_ context.Context) {
+	// Active gameplay pauses indexing through indexPauser independently of the
+	// API-idle scheduler used for lower-priority startup maintenance.
+	resumeAndScheduleStartupMediaWork(
+		st.GetContext(),
+		idleSched,
+		func() bool {
+			if db == nil || db.MediaDB == nil {
+				log.Warn().Msg("skipping startup index resume: database is nil")
+				return false
+			}
+			return checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+		},
+		func(_ context.Context, resumeStarted bool) {
 			if db == nil {
 				log.Warn().Msg("skipping startup media work: database is nil")
 				return
@@ -549,11 +580,13 @@ func Start(
 						log.Warn().Err(inboxErr).Msg("failed to add inbox message about resumed media database rebuild")
 					}
 				}
+				// This legacy recovery path depends on loading the persisted slug cache,
+				// so it cannot be detected by the immediate startup check above.
+				resumeStarted = checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-			indexResumeStarted := checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-			if !indexResumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+			if !resumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
 				// A failed optimization revealed a corrupt database; rebuild it now
 				// rather than waiting for the next startup.
 				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)

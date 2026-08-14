@@ -123,6 +123,7 @@ const (
 	TagTypeSet           TagType = "set"           // Set number
 	TagTypeAlt           TagType = "alt"           // Alternate version
 	TagTypeUnlicensed    TagType = "unlicensed"    // Unlicensed/bootleg/hacks
+	TagTypePatch         TagType = "patch"         // Applied ROM patches and modifications
 	TagTypeMameParent    TagType = "mameparent"    // MAME parent ROM relationship
 	TagTypeRegion        TagType = "region"        // Release region
 	TagTypeYear          TagType = "year"          // Release year
@@ -770,6 +771,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagUnlicensedAftermarket,    // Made after original market cycle ended
 		// Publisher-specific
 		TagUnlicensedSachen, // Sachen unlicensed (NES)
+	},
+
+	TagTypePatch: {
+		// Dynamic values identify applied patches and optional versions, such as
+		// patch:fastrom:1-1 or patch:uncensored:2-1.
 	},
 
 	TagTypeMameParent: {

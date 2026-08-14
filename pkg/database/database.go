@@ -583,7 +583,7 @@ type SearchResultWithCursor struct {
 // siblings, so a sole differentiator always survives truncation regardless of its rank.
 // Rank is the slice index.
 var TagTypeDisplayPriority = []string{
-	"unfinished", "unlicensed", "region", "video", "disc", "disctotal", "edition",
+	"unfinished", "unlicensed", "patch", "region", "video", "disc", "disctotal", "edition",
 	"rev", "arcadeboard", "cabinet", "protection", "set", "input", "dump", "alt", "compatibility", "builddate",
 	"lang", "distribution", "media", "addon", "release", "year",
 	"players", "developer", "publisher", "copyright", "credit",

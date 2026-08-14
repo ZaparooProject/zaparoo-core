@@ -1565,6 +1565,18 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1) // Only Super Mario World matches USA AND platform
 
+	// Cache hits must preserve the strict tag-filter behavior of the SQL fallback.
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	tags = []zapscript.TagFilter{{Type: "region", Value: "usa"}}
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+
 	// Test 6: Slug search across different systems
 	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "supermariobrothers", nil)
 	require.NoError(t, err)

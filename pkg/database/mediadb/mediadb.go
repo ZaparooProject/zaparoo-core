@@ -2599,6 +2599,7 @@ func (db *MediaDB) slugCacheSearch(
 	ctx context.Context,
 	systemID string,
 	input string,
+	tagFilters []zapscript.TagFilter,
 	matchFn func(*SlugSearchCache, []int64, []byte) []int64,
 ) ([]database.SearchResultWithCursor, bool, error) {
 	cache := db.slugSearchCache.Load()
@@ -2625,10 +2626,10 @@ func (db *MediaDB) slugCacheSearch(
 	if len(candidates) == 0 {
 		return []database.SearchResultWithCursor{}, true, nil
 	}
-	// Skip SQL-level tag filters for cache path — the Go-side selection
-	// logic handles missing/conflicting tags gracefully, and the INTERSECT
-	// subqueries are the most expensive part of the query on slow storage.
-	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.sql.Load(), candidates, nil, nil, nil, defaultSlugSearchLimit)
+	// Slug cache narrows title candidates only. Apply tag filters in the bounded
+	// media query so cache hits preserve SQL-fallback semantics before LIMIT.
+	results, err := sqlSearchMediaByTitleDBIDs(
+		ctx, db.sql.Load(), candidates, tagFilters, nil, nil, defaultSlugSearchLimit)
 	log.Debug().
 		Str("system", systemID).
 		Int("candidates", len(candidates)).
@@ -2642,13 +2643,10 @@ func (db *MediaDB) SearchMediaBySlug(
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	if results, ok, err := db.slugCacheSearch(ctx, systemID, slug,
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, slug, tagFilters,
 		(*SlugSearchCache).ExactSlugMatch); ok || err != nil {
 		return results, err
 	}
-	// SQL fallback (cache not ready) still applies tag filters in the query
-	// for performance. The cache path skips SQL tag filters — Go-side
-	// selection handles tag matching in both cases.
 	return sqlSearchMediaBySlug(ctx, db.sql.Load(), systemID, slug, tagFilters)
 }
 
@@ -2658,7 +2656,7 @@ func (db *MediaDB) SearchMediaBySecondarySlug(
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	if results, ok, err := db.slugCacheSearch(ctx, systemID, secondarySlug,
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, secondarySlug, tagFilters,
 		(*SlugSearchCache).ExactSecondarySlugMatch); ok || err != nil {
 		return results, err
 	}
@@ -2671,7 +2669,7 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 	if db.sql.Load() == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	if results, ok, err := db.slugCacheSearch(ctx, systemID, slugPrefix,
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, slugPrefix, tagFilters,
 		(*SlugSearchCache).PrefixSlugMatch); ok || err != nil {
 		return results, err
 	}

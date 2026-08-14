@@ -435,6 +435,27 @@ func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
 	assert.Equal(t, result.Title, resultDefault.Title, "title extraction should be identical regardless of media type")
 }
 
+func TestGetPathFragments_HTGDBPatchSuffix(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(
+		string(filepath.Separator), "media", "fat", "games", "SNES",
+		"Super Castlevania IV (U) FastROM (Hack) v1.1 Vitor Vilela.sfc",
+	)
+	result := GetPathFragments(&PathFragmentParams{
+		Path:      path,
+		SystemID:  "SNES",
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	assert.Equal(t, "Super Castlevania IV", result.Title)
+	assert.Equal(t, "Super Castlevania IV", result.DisplayTitle)
+	assert.Equal(t, "supercastlevania4", result.Slug)
+	assert.Contains(t, result.Tags, "unlicensed:hack")
+	assert.Contains(t, result.Tags, "patch:fastrom:1-1")
+	assert.NotContains(t, result.Tags, "rev:1-1")
+}
+
 // TestGetPathFragments_ProvidedName verifies that a non-empty ProvidedName
 // overrides the title parsed from the filename. The slug derives from the
 // override, and tags are still extracted from the filename.

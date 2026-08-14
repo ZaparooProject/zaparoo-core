@@ -143,6 +143,32 @@ func TestRecomputeSystemDisambiguation_DifferingTagDisambiguates(t *testing.T) {
 	assert.Equal(t, results[1].ZapScriptTags, fetchedResults[1].ZapScriptTags)
 }
 
+func TestRecomputeSystemDisambiguation_PatchTagDisambiguates(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	systemDBID, titleDBID, mediaIDs := setupDisambTitle(t, mediaDB, "SNES", "Super Castlevania IV", []disambTitleMedia{
+		{
+			path: browseTestPath("roms", "snes", "castlevania-fastrom.sfc"),
+			tags: map[string]string{"patch": "fastrom:1-1"},
+		},
+		{path: browseTestPath("roms", "snes", "castlevania-vanilla.sfc")},
+	})
+
+	require.NoError(t, mediaDB.RecomputeSystemDisambiguation(ctx, []int64{systemDBID}))
+	assert.Equal(t, "patch", titleDisambiguationTypes(t, mediaDB, titleDBID))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaIDs[0], DisambiguationTypes: "patch"},
+		{MediaID: mediaIDs[1], DisambiguationTypes: "patch"},
+	}
+	require.NoError(t, attachZapScriptTags(ctx, mediaDB.sql.Load(), results))
+	assert.Equal(t, []database.TagInfo{{Type: "patch", Tag: "fastrom:1-1"}}, results[0].ZapScriptTags)
+	assert.Empty(t, results[1].ZapScriptTags)
+}
+
 // TestDisambiguationBackfill_RecomputesStaleTitlesAndStamps covers the one-time
 // algorithm-version backfill: indexing only recomputes DisambiguationTypes for
 // titles whose data changed, so values written by an older algorithm are never

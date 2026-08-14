@@ -303,6 +303,18 @@ func TestBuildTitleZapScript(t *testing.T) {
 			want:     "@Genesis/Sonic The Hedgehog (region:eu, region:us)",
 		},
 		{
+			name:     "multiple patch tags preserve hierarchical values",
+			systemID: "SNES",
+			gameName: "Super Castlevania IV",
+			tags: []TagInfo{
+				{Tag: "fastrom:1-1", Type: "patch"},
+				{Tag: "uncensored:2-1", Type: "patch"},
+				{Tag: "font:us", Type: "patch"},
+			},
+			want: "@SNES/Super Castlevania IV " +
+				"(patch:fastrom:1-1, patch:uncensored:2-1, patch:font:us)",
+		},
+		{
 			name:     "different types each get their own parens in first-seen order",
 			systemID: "SNES",
 			gameName: "Game",
