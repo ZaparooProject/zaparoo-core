@@ -46,6 +46,7 @@ var scanDynamicTagTypes = []string{
 	string(tags.TagTypePublisher),
 	string(tags.TagTypeCredit),
 	string(tags.TagTypeBuildDate),
+	string(tags.TagTypePatch),
 	string(tags.TagTypeTrack),
 	string(tags.TagTypeExtension),
 }

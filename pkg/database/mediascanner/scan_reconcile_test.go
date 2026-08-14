@@ -214,6 +214,9 @@ func TestReconcile_DynamicTagTypesPersisted(t *testing.T) {
 	require.NoError(t, SeedCanonicalTags(ctx, mediaDB))
 
 	arcadePath := filepath.Join("_Arcade", "Super Street Fighter II The New Challengers (World 931005).mra")
+	patchPath := filepath.Join(
+		"SNES", "Super Castlevania IV (U) FastROM (Hack) v1.1 Vitor Vilela.sfc",
+	)
 	trackPath := filepath.Join("SNESMusic", "Star Fox [01].spc")
 
 	require.NoError(t, mediaDB.BeginTransaction(true))
@@ -222,6 +225,11 @@ func TestReconcile_DynamicTagTypesPersisted(t *testing.T) {
 		DB: mediaDB, SystemID: "Arcade", Path: arcadePath, MediaType: slugs.MediaTypeGame,
 	}))
 	_, err := mediaDB.ReconcileStagedSystem(ctx, "Arcade", database.ScanReconcileOpts{})
+	require.NoError(t, err)
+	require.NoError(t, StageMediaPath(&StageMediaPathParams{
+		DB: mediaDB, SystemID: "SNES", Path: patchPath, MediaType: slugs.MediaTypeGame,
+	}))
+	_, err = mediaDB.ReconcileStagedSystem(ctx, "SNES", database.ScanReconcileOpts{})
 	require.NoError(t, err)
 	require.NoError(t, StageMediaPath(&StageMediaPathParams{
 		DB: mediaDB, SystemID: "SNESMusic", Path: trackPath, MediaType: slugs.MediaTypeMusic,
@@ -235,6 +243,11 @@ func TestReconcile_DynamicTagTypesPersisted(t *testing.T) {
 	got := mediaTagStrings(t, mediaDB, arcadeRows[arcadePath].DBID)
 	assert.Contains(t, got, "builddate:1993-10-05", "build date tag should persist through indexing")
 	assert.Contains(t, got, "region:world")
+
+	patchRows := mediaBySystem(t, mediaDB, "SNES")
+	require.Len(t, patchRows, 1)
+	got = mediaTagStrings(t, mediaDB, patchRows[patchPath].DBID)
+	assert.Contains(t, got, "patch:fastrom:1-1", "patch tag should persist through indexing")
 
 	musicRows := mediaBySystem(t, mediaDB, "SNESMusic")
 	require.Len(t, musicRows, 1)

@@ -40,16 +40,96 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResumeAndScheduleStartupMediaWork_ResumeBypassesAPIIdleWait(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	scheduler := idle.NewWithClock(clock)
+	scheduler.RequestStarted()
+	deferred := make(chan bool, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer scheduler.Wait()
+	defer scheduler.RequestEnded()
+	defer cancel()
+
+	resumeCalls := 0
+	resumeAndScheduleStartupMediaWork(
+		ctx,
+		scheduler,
+		&database.Database{MediaDB: testhelpers.NewMockMediaDBI()},
+		func() bool {
+			resumeCalls++
+			return true
+		},
+		func(_ context.Context, resumeStarted bool) {
+			deferred <- resumeStarted
+		},
+	)
+
+	assert.Equal(t, 1, resumeCalls, "index resume must run before waiting for API idle")
+	select {
+	case <-deferred:
+		t.Fatal("deferred startup work ran while API request was active")
+	default:
+	}
+
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	clock.Advance(startupMediaIdleMaximumWait + time.Second)
+	select {
+	case resumeStarted := <-deferred:
+		assert.True(t, resumeStarted)
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred startup work did not run after maximum idle wait")
+	}
+}
+
+func TestResumeAndScheduleStartupMediaWork_SkipsDeferredWithNilMediaDB(t *testing.T) {
+	t.Parallel()
+
+	clock := clockwork.NewFakeClock()
+	scheduler := idle.NewWithClock(clock)
+	deferred := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resumeCalls := 0
+	resumeAndScheduleStartupMediaWork(
+		ctx,
+		scheduler,
+		&database.Database{},
+		func() bool {
+			resumeCalls++
+			return false
+		},
+		func(context.Context, bool) {
+			deferred <- struct{}{}
+		},
+	)
+
+	assert.Equal(t, 1, resumeCalls)
+	require.NoError(t, clock.BlockUntilContext(ctx, 1))
+	clock.Advance(startupMediaIdleQuietWindow + time.Second)
+	scheduler.Wait()
+
+	select {
+	case <-deferred:
+		t.Fatal("deferred startup work ran with nil media database")
+	default:
+	}
+}
 
 func TestWaitForBackupShutdownDoesNotTearDownBeforeLeaseRelease(t *testing.T) {
 	t.Parallel()

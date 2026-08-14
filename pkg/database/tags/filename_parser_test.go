@@ -1986,6 +1986,254 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 	}
 }
 
+func TestParseFilenameToCanonicalTags_Patches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		filename        string
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name: "issue 1237 multi-patch filename",
+			filename: "Super Castlevania IV (USA) [FastROM hack by Vitor Vilela v1.1] " +
+				"[Uncensored hack by ShadowOne333 v2.1] [US font].sfc",
+			wantContains: []string{
+				"region:us",
+				"unlicensed:hack",
+				"patch:fastrom:1-1",
+				"patch:uncensored:2-1",
+				"patch:font:us",
+			},
+			wantNotContains: []string{"rev:1-1", "rev:2-1"},
+		},
+		{
+			name:         "patch without version",
+			filename:     "Game [FastROM hack by Someone].sfc",
+			wantContains: []string{"unlicensed:hack", "patch:fastrom"},
+		},
+		{
+			name:         "HTGDB FastROM suffix",
+			filename:     "Super Castlevania IV (U) FastROM (Hack) v1.1 Vitor Vilela.sfc",
+			wantContains: []string{"region:us", "unlicensed:hack", "patch:fastrom:1-1"},
+			wantNotContains: []string{
+				"rev:1-1",
+			},
+		},
+		{
+			name:         "HTGDB uncensored suffix",
+			filename:     "Super Castlevania IV Uncensored (hack) v1 ShadowOne333.sfc",
+			wantContains: []string{"unlicensed:hack", "patch:uncensored:1"},
+			wantNotContains: []string{
+				"rev:1",
+			},
+		},
+		{
+			name:         "HTGDB versionless restoration suffix",
+			filename:     "Contra III - The Alien Wars Restoration (Hack) Final SCD.sfc",
+			wantContains: []string{"unlicensed:hack", "patch:restoration"},
+		},
+		{
+			name:         "HTGDB SA-1 suffix",
+			filename:     "Gradius III SA-1 Origin USA (Hack) v1.6 Vitor Vilela.sfc",
+			wantContains: []string{"unlicensed:hack", "patch:sa1:1-6"},
+			wantNotContains: []string{
+				"rev:1-6",
+			},
+		},
+		{
+			// parseHTGDBPatchSuffix applies one captured version to every recognized suffix label.
+			name: "HTGDB composite suffix",
+			filename: "Final Fantasy V GBA Script Port+Ginger Battle Galuf+Bugfixes, Sprite Touch-Ups " +
+				"(Hack) v1.15 J121, v1.03 Chicken Knife.sfc",
+			wantContains: []string{
+				"unlicensed:hack",
+				"patch:script-port:1-15",
+				"patch:bugfix:1-15",
+			},
+			wantNotContains: []string{"rev:1-15", "rev:1-03"},
+		},
+		{
+			name: "HTGDB version before marker",
+			filename: "Final Fantasy III Ted Woolsey Uncensored Edition v1.3 by Rodimus Primal " +
+				"(Hack).sfc",
+			wantContains: []string{"unlicensed:hack", "patch:uncensored:1-3"},
+			wantNotContains: []string{
+				"rev:1-3",
+			},
+		},
+		{
+			name: "standalone researched patch labels",
+			filename: "Game [FastROM] [SlowROM] [Uncensored] [Bugfixes] [Widescreen] [Relocalized] " +
+				"[Restoration] [Redux] [Performance] [Retouch] [Overhaul] [Tweak].sfc",
+			wantContains: []string{
+				"patch:fastrom",
+				"patch:slowrom",
+				"patch:uncensored",
+				"patch:bugfix",
+				"patch:widescreen",
+				"patch:relocalized",
+				"patch:restoration",
+				"patch:redux",
+				"patch:performance",
+				"patch:retouch",
+				"patch:overhaul",
+				"patch:tweak",
+			},
+		},
+		{
+			name: "standalone patch aliases",
+			filename: "Game [Fast-ROM v1.1] [Uncensor v2.0] [Bug Fixes] [All Bugs Fix] " +
+				"[Wide Screen] [Quality of Life].sfc",
+			wantContains: []string{
+				"patch:fastrom:1-1",
+				"patch:uncensored:2-0",
+				"patch:bugfix",
+				"patch:widescreen",
+				"patch:qol",
+			},
+			wantNotContains: []string{"rev:1-1", "rev:2-0"},
+		},
+		{
+			name: "curated patch categories with credits",
+			filename: "Game [Performance by kandowontu (v1.0)] [Fix by Someone (v0.9)] " +
+				"[Restoration by Group v2.0] [Retouch by Person] [Overhaul by Team] [Tweak by Author].sfc",
+			wantContains: []string{
+				"patch:performance:1-0",
+				"patch:fix:0-9",
+				"patch:restoration:2-0",
+				"patch:retouch",
+				"patch:overhaul",
+				"patch:tweak",
+			},
+			wantNotContains: []string{"rev:1-0", "rev:0-9", "rev:2-0"},
+		},
+		{
+			name: "generic explicit hack and patch labels",
+			filename: "Game [Hack by Author v1.2] [Alt Font & Controls Hack by Team v2.0] " +
+				"[Optional patch by Group v3.0].sfc",
+			wantContains: []string{
+				"patch:hack:1-2",
+				"patch:alt-font-controls:2-0",
+				"patch:optional:3-0",
+			},
+			wantNotContains: []string{"rev:1-2", "rev:2-0", "rev:3-0"},
+		},
+		{
+			name: "hardware and enhancement patch labels",
+			filename: "Game [MSU-1] [SA-1] [SRAM] [No SRAM] [Color] [Colorization] " +
+				"[Music] [Script Port] [Splash Screen Removed].sfc",
+			wantContains: []string{
+				"patch:msu1",
+				"patch:sa1",
+				"patch:sram",
+				"patch:no-sram",
+				"patch:color",
+				"patch:music",
+				"patch:script-port",
+				"patch:splash-screen-removed",
+			},
+		},
+		{
+			name:            "unknown bracket label remains non-patch metadata",
+			filename:        "Game [Player 1 Color] [Fan Label v1.0].sfc",
+			wantNotContains: []string{"patch:player-1-color", "patch:fan-label:1-0"},
+		},
+		{
+			name:            "ordinary dump hack marker remains dump metadata",
+			filename:        "Game [h].sfc",
+			wantContains:    []string{"dump:hacked"},
+			wantNotContains: []string{"unlicensed:hack", "patch:h"},
+		},
+		{
+			name:            "title containing hack is not patch metadata",
+			filename:        "Hackers (USA).sfc",
+			wantContains:    []string{"region:us"},
+			wantNotContains: []string{"unlicensed:hack"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parsed := ParseFilenameToCanonicalTagsForMedia(tt.filename, slugs.MediaTypeGame)
+			got := make([]string, 0, len(parsed))
+			for _, tag := range parsed {
+				got = append(got, tag.String())
+			}
+			for _, expected := range tt.wantContains {
+				assert.Contains(t, got, expected)
+			}
+			for _, unexpected := range tt.wantNotContains {
+				assert.NotContains(t, got, unexpected)
+			}
+		})
+	}
+}
+
+func TestParseFilenameTitle_HTGDBPatchSuffixes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{
+			name:     "FastROM suffix",
+			filename: "Super Castlevania IV (U) FastROM (Hack) v1.1 Vitor Vilela.sfc",
+			want:     "Super Castlevania IV",
+		},
+		{
+			name:     "hyphenated FastROM suffix",
+			filename: "Arcana - Fastrom (Hack) v0.2 rainponcho.sfc",
+			want:     "Arcana",
+		},
+		{
+			name:     "uncensored suffix",
+			filename: "Super Castlevania IV Uncensored (hack) v1 ShadowOne333.sfc",
+			want:     "Super Castlevania IV",
+		},
+		{
+			name:     "versionless restoration suffix",
+			filename: "Contra III - The Alien Wars Restoration (Hack) Final SCD.sfc",
+			want:     "Contra III - The Alien Wars",
+		},
+		{
+			name:     "SA-1 suffix qualifiers",
+			filename: "Gradius III SA-1 Origin USA (Hack) v1.6 Vitor Vilela.sfc",
+			want:     "Gradius III",
+		},
+		{
+			name: "version before marker",
+			filename: "Final Fantasy III Ted Woolsey Uncensored Edition v1.3 by Rodimus Primal " +
+				"(Hack).sfc",
+			want: "Final Fantasy III",
+		},
+		{
+			name: "composite suffix",
+			filename: "Final Fantasy V GBA Script Port+Ginger Battle Galuf+Bugfixes, Sprite Touch-Ups " +
+				"(Hack) v1.15 J121, v1.03 Chicken Knife.sfc",
+			want: "Final Fantasy V",
+		},
+		{
+			name:     "unknown hack suffix",
+			filename: "Game Alternate Physics (Hack) v1.0 Author.sfc",
+			want:     "Game Alternate Physics v1.0 Author",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, ParseTitleFromFilename(tt.filename, false))
+			assert.Equal(t, tt.want, ParseDisplayTitleFromFilename(tt.filename, false))
+		})
+	}
+}
+
 func TestExtractSpecialPatterns_EditionWords(t *testing.T) {
 	tests := []struct {
 		name     string
