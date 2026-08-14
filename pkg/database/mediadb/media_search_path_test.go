@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -35,7 +36,8 @@ func TestMediaRecursivePathPrefixNormalizesNativeSeparators(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join("roms", "SNES")
-	assert.Equal(t, filepath.ToSlash(path)+"/", mediaRecursivePathPrefix(path))
+	backslashPath := strings.ReplaceAll(path, string(filepath.Separator), `\`)
+	assert.Equal(t, filepath.ToSlash(path)+"/", mediaRecursivePathPrefix(backslashPath))
 }
 
 func TestSearchMediaWithFilters_PathPrefixIsRecursiveAndBoundarySafe(t *testing.T) {
@@ -75,6 +77,10 @@ func TestSearchMediaWithFilters_PathPrefixIsRecursiveAndBoundarySafe(t *testing.
 	}
 
 	results := search(root)
+	require.Len(t, results, 2)
+	assert.Equal(t, []string{insidePath, nestedPath}, []string{results[0].Path, results[1].Path})
+
+	results = search(strings.ReplaceAll(root, "/", `\`))
 	require.Len(t, results, 2)
 	assert.Equal(t, []string{insidePath, nestedPath}, []string{results[0].Path, results[1].Path})
 
