@@ -887,6 +887,22 @@ func TestSelectWeightedSystemUsing_NoMatchingMedia(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+func TestSelectWeightedSystemUsing_RandomError(t *testing.T) {
+	t.Parallel()
+
+	randomErr := errors.New("random selection failed")
+	selected, err := selectWeightedSystemUsing(
+		[]database.SystemMediaCount{{SystemID: "NES", Count: 10}},
+		[]string{"NES"},
+		func(int) (int, error) {
+			return 0, randomErr
+		},
+	)
+
+	assert.Empty(t, selected)
+	assert.ErrorIs(t, err, randomErr)
+}
+
 func TestSQLRandomGameWithQuery_SystemStatsAvoidTitleJoin(t *testing.T) {
 	t.Parallel()
 

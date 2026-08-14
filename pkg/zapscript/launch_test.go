@@ -1631,6 +1631,68 @@ func TestSearchMediaBySystemTierReturnsDatabaseError(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestLaunchRandomGameWithRetry_StopContracts(t *testing.T) {
+	t.Parallel()
+
+	terminalErr := errors.New("terminal launch failure")
+	selectionErr := errors.New("reselection failure")
+	tests := []struct {
+		launchErr      error
+		selectErr      error
+		wantErr        error
+		name           string
+		wantLaunches   int
+		wantSelections int
+	}{
+		{
+			name:         "terminal launch error",
+			launchErr:    terminalErr,
+			wantErr:      terminalErr,
+			wantLaunches: 1,
+		},
+		{
+			name:           "reselection error",
+			launchErr:      pathhelpers.ErrNoLauncher,
+			selectErr:      selectionErr,
+			wantErr:        selectionErr,
+			wantLaunches:   1,
+			wantSelections: 1,
+		},
+		{
+			name:           "retry limit",
+			launchErr:      pathhelpers.ErrNoLauncher,
+			wantErr:        pathhelpers.ErrNoLauncher,
+			wantLaunches:   randomLaunchSelectionAttempts,
+			wantSelections: randomLaunchSelectionAttempts - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launches := 0
+			selections := 0
+			_, err := launchRandomGameWithRetry(
+				database.SearchResult{Path: filepath.Join("games", "first.rom")},
+				func() (database.SearchResult, error) {
+					selections++
+					if tt.selectErr != nil {
+						return database.SearchResult{}, tt.selectErr
+					}
+					return database.SearchResult{Path: filepath.Join("games", "next.rom")}, nil
+				},
+				func(database.SearchResult) error {
+					launches++
+					return tt.launchErr
+				},
+			)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantLaunches, launches)
+			assert.Equal(t, tt.wantSelections, selections)
+		})
+	}
+}
+
 func TestCmdRandomSystemWildcardUsesOrderedFallback(t *testing.T) {
 	t.Parallel()
 

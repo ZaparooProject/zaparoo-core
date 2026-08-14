@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPathHasPrefixNormalized(t *testing.T) {
@@ -155,6 +156,32 @@ func TestLauncherMatcher_NilPlatformDoesNotSynthesizeMediaPaths(t *testing.T) {
 
 	matcher := NewLauncherMatcher(cfg, nil)
 	assert.False(t, matcher.MatchSystemFile("NES", filepath.Join("media", "nes", "game.nes")))
+}
+
+func TestLauncherMatcher_FindLauncherNoMatch(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	launcher := platforms.Launcher{
+		ID:         "NESLauncher",
+		SystemID:   "NES",
+		Extensions: []string{".nes"},
+	}
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{launcher})
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, nil)
+	_, err := matcher.FindLauncher(filepath.Join("media", "games", "gamelist.xml"))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoLauncher)
 }
 
 func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
