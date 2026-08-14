@@ -1452,8 +1452,10 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 			systemDBID:    insertedSNESSystem.DBID,
 			name:          "The Legend of Zelda: A Link to the Past",
 			secondarySlug: "zelda3",
-			path:          "/roms/snes/Zelda - A Link to the Past.smc",
-			tags:          []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
+			path: filepath.Join(
+				string(filepath.Separator), "roms", "snes", "Zelda - A Link to the Past.smc",
+			),
+			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
 		},
 		{
 			systemID:   nesSystem.ID,
