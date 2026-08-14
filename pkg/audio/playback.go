@@ -286,7 +286,7 @@ func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 // background goroutine. This bounds memory use to ringBufferFrames regardless of
 // file length and keeps decoding off the malgo audio thread.
 type streamingSource struct {
-	resampler      beep.Streamer
+	streamer       beep.Streamer
 	decoder        beep.StreamSeekCloser
 	onDrain        func(natural bool)
 	file           *os.File
@@ -313,6 +313,13 @@ type streamingSource struct {
 	eof            atomic.Bool
 	stopped        atomic.Bool
 	paused         atomic.Bool
+}
+
+func streamerAtTargetSampleRate(source beep.Streamer, sourceRate beep.SampleRate, quality int) beep.Streamer {
+	if sourceRate == beep.SampleRate(targetSampleRate) {
+		return source
+	}
+	return beep.Resample(quality, sourceRate, beep.SampleRate(targetSampleRate), source)
 }
 
 // newStreamingSource opens path for streaming decode and returns a ready source.
@@ -352,7 +359,7 @@ func newStreamingSource(path string, volume float64, quality int) (*streamingSou
 		totalFrames = int64(float64(n) * float64(targetSampleRate) / float64(format.SampleRate))
 	}
 
-	resampler := beep.Resample(quality, format.SampleRate, beep.SampleRate(targetSampleRate), decoder)
+	streamer := streamerAtTargetSampleRate(decoder, format.SampleRate, quality)
 
 	return &streamingSource{
 		ring:        make([][2]float64, ringBufferFrames),
@@ -364,7 +371,7 @@ func newStreamingSource(path string, volume float64, quality int) (*streamingSou
 		wakeCh:      make(chan struct{}, 1),
 		decoder:     decoder,
 		file:        f,
-		resampler:   resampler,
+		streamer:    streamer,
 		chunk:       make([][2]float64, decodeChunkFrames),
 	}, nil
 }
@@ -410,8 +417,7 @@ prefetchLoop:
 			if err := s.decoder.Seek(int(seekFrame)); err != nil {
 				log.Warn().Err(err).Str("path", s.path).Msg("seek audio decoder")
 			}
-			s.resampler = beep.Resample(s.quality, beep.SampleRate(s.sourceRate),
-				beep.SampleRate(targetSampleRate), s.decoder)
+			s.streamer = streamerAtTargetSampleRate(s.decoder, beep.SampleRate(s.sourceRate), s.quality)
 			s.readPos.Store(0)
 			s.writePos.Store(0)
 			s.eof.Store(false)
@@ -445,7 +451,7 @@ prefetchLoop:
 
 			space := len(s.ring) - boundedFrameCount(buffered, len(s.ring))
 			n := min(space, len(s.chunk))
-			written, ok := s.resampler.Stream(s.chunk[:n])
+			written, ok := s.streamer.Stream(s.chunk[:n])
 			if s.seekPending.Load() {
 				continue prefetchLoop
 			}
