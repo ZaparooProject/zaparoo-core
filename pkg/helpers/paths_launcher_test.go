@@ -693,7 +693,8 @@ func TestFindLauncher_NoMatch(t *testing.T) {
 	}()
 
 	_, err := FindLauncher(cfg, mockPlatform, "/some/random/file.xyz")
-	assert.Error(t, err, "should return error when no launcher matches")
+	require.Error(t, err, "should return error when no launcher matches")
+	assert.ErrorIs(t, err, ErrNoLauncher)
 }
 
 func TestFindLauncher_AllowListBlocksAfterSpecificity(t *testing.T) {

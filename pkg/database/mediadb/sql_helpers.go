@@ -54,15 +54,18 @@ func mediaRecursivePathPrefix(path string) string {
 func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string, args []any) {
 	var whereConditions []string
 
-	// System filtering
+	// Filter through Media.SystemDBID so broad system scopes use the
+	// partial covering index instead of joining every Media row through titles.
 	if len(query.Systems) > 0 {
 		placeholders := make([]string, len(query.Systems))
 		for i, system := range query.Systems {
 			placeholders[i] = "?"
 			args = append(args, system)
 		}
-		whereConditions = append(whereConditions,
-			fmt.Sprintf("Systems.SystemID IN (%s)", strings.Join(placeholders, ",")))
+		whereConditions = append(whereConditions, fmt.Sprintf(
+			"Media.SystemDBID IN (SELECT Systems.DBID FROM Systems WHERE Systems.SystemID IN (%s))",
+			strings.Join(placeholders, ","),
+		))
 	}
 
 	// Recursive paths use a boundary-delimited indexed range, so a scope such

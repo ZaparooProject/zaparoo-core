@@ -1937,11 +1937,13 @@ func sqlSelectRandomGameWithStatsUsing(
 	}
 
 	whereClause, baseArgs := buildMediaQueryWhereClause(query)
-	const selectColumns = `
+	selectColumns := `
 		SELECT Systems.SystemID, Media.Path, Media.DBID
 		FROM Media
-		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID`
+		INNER JOIN Systems ON Systems.DBID = Media.SystemDBID`
+	if query.PathGlob != "" {
+		selectColumns += "\n\t\tINNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID"
+	}
 
 	maxInt := int64(^uint(0) >> 1)
 	var rangeSize int64
@@ -2000,13 +2002,12 @@ func sqlRandomGameWithQueryAndStats(
 	// Use shared helper to build WHERE clause and arguments
 	whereClause, args := buildMediaQueryWhereClause(query)
 
-	// Path-prefix and tag filters reference Media directly. Avoid joining every
-	// matching row to metadata tables unless those tables supply a filter.
+	// System, path-prefix, and tag filters reference Media directly. Only title
+	// glob matching needs the title table during the full-scope statistics scan.
 	statsFrom := "FROM Media"
-	if len(query.Systems) > 0 || query.PathGlob != "" {
+	if query.PathGlob != "" {
 		statsFrom = `FROM Media
-		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID`
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID`
 	}
 
 	// Step 1: Get count, min DBID, and max DBID for this query

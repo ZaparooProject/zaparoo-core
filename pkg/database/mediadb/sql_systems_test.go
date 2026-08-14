@@ -166,6 +166,78 @@ func TestSystemMediaCounts_UsesBrowseCache(t *testing.T) {
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 42}}, counts)
 }
 
+func TestRandomGameWithQuery_BroadSystemsUsesBrowseCounts(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.Join("roms", "nes", "game.nes")
+	system := insertSystemWithMedia(t, mediaDB, "NES", "Game", mediaPath)
+	db := mediaDB.sql.Load()
+
+	_, err := db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO BrowseDirs (Path, Name, IsVirtual) VALUES ('/', '/', 0)`)
+	require.NoError(t, err)
+	var rootDirDBID int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		"SELECT DBID FROM BrowseDirs WHERE Path = '/'",
+	).Scan(&rootDirDBID))
+	_, err = db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO BrowseDirCounts
+			(ParentDirDBID, ChildDirDBID, SystemDBID, FileCount)
+		VALUES (?, ?, ?, ?)`, rootDirDBID, rootDirDBID, system.DBID, 1)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)`,
+		DBConfigBrowseIndexVersion, browseCacheSchemaVersion)
+	require.NoError(t, err)
+
+	broadQuery := database.MediaQuery{Systems: []string{"NES", "SNES"}}
+	result, err := mediaDB.RandomGameWithQuery(ctx, &broadQuery)
+	require.NoError(t, err)
+	assert.Equal(t, "NES", result.SystemID)
+	assert.Equal(t, mediaPath, result.Path)
+
+	_, broadCached := mediaDB.GetCachedStats(ctx, &broadQuery)
+	assert.False(t, broadCached)
+	_, narrowedCached := mediaDB.GetCachedStats(ctx, &database.MediaQuery{Systems: []string{"NES"}})
+	assert.True(t, narrowedCached)
+}
+
+func TestRandomGameWithQuery_BroadTaggedSystemsUsesTaggedCounts(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.Join("roms", "nes", "favorite.nes")
+	system := insertSystemWithMedia(t, mediaDB, "NES", "Favorite", mediaPath)
+	media, err := mediaDB.FindMedia(database.Media{SystemDBID: system.DBID, Path: mediaPath})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpdateMediaTags(ctx, media.DBID, nil, []database.MediaTagRef{{
+		Type: "user",
+		Tag:  "favorite",
+	}}))
+
+	favorite := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+	broadQuery := database.MediaQuery{Systems: []string{"NES", "SNES"}, Tags: favorite}
+	result, err := mediaDB.RandomGameWithQuery(ctx, &broadQuery)
+	require.NoError(t, err)
+	assert.Equal(t, "NES", result.SystemID)
+	assert.Equal(t, mediaPath, result.Path)
+
+	_, broadCached := mediaDB.GetCachedStats(ctx, &broadQuery)
+	assert.False(t, broadCached)
+	_, narrowedCached := mediaDB.GetCachedStats(ctx, &database.MediaQuery{
+		Systems: []string{"NES"},
+		Tags:    favorite,
+	})
+	assert.True(t, narrowedCached)
+}
+
 func TestSystemMediaCounts_ExcludesMissingMedia(t *testing.T) {
 	t.Parallel()
 

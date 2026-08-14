@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -829,6 +830,96 @@ func TestSQLRandomGameWithQuery_PathPrefixStatsAvoidMetadataJoins(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.Equal(t, pathPrefix+"game.mra", result.Path)
+	assert.Equal(t, MediaStats{Count: 1, MinDBID: 42, MaxDBID: 42}, stats)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSelectWeightedSystemUsing(t *testing.T) {
+	t.Parallel()
+
+	counts := []database.SystemMediaCount{
+		{SystemID: "NES", Count: 2},
+		{SystemID: "SNES", Count: 3},
+		{SystemID: "Genesis", Count: 100},
+		{SystemID: "Empty", Count: 0},
+	}
+	systems := []string{"NES", "SNES", "Empty"}
+
+	tests := []struct {
+		name   string
+		want   string
+		offset int
+	}{
+		{name: "first NES row", offset: 0, want: "NES"},
+		{name: "last NES row", offset: 1, want: "NES"},
+		{name: "first SNES row", offset: 2, want: "SNES"},
+		{name: "last SNES row", offset: 4, want: "SNES"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selected, err := selectWeightedSystemUsing(
+				counts,
+				systems,
+				func(total int) (int, error) {
+					require.Equal(t, 5, total)
+					return tt.offset, nil
+				},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, selected)
+		})
+	}
+}
+
+func TestSelectWeightedSystemUsing_NoMatchingMedia(t *testing.T) {
+	t.Parallel()
+
+	selected, err := selectWeightedSystemUsing(
+		[]database.SystemMediaCount{{SystemID: "NES", Count: 10}},
+		[]string{"SNES"},
+		func(int) (int, error) {
+			t.Fatal("random selection should not run without eligible media")
+			return 0, nil
+		},
+	)
+
+	assert.Empty(t, selected)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestSQLRandomGameWithQuery_SystemStatsAvoidTitleJoin(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []string{"NES", "SNES", "Genesis"}
+	mock.ExpectQuery(
+		`SELECT COUNT\(\*\), COALESCE\(MIN\(Media\.DBID\), 0\), `+
+			`COALESCE\(MAX\(Media\.DBID\), 0\) FROM Media WHERE `+
+			`Media\.SystemDBID IN \(SELECT Systems\.DBID FROM Systems `+
+			`WHERE Systems\.SystemID IN \(\?,\?,\?\)\) AND Media\.IsMissing = 0`,
+	).WithArgs("NES", "SNES", "Genesis").WillReturnRows(
+		sqlmock.NewRows([]string{"count", "min", "max"}).AddRow(1, 42, 42),
+	)
+	mock.ExpectQuery(
+		`SELECT Systems\.SystemID, Media\.Path, Media\.DBID FROM Media `+
+			`INNER JOIN Systems ON Systems\.DBID = Media\.SystemDBID WHERE `+
+			`Media\.SystemDBID IN \(SELECT Systems\.DBID FROM Systems `+
+			`WHERE Systems\.SystemID IN \(\?,\?,\?\)\) AND Media\.IsMissing = 0 `+
+			`AND Media\.DBID = \? LIMIT 1`,
+	).WithArgs("NES", "SNES", "Genesis", int64(42)).WillReturnRows(
+		sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("SNES", filepath.Join("roms", "snes", "game.sfc"), 42),
+	)
+
+	result, stats, err := sqlRandomGameWithQueryAndStats(context.Background(), db, &database.MediaQuery{
+		Systems: systems,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "SNES", result.SystemID)
 	assert.Equal(t, MediaStats{Count: 1, MinDBID: 42, MaxDBID: 42}, stats)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

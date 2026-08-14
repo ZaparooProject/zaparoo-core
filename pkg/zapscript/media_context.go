@@ -26,13 +26,27 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-const mediaDBLookupTimeout = 2 * time.Second
+const (
+	mediaDBLookupTimeout       = 2 * time.Second
+	randomMediaDBLookupTimeout = 5 * time.Second
+)
 
 func mediaDBLookupContext(env *platforms.CmdEnv) (context.Context, context.CancelFunc) {
+	return mediaDBLookupContextWithTimeout(env, mediaDBLookupTimeout)
+}
+
+func randomMediaDBLookupContext(env *platforms.CmdEnv) (context.Context, context.CancelFunc) {
+	return mediaDBLookupContextWithTimeout(env, randomMediaDBLookupTimeout)
+}
+
+func mediaDBLookupContextWithTimeout(
+	env *platforms.CmdEnv,
+	timeout time.Duration,
+) (context.Context, context.CancelFunc) {
 	parent := env.ServiceCtx
 	if parent == nil {
 		parent = context.Background()
 	}
 	//nolint:gosec // Caller owns and invokes returned cancel function.
-	return context.WithTimeout(parent, mediaDBLookupTimeout)
+	return context.WithTimeout(parent, timeout)
 }
