@@ -103,6 +103,11 @@ var JSONRPCErrorInternalError = models.ErrorObject{
 	Message: "Internal error",
 }
 
+var JSONRPCErrorServerBusy = models.ErrorObject{
+	Code:    -32000,
+	Message: "Server busy",
+}
+
 func makeJSONRPCError(code int, message string) models.ErrorObject {
 	return models.ErrorObject{
 		Code:    code,
@@ -1194,6 +1199,33 @@ func handleWSMessage(
 		}
 
 		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
+			var queueFullErr *wsRequestQueueFullError
+			if errors.As(err, &queueFullErr) {
+				log.Warn().
+					Str("method", queueFullErr.method).
+					Str("requestId", requestIDForLog(queueFullErr.requestID)).
+					Str("priority", queueFullErr.priority.String()).
+					Int("queueDepth", queueFullErr.depth).
+					Int("queueCapacity", queueFullErr.capacity).
+					Msg("websocket request rejected because queue is full")
+				if queueFullErr.requestID.IsAbsent() {
+					endTrackedRequest()
+					return
+				}
+				dispatcher.enqueueResponse(&wsResponseJob{
+					result: requestResult{
+						ID:          queueFullErr.requestID,
+						Error:       &JSONRPCErrorServerBusy,
+						ShouldReply: true,
+					},
+					cs:      cs,
+					tracker: tracker,
+					method:  queueFullErr.method,
+				})
+				handoffTrackedRequest()
+				return
+			}
+
 			log.Warn().Err(err).Msg("failed to queue websocket request")
 			endTrackedRequest()
 			if sendErr := sendWSEncryptedError(
@@ -1883,13 +1915,10 @@ func StartWithReady(
 		r.Get("/api/v0.1/events", sseHandler)
 	})
 
-	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
-		rateLimiter,
-		handleWSMessage(
-			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
-			encGateway, lastSeenTracker, tracker,
-		),
+	session.HandleMessage(handleWSMessage(
+		methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
+		db, limitsManager, profilesSvc, player, playbackManager, indexPauser, scrapePauser, backupPauser,
+		encGateway, lastSeenTracker, tracker,
 	))
 
 	// Static app assets

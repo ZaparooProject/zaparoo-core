@@ -40,6 +40,7 @@ const (
 	wsNormalConcurrency     = 4
 	wsLowConcurrency        = 2
 	wsQueueSize             = 256
+	wsLowQueueSize          = 16
 	wsResponseQueueSize     = 256
 	wsGlobalImageConcurrent = 2
 )
@@ -51,11 +52,28 @@ const (
 )
 
 var (
-	wsGlobalImageSlots = make(chan struct{}, wsGlobalImageConcurrent)
-	wsMediaDBMu        syncutil.RWMutex
+	errWSRequestQueueFull = errors.New("websocket request queue is full")
+	wsGlobalImageSlots    = make(chan struct{}, wsGlobalImageConcurrent)
+	wsMediaDBMu           syncutil.RWMutex
 )
 
 const wsDispatcherSessionKey = "api.ws.dispatcher"
+
+type wsRequestQueueFullError struct {
+	method    string
+	requestID models.RPCID
+	priority  apiRequestPriority
+	depth     int
+	capacity  int
+}
+
+func (e *wsRequestQueueFullError) Error() string {
+	return fmt.Sprintf("%s: method %s", errWSRequestQueueFull, e.method)
+}
+
+func (*wsRequestQueueFullError) Unwrap() error {
+	return errWSRequestQueueFull
+}
 
 func queueDuration(enqueuedAt time.Time) time.Duration {
 	if enqueuedAt.IsZero() {
@@ -111,7 +129,7 @@ func getOrCreateWSDispatcher(parent context.Context, session *melody.Session) *w
 		session:   session,
 		high:      make(chan *wsRequestJob, wsQueueSize),
 		normal:    make(chan *wsRequestJob, wsQueueSize),
-		low:       make(chan *wsRequestJob, wsQueueSize),
+		low:       make(chan *wsRequestJob, wsLowQueueSize),
 		responses: make(chan *wsResponseJob, wsResponseQueueSize),
 	}
 	session.Set(wsDispatcherSessionKey, d)
@@ -184,24 +202,26 @@ func (d *wsSessionDispatcher) start() {
 	go d.writer()
 }
 
-func (d *wsSessionDispatcher) enqueue(job *wsRequestJob, priority apiRequestPriority) error {
-	var q chan *wsRequestJob
+func (d *wsSessionDispatcher) queue(priority apiRequestPriority) chan *wsRequestJob {
 	switch priority {
 	case apiPriorityHigh:
-		q = d.high
+		return d.high
 	case apiPriorityLow:
-		q = d.low
+		return d.low
 	default:
-		q = d.normal
+		return d.normal
 	}
+}
 
+func (d *wsSessionDispatcher) enqueue(job *wsRequestJob, priority apiRequestPriority) error {
+	q := d.queue(priority)
 	select {
 	case <-d.ctx.Done():
 		return d.ctx.Err()
 	case q <- job:
 		return nil
 	default:
-		return errors.New("websocket request queue is full")
+		return errWSRequestQueueFull
 	}
 }
 
@@ -410,6 +430,16 @@ func enqueueWSRequest(
 		image:      isImageAPIMethod(method),
 	}
 	if err := d.enqueue(job, priority); err != nil {
+		if errors.Is(err, errWSRequestQueueFull) {
+			q := d.queue(priority)
+			return &wsRequestQueueFullError{
+				requestID: requestID,
+				method:    method,
+				priority:  priority,
+				depth:     len(q),
+				capacity:  cap(q),
+			}
+		}
 		return fmt.Errorf("enqueue websocket request: %w", err)
 	}
 	return nil
