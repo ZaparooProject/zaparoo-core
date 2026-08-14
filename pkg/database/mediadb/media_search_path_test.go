@@ -31,6 +31,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMediaRecursivePathPrefixNormalizesNativeSeparators(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("roms", "SNES")
+	assert.Equal(t, filepath.ToSlash(path)+"/", mediaRecursivePathPrefix(path))
+}
+
 func TestSearchMediaWithFilters_PathPrefixIsRecursiveAndBoundarySafe(t *testing.T) {
 	t.Parallel()
 
@@ -38,13 +45,13 @@ func TestSearchMediaWithFilters_PathPrefixIsRecursiveAndBoundarySafe(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 
-	root := filepath.Join("roms", "SNES")
-	insidePath := filepath.Join(root, "inside.sfc")
-	nestedPath := filepath.Join(root, "nested", "inside-too.sfc")
-	siblingPath := filepath.Join("roms", "SNES2", "outside.sfc")
-	literalRoot := filepath.Join("roms", "100%_Games")
-	literalPath := filepath.Join(literalRoot, "literal.sfc")
-	wildcardLookalikePath := filepath.Join("roms", "100XXGames", "outside.sfc")
+	root := filepath.ToSlash(filepath.Join("roms", "SNES"))
+	insidePath := filepath.ToSlash(filepath.Join(root, "inside.sfc"))
+	nestedPath := filepath.ToSlash(filepath.Join(root, "nested", "inside-too.sfc"))
+	siblingPath := filepath.ToSlash(filepath.Join("roms", "SNES2", "outside.sfc"))
+	literalRoot := filepath.ToSlash(filepath.Join("roms", "100%_Games"))
+	literalPath := filepath.ToSlash(filepath.Join(literalRoot, "literal.sfc"))
+	wildcardLookalikePath := filepath.ToSlash(filepath.Join("roms", "100XXGames", "outside.sfc"))
 
 	system := insertSystemWithMedia(t, mediaDB, "SNES", "Inside", insidePath)
 	insertSystemMedia(t, mediaDB, system, "Nested", nestedPath)
@@ -159,11 +166,11 @@ func TestSearchMediaWithFilters_PathPrefixComposesAcrossCacheAndSQL(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	root := filepath.Join("roms", "SNES", "favorites")
-	alphaPath := filepath.Join(root, "target-alpha.sfc")
-	betaPath := filepath.Join(root, "nested", "target-beta.sfc")
-	notFavoritePath := filepath.Join(root, "target-other.sfc")
-	outsidePath := filepath.Join("roms", "SNES", "outside", "target-outside.sfc")
+	root := filepath.ToSlash(filepath.Join("roms", "SNES", "favorites"))
+	alphaPath := filepath.ToSlash(filepath.Join(root, "target-alpha.sfc"))
+	betaPath := filepath.ToSlash(filepath.Join(root, "nested", "target-beta.sfc"))
+	notFavoritePath := filepath.ToSlash(filepath.Join(root, "target-other.sfc"))
+	outsidePath := filepath.ToSlash(filepath.Join("roms", "SNES", "outside", "target-outside.sfc"))
 
 	system := insertSystemWithMedia(t, mediaDB, "SNES", "Target Alpha", alphaPath)
 	insertSystemMedia(t, mediaDB, system, "Target Beta", betaPath)

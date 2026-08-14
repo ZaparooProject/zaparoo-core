@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 )
 
 // return ?, ?,... based on count
@@ -41,6 +42,7 @@ func prepareVariadic(p, s string, c int) string {
 }
 
 func mediaRecursivePathPrefix(path string) string {
+	path = pathutil.CanonicalMediaPath(path)
 	if path == "" || strings.HasSuffix(path, "/") {
 		return path
 	}
