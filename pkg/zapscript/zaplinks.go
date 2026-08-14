@@ -94,21 +94,25 @@ var zapFetchTransport = &http.Transport{
 var zapFetchClientMu syncutil.RWMutex
 
 var (
-	wellKnownFetchClient = newHTTPFetchClient(zapFetchTransport)
+	wellKnownFetchClient = newWellKnownFetchClient(zapFetchTransport)
 	zapFetchClient       = newZapFetchClient(zapFetchTransport)
 )
 
 func newHTTPFetchClient(transport http.RoundTripper) *http.Client {
 	return &http.Client{
-		Transport: &installer.AuthTransport{
-			Base: transport,
-		},
-		Timeout: 10 * time.Second,
+		Transport: transport,
+		Timeout:   10 * time.Second,
 	}
 }
 
-func newZapFetchClient(transport http.RoundTripper) *http.Client {
+func newWellKnownFetchClient(transport http.RoundTripper) *http.Client {
 	client := newHTTPFetchClient(transport)
+	client.CheckRedirect = checkZapLinkRedirect
+	return client
+}
+
+func newZapFetchClient(transport http.RoundTripper) *http.Client {
+	client := newHTTPFetchClient(&installer.AuthTransport{Base: transport})
 	client.CheckRedirect = checkZapLinkRedirect
 	return client
 }
@@ -130,7 +134,7 @@ func currentZapFetchClient() *http.Client {
 func ConfigureHTTPTransport() {
 	transport := tlsroots.Transport(zapFetchTransport)
 	zapFetchClientMu.Lock()
-	wellKnownFetchClient = newHTTPFetchClient(transport)
+	wellKnownFetchClient = newWellKnownFetchClient(transport)
 	zapFetchClient = newZapFetchClient(transport)
 	zapFetchClientMu.Unlock()
 }
@@ -142,6 +146,13 @@ var ErrWellKnownNotFound = errors.New("well-known endpoint not found")
 // FetchWellKnown fetches and parses the .well-known/zaparoo file from a base URL.
 // Returns ErrWellKnownNotFound if the host returned 404.
 func FetchWellKnown(baseURL string) (*WellKnown, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid well-known base URL: %w", err)
+	}
+	if validationErr := validateZapLinkURL(u); validationErr != nil {
+		return nil, validationErr
+	}
 	return doFetchWellKnown(baseURL, currentWellKnownFetchClient())
 }
 
@@ -194,7 +205,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 		return 0, err
 	}
 	baseURL := u.Scheme + "://" + u.Host
-	wk, err := doFetchWellKnown(baseURL, currentZapFetchClient())
+	wk, err := doFetchWellKnown(baseURL, currentWellKnownFetchClient())
 	if errors.Is(err, ErrWellKnownNotFound) {
 		return 0, nil
 	}
@@ -490,7 +501,7 @@ func PreWarmZapLinkHostsContext(
 			}
 			defer func() { <-sem }()
 
-			preWarmHost(ctx, u, db, currentZapFetchClient())
+			preWarmHost(ctx, u, db, currentWellKnownFetchClient())
 		}(baseURL)
 	}
 
