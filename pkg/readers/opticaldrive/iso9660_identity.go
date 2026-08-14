@@ -21,6 +21,7 @@ package opticaldrive
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -36,18 +37,52 @@ const (
 	iso9660DescriptorTypePrimary = 0x01
 	iso9660DescriptorTypeEnd     = 0xff
 
-	iso9660VolumeIDOffset = 40
-	iso9660VolumeIDSize   = 32
-	iso9660CreatedOffset  = 813
-	iso9660ModifiedOffset = 830
-	iso9660DateSize       = 17
+	iso9660VolumeIDOffset            = 40
+	iso9660VolumeIDSize              = 32
+	iso9660RootDirectoryRecordOffset = 156
+	iso9660CreatedOffset             = 813
+	iso9660ModifiedOffset            = 830
+	iso9660DateSize                  = 17
+
+	iso9660DirectoryRecordMinSize     = 34
+	iso9660ExtentLocationOffset       = 2
+	iso9660DataLengthOffset           = 10
+	iso9660FileFlagsOffset            = 25
+	iso9660FileIdentifierLengthOffset = 32
+	iso9660FileIdentifierOffset       = 33
+	iso9660DirectoryFlag              = 0x02
+	iso9660MultiExtentFlag            = 0x80
+	iso9660MaxTokenFileSize           = 1 * 1024 * 1024
+	iso9660TokenFileName              = "zaparoo.txt" //nolint:gosec // Filename, not a credential.
+)
+
+type discTokenFileState uint8
+
+const (
+	discTokenFileUnknown discTokenFileState = iota
+	discTokenFileAbsent
+	discTokenFilePresent
 )
 
 var errISO9660IdentityNotFound = errors.New("iso9660 identity not found")
 
 type discIdentity struct {
-	UUID  string
-	Label string
+	UUID      string
+	Label     string
+	TokenFile discTokenFile
+}
+
+type discTokenFile struct {
+	Data  []byte
+	State discTokenFileState
+}
+
+type iso9660DirectoryRecord struct {
+	Identifier              []byte
+	ExtentLocation          uint32
+	DataLength              uint32
+	ExtendedAttributeLength uint8
+	Flags                   uint8
 }
 
 type contextReaderAt interface {
@@ -84,9 +119,124 @@ func readISO9660IdentityContext(ctx context.Context, r contextReaderAt) (discIde
 		if uuid == "" {
 			uuid = iso9660DateUUID(buf[iso9660CreatedOffset : iso9660CreatedOffset+iso9660DateSize])
 		}
-		return discIdentity{UUID: uuid, Label: label}, true, nil
+
+		tokenFile, tokenErr := readISO9660TokenFileContext(ctx, r, buf)
+		if tokenErr != nil {
+			tokenFile = discTokenFile{State: discTokenFileUnknown}
+		}
+		return discIdentity{UUID: uuid, Label: label, TokenFile: tokenFile}, true, nil
 	}
 	return discIdentity{}, false, nil
+}
+
+func readISO9660TokenFileContext(
+	ctx context.Context,
+	r contextReaderAt,
+	primaryVolumeDescriptor []byte,
+) (discTokenFile, error) {
+	rootRecord, err := parseISO9660DirectoryRecord(primaryVolumeDescriptor[iso9660RootDirectoryRecordOffset:])
+	if err != nil {
+		return discTokenFile{}, fmt.Errorf("parse iso9660 root directory record: %w", err)
+	}
+	if rootRecord.Flags&iso9660DirectoryFlag == 0 {
+		return discTokenFile{}, errors.New("iso9660 root directory record is not a directory")
+	}
+
+	rootOffset := iso9660RecordDataOffset(rootRecord)
+	remaining := int64(rootRecord.DataLength)
+	sector := make([]byte, iso9660SectorSize)
+	for directoryOffset := int64(0); remaining > 0; directoryOffset += iso9660SectorSize {
+		readSize := min(remaining, int64(len(sector)))
+		n, readErr := r.ReadAtContext(ctx, sector[:readSize], rootOffset+directoryOffset)
+		if readErr != nil {
+			return discTokenFile{}, fmt.Errorf("read iso9660 root directory: %w", readErr)
+		}
+		if int64(n) < readSize {
+			return discTokenFile{}, io.ErrUnexpectedEOF
+		}
+
+		for recordOffset := 0; recordOffset < n; {
+			recordLength := int(sector[recordOffset])
+			if recordLength == 0 {
+				break
+			}
+			if recordOffset+recordLength > n {
+				return discTokenFile{}, errors.New("iso9660 directory record crosses sector boundary")
+			}
+
+			record, parseErr := parseISO9660DirectoryRecord(sector[recordOffset : recordOffset+recordLength])
+			if parseErr != nil {
+				return discTokenFile{}, fmt.Errorf("parse iso9660 directory record: %w", parseErr)
+			}
+			if iso9660TokenFileIdentifier(record.Identifier) {
+				return readISO9660TokenFileRecord(ctx, r, record)
+			}
+			recordOffset += recordLength
+		}
+		remaining -= readSize
+	}
+
+	return discTokenFile{State: discTokenFileAbsent}, nil
+}
+
+func readISO9660TokenFileRecord(
+	ctx context.Context,
+	r contextReaderAt,
+	record iso9660DirectoryRecord,
+) (discTokenFile, error) {
+	if record.Flags&iso9660DirectoryFlag != 0 || record.Flags&iso9660MultiExtentFlag != 0 {
+		return discTokenFile{State: discTokenFilePresent}, nil
+	}
+	if record.DataLength > iso9660MaxTokenFileSize {
+		return discTokenFile{State: discTokenFilePresent}, nil
+	}
+	if record.DataLength == 0 {
+		return discTokenFile{State: discTokenFilePresent}, nil
+	}
+
+	contents := make([]byte, int(record.DataLength))
+	n, err := r.ReadAtContext(ctx, contents, iso9660RecordDataOffset(record))
+	if err != nil {
+		return discTokenFile{}, fmt.Errorf("read iso9660 token file: %w", err)
+	}
+	if n < len(contents) {
+		return discTokenFile{}, io.ErrUnexpectedEOF
+	}
+	return discTokenFile{Data: contents, State: discTokenFilePresent}, nil
+}
+
+func parseISO9660DirectoryRecord(raw []byte) (iso9660DirectoryRecord, error) {
+	if len(raw) < 1 {
+		return iso9660DirectoryRecord{}, io.ErrUnexpectedEOF
+	}
+	recordLength := int(raw[0])
+	if recordLength < iso9660DirectoryRecordMinSize || recordLength > len(raw) {
+		return iso9660DirectoryRecord{}, errors.New("invalid iso9660 directory record length")
+	}
+
+	identifierLength := int(raw[iso9660FileIdentifierLengthOffset])
+	identifierEnd := iso9660FileIdentifierOffset + identifierLength
+	if identifierEnd > recordLength {
+		return iso9660DirectoryRecord{}, errors.New("invalid iso9660 file identifier length")
+	}
+
+	return iso9660DirectoryRecord{
+		Identifier:              raw[iso9660FileIdentifierOffset:identifierEnd],
+		ExtentLocation:          binary.LittleEndian.Uint32(raw[iso9660ExtentLocationOffset:]),
+		DataLength:              binary.LittleEndian.Uint32(raw[iso9660DataLengthOffset:]),
+		ExtendedAttributeLength: raw[1],
+		Flags:                   raw[iso9660FileFlagsOffset],
+	}, nil
+}
+
+func iso9660RecordDataOffset(record iso9660DirectoryRecord) int64 {
+	block := int64(record.ExtentLocation) + int64(record.ExtendedAttributeLength)
+	return block * iso9660SectorSize
+}
+
+func iso9660TokenFileIdentifier(identifier []byte) bool {
+	name := strings.TrimSuffix(string(identifier), ";1")
+	return strings.EqualFold(name, iso9660TokenFileName)
 }
 
 func trimISO9660String(raw []byte) string {
