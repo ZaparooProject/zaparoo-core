@@ -718,11 +718,11 @@ func TestMediaDB_RandomGameWithQuery_PathPrefixIntegration(t *testing.T) {
 	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
 	require.NoError(t, err)
 
-	matchingDir := filepath.Join("roms", "nes", "favorites")
-	matchingPath := filepath.Join(matchingDir, "target.nes")
-	nestedPath := filepath.Join(matchingDir, "nested", "nested.nes")
-	siblingPrefixPath := filepath.Join("roms", "nes", "favorites-old", "sibling.nes")
-	outsidePath := filepath.Join("roms", "nes", "other", "outside.nes")
+	matchingDir := filepath.ToSlash(filepath.Join("roms", "nes", "favorites"))
+	matchingPath := filepath.ToSlash(filepath.Join(matchingDir, "target.nes"))
+	nestedPath := filepath.ToSlash(filepath.Join(matchingDir, "nested", "nested.nes"))
+	siblingPrefixPath := filepath.ToSlash(filepath.Join("roms", "nes", "favorites-old", "sibling.nes"))
+	outsidePath := filepath.ToSlash(filepath.Join("roms", "nes", "other", "outside.nes"))
 	paths := []string{matchingPath, nestedPath, siblingPrefixPath, outsidePath}
 	for i, path := range paths {
 		name := fmt.Sprintf("Game %d", i+1)
@@ -744,7 +744,7 @@ func TestMediaDB_RandomGameWithQuery_PathPrefixIntegration(t *testing.T) {
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	result, err := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
-		PathPrefix: filepath.ToSlash(matchingDir),
+		PathPrefix: matchingDir,
 	})
 
 	require.NoError(t, err)

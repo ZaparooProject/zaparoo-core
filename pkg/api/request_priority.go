@@ -38,6 +38,17 @@ const (
 	apiPriorityLow
 )
 
+func (p apiRequestPriority) String() string {
+	switch p {
+	case apiPriorityHigh:
+		return "high"
+	case apiPriorityLow:
+		return "low"
+	default:
+		return "normal"
+	}
+}
+
 func requestTimeoutForAPIMethod(method string) time.Duration {
 	if models.MethodHasUnboundedRuntime(method) {
 		return 0

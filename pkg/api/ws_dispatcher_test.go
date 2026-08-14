@@ -21,14 +21,17 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -156,6 +159,161 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	require.NotEqual(t, -1, favoriteIndex)
 	require.NotEqual(t, -1, queuedImageIndex)
 	assert.Less(t, favoriteIndex, queuedImageIndex, "mutation should bypass queued image work")
+}
+
+func TestWebSocketLowPriorityQueueRejectsWithoutClosingSession(t *testing.T) {
+	imageStarted := make(chan struct{}, wsLowConcurrency)
+	releaseImages := make(chan struct{})
+	defer close(releaseImages)
+
+	var methodMap MethodMap
+	require.NoError(t, methodMap.AddMethod(models.MethodMediaImage, func(env requests.RequestEnv) (any, error) {
+		select {
+		case imageStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseImages:
+			return map[string]string{"kind": "image"}, nil
+		case <-env.Context.Done():
+			return nil, env.Context.Err()
+		}
+	}))
+	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(requests.RequestEnv) (any, error) {
+		return map[string]string{"kind": "run"}, nil
+	}))
+
+	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
+	defer cleanup()
+
+	conn := dialWS(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	for id := 1; id <= wsLowConcurrency; id++ {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
+	}
+	for range wsLowConcurrency {
+		select {
+		case <-imageStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("media.image did not start")
+		}
+	}
+
+	for id := wsLowConcurrency + 1; id <= wsLowConcurrency+wsLowQueueSize; id++ {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
+	}
+	busyID := wsLowConcurrency + wsLowQueueSize + 1
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, busyID))))
+	// Saturated JSON-RPC notifications are dropped without an error response.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"media.image"}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"jsonrpc":"2.0","method":"run","id":1000}`)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("ping")))
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	var gotBusy, gotRun, gotPong bool
+	for !gotBusy || !gotRun || !gotPong {
+		_, msg, err := conn.ReadMessage()
+		require.NoError(t, err)
+		if string(msg) == "pong" {
+			gotPong = true
+			continue
+		}
+
+		var resp models.ResponseObject
+		require.NoError(t, json.Unmarshal(msg, &resp))
+		switch {
+		case resp.ID.Equal(models.NewNumberID(int64(busyID))):
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, JSONRPCErrorServerBusy.Code, resp.Error.Code)
+			assert.Equal(t, JSONRPCErrorServerBusy.Message, resp.Error.Message)
+			gotBusy = true
+		case resp.ID.Equal(models.NewNumberID(1000)):
+			require.Nil(t, resp.Error)
+			gotRun = true
+		default:
+			t.Fatalf("unexpected response while image workers blocked: %s", msg)
+		}
+	}
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	_, msg, err := conn.ReadMessage()
+	if err == nil {
+		t.Fatalf("unexpected response for rejected notification: %s", msg)
+	}
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr, "expected read timeout, got %v", err)
+	assert.True(t, netErr.Timeout(), "expected read timeout, got %v", err)
+
+	select {
+	case <-imageStarted:
+		t.Fatal("rejected media.image reached a worker")
+	default:
+	}
+}
+
+func TestWebSocketBusyResponseUsesEncryptedSession(t *testing.T) {
+	cs, clientSecrets := establishTestEncryptionSession(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	m := newWebSocketSession()
+	m.HandleConnect(func(session *melody.Session) {
+		dispatcher := getOrCreateWSDispatcher(ctx, session)
+		dispatcher.enqueueResponse(&wsResponseJob{
+			result: requestResult{
+				ID:          models.NewStringID("busy-request"),
+				Error:       &JSONRPCErrorServerBusy,
+				ShouldReply: true,
+			},
+			cs:     cs,
+			method: models.MethodMediaImage,
+		})
+	})
+	m.HandleDisconnect(func(session *melody.Session) {
+		closeWSDispatcher(session)
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	}))
+	defer func() {
+		_ = m.Close()
+		srv.Close()
+	}()
+
+	conn := dialWS(t, "ws"+srv.URL[len("http"):])
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	var frame struct {
+		Ciphertext string `json:"e"`
+	}
+	require.NoError(t, json.Unmarshal(msg, &frame))
+	ciphertext, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
+	require.NoError(t, err)
+	plaintext, err := crypto.Decrypt(
+		clientSecrets.s2cGCM,
+		clientSecrets.s2cNonce,
+		0,
+		ciphertext,
+		clientSecrets.aad,
+	)
+	require.NoError(t, err)
+
+	var resp models.ResponseObject
+	require.NoError(t, json.Unmarshal(plaintext, &resp))
+	assert.Equal(t, models.NewStringID("busy-request"), resp.ID)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, JSONRPCErrorServerBusy.Code, resp.Error.Code)
+	assert.Equal(t, JSONRPCErrorServerBusy.Message, resp.Error.Message)
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
@@ -457,7 +615,7 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 		cancel:    cancel,
 		high:      make(chan *wsRequestJob, wsQueueSize),
 		normal:    make(chan *wsRequestJob, wsQueueSize),
-		low:       make(chan *wsRequestJob, wsQueueSize),
+		low:       make(chan *wsRequestJob, wsLowQueueSize),
 		responses: make(chan *wsResponseJob, wsResponseQueueSize),
 	}
 

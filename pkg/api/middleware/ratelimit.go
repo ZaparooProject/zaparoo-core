@@ -26,18 +26,17 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
-	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
 
 const (
-	RequestsPerMinute      = 100 // Simple limit - 100 requests per minute per IP
-	BurstSize              = 20  // Allow burst of 20 requests
-	WebSocketRateLimitWait = 2 * time.Second
+	RequestsPerMinute = 100 // Simple limit - 100 requests per minute per IP
+	BurstSize         = 20  // Allow burst of 20 requests
 )
 
-// IPRateLimiter manages rate limiters per IP address for both HTTP and WebSocket
+// IPRateLimiter manages HTTP admission rate limiters per IP address.
+// WebSocket upgrades consume one token; established frames use session queues.
 type IPRateLimiter struct {
 	limiters map[string]*rateLimiterEntry
 	mu       syncutil.RWMutex
@@ -172,53 +171,5 @@ func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Han
 
 			next.ServeHTTP(w, r)
 		})
-	}
-}
-
-// WebSocketRateLimitHandler wraps a WebSocket message handler with rate
-// limiting. When the per-IP rate limit is exceeded the connection is closed
-// rather than receiving a structured JSON-RPC error: this avoids leaking
-// plaintext frames onto encrypted sessions (which would not match the
-// {"e":...} envelope and could not be decrypted by the client) and gives
-// well-behaved clients an unambiguous "back off and reconnect" signal.
-func WebSocketRateLimitHandler(
-	limiter *IPRateLimiter,
-	handler func(*melody.Session, []byte),
-) func(*melody.Session, []byte) {
-	return WebSocketRateLimitHandlerWithWait(limiter, WebSocketRateLimitWait, handler)
-}
-
-func WebSocketRateLimitHandlerWithWait(
-	limiter *IPRateLimiter,
-	waitTimeout time.Duration,
-	handler func(*melody.Session, []byte),
-) func(*melody.Session, []byte) {
-	return func(session *melody.Session, msg []byte) {
-		host, exempt := remoteRateLimitHost(session.Request.RemoteAddr)
-		if exempt {
-			handler(session, msg)
-			return
-		}
-
-		rl := limiter.GetLimiter(host)
-
-		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-		defer cancel()
-		waitTimeoutValue := waitTimeout
-		if err := rl.Wait(ctx); err != nil {
-			log.Warn().
-				Err(err).
-				Str("ip", host).
-				Int("msg_size", len(msg)).
-				Str("wait_timeout", waitTimeoutValue.String()).
-				Msg("WebSocket rate limit wait failed, closing connection")
-
-			if err := session.Close(); err != nil {
-				log.Debug().Err(err).Msg("failed to close rate-limited session")
-			}
-			return
-		}
-
-		handler(session, msg)
 	}
 }
