@@ -93,8 +93,8 @@ type KodiClient interface {
 	// Path format: "kodi-artist://[id]/[name]"
 	LaunchArtist(path string) error
 
-	// LaunchTVShow launches a TV show by ID using playlist generation
-	// Path format: "kodi-show://[id]/[name]"
+	// LaunchTVShow launches a TV show using its current Kodi ID or durable provider identity.
+	// Path format: "kodi-show://[id]/[name]?[provider]=[identity]"
 	LaunchTVShow(path string) error
 
 	// GetURL returns the current Kodi API URL

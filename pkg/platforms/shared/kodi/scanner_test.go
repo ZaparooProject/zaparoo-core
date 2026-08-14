@@ -426,9 +426,22 @@ func TestScanTVShows(t *testing.T) {
 
 	// Mock TV shows data
 	expectedTVShows := []TVShow{
-		{ID: 1, Label: "Breaking Bad"},
+		{
+			ID:    1,
+			Label: "Breaking Bad",
+			UniqueIDs: map[string]string{
+				"imdb": "tt0903747",
+				"tvdb": "81189",
+			},
+		},
 		{ID: 2, Label: "The Wire"},
-		{ID: 3, Label: "Better Call Saul"},
+		{
+			ID:    3,
+			Label: "Better Call Saul",
+			UniqueIDs: map[string]string{
+				"tmdb": "60059",
+			},
+		},
 	}
 
 	// Set up mock expectation
@@ -443,13 +456,13 @@ func TestScanTVShows(t *testing.T) {
 	assert.Len(t, results, 3)
 
 	assert.Equal(t, "Breaking Bad", results[0].Name)
-	assert.Equal(t, "kodi-show://1/Breaking%20Bad", results[0].Path)
+	assert.Equal(t, "kodi-show://1/Breaking%20Bad?tvdb=81189&imdb=tt0903747", results[0].Path)
 
 	assert.Equal(t, "The Wire", results[1].Name)
 	assert.Equal(t, "kodi-show://2/The%20Wire", results[1].Path)
 
 	assert.Equal(t, "Better Call Saul", results[2].Name)
-	assert.Equal(t, "kodi-show://3/Better%20Call%20Saul", results[2].Path)
+	assert.Equal(t, "kodi-show://3/Better%20Call%20Saul?tmdb=60059", results[2].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)

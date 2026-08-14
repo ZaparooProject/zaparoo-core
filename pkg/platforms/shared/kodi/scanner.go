@@ -184,7 +184,7 @@ func ScanTVShows(
 	for _, show := range shows {
 		results = append(results, platforms.ScanResult{
 			Name:  show.Label,
-			Path:  virtualpath.CreateVirtualPath(shared.SchemeKodiShow, strconv.Itoa(show.ID), show.Label),
+			Path:  createTVShowVirtualPath(show),
 			NoExt: true,
 		})
 	}
