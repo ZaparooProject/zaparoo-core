@@ -24,6 +24,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -239,6 +240,15 @@ func TestWebSocketLowPriorityQueueRejectsWithoutClosingSession(t *testing.T) {
 			t.Fatalf("unexpected response while image workers blocked: %s", msg)
 		}
 	}
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	_, msg, err := conn.ReadMessage()
+	if err == nil {
+		t.Fatalf("unexpected response for rejected notification: %s", msg)
+	}
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr, "expected read timeout, got %v", err)
+	assert.True(t, netErr.Timeout(), "expected read timeout, got %v", err)
 
 	select {
 	case <-imageStarted:
