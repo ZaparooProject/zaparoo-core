@@ -167,7 +167,10 @@ func TestWebSocketLowPriorityQueueRejectsWithoutClosingSession(t *testing.T) {
 
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodMediaImage, func(env requests.RequestEnv) (any, error) {
-		imageStarted <- struct{}{}
+		select {
+		case imageStarted <- struct{}{}:
+		default:
+		}
 		select {
 		case <-releaseImages:
 			return map[string]string{"kind": "image"}, nil
