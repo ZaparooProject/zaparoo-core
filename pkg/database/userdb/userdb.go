@@ -103,33 +103,52 @@ func (db *UserDB) Open() error {
 		}
 	}
 
+	sqlInstance, err := db.openSQLConnection(dbPath)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		log.Debug().Msg("user database is new, allocating schema")
+		if err = sqlAllocate(sqlInstance, dbPath); err != nil {
+			_ = sqlInstance.Close()
+			return err
+		}
+	}
+	db.sql.Store(sqlInstance)
+	return nil
+}
+
+func (db *UserDB) openSQLConnection(dbPath string) (*sql.DB, error) {
 	log.Debug().Msg("opening user database connection")
 	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
 	if err != nil {
-		return fmt.Errorf("failed to open user database: %w", err)
+		return nil, fmt.Errorf("failed to open user database: %w", err)
 	}
-	db.sql.Store(sqlInstance)
 	if _, err = sqlInstance.ExecContext(db.ctx, "PRAGMA cell_size_check=ON"); err != nil {
 		if database.IsCorruptionError(err) {
 			db.MarkCorrupt(fmt.Sprintf("cell_size_check failed during open: %v", err))
 			log.Warn().Err(err).Msg("user database cell size check failed during open")
 		} else {
 			// cell_size_check is a best-effort safety pragma; a non-corruption failure
-			// (e.g. a transient "database is locked" while another connection is active
-			// during a restore) must not disconnect an otherwise-usable database. Keep the
-			// connection and re-attempt the pragma on the next open.
+			// must not disconnect an otherwise-usable database.
 			log.Warn().Err(err).Msg("failed to enable user database cell size checks; continuing without")
 		}
 	}
+	return sqlInstance, nil
+}
 
-	if !exists {
-		log.Debug().Msg("user database is new, allocating schema")
-		err := db.Allocate()
-		if err != nil {
-			return err
-		}
+func (db *UserDB) openMigratedDatabase() error {
+	dbPath := db.GetDBPath()
+	db.dbPath = dbPath
+	sqlInstance, err := db.openSQLConnection(dbPath)
+	if err != nil {
+		return err
 	}
-
+	if err = sqlMigrateUp(sqlInstance, dbPath); err != nil {
+		_ = sqlInstance.Close()
+		return err
+	}
+	db.sql.Store(sqlInstance)
 	return nil
 }
 

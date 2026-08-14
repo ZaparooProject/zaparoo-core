@@ -605,11 +605,11 @@ func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	if err = replaceDatabaseFromBackup(afero.NewOsFs(), backupPath, db.GetDBPath()); err != nil {
 		return db.restoreFailed(fmt.Errorf("failed to restore user database backup: %w", err))
 	}
-	if err = db.Open(); err != nil {
-		return db.restoreFailed(fmt.Errorf("failed to reopen restored user database: %w", err))
-	}
-	if err = db.MigrateUp(); err != nil {
-		return db.restoreFailed(fmt.Errorf("failed to migrate restored user database: %w", err))
+	// Keep the replacement private until migrations finish. Publishing the
+	// handle earlier lets concurrent API work lock the database between Open
+	// and MigrateUp, causing an otherwise valid live restore to fail.
+	if err = db.openMigratedDatabase(); err != nil {
+		return db.restoreFailed(fmt.Errorf("failed to open restored user database: %w", err))
 	}
 	result := database.RestoreInfo{RestoredFrom: backup, PreRestoreBackup: preRestore}
 	if err = db.ClearCorruptMarker(); err != nil {
@@ -669,11 +669,8 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 			log.Warn().Err(err).Str("path", backup.Path).Msg("failed to restore user database backup")
 			continue
 		}
-		if err = db.Open(); err != nil {
-			return database.RestoreInfo{}, fmt.Errorf("failed to reopen restored user database: %w", err)
-		}
-		if err = db.MigrateUp(); err != nil {
-			return database.RestoreInfo{}, fmt.Errorf("failed to migrate restored user database: %w", err)
+		if err = db.openMigratedDatabase(); err != nil {
+			return database.RestoreInfo{}, fmt.Errorf("failed to open restored user database: %w", err)
 		}
 		if err = db.ClearCorruptMarker(); err != nil {
 			return database.RestoreInfo{}, fmt.Errorf(
@@ -688,11 +685,6 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 	if err = db.Open(); err != nil {
 		return database.RestoreInfo{}, fmt.Errorf(
 			"failed to create fresh user database after corruption: %w", err,
-		)
-	}
-	if err = db.MigrateUp(); err != nil {
-		return database.RestoreInfo{}, fmt.Errorf(
-			"failed to migrate fresh user database after corruption: %w", err,
 		)
 	}
 	if err = db.ClearCorruptMarker(); err != nil {
