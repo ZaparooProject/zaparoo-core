@@ -24,6 +24,8 @@ package opticaldrive
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -37,9 +39,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+)
+
+const (
+	testISO9660RootExtent  = 20
+	testISO9660TokenExtent = 21
 )
 
 func TestNewReader(t *testing.T) {
@@ -278,19 +286,116 @@ func TestConstants(t *testing.T) {
 func TestReadISO9660Identity(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("SCES-01420", "1998102813221100", "1998010100000000")
+	image, _ := newTestISO9660Image("SCES-01420", "1998102813221100", "1998010100000000")
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "SCES-01420", identity.Label)
 	assert.Equal(t, "1998-10-28-13-22-11-00", identity.UUID)
+	assert.Equal(t, discTokenFileAbsent, identity.TokenFile.State)
+}
+
+func TestReadISO9660Identity_TokenFile(t *testing.T) {
+	t.Parallel()
+
+	const fixtureContents = "  **launch.system:nes\n"
+	contents := []byte(fixtureContents)
+	image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt", contents, uint32(len(fixtureContents)))
+
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, discTokenFilePresent, identity.TokenFile.State)
+	assert.Equal(t, contents, identity.TokenFile.Data)
+}
+
+func TestReadISO9660Identity_TokenFileNameVariants(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"ZAPAROO.TXT", "ZaPaRoO.TxT;1"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+			addTestISO9660TokenFile(image, rootEntriesSize, name, []byte("launch"), uint32(len("launch")))
+
+			identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
+
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, discTokenFilePresent, identity.TokenFile.State)
+			assert.Equal(t, []byte("launch"), identity.TokenFile.Data)
+		})
+	}
+}
+
+func TestReadISO9660Identity_EmptyTokenFile(t *testing.T) {
+	t.Parallel()
+
+	image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt;1", nil, 0)
+
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, discTokenFilePresent, identity.TokenFile.State)
+	assert.Empty(t, identity.TokenFile.Data)
+}
+
+func TestReadISO9660Identity_OversizedTokenFile(t *testing.T) {
+	t.Parallel()
+
+	image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt;1", nil, iso9660MaxTokenFileSize+1)
+
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, discTokenFilePresent, identity.TokenFile.State)
+	assert.Empty(t, identity.TokenFile.Data)
+}
+
+func TestReadISO9660Identity_MalformedTokenDirectoryPreservesIdentity(t *testing.T) {
+	t.Parallel()
+
+	image, rootEntriesSize := newTestISO9660Image("LEGACY", "1998010100000000", "1998010100000000")
+	root := image[testISO9660RootExtent*iso9660SectorSize:]
+	root[rootEntriesSize] = 10
+
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "LEGACY", identity.Label)
+	assert.Equal(t, "1998-01-01-00-00-00-00", identity.UUID)
+	assert.Equal(t, discTokenFileUnknown, identity.TokenFile.State)
+}
+
+func TestReadISO9660Identity_TruncatedTokenFilePreservesIdentity(t *testing.T) {
+	t.Parallel()
+
+	image, rootEntriesSize := newTestISO9660Image("LEGACY", "1998010100000000", "1998010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt;1", nil, 32)
+	image = image[:testISO9660TokenExtent*iso9660SectorSize]
+
+	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "LEGACY", identity.Label)
+	assert.Equal(t, "1998-01-01-00-00-00-00", identity.UUID)
+	assert.Equal(t, discTokenFileUnknown, identity.TokenFile.State)
 }
 
 func TestReadISO9660Identity_FallsBackToCreatedDate(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("SCES-01420", "0000000000000000", "1998010100000000")
+	image, _ := newTestISO9660Image("SCES-01420", "0000000000000000", "1998010100000000")
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
 	require.NoError(t, err)
@@ -341,8 +446,8 @@ func readTestISO9660Identity(reader *bytes.Reader) (discIdentity, bool, error) {
 	return readISO9660IdentityContext(context.Background(), testReaderAtContextAdapter{reader: reader})
 }
 
-func newTestISO9660Image(label, modified, created string) []byte {
-	image := make([]byte, iso9660SuperblockOffset+iso9660SectorSize)
+func newTestISO9660Image(label, modified, created string) (image []byte, rootEntriesSize int) {
+	image = make([]byte, (testISO9660TokenExtent+1)*iso9660SectorSize)
 	desc := image[iso9660SuperblockOffset:]
 	desc[0] = iso9660DescriptorTypePrimary
 	copy(desc[1:6], "CD001")
@@ -351,7 +456,83 @@ func newTestISO9660Image(label, modified, created string) []byte {
 	copy(desc[iso9660VolumeIDOffset:iso9660VolumeIDOffset+iso9660VolumeIDSize], label)
 	copy(desc[iso9660ModifiedOffset:iso9660ModifiedOffset+16], modified)
 	copy(desc[iso9660CreatedOffset:iso9660CreatedOffset+16], created)
-	return image
+	writeTestISO9660DirectoryRecord(
+		desc[iso9660RootDirectoryRecordOffset:],
+		testISO9660RootExtent,
+		iso9660SectorSize,
+		iso9660DirectoryFlag,
+		[]byte{0},
+	)
+
+	root := image[testISO9660RootExtent*iso9660SectorSize:]
+	rootEntriesSize = writeTestISO9660DirectoryRecord(
+		root,
+		testISO9660RootExtent,
+		iso9660SectorSize,
+		iso9660DirectoryFlag,
+		[]byte{0},
+	)
+	rootEntriesSize += writeTestISO9660DirectoryRecord(
+		root[rootEntriesSize:],
+		testISO9660RootExtent,
+		iso9660SectorSize,
+		iso9660DirectoryFlag,
+		[]byte{1},
+	)
+	return image, rootEntriesSize
+}
+
+func addTestISO9660TokenFile(
+	image []byte,
+	rootEntriesSize int,
+	name string,
+	contents []byte,
+	declaredSize uint32,
+) {
+	root := image[testISO9660RootExtent*iso9660SectorSize:]
+	writeTestISO9660DirectoryRecord(
+		root[rootEntriesSize:],
+		testISO9660TokenExtent,
+		declaredSize,
+		0,
+		[]byte(name),
+	)
+	copy(image[testISO9660TokenExtent*iso9660SectorSize:], contents)
+}
+
+func writeTestISO9660DirectoryRecord(
+	destination []byte,
+	extentLocation uint32,
+	dataLength uint32,
+	flags uint8,
+	identifier []byte,
+) int {
+	if len(identifier) > int(^uint8(0)) {
+		panic("test ISO9660 identifier exceeds byte-sized field")
+	}
+	identifierLength := byte(len(identifier)) //nolint:gosec // Length is bounds-checked above.
+
+	recordLength := iso9660FileIdentifierOffset + len(identifier)
+	if recordLength%2 != 0 {
+		recordLength++
+	}
+	if recordLength > int(^uint8(0)) {
+		panic("test ISO9660 directory record exceeds byte-sized field")
+	}
+	recordLengthByte := byte(recordLength)
+
+	record := destination[:recordLength]
+	record[0] = recordLengthByte
+	binary.LittleEndian.PutUint32(record[2:6], extentLocation)
+	binary.BigEndian.PutUint32(record[6:10], extentLocation)
+	binary.LittleEndian.PutUint32(record[10:14], dataLength)
+	binary.BigEndian.PutUint32(record[14:18], dataLength)
+	record[iso9660FileFlagsOffset] = flags
+	binary.LittleEndian.PutUint16(record[28:30], 1)
+	binary.BigEndian.PutUint16(record[30:32], 1)
+	record[iso9660FileIdentifierLengthOffset] = identifierLength
+	copy(record[iso9660FileIdentifierOffset:], identifier)
+	return recordLength
 }
 
 type mockFSChecker struct {
@@ -636,6 +817,186 @@ func TestOpen_SuccessfulDiscDetection(t *testing.T) {
 	// Clean up
 	err = reader.Close()
 	require.NoError(t, err)
+}
+
+func TestOpen_TokenFileContent(t *testing.T) {
+	t.Parallel()
+
+	contents := []byte("  **launch.system:nes\n")
+	reader := newTestReader(&config.Instance{})
+	reader.fsChecker = &mockFSChecker{}
+	reader.discIdentifier = &mockDiscIdentifier{
+		identifyFunc: func(_ context.Context, _ string) (discIdentity, error) {
+			return discIdentity{
+				UUID:  "test-uuid",
+				Label: "test-label",
+				TokenFile: discTokenFile{
+					Data:  contents,
+					State: discTokenFilePresent,
+				},
+			}, nil
+		},
+	}
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	err := reader.Open(config.ReadersConnect{
+		Driver: "optical_drive",
+		Path:   "/dev/sr0",
+	}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+
+	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	require.NotNil(t, scan.Token)
+	assert.Equal(t, "disc", scan.Token.Type)
+	assert.Equal(t, "test-uuid/test-label", scan.Token.UID)
+	assert.Equal(t, "**launch.system:nes", scan.Token.Text)
+	assert.Equal(t, hex.EncodeToString(contents), scan.Token.Data)
+	assert.Equal(t, tokens.SourceReader, scan.Token.Source)
+	assert.NotEmpty(t, scan.Token.ReaderID)
+	assert.Empty(t, scan.Token.PathRoot)
+
+	require.NoError(t, reader.Close())
+}
+
+func TestOpen_InitialTokenParseErrorPreservesLegacyIdentity(t *testing.T) {
+	t.Parallel()
+
+	reader := newTestReader(&config.Instance{})
+	reader.fsChecker = &mockFSChecker{}
+	reader.discIdentifier = &mockDiscIdentifier{
+		identifyFunc: func(_ context.Context, _ string) (discIdentity, error) {
+			return discIdentity{
+				UUID:      "legacy-uuid",
+				Label:     "legacy-label",
+				TokenFile: discTokenFile{State: discTokenFileUnknown},
+			}, nil
+		},
+	}
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	err := reader.Open(config.ReadersConnect{
+		Driver: "optical_drive",
+		Path:   "/dev/sr0",
+	}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+
+	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	require.NotNil(t, scan.Token)
+	assert.Equal(t, "legacy-uuid/legacy-label", scan.Token.UID)
+	assert.Empty(t, scan.Token.Text)
+	assert.Empty(t, scan.Token.Data)
+	testutils.AssertNoScan(t, scanQueue, 1500*time.Millisecond)
+
+	require.NoError(t, reader.Close())
+}
+
+func TestOpen_TokenParseErrorDoesNotRemoveActiveToken(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	reader := newTestReader(&config.Instance{})
+	reader.fsChecker = &mockFSChecker{}
+	reader.discIdentifier = &mockDiscIdentifier{
+		identifyFunc: func(_ context.Context, _ string) (discIdentity, error) {
+			identity := discIdentity{UUID: "test-uuid", Label: "test-label"}
+			if callCount.Add(1) == 1 {
+				identity.TokenFile = discTokenFile{Data: []byte("launch"), State: discTokenFilePresent}
+			} else {
+				identity.TokenFile = discTokenFile{State: discTokenFileUnknown}
+			}
+			return identity, nil
+		},
+	}
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	err := reader.Open(config.ReadersConnect{
+		Driver: "optical_drive",
+		Path:   "/dev/sr0",
+	}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+
+	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	require.NotNil(t, scan.Token)
+	assert.Equal(t, "launch", scan.Token.Text)
+	testutils.AssertNoScan(t, scanQueue, 2500*time.Millisecond)
+
+	require.NoError(t, reader.Close())
+}
+
+func TestOpen_TokenContentChangeEmitsOneUpdatedScan(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	reader := newTestReader(&config.Instance{})
+	reader.fsChecker = &mockFSChecker{}
+	reader.discIdentifier = &mockDiscIdentifier{
+		identifyFunc: func(_ context.Context, _ string) (discIdentity, error) {
+			contents := []byte("second")
+			if callCount.Add(1) == 1 {
+				contents = []byte("first")
+			}
+			return discIdentity{
+				UUID:      "test-uuid",
+				Label:     "test-label",
+				TokenFile: discTokenFile{Data: contents, State: discTokenFilePresent},
+			}, nil
+		},
+	}
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	err := reader.Open(config.ReadersConnect{
+		Driver: "optical_drive",
+		Path:   "/dev/sr0",
+	}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+
+	first := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	require.NotNil(t, first.Token)
+	assert.Equal(t, "first", first.Token.Text)
+
+	second := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	require.NotNil(t, second.Token)
+	assert.Equal(t, "second", second.Token.Text)
+	testutils.AssertNoScan(t, scanQueue, 1500*time.Millisecond)
+
+	require.NoError(t, reader.Close())
+}
+
+func TestOpen_DiscRemovalAfterTokenFileEmitsRemoval(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	reader := newTestReader(&config.Instance{})
+	reader.fsChecker = &mockFSChecker{}
+	reader.discIdentifier = &mockDiscIdentifier{
+		identifyFunc: func(_ context.Context, _ string) (discIdentity, error) {
+			if callCount.Add(1) == 1 {
+				return discIdentity{
+					UUID:      "test-uuid",
+					Label:     "test-label",
+					TokenFile: discTokenFile{Data: []byte("launch"), State: discTokenFilePresent},
+				}, nil
+			}
+			return discIdentity{}, errISO9660IdentityNotFound
+		},
+	}
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	err := reader.Open(config.ReadersConnect{
+		Driver: "optical_drive",
+		Path:   "/dev/sr0",
+	}, scanQueue, readers.OpenOpts{})
+	require.NoError(t, err)
+
+	inserted := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	require.NotNil(t, inserted.Token)
+	assert.Equal(t, "launch", inserted.Token.Text)
+
+	removed := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, removed.Token)
+	assert.False(t, removed.ReaderError)
+
+	require.NoError(t, reader.Close())
 }
 
 func TestOpen_DeviceDisappearsWithActiveToken(t *testing.T) {
@@ -1079,7 +1440,11 @@ func TestOpen_KeepsExistingTokenWhenStableIDTemporarilyUnavailable(t *testing.T)
 		identifyFunc: func(_ context.Context, _ string) (discIdentity, error) {
 			call := callCount.Add(1)
 			if call == 1 {
-				return discIdentity{UUID: "1998-10-28-13-22-11-00", Label: "SCES-01420"}, nil
+				return discIdentity{
+					UUID:      "1998-10-28-13-22-11-00",
+					Label:     "SCES-01420",
+					TokenFile: discTokenFile{Data: []byte("launch"), State: discTokenFilePresent},
+				}, nil
 			}
 			return discIdentity{}, errors.New("disc identity unavailable")
 		},
@@ -1104,6 +1469,7 @@ func TestOpen_KeepsExistingTokenWhenStableIDTemporarilyUnavailable(t *testing.T)
 	scan := testutils.AssertScanReceived(t, scanQueue, 1500*time.Millisecond)
 	require.NotNil(t, scan.Token)
 	assert.Equal(t, "1998-10-28-13-22-11-00/SCES-01420", scan.Token.UID)
+	assert.Equal(t, "launch", scan.Token.Text)
 	require.Len(t, scan.Properties, 1)
 
 	testutils.AssertNoScan(t, scanQueue, 2500*time.Millisecond)

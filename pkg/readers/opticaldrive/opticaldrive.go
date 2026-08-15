@@ -20,7 +20,9 @@
 package opticaldrive
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -182,6 +184,34 @@ func scanPropertiesEqual(a, b []readers.ScanProperty) bool {
 	return true
 }
 
+func discTokenFilesEqual(a, b discTokenFile) bool {
+	return a.State == b.State && bytes.Equal(a.Data, b.Data)
+}
+
+func cloneDiscTokenFile(tokenFile discTokenFile) discTokenFile {
+	return discTokenFile{
+		Data:  bytes.Clone(tokenFile.Data),
+		State: tokenFile.State,
+	}
+}
+
+func effectiveDiscTokenFile(
+	current, previous discTokenFile,
+	hasProbed bool,
+	identityErr error,
+) discTokenFile {
+	if identityErr != nil {
+		return discTokenFile{State: discTokenFileAbsent}
+	}
+	if current.State == discTokenFileUnknown {
+		if hasProbed {
+			return cloneDiscTokenFile(previous)
+		}
+		return discTokenFile{State: discTokenFileAbsent}
+	}
+	return current
+}
+
 func (r *FileReader) Open(
 	device config.ReadersConnect,
 	iq chan<- readers.Scan,
@@ -218,6 +248,7 @@ func (r *FileReader) Open(
 		defer r.wg.Done()
 		var token *tokens.Token
 		var tokenProperties []readers.ScanProperty
+		var activeTokenFile, lastTokenFile discTokenFile
 		var lastUUID, lastLabel, lastIdentityErr string
 		hasProbed := false
 
@@ -242,6 +273,7 @@ func (r *FileReader) Open(
 					log.Warn().Err(err).Msg("optical drive device no longer exists - " +
 						"sending error signal to keep media running")
 					token = nil
+					activeTokenFile = discTokenFile{}
 					hasProbed = false
 					iq <- readers.Scan{
 						Source:      tokens.SourceReader,
@@ -260,37 +292,52 @@ func (r *FileReader) Open(
 			uuid := strings.TrimSpace(identity.UUID)
 			label := strings.TrimSpace(identity.Label)
 			identityErrStr := errString(identityErr)
+			probeTokenFile := effectiveDiscTokenFile(identity.TokenFile, lastTokenFile, hasProbed, identityErr)
 
-			probeChanged := !hasProbed || uuid != lastUUID || label != lastLabel || identityErrStr != lastIdentityErr
+			probeChanged := !hasProbed || uuid != lastUUID || label != lastLabel ||
+				identityErrStr != lastIdentityErr || !discTokenFilesEqual(probeTokenFile, lastTokenFile)
 			lastUUID, lastLabel, lastIdentityErr = uuid, label, identityErrStr
+			lastTokenFile = cloneDiscTokenFile(probeTokenFile)
 			hasProbed = true
 			if !probeChanged {
 				continue
 			}
 
 			id := resolveTokenID(uuid, label, r.device.IDSource)
+			tokenText := ""
+			tokenData := ""
+			if probeTokenFile.State == discTokenFilePresent {
+				tokenText = strings.TrimSpace(string(probeTokenFile.Data))
+				if tokenText != "" {
+					tokenData = hex.EncodeToString(probeTokenFile.Data)
+				}
+			}
 			scanProperties := r.gameIDProbe(r.path)
 			log.Debug().
 				Str("path", r.path).
 				Str("uuid", uuid).
 				Str("label", label).
 				Str("identityErr", identityErrStr).
+				Uint8("tokenFileState", uint8(probeTokenFile.State)).
+				Int("tokenFileBytes", len(probeTokenFile.Data)).
 				Int("properties", len(scanProperties)).
 				Msg("optical media identification probe changed")
 
-			if token != nil && len(scanProperties) > 0 && scanPropertiesEqual(scanProperties, tokenProperties) {
+			if token != nil && len(scanProperties) > 0 && scanPropertiesEqual(scanProperties, tokenProperties) &&
+				(identityErr != nil || discTokenFilesEqual(probeTokenFile, activeTokenFile)) {
 				if id == "" || token.UID == "" || token.UID == id {
 					continue
 				}
 			}
 
-			if id == "" && len(scanProperties) == 0 {
+			if id == "" && len(scanProperties) == 0 && tokenText == "" {
 				if token != nil {
 					log.Debug().
 						Err(identityErr).
 						Msg("error identifying optical media, removing token")
 					token = nil
 					tokenProperties = nil
+					activeTokenFile = discTokenFile{}
 					iq <- readers.Scan{
 						Source:   tokens.SourceReader,
 						ReaderID: r.ReaderID(),
@@ -300,7 +347,8 @@ func (r *FileReader) Open(
 				continue
 			}
 
-			if token != nil && token.UID == id && scanPropertiesEqual(scanProperties, tokenProperties) {
+			if token != nil && token.UID == id && scanPropertiesEqual(scanProperties, tokenProperties) &&
+				discTokenFilesEqual(probeTokenFile, activeTokenFile) {
 				continue
 			}
 
@@ -308,10 +356,13 @@ func (r *FileReader) Open(
 				Type:     TokenType,
 				ScanTime: time.Now(),
 				UID:      id,
+				Text:     tokenText,
+				Data:     tokenData,
 				Source:   tokens.SourceReader,
 				ReaderID: r.ReaderID(),
 			}
 			tokenProperties = append(tokenProperties[:0], scanProperties...)
+			activeTokenFile = cloneDiscTokenFile(probeTokenFile)
 
 			log.Debug().Msgf("new token: %s", token.UID)
 			iq <- readers.Scan{
