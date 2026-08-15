@@ -64,6 +64,24 @@ func (p *sequenceMockPlatform) KeyboardPressSequence(args []string, interKeyDela
 	return p.recorder.sequenceErr
 }
 
+type gamepadSequenceMockPlatform struct {
+	*mocks.MockPlatform
+	recorder *sequenceRecorder
+}
+
+func newGamepadSequenceMockPlatform() *gamepadSequenceMockPlatform {
+	return &gamepadSequenceMockPlatform{
+		MockPlatform: mocks.NewMockPlatform(),
+		recorder:     &sequenceRecorder{},
+	}
+}
+
+func (p *gamepadSequenceMockPlatform) GamepadPressSequence(args []string, interKeyDelay time.Duration) error {
+	p.recorder.sequenceArgs = append([]string(nil), args...)
+	p.recorder.sequenceDelay = interKeyDelay
+	return p.recorder.sequenceErr
+}
+
 func TestIsSpecialKey(t *testing.T) {
 	t.Parallel()
 
@@ -452,6 +470,32 @@ func TestPressKeyboardSequence_SequencerErrorIsWrapped(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "keyboard sequence")
+	assert.Contains(t, err.Error(), "device failed")
+}
+
+func TestPressGamepadSequence_UsesPlatformSequencer(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := newGamepadSequenceMockPlatform()
+	args := []string{"{press:up}", "{release:up}"}
+
+	err := PressGamepadSequence(mockPlatform, args, 7*time.Millisecond)
+
+	require.NoError(t, err)
+	assert.Equal(t, args, mockPlatform.recorder.sequenceArgs)
+	assert.Equal(t, 7*time.Millisecond, mockPlatform.recorder.sequenceDelay)
+}
+
+func TestPressGamepadSequence_SequencerErrorIsWrapped(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := newGamepadSequenceMockPlatform()
+	mockPlatform.recorder.sequenceErr = errors.New("device failed")
+
+	err := PressGamepadSequence(mockPlatform, []string{"a"}, time.Nanosecond)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gamepad sequence")
 	assert.Contains(t, err.Error(), "device failed")
 }
 

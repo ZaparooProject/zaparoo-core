@@ -77,16 +77,16 @@ type Platform struct {
 	cmd            command.Executor
 	ctx            context.Context
 	clock          clockwork.Clock
-	activeMedia    func() *models.ActiveMedia
+	cancel         context.CancelFunc
 	setActiveMedia func(*models.ActiveMedia)
 	stopTracker    func() error
-	cancel         context.CancelFunc
+	activeMedia    func() *models.ActiveMedia
+	activeStorage  string
+	pendingROMPath string
+	lastKnownCore  string
+	procPath       string
+	storagePaths   []string
 	shared.LinuxInput
-	activeStorage    string
-	pendingROMPath   string
-	lastKnownCore    string
-	procPath         string
-	storagePaths     []string
 	trackerMu        syncutil.RWMutex
 	keyboardRealMode bool
 }

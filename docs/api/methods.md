@@ -4813,7 +4813,9 @@ Returns an empty object `{}` on success.
 
 Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely: no hooks, history, or sound effects are triggered.
 
-The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character.
+The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character. Macros also support `{delay:duration}`, `{hold:key:duration}`, `{press:key}`, and `{release:key}`. Press and release have short forms `{_key}` and `{^key}`.
+
+Persistent `{press:key}` and `{release:key}` input is available only over WebSocket. A press remains held across requests from that WebSocket until its matching release. Each WebSocket owns its held keys and buttons; one connection cannot release another connection's input. Core releases all owned input when the WebSocket disconnects, input execution fails, or Core shuts down. HTTP JSON-RPC requests reject persistent press and release tokens because HTTP has no durable session lifecycle.
 
 ### input.keyboard
 
@@ -4827,7 +4829,7 @@ An object:
 
 | Key  | Type   | Required | Description                                                                                                                                          |
 | :--- | :----- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
-| keys | string | Yes      | Input macro string. Each character is a keypress, `{...}` for special keys (e.g. `{enter}`, `{f9}`, `{ctrl+q}`). Same format as ZapScript on a token. |
+| keys | string | Yes      | Input macro string. Each character is a keypress, `{...}` for special keys (e.g. `{enter}`, `{f9}`, `{ctrl+q}`). WebSocket requests may use `{press:key}` and `{release:key}` to hold a key across requests. |
 
 #### Result
 
@@ -4870,7 +4872,7 @@ An object:
 
 | Key     | Type   | Required | Description                                                                                                                                                  |
 | :------ | :----- | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| buttons | string | Yes      | Input macro string. Each character is a button press, `{...}` for named buttons (e.g. `{up}`, `{start}`, `{l1}`). Same format as ZapScript on a token. |
+| buttons | string | Yes      | Input macro string. Each character is a button press, `{...}` for named buttons (e.g. `{up}`, `{start}`, `{l1}`). WebSocket requests may use `{press:button}` and `{release:button}` to hold a button across requests. |
 
 #### Result
 

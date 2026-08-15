@@ -168,6 +168,10 @@ type keyboardSequencer interface {
 	KeyboardPressSequence(args []string, interKeyDelay time.Duration) error
 }
 
+type gamepadSequencer interface {
+	GamepadPressSequence(args []string, interKeyDelay time.Duration) error
+}
+
 // PressKeyboardSequence is shared between ZapScript commands and API handlers.
 // interKeyDelay sets the gap between consecutive key presses; pass 0 to use
 // the default (100 ms). If the platform implements keyboardSequencer, the full
@@ -197,6 +201,12 @@ func PressKeyboardSequence(pl platforms.Platform, args []string, interKeyDelay t
 func PressGamepadSequence(pl platforms.Platform, args []string, interKeyDelay time.Duration) error {
 	if interKeyDelay == 0 {
 		interKeyDelay = defaultInterKeyDelay
+	}
+	if gs, ok := pl.(gamepadSequencer); ok {
+		if err := gs.GamepadPressSequence(args, interKeyDelay); err != nil {
+			return fmt.Errorf("gamepad sequence: %w", err)
+		}
+		return nil
 	}
 	for _, name := range args {
 		if err := pl.GamepadPress(name); err != nil {
