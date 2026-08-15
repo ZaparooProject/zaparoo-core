@@ -21,24 +21,20 @@ package methods
 
 import (
 	"fmt"
-	"strings"
 
 	zapscriptlib "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
 func hasPersistentInputTokens(args []string) bool {
 	for _, token := range args {
-		if len(token) <= 2 || token[0] != '{' || token[len(token)-1] != '}' {
-			continue
-		}
-		inner := token[1 : len(token)-1]
-		if strings.HasPrefix(inner, "press:") || strings.HasPrefix(inner, "release:") ||
-			(len(inner) > 1 && (inner[0] == '_' || inner[0] == '^')) {
+		action := inputmacro.ClassifyControl(token).Action
+		if action == inputmacro.ActionPress || action == inputmacro.ActionRelease {
 			return true
 		}
 	}

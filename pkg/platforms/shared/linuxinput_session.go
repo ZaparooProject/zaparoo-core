@@ -13,20 +13,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
-type inputMacroAction uint8
+type inputMacroAction = inputmacro.Action
 
 const (
-	inputMacroNone inputMacroAction = iota
-	inputMacroDelay
-	inputMacroPress
-	inputMacroRelease
-	inputMacroHold
+	inputMacroNone        = inputmacro.ActionNone
+	inputMacroDelay       = inputmacro.ActionDelay
+	inputMacroPress       = inputmacro.ActionPress
+	inputMacroRelease     = inputmacro.ActionRelease
+	inputMacroHold        = inputmacro.ActionHold
+	maxInputMacroDuration = 30 * time.Second
 )
 
 type parsedInputMacro struct {
@@ -103,28 +105,17 @@ func (s *linuxInputSession) ReleaseAll() error {
 }
 
 func parseInputMacroToken(token string) (parsedInputMacro, bool) {
-	if len(token) <= 2 || token[0] != '{' || token[len(token)-1] != '}' {
+	control := inputmacro.ClassifyControl(token)
+	switch control.Action {
+	case inputMacroNone:
 		return parsedInputMacro{}, false
-	}
-
-	inner := token[1 : len(token)-1]
-	switch {
-	case strings.HasPrefix(inner, "delay:"):
-		return parsedInputMacro{action: inputMacroDelay, duration: inner[len("delay:"):]}, true
-	case strings.HasPrefix(inner, "press:"):
-		return parsedInputMacro{action: inputMacroPress, name: inner[len("press:"):]}, true
-	case strings.HasPrefix(inner, "release:"):
-		return parsedInputMacro{action: inputMacroRelease, name: inner[len("release:"):]}, true
-	case strings.HasPrefix(inner, "hold:"):
-		name, duration := splitInputHold(inner[len("hold:"):])
-		return parsedInputMacro{action: inputMacroHold, name: name, duration: duration}, true
-	case len(inner) > 1 && inner[0] == '_':
-		return parsedInputMacro{action: inputMacroPress, name: inner[1:]}, true
-	case len(inner) > 1 && inner[0] == '^':
-		return parsedInputMacro{action: inputMacroRelease, name: inner[1:]}, true
-	case len(inner) > 1 && inner[0] == '~':
-		name, duration := splitInputHold(inner[1:])
-		return parsedInputMacro{action: inputMacroHold, name: name, duration: duration}, true
+	case inputMacroDelay:
+		return parsedInputMacro{action: control.Action, duration: control.Value}, true
+	case inputMacroPress, inputMacroRelease:
+		return parsedInputMacro{action: control.Action, name: control.Value}, true
+	case inputMacroHold:
+		name, duration := splitInputHold(control.Value)
+		return parsedInputMacro{action: control.Action, name: name, duration: duration}, true
 	default:
 		return parsedInputMacro{}, false
 	}
@@ -135,6 +126,17 @@ func splitInputHold(value string) (name, duration string) {
 		return value[:idx], value[idx+1:]
 	}
 	return value, ""
+}
+
+func parseBoundedInputMacroDuration(value string) (time.Duration, error) {
+	duration, err := parseMacroDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if duration < 0 || duration > maxInputMacroDuration {
+		return 0, fmt.Errorf("duration %q must be between 0 and %s", value, maxInputMacroDuration)
+	}
+	return duration, nil
 }
 
 func sleepInputContext(ctx context.Context, duration time.Duration) error {
@@ -635,7 +637,7 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 			case inputMacroNone:
 				return fmt.Errorf("unsupported input macro token %q", token)
 			case inputMacroDelay:
-				duration, err := parseMacroDuration(macro.duration)
+				duration, err := parseBoundedInputMacroDuration(macro.duration)
 				if err != nil {
 					return fmt.Errorf("invalid delay token %q: %w", token, err)
 				}
@@ -661,7 +663,7 @@ func (l *LinuxInput) keyboardPressSequenceLocked(
 				case inputMacroHold:
 					holdDuration := l.kbd.Delay
 					if macro.duration != "" {
-						holdDuration, err = parseMacroDuration(macro.duration)
+						holdDuration, err = parseBoundedInputMacroDuration(macro.duration)
 						if err != nil {
 							return fmt.Errorf("invalid hold duration in %q: %w", token, err)
 						}
@@ -801,7 +803,7 @@ func (l *LinuxInput) gamepadPressSequenceLocked(
 			case inputMacroNone:
 				return fmt.Errorf("unsupported input macro token %q", token)
 			case inputMacroDelay:
-				duration, err := parseMacroDuration(macro.duration)
+				duration, err := parseBoundedInputMacroDuration(macro.duration)
 				if err != nil {
 					return fmt.Errorf("invalid delay token %q: %w", token, err)
 				}
@@ -827,7 +829,7 @@ func (l *LinuxInput) gamepadPressSequenceLocked(
 				case inputMacroHold:
 					holdDuration := l.gpd.Delay
 					if macro.duration != "" {
-						holdDuration, err = parseMacroDuration(macro.duration)
+						holdDuration, err = parseBoundedInputMacroDuration(macro.duration)
 						if err != nil {
 							return fmt.Errorf("invalid hold duration in %q: %w", token, err)
 						}

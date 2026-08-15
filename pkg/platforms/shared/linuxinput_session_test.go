@@ -160,7 +160,7 @@ func TestInputSession_CancellationReleasesHeldInput(t *testing.T) {
 	go func() {
 		errCh <- session.KeyboardPressSequence(ctx, []string{
 			"{press:a}",
-			"{delay:1h}",
+			"{delay:30s}",
 		}, 0)
 	}()
 
@@ -202,7 +202,7 @@ func TestInputSession_ReleaseNotBlockedByAnotherSessionDelay(t *testing.T) {
 	go func() {
 		sequenceErr <- second.KeyboardPressSequence(ctx, []string{
 			"{press:b}",
-			"{delay:1h}",
+			"{delay:30s}",
 		}, 0)
 	}()
 	assert.Equal(t, 48, <-keyboard.keyDownSignal)
@@ -269,6 +269,46 @@ func TestCloseDevicesNotBlockedByRequestScopedDelay(t *testing.T) {
 	require.NoError(t, <-sequenceDone)
 	assert.True(t, keyboard.closed)
 	assert.Contains(t, keyboard.events, keyEvent{kind: "up", code: 30})
+}
+
+func TestParseBoundedInputMacroDuration(t *testing.T) {
+	t.Parallel()
+
+	duration, err := parseBoundedInputMacroDuration(maxInputMacroDuration.String())
+	require.NoError(t, err)
+	assert.Equal(t, maxInputMacroDuration, duration)
+
+	_, err = parseBoundedInputMacroDuration((maxInputMacroDuration + time.Millisecond).String())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be between")
+
+	_, err = parseBoundedInputMacroDuration("-1ms")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be between")
+}
+
+func TestInputSequencesRejectExcessiveDurations(t *testing.T) {
+	t.Parallel()
+
+	input, keyboard, gamepad := newRecordingInputDevices()
+
+	err := input.KeyboardPressSequence([]string{"{delay:31s}"}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid delay token")
+
+	err = input.KeyboardPressSequence([]string{"{hold:a:31s}"}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid hold duration")
+	assert.Empty(t, keyboard.events)
+
+	err = input.GamepadPressSequence([]string{"{delay:31s}"}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid delay token")
+
+	err = input.GamepadPressSequence([]string{"{hold:start:31s}"}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid hold duration")
+	assert.Empty(t, gamepad.events)
 }
 
 func TestInputSession_GamepadPersistsAcrossRequests(t *testing.T) {

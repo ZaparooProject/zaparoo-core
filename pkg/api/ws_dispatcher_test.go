@@ -644,6 +644,35 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	assert.Error(t, jobCtx.Err())
 }
 
+func TestCloseWSDispatcherBoundsInputWorkerDrain(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	d := &wsSessionDispatcher{
+		ctx:       ctx,
+		cancel:    cancel,
+		inputDone: make(chan struct{}),
+	}
+
+	started := time.Now()
+	d.close()
+	assert.Less(t, time.Since(started), wsInputWorkerDrainTimeout+time.Second)
+}
+
+func TestWSDispatcherStartInitializesInputDone(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	d := &wsSessionDispatcher{
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	d.start()
+	require.NotNil(t, d.inputDone)
+	d.close()
+}
+
 type countingRequestTracker struct {
 	count int
 }

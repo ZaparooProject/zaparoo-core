@@ -38,13 +38,14 @@ import (
 type mediaDBLockMode uint8
 
 const (
-	wsHighConcurrency       = 1
-	wsNormalConcurrency     = 4
-	wsLowConcurrency        = 2
-	wsQueueSize             = 256
-	wsLowQueueSize          = 16
-	wsResponseQueueSize     = 256
-	wsGlobalImageConcurrent = 2
+	wsHighConcurrency         = 1
+	wsNormalConcurrency       = 4
+	wsLowConcurrency          = 2
+	wsQueueSize               = 256
+	wsLowQueueSize            = 16
+	wsResponseQueueSize       = 256
+	wsGlobalImageConcurrent   = 2
+	wsInputWorkerDrainTimeout = 2 * time.Second
 )
 
 const (
@@ -174,14 +175,27 @@ func (d *wsSessionDispatcher) close() {
 		d.drainQueuedJobs(d.normal)
 		d.drainQueuedJobs(d.input)
 		d.drainQueuedJobs(d.low)
-		if d.inputDone != nil {
-			<-d.inputDone
-		}
-		// Retry after the input worker exits in case its final cleanup raced
-		// the first release or a device release initially failed.
+		d.waitForInputWorker()
+		// Retry after the drain wait in case worker cleanup raced the first
+		// release or a device release initially failed.
 		d.releaseInputSession()
 		d.drainQueuedResponses()
 	})
+}
+
+func (d *wsSessionDispatcher) waitForInputWorker() {
+	if d.inputDone == nil {
+		return
+	}
+
+	timer := time.NewTimer(wsInputWorkerDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-d.inputDone:
+	case <-timer.C:
+		log.Warn().Dur("timeout", wsInputWorkerDrainTimeout).
+			Msg("timed out waiting for WebSocket input worker to stop")
+	}
 }
 
 func (d *wsSessionDispatcher) releaseInputSession() {
@@ -226,6 +240,9 @@ func (d *wsSessionDispatcher) drainQueuedResponses() {
 }
 
 func (d *wsSessionDispatcher) start() {
+	if d.inputDone == nil {
+		d.inputDone = make(chan struct{})
+	}
 	for range wsHighConcurrency {
 		go d.worker(d.high)
 	}
