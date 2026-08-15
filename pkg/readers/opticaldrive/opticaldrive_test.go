@@ -46,9 +46,8 @@ import (
 )
 
 const (
-	testISO9660RootExtent      = 20
-	testISO9660TokenExtent     = 21
-	testISO9660RootEntriesSize = 68
+	testISO9660RootExtent  = 20
+	testISO9660TokenExtent = 21
 )
 
 func TestNewReader(t *testing.T) {
@@ -287,7 +286,7 @@ func TestConstants(t *testing.T) {
 func TestReadISO9660Identity(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("SCES-01420", "1998102813221100", "1998010100000000")
+	image, _ := newTestISO9660Image("SCES-01420", "1998102813221100", "1998010100000000")
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
 	require.NoError(t, err)
@@ -300,9 +299,10 @@ func TestReadISO9660Identity(t *testing.T) {
 func TestReadISO9660Identity_TokenFile(t *testing.T) {
 	t.Parallel()
 
-	contents := []byte("  **launch.system:nes\n")
-	image := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
-	addTestISO9660TokenFile(image, "zaparoo.txt", contents, testISO9660DataLength(contents))
+	const fixtureContents = "  **launch.system:nes\n"
+	contents := []byte(fixtureContents)
+	image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt", contents, uint32(len(fixtureContents)))
 
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
@@ -319,8 +319,8 @@ func TestReadISO9660Identity_TokenFileNameVariants(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			image := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
-			addTestISO9660TokenFile(image, name, []byte("launch"), uint32(len("launch")))
+			image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+			addTestISO9660TokenFile(image, rootEntriesSize, name, []byte("launch"), uint32(len("launch")))
 
 			identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
@@ -335,8 +335,8 @@ func TestReadISO9660Identity_TokenFileNameVariants(t *testing.T) {
 func TestReadISO9660Identity_EmptyTokenFile(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
-	addTestISO9660TokenFile(image, "zaparoo.txt;1", nil, 0)
+	image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt;1", nil, 0)
 
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
@@ -349,8 +349,8 @@ func TestReadISO9660Identity_EmptyTokenFile(t *testing.T) {
 func TestReadISO9660Identity_OversizedTokenFile(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
-	addTestISO9660TokenFile(image, "zaparoo.txt;1", nil, iso9660MaxTokenFileSize+1)
+	image, rootEntriesSize := newTestISO9660Image("DATA", "2026010100000000", "2026010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt;1", nil, iso9660MaxTokenFileSize+1)
 
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
@@ -363,9 +363,9 @@ func TestReadISO9660Identity_OversizedTokenFile(t *testing.T) {
 func TestReadISO9660Identity_MalformedTokenDirectoryPreservesIdentity(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("LEGACY", "1998010100000000", "1998010100000000")
+	image, rootEntriesSize := newTestISO9660Image("LEGACY", "1998010100000000", "1998010100000000")
 	root := image[testISO9660RootExtent*iso9660SectorSize:]
-	root[testISO9660RootEntriesSize] = 10
+	root[rootEntriesSize] = 10
 
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
@@ -379,8 +379,8 @@ func TestReadISO9660Identity_MalformedTokenDirectoryPreservesIdentity(t *testing
 func TestReadISO9660Identity_TruncatedTokenFilePreservesIdentity(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("LEGACY", "1998010100000000", "1998010100000000")
-	addTestISO9660TokenFile(image, "zaparoo.txt;1", nil, 32)
+	image, rootEntriesSize := newTestISO9660Image("LEGACY", "1998010100000000", "1998010100000000")
+	addTestISO9660TokenFile(image, rootEntriesSize, "zaparoo.txt;1", nil, 32)
 	image = image[:testISO9660TokenExtent*iso9660SectorSize]
 
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
@@ -395,7 +395,7 @@ func TestReadISO9660Identity_TruncatedTokenFilePreservesIdentity(t *testing.T) {
 func TestReadISO9660Identity_FallsBackToCreatedDate(t *testing.T) {
 	t.Parallel()
 
-	image := newTestISO9660Image("SCES-01420", "0000000000000000", "1998010100000000")
+	image, _ := newTestISO9660Image("SCES-01420", "0000000000000000", "1998010100000000")
 	identity, found, err := readTestISO9660Identity(bytes.NewReader(image))
 
 	require.NoError(t, err)
@@ -446,8 +446,8 @@ func readTestISO9660Identity(reader *bytes.Reader) (discIdentity, bool, error) {
 	return readISO9660IdentityContext(context.Background(), testReaderAtContextAdapter{reader: reader})
 }
 
-func newTestISO9660Image(label, modified, created string) []byte {
-	image := make([]byte, (testISO9660TokenExtent+1)*iso9660SectorSize)
+func newTestISO9660Image(label, modified, created string) (image []byte, rootEntriesSize int) {
+	image = make([]byte, (testISO9660TokenExtent+1)*iso9660SectorSize)
 	desc := image[iso9660SuperblockOffset:]
 	desc[0] = iso9660DescriptorTypePrimary
 	copy(desc[1:6], "CD001")
@@ -465,27 +465,33 @@ func newTestISO9660Image(label, modified, created string) []byte {
 	)
 
 	root := image[testISO9660RootExtent*iso9660SectorSize:]
-	offset := writeTestISO9660DirectoryRecord(
+	rootEntriesSize = writeTestISO9660DirectoryRecord(
 		root,
 		testISO9660RootExtent,
 		iso9660SectorSize,
 		iso9660DirectoryFlag,
 		[]byte{0},
 	)
-	writeTestISO9660DirectoryRecord(
-		root[offset:],
+	rootEntriesSize += writeTestISO9660DirectoryRecord(
+		root[rootEntriesSize:],
 		testISO9660RootExtent,
 		iso9660SectorSize,
 		iso9660DirectoryFlag,
 		[]byte{1},
 	)
-	return image
+	return image, rootEntriesSize
 }
 
-func addTestISO9660TokenFile(image []byte, name string, contents []byte, declaredSize uint32) {
+func addTestISO9660TokenFile(
+	image []byte,
+	rootEntriesSize int,
+	name string,
+	contents []byte,
+	declaredSize uint32,
+) {
 	root := image[testISO9660RootExtent*iso9660SectorSize:]
 	writeTestISO9660DirectoryRecord(
-		root[testISO9660RootEntriesSize:],
+		root[rootEntriesSize:],
 		testISO9660TokenExtent,
 		declaredSize,
 		0,
@@ -501,15 +507,19 @@ func writeTestISO9660DirectoryRecord(
 	flags uint8,
 	identifier []byte,
 ) int {
-	identifierLength := byte(0)
-	for range identifier {
-		identifierLength++
+	if len(identifier) > int(^uint8(0)) {
+		panic("test ISO9660 identifier exceeds byte-sized field")
 	}
-	recordLengthByte := byte(iso9660FileIdentifierOffset) + identifierLength
-	if recordLengthByte%2 != 0 {
-		recordLengthByte++
+	identifierLength := byte(len(identifier)) //nolint:gosec // Length is bounds-checked above.
+
+	recordLength := iso9660FileIdentifierOffset + len(identifier)
+	if recordLength%2 != 0 {
+		recordLength++
 	}
-	recordLength := int(recordLengthByte)
+	if recordLength > int(^uint8(0)) {
+		panic("test ISO9660 directory record exceeds byte-sized field")
+	}
+	recordLengthByte := byte(recordLength)
 
 	record := destination[:recordLength]
 	record[0] = recordLengthByte
@@ -523,14 +533,6 @@ func writeTestISO9660DirectoryRecord(
 	record[iso9660FileIdentifierLengthOffset] = identifierLength
 	copy(record[iso9660FileIdentifierOffset:], identifier)
 	return recordLength
-}
-
-func testISO9660DataLength(data []byte) uint32 {
-	var length uint32
-	for range data {
-		length++
-	}
-	return length
 }
 
 type mockFSChecker struct {

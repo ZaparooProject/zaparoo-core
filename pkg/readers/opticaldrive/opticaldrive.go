@@ -318,6 +318,8 @@ func (r *FileReader) Open(
 				Str("uuid", uuid).
 				Str("label", label).
 				Str("identityErr", identityErrStr).
+				Uint8("tokenFileState", uint8(probeTokenFile.State)).
+				Int("tokenFileBytes", len(probeTokenFile.Data)).
 				Int("properties", len(scanProperties)).
 				Msg("optical media identification probe changed")
 

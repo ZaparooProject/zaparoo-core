@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -122,6 +124,11 @@ func readISO9660IdentityContext(ctx context.Context, r contextReaderAt) (discIde
 
 		tokenFile, tokenErr := readISO9660TokenFileContext(ctx, r, buf)
 		if tokenErr != nil {
+			log.Debug().
+				Err(tokenErr).
+				Str("uuid", uuid).
+				Str("label", label).
+				Msg("failed to read ISO9660 token file")
 			tokenFile = discTokenFile{State: discTokenFileUnknown}
 		}
 		return discIdentity{UUID: uuid, Label: label, TokenFile: tokenFile}, true, nil
@@ -206,7 +213,7 @@ func readISO9660TokenFileRecord(
 }
 
 func parseISO9660DirectoryRecord(raw []byte) (iso9660DirectoryRecord, error) {
-	if len(raw) < 1 {
+	if len(raw) == 0 {
 		return iso9660DirectoryRecord{}, io.ErrUnexpectedEOF
 	}
 	recordLength := int(raw[0])
