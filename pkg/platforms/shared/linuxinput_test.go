@@ -292,10 +292,15 @@ type keyEvent struct {
 // recordingKeyboard records all key events in order for assertion.
 // If failOnCode is set, KeyDown returns an error when that code is pressed.
 type recordingKeyboard struct {
-	events     []keyEvent
-	failOnCode int  // if non-zero, KeyDown returns error for this code
-	failOnce   bool // trigger failOnCode only once
-	failed     bool
+	keyDownSignal chan int
+	events        []keyEvent
+	failOnCode    int
+	failUpOnCode  int
+	closed        bool
+	failOnce      bool
+	failed        bool
+	failUpOnce    bool
+	failedUp      bool
 }
 
 func (r *recordingKeyboard) KeyPress(code int) error {
@@ -309,16 +314,29 @@ func (r *recordingKeyboard) KeyDown(code int) error {
 		return fmt.Errorf("injected KeyDown error for code %d", code)
 	}
 	r.events = append(r.events, keyEvent{"down", code})
+	if r.keyDownSignal != nil {
+		select {
+		case r.keyDownSignal <- code:
+		default:
+		}
+	}
 	return nil
 }
 
 func (r *recordingKeyboard) KeyUp(code int) error {
+	if r.failUpOnCode != 0 && code == r.failUpOnCode && (!r.failUpOnce || !r.failedUp) {
+		r.failedUp = true
+		return fmt.Errorf("injected KeyUp error for code %d", code)
+	}
 	r.events = append(r.events, keyEvent{"up", code})
 	return nil
 }
 
 func (*recordingKeyboard) FetchSyspath() (string, error) { return "", nil }
-func (*recordingKeyboard) Close() error                  { return nil }
+func (r *recordingKeyboard) Close() error {
+	r.closed = true
+	return nil
+}
 
 // TestKeyboardPress_SingleKey tests successful single key press
 func TestKeyboardPress_SingleKey(t *testing.T) {

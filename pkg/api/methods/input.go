@@ -26,9 +26,20 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
+
+func hasPersistentInputTokens(args []string) bool {
+	for _, token := range args {
+		action := inputmacro.ClassifyControl(token).Action
+		if action == inputmacro.ActionPress || action == inputmacro.ActionRelease {
+			return true
+		}
+	}
+	return false
+}
 
 func parseInputMacro(cmdName, macro string) ([]string, error) {
 	script, err := zapscriptlib.NewParser("**" + cmdName + ":" + macro).ParseScript()
@@ -55,8 +66,17 @@ func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 
 	log.Info().Int("key_count", len(args)).Msg("keyboard input via API")
 
-	if err := zapscript.PressKeyboardSequence(env.Platform, args, 0); err != nil {
-		return nil, fmt.Errorf("keyboard press failed: %w", err)
+	if env.InputSession != nil {
+		if err := env.InputSession.KeyboardPressSequence(env.Context, args, 0); err != nil {
+			return nil, fmt.Errorf("keyboard press failed: %w", err)
+		}
+	} else {
+		if hasPersistentInputTokens(args) {
+			return nil, models.ClientErrf("persistent keyboard input requires a supported WebSocket session")
+		}
+		if err := zapscript.PressKeyboardSequence(env.Platform, args, 0); err != nil {
+			return nil, fmt.Errorf("keyboard press failed: %w", err)
+		}
 	}
 
 	return NoContent{}, nil
@@ -76,8 +96,17 @@ func HandleInputGamepad(env requests.RequestEnv) (any, error) {
 
 	log.Info().Int("button_count", len(args)).Msg("gamepad input via API")
 
-	if err := zapscript.PressGamepadSequence(env.Platform, args, 0); err != nil {
-		return nil, fmt.Errorf("gamepad press failed: %w", err)
+	if env.InputSession != nil {
+		if err := env.InputSession.GamepadPressSequence(env.Context, args, 0); err != nil {
+			return nil, fmt.Errorf("gamepad press failed: %w", err)
+		}
+	} else {
+		if hasPersistentInputTokens(args) {
+			return nil, models.ClientErrf("persistent gamepad input requires a supported WebSocket session")
+		}
+		if err := zapscript.PressGamepadSequence(env.Platform, args, 0); err != nil {
+			return nil, fmt.Errorf("gamepad press failed: %w", err)
+		}
 	}
 
 	return NoContent{}, nil

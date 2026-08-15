@@ -80,6 +80,8 @@ func TestClassifyAPIMethod(t *testing.T) {
 		{"high media history latest", models.MethodMediaHistoryLatest, apiPriorityHigh},
 		{"high run case insensitive", "RUN", apiPriorityHigh},
 		{"high media control", models.MethodMediaControl, apiPriorityHigh},
+		{"input keyboard", models.MethodInputKeyboard, apiPriorityInput},
+		{"input gamepad", models.MethodInputGamepad, apiPriorityInput},
 		{"low media generate", models.MethodMediaGenerate, apiPriorityLow},
 		{"low media image", models.MethodMediaImage, apiPriorityLow},
 		{"low scrape prefix", "media.scrape.queue", apiPriorityLow},

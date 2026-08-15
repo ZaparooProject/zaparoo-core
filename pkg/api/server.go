@@ -1161,7 +1161,7 @@ func handleWSMessage(
 		// Heartbeat ping/pong runs on the decrypted plaintext so encrypted
 		// sessions get an encrypted pong, and remote plaintext probes are
 		// rejected by decryptIncomingFrame before reaching this point.
-		dispatcher := getOrCreateWSDispatcher(st.GetContext(), session)
+		dispatcher := getOrCreateWSDispatcher(st.GetContext(), session, platform)
 
 		if bytes.Equal(plaintext, []byte("ping")) {
 			if err := dispatcher.enqueuePong(cs, tracker); err != nil {
@@ -1191,6 +1191,7 @@ func handleWSMessage(
 			IndexPauser:     indexPauser,
 			ScrapePauser:    scrapePauser,
 			BackupPauser:    backupPauser,
+			InputSession:    dispatcher.inputSession,
 			IsLocal:         isLocal,
 			ClientID:        session.Request.RemoteAddr,
 		}

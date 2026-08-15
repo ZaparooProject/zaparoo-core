@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -68,6 +69,21 @@ type ServiceReadyPlatform interface {
 // when active media is ready for controls or raw input.
 type MediaReadyPlatform interface {
 	WaitForMediaReady(context.Context, *config.Instance, *models.ActiveMedia) error
+}
+
+// InputSession owns keyboard and gamepad inputs held by one durable client
+// connection. Implementations must isolate held input between sessions and
+// release all owned input when ReleaseAll is called.
+type InputSession interface {
+	KeyboardPressSequence(context.Context, []string, time.Duration) error
+	GamepadPressSequence(context.Context, []string, time.Duration) error
+	ReleaseAll() error
+}
+
+// InputSessionProvider is optionally implemented by platforms that support
+// input held across multiple API requests.
+type InputSessionProvider interface {
+	NewInputSession() InputSession
 }
 
 // LauncherLifecycle determines how a launcher process is managed

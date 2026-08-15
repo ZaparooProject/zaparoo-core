@@ -34,6 +34,7 @@ type apiRequestPriority int
 
 const (
 	apiPriorityHigh apiRequestPriority = iota
+	apiPriorityInput
 	apiPriorityNormal
 	apiPriorityLow
 )
@@ -42,6 +43,8 @@ func (p apiRequestPriority) String() string {
 	switch p {
 	case apiPriorityHigh:
 		return "high"
+	case apiPriorityInput:
+		return "input"
 	case apiPriorityLow:
 		return "low"
 	default:
@@ -72,6 +75,8 @@ func classifyAPIMethod(method string) apiRequestPriority {
 	method = strings.ToLower(method)
 
 	switch method {
+	case models.MethodInputKeyboard, models.MethodInputGamepad:
+		return apiPriorityInput
 	case models.MethodMediaHistoryLatest,
 		models.MethodRun,
 		models.MethodRunScript,

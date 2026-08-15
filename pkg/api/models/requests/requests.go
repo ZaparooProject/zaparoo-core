@@ -57,7 +57,10 @@ type RequestEnv struct {
 	IndexPauser     *syncutil.Pauser
 	ScrapePauser    *syncutil.Pauser
 	BackupPauser    *syncutil.Pauser
-	ClientID        string
+	// InputSession is non-nil only for durable transports such as WebSocket.
+	// It owns keyboard and gamepad inputs held across requests.
+	InputSession platforms.InputSession
+	ClientID     string
 	// ClientRole is the paired client's permission role ("admin" or
 	// "member"), or "" when the request carries no paired identity (local
 	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.

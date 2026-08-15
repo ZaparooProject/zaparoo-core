@@ -23,12 +23,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 )
@@ -36,13 +38,14 @@ import (
 type mediaDBLockMode uint8
 
 const (
-	wsHighConcurrency       = 1
-	wsNormalConcurrency     = 4
-	wsLowConcurrency        = 2
-	wsQueueSize             = 256
-	wsLowQueueSize          = 16
-	wsResponseQueueSize     = 256
-	wsGlobalImageConcurrent = 2
+	wsHighConcurrency         = 1
+	wsNormalConcurrency       = 4
+	wsLowConcurrency          = 2
+	wsQueueSize               = 256
+	wsLowQueueSize            = 16
+	wsResponseQueueSize       = 256
+	wsGlobalImageConcurrent   = 2
+	wsInputWorkerDrainTimeout = 2 * time.Second
 )
 
 const (
@@ -106,16 +109,24 @@ type wsResponseJob struct {
 }
 
 type wsSessionDispatcher struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	session   *melody.Session
-	high      chan *wsRequestJob
-	normal    chan *wsRequestJob
-	low       chan *wsRequestJob
-	responses chan *wsResponseJob
+	ctx          context.Context
+	cancel       context.CancelFunc
+	session      *melody.Session
+	inputSession platforms.InputSession
+	high         chan *wsRequestJob
+	normal       chan *wsRequestJob
+	input        chan *wsRequestJob
+	low          chan *wsRequestJob
+	responses    chan *wsResponseJob
+	inputDone    chan struct{}
+	closeOnce    sync.Once
 }
 
-func getOrCreateWSDispatcher(parent context.Context, session *melody.Session) *wsSessionDispatcher {
+func getOrCreateWSDispatcher(
+	parent context.Context,
+	session *melody.Session,
+	platform platforms.Platform,
+) *wsSessionDispatcher {
 	if existing, ok := session.Get(wsDispatcherSessionKey); ok {
 		if d, ok := existing.(*wsSessionDispatcher); ok {
 			return d
@@ -123,14 +134,21 @@ func getOrCreateWSDispatcher(parent context.Context, session *melody.Session) *w
 	}
 
 	ctx, cancel := context.WithCancel(parent)
+	var inputSession platforms.InputSession
+	if provider, ok := platform.(platforms.InputSessionProvider); ok {
+		inputSession = provider.NewInputSession()
+	}
 	d := &wsSessionDispatcher{
-		ctx:       ctx,
-		cancel:    cancel,
-		session:   session,
-		high:      make(chan *wsRequestJob, wsQueueSize),
-		normal:    make(chan *wsRequestJob, wsQueueSize),
-		low:       make(chan *wsRequestJob, wsLowQueueSize),
-		responses: make(chan *wsResponseJob, wsResponseQueueSize),
+		ctx:          ctx,
+		cancel:       cancel,
+		session:      session,
+		inputSession: inputSession,
+		high:         make(chan *wsRequestJob, wsQueueSize),
+		normal:       make(chan *wsRequestJob, wsQueueSize),
+		input:        make(chan *wsRequestJob, wsQueueSize),
+		low:          make(chan *wsRequestJob, wsLowQueueSize),
+		responses:    make(chan *wsResponseJob, wsResponseQueueSize),
+		inputDone:    make(chan struct{}),
 	}
 	session.Set(wsDispatcherSessionKey, d)
 	d.start()
@@ -150,11 +168,43 @@ func closeWSDispatcher(session *melody.Session) {
 }
 
 func (d *wsSessionDispatcher) close() {
-	d.cancel()
-	d.drainQueuedJobs(d.high)
-	d.drainQueuedJobs(d.normal)
-	d.drainQueuedJobs(d.low)
-	d.drainQueuedResponses()
+	d.closeOnce.Do(func() {
+		d.cancel()
+		d.releaseInputSession()
+		d.drainQueuedJobs(d.high)
+		d.drainQueuedJobs(d.normal)
+		d.drainQueuedJobs(d.input)
+		d.drainQueuedJobs(d.low)
+		d.waitForInputWorker()
+		// Retry after the drain wait in case worker cleanup raced the first
+		// release or a device release initially failed.
+		d.releaseInputSession()
+		d.drainQueuedResponses()
+	})
+}
+
+func (d *wsSessionDispatcher) waitForInputWorker() {
+	if d.inputDone == nil {
+		return
+	}
+
+	timer := time.NewTimer(wsInputWorkerDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-d.inputDone:
+	case <-timer.C:
+		log.Warn().Dur("timeout", wsInputWorkerDrainTimeout).
+			Msg("timed out waiting for WebSocket input worker to stop")
+	}
+}
+
+func (d *wsSessionDispatcher) releaseInputSession() {
+	if d.inputSession == nil {
+		return
+	}
+	if err := d.inputSession.ReleaseAll(); err != nil {
+		log.Warn().Err(err).Msg("error releasing WebSocket input session")
+	}
 }
 
 func (*wsSessionDispatcher) drainQueuedJobs(queue <-chan *wsRequestJob) {
@@ -190,12 +240,19 @@ func (d *wsSessionDispatcher) drainQueuedResponses() {
 }
 
 func (d *wsSessionDispatcher) start() {
+	if d.inputDone == nil {
+		d.inputDone = make(chan struct{})
+	}
 	for range wsHighConcurrency {
 		go d.worker(d.high)
 	}
 	for range wsNormalConcurrency {
 		go d.worker(d.normal)
 	}
+	go func() {
+		defer close(d.inputDone)
+		d.worker(d.input)
+	}()
 	for range wsLowConcurrency {
 		go d.worker(d.low)
 	}
@@ -206,6 +263,8 @@ func (d *wsSessionDispatcher) queue(priority apiRequestPriority) chan *wsRequest
 	switch priority {
 	case apiPriorityHigh:
 		return d.high
+	case apiPriorityInput:
+		return d.input
 	case apiPriorityLow:
 		return d.low
 	default:

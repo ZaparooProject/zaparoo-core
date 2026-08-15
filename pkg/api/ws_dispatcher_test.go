@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
@@ -53,17 +54,26 @@ func indexRPCID(ids []models.RPCID, target models.RPCID) int {
 
 func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cleanup func()) {
 	t.Helper()
+	return startPriorityWSServerWithPlatform(t, methodMap, nil)
+}
+
+func startPriorityWSServerWithPlatform(
+	t *testing.T,
+	methodMap *MethodMap,
+	platform platforms.Platform,
+) (wsURL string, cleanup func()) {
+	t.Helper()
 
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
-	st, _ := state.NewState(nil, "test-boot")
+	st, _ := state.NewState(platform, "test-boot")
 
 	m := newWebSocketSession()
 	m.HandleDisconnect(func(s *melody.Session) {
 		closeWSDispatcher(s)
 	})
 	m.HandleMessage(handleWSMessage(
-		methodMap, nil, cfg, st, nil, nil,
+		methodMap, platform, cfg, st, nil, nil,
 		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil,
 	))
@@ -264,7 +274,7 @@ func TestWebSocketBusyResponseUsesEncryptedSession(t *testing.T) {
 
 	m := newWebSocketSession()
 	m.HandleConnect(func(session *melody.Session) {
-		dispatcher := getOrCreateWSDispatcher(ctx, session)
+		dispatcher := getOrCreateWSDispatcher(ctx, session, nil)
 		dispatcher.enqueueResponse(&wsResponseJob{
 			result: requestResult{
 				ID:          models.NewStringID("busy-request"),
@@ -632,6 +642,35 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	d.close()
 	assert.Equal(t, 0, tracker.inFlight())
 	assert.Error(t, jobCtx.Err())
+}
+
+func TestCloseWSDispatcherBoundsInputWorkerDrain(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	d := &wsSessionDispatcher{
+		ctx:       ctx,
+		cancel:    cancel,
+		inputDone: make(chan struct{}),
+	}
+
+	started := time.Now()
+	d.close()
+	assert.Less(t, time.Since(started), wsInputWorkerDrainTimeout+time.Second)
+}
+
+func TestWSDispatcherStartInitializesInputDone(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	d := &wsSessionDispatcher{
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	d.start()
+	require.NotNil(t, d.inputDone)
+	d.close()
 }
 
 type countingRequestTracker struct {
