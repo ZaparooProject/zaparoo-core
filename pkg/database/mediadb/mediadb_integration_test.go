@@ -3370,6 +3370,34 @@ func TestPopulateBrowseCacheForSystems_IncrementalRefresh_Integration(t *testing
 	assert.Equal(t, 2, rootDirs[0].FileCount)
 }
 
+func TestBrowseFileCount_PartialCacheFallsBackForIncompleteCoverage_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sharedDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "shared")) + "/"
+	insertSystemWithMedia(t, mediaDB, "SNES", "SNES Game", filepath.ToSlash(filepath.Join(sharedDir, "snes.sfc")))
+	insertSystemWithMedia(t, mediaDB, "NES", "NES Game", filepath.ToSlash(filepath.Join(sharedDir, "nes.nes")))
+	require.NoError(t, mediaDB.PopulateBrowseCacheForSystems(ctx, []string{"SNES"}))
+
+	nes, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	nesFiles, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		PathPrefix: sharedDir,
+		Systems:    []systemdefs.System{*nes},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, nesFiles, "unrefreshed requested system must use Media fallback")
+
+	allFiles, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{PathPrefix: sharedDir})
+	require.NoError(t, err)
+	assert.Equal(t, 2, allFiles, "unfiltered partial cache must use Media fallback")
+}
+
 func TestSqlInvalidateBrowseCache_MarksBrowseCacheStale_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -3462,6 +3490,42 @@ func TestPopulateBrowseCacheForSystems_ClearsIncompatibleCache_Integration(t *te
 	fileCount, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{PathPrefix: snesDir})
 	require.NoError(t, err)
 	assert.Equal(t, 1, fileCount)
+}
+
+func TestSqlInvalidateBrowseCache_DoesNotCreateMissingVersion_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	_, err := mediaDB.sql.Load().ExecContext(ctx,
+		"DELETE FROM DBConfig WHERE Name = ?",
+		DBConfigBrowseIndexVersion,
+	)
+	require.NoError(t, err)
+	_, err = mediaDB.sql.Load().ExecContext(ctx,
+		"INSERT OR IGNORE INTO BrowseDirs (DBID, Path, Name, IsVirtual) VALUES (?, ?, ?, ?)",
+		1,
+		"/",
+		"/",
+		false,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
+
+	var version string
+	err = mediaDB.sql.Load().QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigBrowseIndexVersion,
+	).Scan(&version)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	ready, err := sqlBrowseCacheReady(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.False(t, ready, "cache rows without a compatible version must not be served")
 }
 
 func TestMediaDB_UnfilteredBrowseReadsFromMediaWhenBrowseCacheEmpty_Integration(t *testing.T) {

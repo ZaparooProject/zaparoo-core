@@ -795,6 +795,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "path": "/roms/SNES",
         "type": "root",
         "fileCount": 150,
+        "hasCover": false,
         "systemId": "SNES",
         "systemIds": ["SNES"]
       }
@@ -833,7 +834,8 @@ All parameters are optional. When called with no parameters, returns root entrie
         "name": "RPGs",
         "path": "/roms/SNES/RPGs",
         "type": "directory",
-        "fileCount": 42
+        "fileCount": 42,
+        "hasCover": false
       },
       {
         "mediaId": 42,
@@ -841,6 +843,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "path": "/roms/SNES/Super Mario World.sfc",
         "type": "media",
         "systemId": "SNES",
+        "hasCover": true,
         "zapScript": "@SNES/Super Mario World",
         "relativePath": "Super Mario World.sfc",
         "tags": [
@@ -854,6 +857,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "path": "/roms/SNES/The Legend of Zelda - A Link to the Past.sfc",
         "type": "media",
         "systemId": "SNES",
+        "hasCover": false,
         "zapScript": "@SNES/The Legend of Zelda - A Link to the Past",
         "relativePath": "The Legend of Zelda - A Link to the Past.sfc",
         "tags": [

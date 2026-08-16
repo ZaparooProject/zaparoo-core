@@ -921,11 +921,11 @@ func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
+	deliveryForLog = delivery
+	hasMediaID = ref.MediaID != nil
 	if deliveryErr := validateMediaImageDelivery(delivery, ref); deliveryErr != nil {
 		return nil, deliveryErr
 	}
-	deliveryForLog = delivery
-	hasMediaID = ref.MediaID != nil
 	localPath := delivery == mediaImageDeliveryPath
 
 	// Snap the requested size onto a standard tier so every view shares one

@@ -1560,8 +1560,8 @@ func sqlBrowseFileCount(
 			return 0, err
 		}
 		if ready {
-			count, parentFound, cacheErr := sqlBrowseDirectFileCountFromCache(ctx, db, opts)
-			if cacheErr != nil || parentFound {
+			count, cacheUsable, cacheErr := sqlBrowseDirectFileCountFromCache(ctx, db, opts)
+			if cacheErr != nil || cacheUsable {
 				return count, cacheErr
 			}
 		}
@@ -1573,10 +1573,15 @@ func sqlBrowseDirectFileCountFromCache(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseFileCountOptions,
-) (count int, parentFound bool, err error) {
+) (count int, cacheUsable bool, err error) {
+	covered, err := sqlBrowseCacheCoversSystems(ctx, db, opts.Systems)
+	if err != nil || !covered {
+		return 0, false, err
+	}
+
 	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
 	if err != nil || !ok {
-		return 0, ok, err
+		return 0, false, err
 	}
 
 	args := []any{parentID}
@@ -1592,6 +1597,43 @@ func sqlBrowseDirectFileCountFromCache(
 		return 0, true, fmt.Errorf("browse cache direct file count: %w", scanErr)
 	}
 	return count, true, nil
+}
+
+func sqlBrowseCacheCoversSystems(
+	ctx context.Context,
+	db sqlQueryable,
+	systems []systemdefs.System,
+) (bool, error) {
+	var complete string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigBrowseIndexComplete,
+	).Scan(&complete)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("browse cache coverage query: %w", err)
+	}
+	if complete == "1" {
+		return true, nil
+	}
+	if len(systems) == 0 {
+		return false, nil
+	}
+
+	systemIDs := make([]string, len(systems))
+	for i := range systems {
+		systemIDs[i] = systems[i].ID
+	}
+	expected := len(uniqueBrowseSystemIDs(systemIDs))
+	systemClause, args := browseSystemFilterClause("s.SystemID", systems)
+	var covered int
+	query := `SELECT COUNT(DISTINCT s.SystemID)
+		FROM BrowseDirCounts c
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE ` + systemClause
+	if scanErr := db.QueryRowContext(ctx, query, args...).Scan(&covered); scanErr != nil {
+		return false, fmt.Errorf("browse cache system coverage query: %w", scanErr)
+	}
+	return covered == expected, nil
 }
 
 func sqlBrowseFileCountFromMedia(

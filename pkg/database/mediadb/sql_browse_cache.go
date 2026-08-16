@@ -124,6 +124,13 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 	); cfgErr != nil {
 		return fmt.Errorf("browse cache: failed to mark index ready: %w", cfgErr)
 	}
+	if _, cfgErr := tx.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigBrowseIndexComplete,
+		"1",
+	); cfgErr != nil {
+		return fmt.Errorf("browse cache: failed to mark index complete: %w", cfgErr)
+	}
 
 	commitStarted := time.Now()
 	if err := tx.Commit(); err != nil {
@@ -522,6 +529,14 @@ func sqlPopulateBrowseCacheForSystems(ctx context.Context, db *sql.DB, systemDBI
 	); cfgErr != nil {
 		return fmt.Errorf("browse cache: failed to mark system refresh: %w", cfgErr)
 	}
+	// Only a full rebuild proves unfiltered coverage across every system.
+	if _, cfgErr := tx.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigBrowseIndexComplete,
+		"0",
+	); cfgErr != nil {
+		return fmt.Errorf("browse cache: failed to mark partial index coverage: %w", cfgErr)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("browse cache: failed to commit system refresh: %w", err)
@@ -553,11 +568,10 @@ func sqlBrowseCacheVersionCompatible(ctx context.Context, db sqlQueryable) (bool
 
 func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable) error {
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO DBConfig (Name, Value) VALUES (?, ?)
-		ON CONFLICT(Name) DO UPDATE SET Value = excluded.Value
-		WHERE DBConfig.Value IN (?, ?)`,
-		DBConfigBrowseIndexVersion,
+		UPDATE DBConfig SET Value = ?
+		WHERE Name = ? AND Value IN (?, ?)`,
 		browseCacheInvalidatedVersion,
+		DBConfigBrowseIndexVersion,
 		browseCacheSchemaVersion,
 		browseCacheInvalidatedVersion,
 	)
