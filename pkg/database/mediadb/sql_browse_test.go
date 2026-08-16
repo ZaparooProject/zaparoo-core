@@ -664,7 +664,7 @@ func TestSqlBrowseRouteCountsFromMedia_PropagatesCancellationDuringCount(t *test
 		Routes:  []string{route},
 		Systems: []systemdefs.System{{ID: "SNES"}},
 	})
-	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	assert.Nil(t, counts)
 	assert.Zero(t, probeQueries, "caller cancellation must not invoke timeout fallback")

@@ -2124,8 +2124,8 @@ func sqlBrowseRouteCountsFromMedia(
 		}
 
 		// The caller's context (the whole request) is done: stop, don't degrade.
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("browse route counts media scan: %w", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("browse route counts media scan: %w", ctxErr)
 		}
 		// A real error (not our sub-timeout) should surface.
 		if !timedOut && !errors.Is(err, context.DeadlineExceeded) {
