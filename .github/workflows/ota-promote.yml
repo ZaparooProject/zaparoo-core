@@ -1,0 +1,137 @@
+name: OTA promote
+
+# Publishing a release to the updater is a deliberate act, separate from
+# publishing it on GitHub. This is the only workflow that can add a release to
+# the update manifest, and it runs in a protected environment so the workflow
+# file alone cannot reach the signing key.
+#
+# Every archive is downloaded and hashed on the runner. GitHub's reported
+# digests are cross-checked against those hashes but are never the source of
+# what gets signed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to promote, for example v2.16.1
+        required: true
+        type: string
+      channel:
+        description: Channel to promote into
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta]
+      rollout:
+        description: Percentage of devices eligible for automatic installation (0-100)
+        required: true
+        default: "100"
+        type: string
+      min_upgrade_from:
+        description: Minimum version a device must already run to install this directly
+        required: false
+        default: ""
+        type: string
+      reason:
+        description: Why this release is being promoted
+        required: true
+        type: string
+      replace:
+        description: Overwrite the release if it is already in the manifest
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: Generate and sign, but do not publish
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ota-metadata
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.tag }} to ${{ inputs.channel }}
+    runs-on: ubuntu-latest
+    environment: ota-publish
+    timeout-minutes: 30
+    steps:
+      - name: Record the request
+        env:
+          TAG: ${{ inputs.tag }}
+          CHANNEL: ${{ inputs.channel }}
+          ROLLOUT: ${{ inputs.rollout }}
+          MIN_UPGRADE_FROM: ${{ inputs.min_upgrade_from }}
+          REASON: ${{ inputs.reason }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Promote request"
+            echo
+            echo "| Input | Value |"
+            echo "|---|---|"
+            echo "| tag | \`$TAG\` |"
+            echo "| channel | $CHANNEL |"
+            echo "| rollout | $ROLLOUT% |"
+            echo "| min_upgrade_from | ${MIN_UPGRADE_FROM:-none} |"
+            echo "| dry run | $DRY_RUN |"
+            echo "| requested by | @${GITHUB_ACTOR} |"
+            echo
+            echo "> $REASON"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/actions/ota-metadata/
+            scripts/generate-update-manifest/
+            pkg/service/updater/update_signing.pub
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p _release _archives _work
+          gh release view "$TAG" \
+            --json assets,tagName,url,publishedAt,isDraft,isPrerelease,body \
+            > _release/release.json
+          jq -r '.body // ""' _release/release.json > _work/notes.md
+          gh release download "$TAG" --dir _archives \
+            --pattern 'zaparoo-*.tar.gz' --pattern 'zaparoo-*.zip'
+
+      - name: Publish the update metadata
+        uses: ./.github/actions/ota-metadata
+        with:
+          mode: promote
+          tag: ${{ inputs.tag }}
+          channel: ${{ inputs.channel }}
+          rollout: ${{ inputs.rollout }}
+          min-upgrade-from: ${{ inputs.min_upgrade_from }}
+          release-notes-file: _work/notes.md
+          archives-dir: _archives
+          github-release: _release/release.json
+          replace: ${{ inputs.replace }}
+          dry-run: ${{ inputs.dry_run }}
+          signing-key: ${{ secrets.UPDATE_SIGNING_KEY }}
+          storage-zone: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          storage-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
+          bunny-api-key: ${{ secrets.BUNNY_API_KEY }}
+          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}

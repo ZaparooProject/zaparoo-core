@@ -76,3 +76,7 @@ Then build with `NO_LIBNFC=true NO_STATIC=true task build`. This will produce a 
 ## Testing
 
 When changing the application behavior, in particular the reader loop, some testing is required. The [Scan Behavior checklist](./scan-behavior) contains a list of expected behavior for the application under certain conditions. It is useful to test them and ensure we didn't break any flows.
+
+## Releasing updates
+
+Publishing a GitHub release does not publish an update to devices. Promoting a release to the updater, staging its rollout, and withdrawing it again are all separate, explicit steps. See the [OTA update runbook](./ota-runbook).

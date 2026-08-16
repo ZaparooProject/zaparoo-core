@@ -1,0 +1,99 @@
+name: OTA rollout
+
+# First rung of the kill-switch ladder. Setting a release's rollout to 0 stops
+# automatic installation of it within one device check interval while leaving
+# it installable on request, which is the right response to a report that might
+# turn out to be one bad device. If it turns out not to be, run OTA withdraw.
+#
+# It is also how a staged rollout is widened - 5, then 25, then 100. Bucketing
+# is salted per release, so widening keeps the devices already on it.
+#
+# Nothing is downloaded or re-hashed here: this changes one number in the
+# already-published manifest, so it is fast enough to use in an incident.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to adjust, for example v2.16.1
+        required: true
+        type: string
+      rollout:
+        description: New rollout percentage (0 halts automatic installs)
+        required: true
+        default: "0"
+        type: string
+      reason:
+        description: Why the rollout is being changed
+        required: true
+        type: string
+      dry_run:
+        description: Generate and sign, but do not publish
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ota-metadata
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    name: Set ${{ inputs.tag }} rollout to ${{ inputs.rollout }}%
+    runs-on: ubuntu-latest
+    environment: ota-publish
+    timeout-minutes: 20
+    steps:
+      - name: Record the request
+        env:
+          TAG: ${{ inputs.tag }}
+          ROLLOUT: ${{ inputs.rollout }}
+          REASON: ${{ inputs.reason }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Rollout change request"
+            echo
+            echo "| Input | Value |"
+            echo "|---|---|"
+            echo "| tag | \`$TAG\` |"
+            echo "| rollout | $ROLLOUT% |"
+            echo "| dry run | $DRY_RUN |"
+            echo "| requested by | @${GITHUB_ACTOR} |"
+            echo
+            echo "> $REASON"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/actions/ota-metadata/
+            scripts/generate-update-manifest/
+            pkg/service/updater/update_signing.pub
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Publish the update metadata
+        uses: ./.github/actions/ota-metadata
+        with:
+          mode: rollout
+          tag: ${{ inputs.tag }}
+          rollout: ${{ inputs.rollout }}
+          dry-run: ${{ inputs.dry_run }}
+          signing-key: ${{ secrets.UPDATE_SIGNING_KEY }}
+          storage-zone: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          storage-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
+          bunny-api-key: ${{ secrets.BUNNY_API_KEY }}
+          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
