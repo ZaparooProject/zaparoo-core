@@ -615,6 +615,62 @@ func TestSqlBrowseRouteCountsFromMedia_ReusesPresenceProbeAcrossTimeouts(t *test
 	}
 }
 
+func TestSqlBrowseRouteCountsFromMedia_PropagatesCountError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	route := browseTestPath("roms", "a")
+	countErr := errors.New("count failed")
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(route), "SNES").
+		WillReturnError(countErr)
+
+	counts, err := sqlBrowseRouteCountsFromMedia(context.Background(), db, database.BrowseRouteCountsOptions{
+		Routes:  []string{route},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.ErrorIs(t, err, countErr)
+	assert.Nil(t, counts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseRouteCountsFromMedia_PropagatesCancellationDuringCount(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	probeQueries := 0
+	matcher := sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if strings.Contains(actualSQL, "SELECT COUNT") {
+			cancel()
+		}
+		if strings.Contains(actualSQL, "SELECT 1") {
+			probeQueries++
+		}
+		return sqlmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	route := browseTestPath("roms", "a")
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(browseRouteCacheKey(route), "SNES").
+		WillReturnError(context.Canceled)
+
+	counts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
+		Routes:  []string{route},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.Nil(t, counts)
+	assert.Zero(t, probeQueries, "caller cancellation must not invoke timeout fallback")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseRouteCountsFromMedia_PropagatesCancellationDuringProbe(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

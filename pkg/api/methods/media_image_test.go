@@ -705,6 +705,7 @@ func TestHandleMediaImage_TimingLog(t *testing.T) {
 		assert.Equal(t, mediaImageDeliveryInline, event["delivery"])
 		assert.Equal(t, true, event["mediaId"])
 		assert.Equal(t, json.Number("512"), event["maxSize"])
+		assert.Contains(t, event, "duration")
 		mockDB.AssertExpectations(t)
 	})
 
@@ -719,6 +720,7 @@ func TestHandleMediaImage_TimingLog(t *testing.T) {
 		assert.Equal(t, false, event["ok"])
 		assert.Equal(t, mediaImageDeliveryPath, event["delivery"])
 		assert.Equal(t, true, event["mediaId"])
+		assert.Contains(t, event, "duration")
 	})
 }
 

@@ -80,6 +80,7 @@ func TestHandleMediaMeta_TimingLog(t *testing.T) {
 		assert.Equal(t, false, event["batch"])
 		assert.Equal(t, json.Number("1"), event["itemCount"])
 		assert.Equal(t, true, event["ok"])
+		assert.Contains(t, event, "duration")
 		mockDB.AssertExpectations(t)
 	})
 
@@ -95,6 +96,7 @@ func TestHandleMediaMeta_TimingLog(t *testing.T) {
 		assert.Equal(t, true, event["batch"])
 		assert.Equal(t, json.Number("2"), event["itemCount"])
 		assert.Equal(t, true, event["ok"])
+		assert.Contains(t, event, "duration")
 		mockDB.AssertExpectations(t)
 	})
 
@@ -107,6 +109,7 @@ func TestHandleMediaMeta_TimingLog(t *testing.T) {
 		assert.Equal(t, false, event["batch"])
 		assert.Equal(t, json.Number("0"), event["itemCount"])
 		assert.Equal(t, false, event["ok"])
+		assert.Contains(t, event, "duration")
 	})
 
 	t.Run("downstream error", func(t *testing.T) {
@@ -121,6 +124,7 @@ func TestHandleMediaMeta_TimingLog(t *testing.T) {
 		assert.Equal(t, false, event["batch"])
 		assert.Equal(t, json.Number("1"), event["itemCount"])
 		assert.Equal(t, false, event["ok"])
+		assert.Contains(t, event, "duration")
 		mockDB.AssertExpectations(t)
 	})
 }
