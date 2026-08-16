@@ -1058,6 +1058,19 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "games", "NES Hacks")},
 		},
 		{
+			name: "grandparent absorbed by deeper descendants",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games", "MegaDrive"), FileCount: count(3)},
+				{Path: path("media", "fat", "games", "Genesis"), FileCount: count(8387)},
+				{Path: path("media", "fat", "games"), FileCount: count(8390)},
+				{Path: path("media", "fat"), FileCount: count(8390)},
+			},
+			want: []string{
+				path("media", "fat", "games", "MegaDrive"),
+				path("media", "fat", "games", "Genesis"),
+			},
+		},
+		{
 			name: "parent retained when descendants do not cover count",
 			entries: []models.BrowseEntry{
 				{Path: path("media", "fat", "games"), FileCount: count(20)},

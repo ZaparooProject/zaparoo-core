@@ -82,6 +82,9 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigBrowseIndexVersion, browseCacheSchemaVersion).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigBrowseIndexComplete, "1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 }
 

@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -56,6 +57,76 @@ func expectMediaMetaResolve(mockDB *testhelpers.MockMediaDBI, row *database.Medi
 
 func mediaMetaParams(row *database.MediaFullRow) string {
 	return fmt.Sprintf(`{"system": %q, "path": %q}`, row.System.SystemID, row.Path)
+}
+
+func TestHandleMediaMeta_TimingLog(t *testing.T) {
+	// Not parallel: captureHandlerLogEvent swaps process-wide logger.
+	t.Run("single", func(t *testing.T) {
+		mockDB := testhelpers.NewMockMediaDBI()
+		row := makeMediaFullRow(9300, 9310)
+		expectMediaMetaResolve(mockDB, row)
+		mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).Return([]database.TagInfo{}, nil)
+		mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, row.Title.DBID).
+			Return([]database.TagInfo{}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, row.DBID).Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+			Return([]database.MediaProperty{}, nil)
+
+		env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+		event := captureHandlerLogEvent(t, "media.meta handler timing", func() {
+			_, err := HandleMediaMeta(env)
+			require.NoError(t, err)
+		})
+		assert.Equal(t, false, event["batch"])
+		assert.Equal(t, json.Number("1"), event["itemCount"])
+		assert.Equal(t, true, event["ok"])
+		assert.Contains(t, event, "duration")
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		mockDB := testhelpers.NewMockMediaDBI()
+		mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+			Return(map[int64]database.MediaFullRow{}, nil)
+		env := makeMediaMetaEnv(t, mockDB, `{"items":[{"mediaId":9301},{"mediaId":9302}]}`)
+		event := captureHandlerLogEvent(t, "media.meta handler timing", func() {
+			_, err := HandleMediaMeta(env)
+			require.NoError(t, err)
+		})
+		assert.Equal(t, true, event["batch"])
+		assert.Equal(t, json.Number("2"), event["itemCount"])
+		assert.Equal(t, true, event["ok"])
+		assert.Contains(t, event, "duration")
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("parse error", func(t *testing.T) {
+		env := makeMediaMetaEnv(t, testhelpers.NewMockMediaDBI(), `{`)
+		event := captureHandlerLogEvent(t, "media.meta handler timing", func() {
+			_, err := HandleMediaMeta(env)
+			require.Error(t, err)
+		})
+		assert.Equal(t, false, event["batch"])
+		assert.Equal(t, json.Number("0"), event["itemCount"])
+		assert.Equal(t, false, event["ok"])
+		assert.Contains(t, event, "duration")
+	})
+
+	t.Run("downstream error", func(t *testing.T) {
+		mockDB := testhelpers.NewMockMediaDBI()
+		row := makeMediaFullRow(9303, 9330)
+		mockDB.On("FindSystemBySystemID", row.System.SystemID).Return(database.System{}, assert.AnError)
+		env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+		event := captureHandlerLogEvent(t, "media.meta handler timing", func() {
+			_, err := HandleMediaMeta(env)
+			require.Error(t, err)
+		})
+		assert.Equal(t, false, event["batch"])
+		assert.Equal(t, json.Number("1"), event["itemCount"])
+		assert.Equal(t, false, event["ok"])
+		assert.Contains(t, event, "duration")
+		mockDB.AssertExpectations(t)
+	})
 }
 
 func TestHandleMediaMeta_FullResult(t *testing.T) {

@@ -42,6 +42,7 @@ const (
 	DBConfigIndexingSystems                 = "IndexingSystems"
 	DBConfigIndexingPlanSystems             = "IndexingPlanSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
+	DBConfigBrowseIndexComplete             = "BrowseIndexComplete"
 	DBConfigMediaTotalCount                 = "MediaTotalCount"
 	DBConfigMediaMissingCount               = "MediaMissingCount"
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"

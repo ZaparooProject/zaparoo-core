@@ -203,8 +203,9 @@ func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
 	}
 
 	tests := []struct {
-		setup func(*testing.T, *helpers.MockMediaDBI)
-		name  string
+		setup           func(*testing.T, *helpers.MockMediaDBI)
+		name            string
+		expectedMediaID int64
 	}{
 		{
 			name: "media identity lookup",
@@ -214,7 +215,8 @@ func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
 			},
 		},
 		{
-			name: "cover lookup",
+			name:            "cover lookup",
+			expectedMediaID: 42,
 			setup: func(t *testing.T, mockMediaDB *helpers.MockMediaDBI) {
 				t.Helper()
 				mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
@@ -252,8 +254,8 @@ func TestHandleMediaHistory_EnrichmentFailuresAreNonFatal(t *testing.T) {
 			response, ok := result.(models.MediaHistoryResponse)
 			require.True(t, ok)
 			require.Len(t, response.Entries, 1)
-			assert.Zero(t, response.Entries[0].MediaID)
-			assert.False(t, response.Entries[0].HasCover)
+			assert.Equal(t, tt.expectedMediaID, response.Entries[0].MediaID)
+			assert.True(t, response.Entries[0].HasCover)
 			mockUserDB.AssertExpectations(t)
 			mockMediaDB.AssertExpectations(t)
 		})

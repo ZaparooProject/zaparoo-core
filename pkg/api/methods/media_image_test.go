@@ -32,6 +32,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -44,6 +45,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -71,6 +74,29 @@ func makeMediaImageEnv(
 		Config:   cfg,
 		Params:   params,
 	}
+}
+
+func captureHandlerLogEvent(t *testing.T, message string, run func()) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	run()
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		var event map[string]any
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.UseNumber()
+		if err := decoder.Decode(&event); err != nil {
+			continue
+		}
+		if event["message"] == message {
+			return event
+		}
+	}
+	t.Fatalf("log event %q not found in %q", message, buf.String())
+	return nil
 }
 
 func makeMediaFullRow(mediaDBID, titleDBID int64) *database.MediaFullRow {
@@ -646,6 +672,56 @@ func TestImageHasTransparency(t *testing.T) {
 			assert.Equal(t, tt.want, imageHasTransparency(tt.img))
 		})
 	}
+}
+
+func TestHandleMediaImage_TimingLog(t *testing.T) {
+	// Not parallel: swaps process-wide logger.
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	t.Run("success", func(t *testing.T) {
+		var imageData bytes.Buffer
+		require.NoError(t, png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 1, 1))))
+
+		mockDB := testhelpers.NewMockMediaDBI()
+		row := makeMediaFullRow(9200, 9210)
+		mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+			Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
+		mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+			Return([]database.MediaProperty{}, nil)
+		mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+			Return([]database.MediaProperty{
+				{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: imageData.Bytes()},
+			}, nil)
+
+		env := makeMediaImageEnv(t, mockDB, json.RawMessage(
+			`{"mediaId":9200,"delivery":"inline","maxSize":300}`))
+		event := captureHandlerLogEvent(t, "media.image handler timing", func() {
+			_, err := HandleMediaImage(env)
+			require.NoError(t, err)
+		})
+
+		assert.Equal(t, true, event["ok"])
+		assert.Equal(t, mediaImageDeliveryInline, event["delivery"])
+		assert.Equal(t, true, event["mediaId"])
+		assert.Equal(t, json.Number("512"), event["maxSize"])
+		assert.Contains(t, event, "duration")
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("validation error", func(t *testing.T) {
+		env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), json.RawMessage(
+			`{"mediaId":9201,"delivery":"localPath"}`))
+		event := captureHandlerLogEvent(t, "media.image handler timing", func() {
+			_, err := HandleMediaImage(env)
+			require.Error(t, err)
+		})
+
+		assert.Equal(t, false, event["ok"])
+		assert.Equal(t, mediaImageDeliveryPath, event["delivery"])
+		assert.Equal(t, true, event["mediaId"])
+		assert.Contains(t, event, "duration")
+	})
 }
 
 func TestHandleMediaImage_MaxSizeResizesAndCachesThumbnail(t *testing.T) {

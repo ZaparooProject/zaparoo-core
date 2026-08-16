@@ -756,6 +756,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | relativePath | string   | No       | Relative path from root directory. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
+| hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
 
 ##### Browse pagination object
 
@@ -794,6 +795,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "path": "/roms/SNES",
         "type": "root",
         "fileCount": 150,
+        "hasCover": false,
         "systemId": "SNES",
         "systemIds": ["SNES"]
       }
@@ -832,7 +834,8 @@ All parameters are optional. When called with no parameters, returns root entrie
         "name": "RPGs",
         "path": "/roms/SNES/RPGs",
         "type": "directory",
-        "fileCount": 42
+        "fileCount": 42,
+        "hasCover": false
       },
       {
         "mediaId": 42,
@@ -840,6 +843,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "path": "/roms/SNES/Super Mario World.sfc",
         "type": "media",
         "systemId": "SNES",
+        "hasCover": true,
         "zapScript": "@SNES/Super Mario World",
         "relativePath": "Super Mario World.sfc",
         "tags": [
@@ -853,6 +857,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "path": "/roms/SNES/The Legend of Zelda - A Link to the Past.sfc",
         "type": "media",
         "systemId": "SNES",
+        "hasCover": false,
         "zapScript": "@SNES/The Legend of Zelda - A Link to the Past",
         "relativePath": "The Legend of Zelda - A Link to the Past.sfc",
         "tags": [

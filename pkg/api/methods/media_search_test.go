@@ -331,7 +331,7 @@ func TestHandleMediaSearch_CoverFailureIsNonFatal(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, response.Results, 1)
 	assert.Equal(t, int64(1), response.Results[0].MediaID)
-	assert.False(t, response.Results[0].HasCover)
+	assert.True(t, response.Results[0].HasCover)
 	mockMediaDB.AssertExpectations(t)
 }
 
