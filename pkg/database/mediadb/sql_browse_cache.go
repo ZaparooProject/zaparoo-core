@@ -32,7 +32,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const browseCacheSchemaVersion = "2"
+const browseCacheSchemaVersion = "3"
 
 // browseCacheInvalidatedVersion is the sentinel written to
 // DBConfig.BrowseIndexVersion when the cache is marked stale (e.g. media changed
@@ -244,7 +244,12 @@ type browseCacheCountPair struct {
 func (b *browseCacheBuilder) countPairsForPath(mediaPath string) []browseCacheCountPair {
 	mediaPath = browseCacheNormalizePath(mediaPath)
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
-		return []browseCacheCountPair{{parent: b.ensureDir("/"), child: b.ensureDir(mediaPath[:idx+3])}}
+		root := b.ensureDir("/")
+		scheme := b.ensureDir(mediaPath[:idx+3])
+		return []browseCacheCountPair{
+			{parent: root, child: scheme},
+			{parent: scheme, child: scheme},
+		}
 	}
 
 	dirs := browseCacheAncestorDirs(mediaPath)
@@ -256,6 +261,14 @@ func (b *browseCacheBuilder) countPairsForPath(mediaPath string) []browseCacheCo
 			parent: b.ensureDir(dirs[i]),
 			child:  b.ensureDir(dirs[i+1]),
 		})
+	}
+	// A self-pair on the media's immediate parent stores direct-child file
+	// count. Parent→child pairs intentionally remain subtree counts for route
+	// discovery; keeping both shapes lets media.browse answer totalFiles without
+	// scanning a large Media partition on every cold first page.
+	if len(dirs) > 1 {
+		leaf := b.ensureDir(dirs[len(dirs)-1])
+		pairs = append(pairs, browseCacheCountPair{parent: leaf, child: leaf})
 	}
 	return pairs
 }
@@ -449,6 +462,21 @@ func sqlPopulateBrowseCacheForSystems(ctx context.Context, db *sql.DB, systemDBI
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	compatible, err := sqlBrowseCacheVersionCompatible(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !compatible {
+		for _, stmt := range []string{
+			"DELETE FROM BrowseDirCounts",
+			"DELETE FROM BrowseDirs",
+		} {
+			if _, execErr := tx.ExecContext(ctx, stmt); execErr != nil {
+				return fmt.Errorf("browse cache: failed to clear incompatible cache: %w", execErr)
+			}
+		}
+	}
+
 	firstNewID, err := loadBrowseCacheDirs(ctx, tx, builder)
 	if err != nil {
 		return err
@@ -508,10 +536,29 @@ func sqlPopulateBrowseCacheForSystems(ctx context.Context, db *sql.DB, systemDBI
 	return nil
 }
 
-func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable) error {
-	_, err := db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+func sqlBrowseCacheVersionCompatible(ctx context.Context, db sqlQueryable) (bool, error) {
+	var version string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
 		DBConfigBrowseIndexVersion,
+	).Scan(&version)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("browse cache version query: %w", err)
+	}
+	return version == browseCacheSchemaVersion || version == browseCacheInvalidatedVersion, nil
+}
+
+func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO DBConfig (Name, Value) VALUES (?, ?)
+		ON CONFLICT(Name) DO UPDATE SET Value = excluded.Value
+		WHERE DBConfig.Value IN (?, ?)`,
+		DBConfigBrowseIndexVersion,
+		browseCacheInvalidatedVersion,
+		browseCacheSchemaVersion,
 		browseCacheInvalidatedVersion,
 	)
 	if err != nil {

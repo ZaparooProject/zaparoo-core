@@ -756,6 +756,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | relativePath | string   | No       | Relative path from root directory. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
+| hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
 
 ##### Browse pagination object
 

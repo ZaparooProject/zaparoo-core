@@ -1552,7 +1552,46 @@ func sqlBrowseFileCount(
 	db sqlQueryable,
 	opts database.BrowseFileCountOptions,
 ) (int, error) {
+	// Letter and tag scopes need row-level predicates absent from compact cache.
+	// Unfiltered directory totals can use v3's parent=self direct-file rows.
+	if opts.Letter == nil && len(opts.Tags) == 0 && browseRouteCacheKey(opts.PathPrefix) != "/" {
+		ready, err := sqlBrowseCacheReady(ctx, db)
+		if err != nil {
+			return 0, err
+		}
+		if ready {
+			count, parentFound, cacheErr := sqlBrowseDirectFileCountFromCache(ctx, db, opts)
+			if cacheErr != nil || parentFound {
+				return count, cacheErr
+			}
+		}
+	}
 	return sqlBrowseFileCountFromMedia(ctx, db, opts)
+}
+
+func sqlBrowseDirectFileCountFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions,
+) (count int, parentFound bool, err error) {
+	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+
+	args := []any{parentID}
+	query := `SELECT COALESCE(SUM(c.FileCount), 0)
+		FROM BrowseDirCounts c
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE c.ParentDirDBID = ? AND c.ChildDirDBID = c.ParentDirDBID`
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	if scanErr := db.QueryRowContext(ctx, query, args...).Scan(&count); scanErr != nil {
+		return 0, true, fmt.Errorf("browse cache direct file count: %w", scanErr)
+	}
+	return count, true, nil
 }
 
 func sqlBrowseFileCountFromMedia(
@@ -1966,13 +2005,18 @@ func sqlBrowseRouteCountsFromCache(
 		args := append([]any{dirID}, systemArgs...)
 		var count int
 		var systemIDs sql.NullString
-		err = db.QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(c.FileCount), 0), GROUP_CONCAT(DISTINCT s.SystemID)
+		query := `SELECT COALESCE(SUM(c.FileCount), 0), GROUP_CONCAT(DISTINCT s.SystemID)
 			 FROM BrowseDirCounts c
 			 INNER JOIN Systems s ON c.SystemDBID = s.DBID
-			 WHERE c.ChildDirDBID = ? AND `+systemClause,
-			args...,
-		).Scan(&count, &systemIDs)
+			 WHERE c.ChildDirDBID = ?`
+		// v3 self rows are direct-file counts and would double-count a route's
+		// parent→child subtree total. Root's historical self row is the global
+		// filesystem total and remains authoritative for the root route.
+		if browseRouteCacheKey(route) != "/" {
+			query += ` AND c.ParentDirDBID != c.ChildDirDBID`
+		}
+		query += ` AND ` + systemClause
+		err = db.QueryRowContext(ctx, query, args...).Scan(&count, &systemIDs)
 		if err != nil {
 			return nil, fmt.Errorf("browse cache route counts query: %w", err)
 		}
@@ -2318,10 +2362,11 @@ func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string
 			continue
 		}
 		var dbCount int
-		if scanErr := db.QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(FileCount), 0) FROM BrowseDirCounts WHERE ChildDirDBID = ?`,
-			dirID,
-		).Scan(&dbCount); scanErr != nil {
+		query := `SELECT COALESCE(SUM(FileCount), 0) FROM BrowseDirCounts WHERE ChildDirDBID = ?`
+		if browseRouteCacheKey(root) != "/" {
+			query += ` AND ParentDirDBID != ChildDirDBID`
+		}
+		if scanErr := db.QueryRowContext(ctx, query, dirID).Scan(&dbCount); scanErr != nil {
 			return nil, fmt.Errorf("browse cache root counts query: %w", scanErr)
 		}
 		c := dbCount

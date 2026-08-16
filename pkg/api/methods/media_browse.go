@@ -395,15 +395,25 @@ func dedupeSystemRootEntries(entries []models.BrowseEntry) []models.BrowseEntry 
 		return entries
 	}
 
-	filtered := make([]models.BrowseEntry, 0, len(entries))
-	for i := range entries {
-		if systemRootEntryCoveredByDescendant(entries, i) {
-			continue
+	// Route candidates can contain several ancestor levels. One pass removes an
+	// intermediate route, but a grandparent evaluated against the original set
+	// double-counts both that intermediate subtree and its leaf routes. Repeat on
+	// the reduced set until stable so every covered ancestor is removed while
+	// preserving parents with genuinely unmatched direct media.
+	current := entries
+	for {
+		filtered := make([]models.BrowseEntry, 0, len(current))
+		for i := range current {
+			if systemRootEntryCoveredByDescendant(current, i) {
+				continue
+			}
+			filtered = append(filtered, current[i])
 		}
-		filtered = append(filtered, entries[i])
+		if len(filtered) == len(current) {
+			return filtered
+		}
+		current = filtered
 	}
-
-	return filtered
 }
 
 func systemRootEntryCoveredByDescendant(entries []models.BrowseEntry, parentIdx int) bool {

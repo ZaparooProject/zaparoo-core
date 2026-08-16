@@ -132,12 +132,12 @@ func TestIndexedSystemsUsesBrowseCache(t *testing.T) {
 			FileCount INTEGER NOT NULL,
 			PRIMARY KEY (ParentDirDBID, ChildDirDBID, SystemDBID)
 		);
-		INSERT INTO DBConfig (Name, Value) VALUES ('BrowseIndexVersion', '2');
+		INSERT INTO DBConfig (Name, Value) VALUES ('BrowseIndexVersion', ?);
 		INSERT INTO Systems (DBID, SystemID) VALUES (1, 'SNES'), (2, 'NES'), (3, 'C64');
 		INSERT INTO BrowseDirs (DBID, Path) VALUES (1, '/'), (2, '/roms'), (3, '/more-roms');
 		INSERT INTO BrowseDirCounts (ParentDirDBID, ChildDirDBID, SystemDBID, FileCount)
 		VALUES (1, 2, 2, 10), (1, 2, 1, 5), (1, 3, 2, 3);
-	`)
+	`, browseCacheSchemaVersion)
 	require.NoError(t, err)
 
 	systems, err := sqlIndexedSystems(ctx, sqlDB)

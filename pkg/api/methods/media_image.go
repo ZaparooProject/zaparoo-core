@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/KarpelesLab/gowebp"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -899,7 +900,23 @@ func validateMediaImageDelivery(delivery string, ref mediaRefParam) error {
 
 // HandleMediaImage returns a single best-match image inline or as a transient,
 // Core-owned cached thumbnail path when explicitly requested.
-func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//
+//nolint:gocritic // RequestEnv is copied once at the API handler boundary.
+func HandleMediaImage(env requests.RequestEnv) (result any, resultErr error) {
+	started := time.Now()
+	deliveryForLog := ""
+	maxSizeForLog := 0
+	hasMediaID := false
+	defer func() {
+		log.Debug().
+			Dur("duration", time.Since(started)).
+			Str("delivery", deliveryForLog).
+			Int("maxSize", maxSizeForLog).
+			Bool("mediaId", hasMediaID).
+			Bool("ok", resultErr == nil).
+			Msg("media.image handler timing")
+	}()
+
 	ref, delivery, err := parseMediaImageRequest(env.Params)
 	if err != nil {
 		return nil, err
@@ -907,6 +924,8 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if deliveryErr := validateMediaImageDelivery(delivery, ref); deliveryErr != nil {
 		return nil, deliveryErr
 	}
+	deliveryForLog = delivery
+	hasMediaID = ref.MediaID != nil
 	localPath := delivery == mediaImageDeliveryPath
 
 	// Snap the requested size onto a standard tier so every view shares one
@@ -915,6 +934,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if ref.MaxSize != nil {
 		snapped := snapThumbMaxSize(*ref.MaxSize)
 		ref.MaxSize = &snapped
+		maxSizeForLog = int(snapped)
 	}
 	prefs := imagePrefs(nil, ref.ImageTypes)
 

@@ -1015,6 +1015,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	coverStarted := time.Now()
 	coverStatuses := make(map[int64]bool)
+	// Unknown must remain true in the response so clients do not suppress a
+	// valid image request merely because optional enrichment timed out.
+	coverStatusesKnown := false
 	if len(searchResults) > 0 {
 		coverRefs := make([]database.MediaCoverRef, len(searchResults))
 		for i := range searchResults {
@@ -1030,6 +1033,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			log.Debug().Err(coverErr).Msg("could not enrich media search cover status")
 		} else {
 			coverStatuses = resolvedCoverStatuses
+			coverStatusesKnown = true
 		}
 	}
 	coverDuration := time.Since(coverStarted)
@@ -1073,10 +1077,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 		relativePathDuration += time.Since(stageStarted)
 
+		hasCover := true
+		if coverStatusesKnown {
+			hasCover = coverStatuses[result.MediaID]
+		}
 		results = append(results, models.SearchResultMedia{
 			MediaID:            result.MediaID,
 			RelPath:            relPath,
-			HasCover:           coverStatuses[result.MediaID],
+			HasCover:           hasCover,
 			System:             resultSystem,
 			Name:               result.Name,
 			Path:               result.Path,

@@ -3210,7 +3210,8 @@ func TestMediaDB_SystemBrowseFallsBackWhenBrowseCacheNotReady_Integration(t *tes
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
-	assert.Equal(t, browseCacheInvalidatedVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion),
+		"invalidation must not relabel an incompatible cache schema")
 
 	_, err = mediaDB.sql.Load().ExecContext(ctx, "DELETE FROM BrowseDirs")
 	require.NoError(t, err)
@@ -3267,7 +3268,9 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	assert.Equal(t, 2, countTableRows(t, mediaDB, "BrowseDirCounts",
 		"ParentDirDBID = ? AND ChildDirDBID = ?", rootID, romsID))
 	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
-		"ChildDirDBID = ? AND SystemDBID = ?", steamID, snesSystem.DBID))
+		"ParentDirDBID = ? AND ChildDirDBID = ? AND SystemDBID = ?", rootID, steamID, snesSystem.DBID))
+	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
+		"ParentDirDBID = ? AND ChildDirDBID = ? AND SystemDBID = ?", steamID, steamID, snesSystem.DBID))
 	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
 		"ChildDirDBID = ? AND SystemDBID = ?", romsID, nesSystem.DBID))
 
@@ -3283,6 +3286,27 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	assert.Equal(t, 2, rootDirs[0].FileCount)
 
 	rpgDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG")) + "/"
+	snesDef, systemErr := systemdefs.GetSystem(snesSystem.SystemID)
+	require.NoError(t, systemErr)
+	directRPGFiles, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		PathPrefix: rpgDir,
+		Systems:    []systemdefs.System{*snesDef},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, directRPGFiles)
+
+	romsDirectFiles, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		PathPrefix: romsDir,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, romsDirectFiles, "subtree files must not count as direct children")
+
+	virtualFiles, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		PathPrefix: "steam://",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, virtualFiles)
+
 	files, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: rpgDir, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, files, 1)
@@ -3365,6 +3389,79 @@ func TestSqlInvalidateBrowseCache_MarksBrowseCacheStale_Integration(t *testing.T
 	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
 
 	assert.Equal(t, browseCacheInvalidatedVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+}
+
+func TestSqlInvalidateBrowseCache_PreservesIncompatibleVersion_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	mediaPath := filepath.ToSlash(filepath.Join(
+		string(filepath.Separator), "roms", "snes", "RPG", "super-rpg.sfc"))
+	insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG", mediaPath)
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+
+	_, err := mediaDB.sql.Load().ExecContext(ctx,
+		"UPDATE DBConfig SET Value = ? WHERE Name = ?",
+		"2",
+		DBConfigBrowseIndexVersion,
+	)
+	require.NoError(t, err)
+	_, err = mediaDB.sql.Load().ExecContext(ctx,
+		"DELETE FROM BrowseDirCounts WHERE ParentDirDBID = ChildDirDBID AND ParentDirDBID != ?",
+		browseCacheDirID(t, mediaDB, "/"),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql.Load()))
+	assert.Equal(t, "2", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+
+	state, err := sqlBrowseCacheStatus(ctx, mediaDB.sql.Load())
+	require.NoError(t, err)
+	assert.Equal(t, browseCacheAbsent, state)
+
+	rpgDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG")) + "/"
+	fileCount, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{PathPrefix: rpgDir})
+	require.NoError(t, err)
+	assert.Equal(t, 1, fileCount, "incompatible cache must fall back to Media rows")
+}
+
+func TestPopulateBrowseCacheForSystems_ClearsIncompatibleCache_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	snesPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "game.sfc"))
+	nesPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "nes", "game.nes"))
+	snesSystem := insertSystemWithMedia(t, mediaDB, "SNES", "SNES Game", snesPath)
+	nesSystem := insertSystemWithMedia(t, mediaDB, "NES", "NES Game", nesPath)
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+
+	_, err := mediaDB.sql.Load().ExecContext(ctx,
+		"UPDATE DBConfig SET Value = ? WHERE Name = ?",
+		"2",
+		DBConfigBrowseIndexVersion,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.PopulateBrowseCacheForSystems(ctx, []string{"SNES"}))
+	assert.Equal(t, browseCacheInvalidatedVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+	assert.Positive(t, countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", snesSystem.DBID))
+	assert.Zero(t, countTableRows(t, mediaDB, "BrowseDirCounts", "SystemDBID = ?", nesSystem.DBID),
+		"rows from an incompatible cache schema must not remain serveable")
+
+	snesDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes")) + "/"
+	fileCount, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{PathPrefix: snesDir})
+	require.NoError(t, err)
+	assert.Equal(t, 1, fileCount)
 }
 
 func TestMediaDB_UnfilteredBrowseReadsFromMediaWhenBrowseCacheEmpty_Integration(t *testing.T) {

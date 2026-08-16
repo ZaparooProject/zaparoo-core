@@ -106,6 +106,9 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	enrichStarted := time.Now()
 	mediaIDs := make(map[mediaPathRef]int64)
 	coverStatuses := make(map[int64]bool)
+	// Unknown must remain true in the response so clients do not suppress a
+	// valid image request merely because optional enrichment timed out.
+	coverStatusesKnown := false
 	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
 	defer cancelEnrichment()
 
@@ -132,15 +135,17 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			})
 		}
 
-		resolvedCoverStatuses := make(map[int64]bool)
-		if len(coverRefs) > 0 {
-			resolvedCoverStatuses, enrichErr = env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, coverRefs)
-		}
-		if enrichErr != nil {
-			log.Debug().Err(enrichErr).Msg("could not enrich media history cover status")
+		mediaIDs = resolvedMediaIDs
+		if len(coverRefs) == 0 {
+			coverStatusesKnown = true
 		} else {
-			mediaIDs = resolvedMediaIDs
-			coverStatuses = resolvedCoverStatuses
+			resolvedCoverStatuses, coverErr := env.Database.MediaDB.GetMediaCoverStatus(enrichCtx, coverRefs)
+			if coverErr != nil {
+				log.Debug().Err(coverErr).Msg("could not enrich media history cover status")
+			} else {
+				coverStatuses = resolvedCoverStatuses
+				coverStatusesKnown = true
+			}
 		}
 	}
 	enrichElapsed := time.Since(enrichStarted)
@@ -158,11 +163,15 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			endedAt = &formatted
 		}
 		mediaID := mediaIDs[ref]
+		hasCover := true
+		if coverStatusesKnown {
+			hasCover = coverStatuses[mediaID]
+		}
 
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
 			MediaID:    mediaID,
 			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
-			HasCover:   coverStatuses[mediaID],
+			HasCover:   hasCover,
 			SystemID:   entry.SystemID,
 			SystemName: entry.SystemName,
 			MediaName:  entry.MediaName,
