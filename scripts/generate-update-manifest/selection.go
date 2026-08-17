@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/spf13/afero"
 )
@@ -104,12 +105,31 @@ func verifySelectionMatrix(fs afero.Fs, path string) (*result, error) {
 }
 
 // newestPerChannel returns the tags of the release a device on each channel
-// would be offered, using the same ordering retention uses to decide what to
-// keep.
+// would be offered.
+//
+// The ordering is by semantic version, not by publish date, because that is
+// what go-selfupdate does: it walks every release and keeps the highest version,
+// regardless of the order they were published in. Ordering by date here would
+// let a hotfix on an older line published after a newer release become "newest"
+// in CI while devices were still being offered the newer one, and the newer
+// one's asset matrix would then go unchecked. Retention orders by date instead,
+// which is a different question — what to keep, not what to offer.
+//
+// A release missing this device's archive is deliberately still a candidate.
+// go-selfupdate would skip it and fall back to an older release, which is the
+// silent failure this check exists to catch: promoting a version most platforms
+// get while one quietly stays behind.
 func newestPerChannel(m *otameta.Manifest) map[string]bool {
 	byChannel := make(map[string]*otameta.Release, 2)
 	for _, rel := range m.Releases {
+		// Drafts and unparseable tags are skipped by go-selfupdate, so a device
+		// is never offered them and their matrix does not matter. The channel
+		// grouping covers prereleases: releasesFor derives go-selfupdate's
+		// prerelease flag from the channel, not from the manifest's own field.
 		if rel == nil || rel.Draft {
+			continue
+		}
+		if _, err := semver.NewVersion(otameta.VersionFromTag(rel.TagName)); err != nil {
 			continue
 		}
 		if cur, ok := byChannel[rel.Channel]; !ok || newerRelease(rel, cur) {
@@ -124,9 +144,16 @@ func newestPerChannel(m *otameta.Manifest) map[string]bool {
 	return newest
 }
 
+// newerRelease reports whether a is the higher version. Both tags have already
+// parsed, so a parse failure here cannot happen and orders conservatively.
 func newerRelease(a, b *otameta.Release) bool {
-	if !a.PublishedAt.Equal(b.PublishedAt) {
-		return a.PublishedAt.After(b.PublishedAt)
+	av, err := semver.NewVersion(otameta.VersionFromTag(a.TagName))
+	if err != nil {
+		return false
 	}
-	return a.TagName > b.TagName
+	bv, err := semver.NewVersion(otameta.VersionFromTag(b.TagName))
+	if err != nil {
+		return true
+	}
+	return av.GreaterThan(bv)
 }

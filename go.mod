@@ -6,6 +6,7 @@ require (
 	fyne.io/systray v1.12.2
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/KarpelesLab/gowebp v0.1.1
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-gameid v0.2.0
 	github.com/ZaparooProject/go-pn532 v0.23.0
@@ -71,7 +72,6 @@ require (
 	code.gitea.io/sdk/gitea v0.23.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
-	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect

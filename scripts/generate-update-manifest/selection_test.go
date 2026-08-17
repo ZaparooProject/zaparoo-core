@@ -91,6 +91,46 @@ func TestVerifySelectionMatrix_OlderMissingTargetIsFine(t *testing.T) {
 	assert.Equal(t, 2, res.releases)
 }
 
+// go-selfupdate picks the highest version, not the most recently published one,
+// so a hotfix on an older line promoted after a newer release must not become
+// the release whose matrix is checked.
+func TestVerifySelectionMatrix_NewestIsByVersionNotDate(t *testing.T) {
+	t.Parallel()
+
+	// newTestManifest publishes in order, so v2.16.1 is the later publish while
+	// v2.17.0 is the higher version and the one devices are offered.
+	m := newTestManifest(t, []string{"v2.17.0", "v2.16.1"}, []string{channelStable, channelStable})
+
+	high := findRelease(m, "v2.17.0")
+	require.NotNil(t, high)
+	high.Assets = high.Assets[:2]
+
+	fs := afero.NewMemMapFs()
+	writeManifestFor(t, fs, m, "manifest.yaml")
+
+	_, err := verifySelectionMatrix(fs, "manifest.yaml")
+	require.ErrorIs(t, err, errSelectionMatrix)
+	assert.Contains(t, err.Error(), "v2.17.0: no archive for")
+}
+
+// The mirror of the above: the later publish is the lower version, so devices
+// are never offered it and a gap in it is not a promote failure.
+func TestVerifySelectionMatrix_LaterPublishLowerVersionIsFine(t *testing.T) {
+	t.Parallel()
+
+	m := newTestManifest(t, []string{"v2.17.0", "v2.16.1"}, []string{channelStable, channelStable})
+
+	late := findRelease(m, "v2.16.1")
+	require.NotNil(t, late)
+	late.Assets = late.Assets[:2]
+
+	fs := afero.NewMemMapFs()
+	writeManifestFor(t, fs, m, "manifest.yaml")
+
+	_, err := verifySelectionMatrix(fs, "manifest.yaml")
+	require.NoError(t, err)
+}
+
 // Two archives one device could both install means the client has to guess, so
 // it fails regardless of how old the release is.
 func TestVerifySelectionMatrix_AmbiguityFailsOnAnyRelease(t *testing.T) {
