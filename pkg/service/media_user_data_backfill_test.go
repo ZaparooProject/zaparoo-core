@@ -103,7 +103,7 @@ func TestBackfillMediaUserData(t *testing.T) {
 	favPath, overridePath := seedMediaUserData(ctx, t, mediaDB)
 	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
 
-	backfillMediaUserData(ctx, db)
+	backfillMediaUserData(ctx, db, nil)
 
 	fav, found, err := userDB.GetMediaUserData("NES", favPath)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestBackfillMediaUserDataGuardSkipsWhenPopulated(t *testing.T) {
 	favPath, _ := seedMediaUserData(ctx, t, mediaDB)
 
 	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
-	backfillMediaUserData(ctx, db)
+	backfillMediaUserData(ctx, db, nil)
 
 	_, found, err := userDB.GetMediaUserData("NES", favPath)
 	require.NoError(t, err)
@@ -142,4 +142,100 @@ func TestBackfillMediaUserDataGuardSkipsWhenPopulated(t *testing.T) {
 	all, err := userDB.ListMediaUserData()
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "only the pre-existing row remains")
+}
+
+// Rows rescued from a media database that has already been discarded are the only
+// copy left, so the backfill has to take them in place of a read it can no longer
+// do.
+func TestBackfillMediaUserDataUsesRescuedRows(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	rescuedPath := filepath.Join("roms", "NES", "Rescued.nes")
+	rescued := []database.MediaUserData{{
+		SystemID: "NES", Path: rescuedPath, IsFavorite: true, LauncherOverride: "RetroArch",
+	}}
+
+	// An empty media database stands in for the rebuilt one: without the rescued
+	// rows there would be nothing to import.
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+	backfillMediaUserData(ctx, db, rescued)
+
+	row, found, err := userDB.GetMediaUserData("NES", rescuedPath)
+	require.NoError(t, err)
+	require.True(t, found, "rescued rows must be imported when UserDB is empty")
+	assert.True(t, row.IsFavorite)
+	assert.Equal(t, "RetroArch", row.LauncherOverride)
+}
+
+// A media database written by a newer build may not answer these queries at all.
+// Nothing comes back and startup carries on: the rows were only ever a bonus.
+func TestRescueMediaUserDataOnUnreadableDatabase(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	require.NoError(t, mediaDB.Close())
+
+	assert.Empty(t, rescueMediaUserData(ctx, mediaDB))
+}
+
+func TestBackfillMediaUserDataSurvivesUnreadableMediaDB(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	require.NoError(t, mediaDB.Close())
+
+	backfillMediaUserData(ctx, &database.Database{MediaDB: mediaDB, UserDB: userDB}, nil)
+
+	all, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+// Nothing to read and nothing rescued means there is no work to do.
+func TestBackfillMediaUserDataWithoutMediaDB(t *testing.T) {
+	ctx := context.Background()
+
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	backfillMediaUserData(ctx, &database.Database{UserDB: userDB}, nil)
+
+	all, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+// The rescued rows are as stale as any other media.db copy, so the guard that makes
+// UserDB authoritative applies to them too.
+func TestBackfillMediaUserDataIgnoresRescuedRowsWhenPopulated(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	manualPath := filepath.Join("roms", "SNES", "Manual.sfc")
+	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
+		SystemID: "SNES", Path: manualPath, IsFavorite: true,
+	}))
+
+	rescuedPath := filepath.Join("roms", "NES", "Rescued.nes")
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+	backfillMediaUserData(ctx, db, []database.MediaUserData{{
+		SystemID: "NES", Path: rescuedPath, IsFavorite: true,
+	}})
+
+	_, found, err := userDB.GetMediaUserData("NES", rescuedPath)
+	require.NoError(t, err)
+	assert.False(t, found, "guard must skip rescued rows when UserDB already has data")
 }
