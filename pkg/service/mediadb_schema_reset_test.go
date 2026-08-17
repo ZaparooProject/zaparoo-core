@@ -92,6 +92,17 @@ func markSchemaAhead(ctx context.Context, t *testing.T, dataDir, dbFile string) 
 	}
 }
 
+// dropMediaDBTable removes a table the rescue queries, standing in for a newer
+// build having reshaped it.
+func dropMediaDBTable(ctx context.Context, t *testing.T, dataDir, table string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", filepath.Join(dataDir, config.MediaDbFile))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, conn.Close()) }()
+	_, err = conn.ExecContext(ctx, "DROP TABLE "+table)
+	require.NoError(t, err)
+}
+
 // mediaDBSchemaVersion reads the migration version straight out of the file, so
 // the assertion does not depend on the handle under test.
 func mediaDBSchemaVersion(ctx context.Context, t *testing.T, dataDir string) int64 {
@@ -115,7 +126,9 @@ func TestMakeDatabase_SchemaAheadRebuildsMediaDB(t *testing.T) {
 	db, mediaDBReset, err := makeDatabase(ctx, pl)
 	t.Cleanup(func() { closeDatabase(db) })
 	require.NoError(t, err, "a media database from a newer build must not stop startup")
-	assert.True(t, mediaDBReset, "the caller has to know the database was discarded")
+	require.NotNil(t, mediaDBReset, "the caller has to know the database was discarded")
+	assert.False(t, mediaDBReset.userDataLost,
+		"there were no favorites or overrides to lose, so the notice must not claim any")
 
 	_, err = db.MediaDB.FindSystemBySystemID(testSystemID)
 	require.Error(t, err, "the unreadable database's rows must not survive the rebuild")
@@ -138,7 +151,7 @@ func TestMakeDatabase_CompatibleMediaDBIsKept(t *testing.T) {
 	db, mediaDBReset, err := makeDatabase(ctx, pl)
 	t.Cleanup(func() { closeDatabase(db) })
 	require.NoError(t, err)
-	assert.False(t, mediaDBReset, "a readable database must not be reported as rebuilt")
+	assert.Nil(t, mediaDBReset, "a readable database must not be reported as rebuilt")
 
 	system, err := db.MediaDB.FindSystemBySystemID(testSystemID)
 	require.NoError(t, err, "a readable database must be left alone")
@@ -163,7 +176,7 @@ func TestMakeDatabase_SchemaAheadUserDBIsFatal(t *testing.T) {
 	db, mediaDBReset, err := makeDatabase(ctx, pl)
 	t.Cleanup(func() { closeDatabase(db) })
 	require.ErrorIs(t, err, database.ErrSchemaAhead)
-	assert.False(t, mediaDBReset)
+	assert.Nil(t, mediaDBReset)
 
 	// A downgrade usually leaves both databases ahead. Startup ends here either
 	// way, so the media index — expensive to rebuild, and holding scraped
@@ -176,7 +189,7 @@ func TestMakeDatabase_SchemaAheadUserDBIsFatal(t *testing.T) {
 	assert.Equal(t, "Test System", system.Name)
 }
 
-// Favourites and launcher overrides can still be sitting only in media.db when the
+// Favorites and launcher overrides can still be sitting only in media.db when the
 // rebuild happens, and a reindex cannot bring them back, so the rebuild has to hand
 // them to the backfill on its way out.
 func TestMakeDatabase_SchemaAheadPreservesMediaUserData(t *testing.T) {
@@ -194,17 +207,44 @@ func TestMakeDatabase_SchemaAheadPreservesMediaUserData(t *testing.T) {
 	db, mediaDBReset, err := makeDatabase(ctx, pl)
 	t.Cleanup(func() { closeDatabase(db) })
 	require.NoError(t, err)
-	require.True(t, mediaDBReset)
+	require.NotNil(t, mediaDBReset)
+	assert.False(t, mediaDBReset.userDataLost, "the rows were carried across, so nothing was lost")
 
 	fav, found, err := db.UserDB.GetMediaUserData("NES", favPath)
 	require.NoError(t, err)
-	require.True(t, found, "a favourite held only in the discarded database must survive")
+	require.True(t, found, "a favorite held only in the discarded database must survive")
 	assert.True(t, fav.IsFavorite)
 
 	override, found, err := db.UserDB.GetMediaUserData("NES", overridePath)
 	require.NoError(t, err)
 	require.True(t, found, "a launcher override held only in the discarded database must survive")
 	assert.Equal(t, "RetroArch", override.LauncherOverride)
+}
+
+// The rescue queries this build's tables against a file a newer build wrote, so they
+// can fail outright. Nothing later can say what was in there, so the rebuild has to
+// assume favorites and overrides were lost and pass that on to the notice.
+func TestMakeDatabase_SchemaAheadReportsUnreadableMediaUserData(t *testing.T) {
+	ctx := context.Background()
+	pl, dataDir := newMediaDBPlatform(t)
+	seedMigratedMediaDB(ctx, t, pl)
+
+	// A newer build having reshaped the tables the rescue reads is the realistic
+	// version of this; dropping one gets the same failure without a second schema.
+	dropMediaDBTable(ctx, t, dataDir, "MediaTags")
+	markSchemaAhead(ctx, t, dataDir, config.MediaDbFile)
+
+	db, mediaDBReset, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err, "an unreadable rescue must not stop startup either")
+	require.NotNil(t, mediaDBReset)
+	assert.True(t, mediaDBReset.userDataLost,
+		"a rescue that could not read the rows must be reported as a loss")
+
+	status, err := db.MediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, mediadb.IndexingStatusPending, status,
+		"the rebuild still has to happen")
 }
 
 // Start posts the notice rather than makeDatabase, because the media database is
@@ -252,7 +292,7 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	db, mediaDBReset, err := makeDatabase(ctx, mockPlatform)
 	t.Cleanup(func() { closeDatabase(db) })
 	require.NoError(t, err)
-	assert.False(t, mediaDBReset, "the database Start rebuilt must now be readable")
+	assert.Nil(t, mediaDBReset, "the database Start rebuilt must now be readable")
 
 	messages, err := db.UserDB.GetInboxMessages()
 	require.NoError(t, err)
@@ -261,25 +301,47 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 	assert.Equal(t, inbox.SeverityWarning, messages[0].Severity)
 }
 
+// A reindex restores the media list and (after a re-scrape) the artwork, so the notice
+// only has to explain that. Favorites and launcher overrides are different: nothing
+// can rebuild them, so when they did not make it across the notice has to say so.
 func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
-	ctx := context.Background()
-	pl, _ := newMediaDBPlatform(t)
+	tests := []struct {
+		name         string
+		userDataLost bool
+	}{
+		{name: "user data carried across", userDataLost: false},
+		{name: "user data lost", userDataLost: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			pl, _ := newMediaDBPlatform(t)
 
-	db, _, err := makeDatabase(ctx, pl)
-	t.Cleanup(func() { closeDatabase(db) })
-	require.NoError(t, err)
+			db, _, err := makeDatabase(ctx, pl)
+			t.Cleanup(func() { closeDatabase(db) })
+			require.NoError(t, err)
 
-	st, _ := state.NewState(pl, "test-boot-uuid")
-	t.Cleanup(st.StopService)
-	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+			st, _ := state.NewState(pl, "test-boot-uuid")
+			t.Cleanup(st.StopService)
+			st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
-	notifyMediaDBSchemaReset(st)
+			notifyMediaDBSchemaReset(st, tt.userDataLost)
 
-	messages, err := db.UserDB.GetInboxMessages()
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, inbox.CategoryMediaDBSchemaReset, messages[0].Category)
-	assert.Equal(t, inbox.SeverityWarning, messages[0].Severity)
+			messages, err := db.UserDB.GetInboxMessages()
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, inbox.CategoryMediaDBSchemaReset, messages[0].Category)
+			assert.Equal(t, inbox.SeverityWarning, messages[0].Severity)
+			assert.Contains(t, messages[0].Body, "indexed again",
+				"the notice always explains the reindex")
+			if tt.userDataLost {
+				assert.Contains(t, messages[0].Body, "Favorites")
+			} else {
+				assert.NotContains(t, messages[0].Body, "Favorites",
+					"nothing was lost, so the notice must not say anything needs setting again")
+			}
+		})
+	}
 }
 
 // The notice is an explanation, not part of the rebuild, so a failed write is
@@ -293,15 +355,15 @@ func TestNotifyMediaDBSchemaReset_InboxWriteFailureIsNotFatal(t *testing.T) {
 	t.Cleanup(st.StopService)
 	st.SetInbox(inbox.NewService(userDB, st.Notifications))
 
-	notifyMediaDBSchemaReset(st)
+	notifyMediaDBSchemaReset(st, false)
 
 	userDB.AssertExpectations(t)
 }
 
 func TestNotifyMediaDBSchemaReset_WithoutInboxIsNoOp(_ *testing.T) {
 	// Must not panic before the inbox service exists, or with no state at all.
-	notifyMediaDBSchemaReset(nil)
+	notifyMediaDBSchemaReset(nil, false)
 	st, _ := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
 	defer st.StopService()
-	notifyMediaDBSchemaReset(st)
+	notifyMediaDBSchemaReset(st, true)
 }

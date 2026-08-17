@@ -378,8 +378,8 @@ func Start(
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
-	if mediaDBReset {
-		notifyMediaDBSchemaReset(st)
+	if mediaDBReset != nil {
+		notifyMediaDBSchemaReset(st, mediaDBReset.userDataLost)
 	}
 
 	// Initialize profiles and restore the persisted active profile before

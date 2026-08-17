@@ -46,6 +46,16 @@ const zapLinkHostExpiration = 30 * 24 * time.Hour
 
 const userDBBackupMaxAge = 24 * time.Hour
 
+// mediaDBSchemaReset reports that the media database was discarded because its
+// schema was newer than this build supports.
+type mediaDBSchemaReset struct {
+	// userDataLost is set when favorites or launcher overrides that existed only in
+	// the discarded database could not be read out of it, or could not all be written
+	// to the user database. No reindex can rebuild them and nothing else holds a copy,
+	// so the user is told rather than left to notice on their own.
+	userDataLost bool
+}
+
 func setupEnvironment(pl platforms.Platform) error {
 	return setupEnvironmentFS(afero.NewOsFs(), pl)
 }
@@ -75,10 +85,12 @@ func setupEnvironmentFS(fs afero.Fs, pl platforms.Platform) error {
 	return nil
 }
 
-// makeDatabase opens both databases. The returned flag reports that the media
-// database was discarded because its schema was newer than this build supports,
-// so the caller can tell the user why a full reindex is starting.
-func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Database, bool, error) {
+// makeDatabase opens both databases. A non-nil reset reports that the media database
+// was discarded because its schema was newer than this build supports, so the caller
+// can tell the user why a full reindex is starting.
+func makeDatabase(
+	ctx context.Context, pl platforms.Platform,
+) (*database.Database, *mediaDBSchemaReset, error) {
 	db := &database.Database{
 		MediaDB: nil,
 		UserDB:  nil,
@@ -100,18 +112,18 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	// is stored on db. Assigning here ensures that handle is not leaked.
 	db.UserDB = userDB
 	if err != nil {
-		return db, false, err
+		return db, nil, err
 	}
 
 	log.Debug().Msg("opening media database")
 	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
-		return db, false, fmt.Errorf("failed to open media database: %w", err)
+		return db, nil, fmt.Errorf("failed to open media database: %w", err)
 	}
 	db.MediaDB = mediaDB
 
 	log.Debug().Msg("running media database migrations")
-	mediaDBReset := false
+	var reset *mediaDBSchemaReset
 	err = mediaDB.MigrateUp()
 	switch {
 	case errors.Is(err, database.ErrSchemaAhead):
@@ -124,19 +136,30 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		// No recovery gate is taken around the rebuild: nothing else has a handle
 		// on this database yet, so there is no background work to lock out.
 		log.Warn().Err(err).Msg("media database schema is newer than this build supports, rebuilding it")
-		// Favourites and launcher overrides written before UserDB became their
+		reset = &mediaDBSchemaReset{userDataLost: false}
+		// Favorites and launcher overrides written before UserDB became their
 		// home exist only in this file. Import them now rather than carrying them
 		// to the backfill below: once the file is gone the rescue is the only copy
 		// there is, and anything that ends startup in between would take it.
-		if rescued := rescueMediaUserData(ctx, mediaDB); len(rescued) > 0 {
-			backfillMediaUserData(ctx, db, rescued)
+		rescued, rescueErr := rescueMediaUserData(ctx, mediaDB)
+		switch {
+		case rescueErr != nil:
+			// Nothing later can say what was in there, so assume the worst.
+			log.Error().Err(rescueErr).
+				Msg("could not read media user data out of the newer media database")
+			reset.userDataLost = true
+		case len(rescued) > 0:
+			if importErr := backfillMediaUserData(ctx, db, rescued); importErr != nil {
+				log.Error().Err(importErr).
+					Msg("could not import media user data rescued from the newer media database")
+				reset.userDataLost = true
+			}
 		}
 		if resetErr := resetMediaDBForNewerSchema(mediaDB); resetErr != nil {
-			return db, false, fmt.Errorf("rebuilding media database with a newer schema: %w", resetErr)
+			return db, nil, fmt.Errorf("rebuilding media database with a newer schema: %w", resetErr)
 		}
-		mediaDBReset = true
 	case err != nil:
-		return db, false, fmt.Errorf("error migrating mediadb: %w", err)
+		return db, nil, fmt.Errorf("error migrating mediadb: %w", err)
 	}
 
 	// migrate old boltdb mappings if required
@@ -146,31 +169,33 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		log.Error().Err(err).Msg("error migrating old boltdb mappings")
 	}
 
-	// One-time import of favourites/launcher overrides that older versions wrote
+	// One-time import of favorites/launcher overrides that older versions wrote
 	// only to media.db, so they live in UserDB (the source of truth) and survive a
-	// future media.db rebuild.
-	backfillMediaUserData(ctx, db, nil)
+	// future media.db rebuild. media.db is still there to retry from next boot, so a
+	// failure here is only logged.
+	if err := backfillMediaUserData(ctx, db, nil); err != nil {
+		log.Warn().Err(err).Msg("failed to backfill media user data into the user database")
+	}
 
 	success = true
-	return db, mediaDBReset, nil
+	return db, reset, nil
 }
 
-// rescueMediaUserData reads the favourites and launcher overrides out of a media
+// rescueMediaUserData reads the favorites and launcher overrides out of a media
 // database that is about to be discarded, for the caller to hand straight to the
-// backfill. Best-effort by necessity: the file was written by a newer build, so
-// these queries may not fit its schema at all. A failure here leaves the rebuild
-// to go ahead without them, which is what would have happened regardless.
-func rescueMediaUserData(ctx context.Context, mediaDB *mediadb.MediaDB) []database.MediaUserData {
+// backfill. The file was written by a newer build, so these queries may not fit its
+// schema at all; an error means the caller is about to delete rows it could not read
+// and cannot say what they were, which is worth telling the user about.
+func rescueMediaUserData(ctx context.Context, mediaDB *mediadb.MediaDB) ([]database.MediaUserData, error) {
 	rows, err := mediaDB.GetExistingMediaUserData(ctx)
 	if err != nil {
-		log.Warn().Err(err).Msg("could not read media user data out of the newer media database")
-		return nil
+		return nil, fmt.Errorf("reading media user data from the newer media database: %w", err)
 	}
 	if len(rows) > 0 {
 		log.Info().Int("found", len(rows)).
 			Msg("preserving media user data from the discarded media database")
 	}
-	return rows
+	return rows, nil
 }
 
 // resetMediaDBForNewerSchema replaces a media database this build cannot read
@@ -194,7 +219,7 @@ func resetMediaDBForNewerSchema(mediaDB *mediadb.MediaDB) error {
 // notifyMediaDBSchemaReset tells the user why their media is being indexed
 // again. makeDatabase discards the database before the inbox service exists, so
 // the message is posted from Start once it does.
-func notifyMediaDBSchemaReset(st *state.State) {
+func notifyMediaDBSchemaReset(st *state.State, userDataLost bool) {
 	if st == nil {
 		return
 	}
@@ -203,10 +228,19 @@ func notifyMediaDBSchemaReset(st *state.State) {
 		log.Warn().Msg("inbox unavailable, cannot report media database rebuild")
 		return
 	}
+	body := "This version of Zaparoo is older than the one that last ran and could not read " +
+		"the media database it left behind. The database has been rebuilt and your media is being " +
+		"indexed again. Re-scrape your library to restore box art and metadata."
+	if userDataLost {
+		// The rescue is the only thing that could have saved these, and it did not.
+		// A reindex will not bring them back, so say so plainly.
+		// A failed read cannot tell an empty database from one full of favorites, so
+		// this hedges rather than telling someone who had none that they lost some.
+		body += " Favorites and launcher overrides set before this device last updated may " +
+			"not have been carried across, and may need to be set again."
+	}
 	if err := inboxSvc.Add("Media database was rebuilt after a version change",
-		inbox.WithBody("This version of Zaparoo is older than the one that last ran and could not read "+
-			"the media database it left behind. The database has been rebuilt and your media is being "+
-			"indexed again. Re-scrape your library to restore box art and metadata."),
+		inbox.WithBody(body),
 		inbox.WithSeverity(inbox.SeverityWarning),
 		inbox.WithCategory(inbox.CategoryMediaDBSchemaReset),
 	); err != nil {
@@ -238,57 +272,70 @@ func backfillMediaHistoryUUIDs(userDB database.UserDBI) (int64, error) {
 	return 0, nil
 }
 
-// backfillMediaUserData seeds UserDB from favourites/launcher overrides that older
+// backfillMediaUserData seeds UserDB from favorites/launcher overrides that older
 // versions stored only in media.db. It runs only while UserDB has no media user
 // data yet: once any row exists, UserDB is authoritative and media.db's copy is
-// never re-read (re-reading could resurrect a favourite the user removed if a prior
-// projection write had failed). Best-effort: failures are logged, not fatal.
+// never re-read (re-reading could resurrect a favorite the user removed if a prior
+// projection write had failed).
 //
 // rescued carries rows read out of a media database that has since been discarded
 // for having a newer schema; when it is set, it stands in for the read that can no
 // longer happen. The same UserDB-is-authoritative guard applies to it.
-func backfillMediaUserData(ctx context.Context, db *database.Database, rescued []database.MediaUserData) {
+//
+// Never fatal — startup carries on either way. An error means at least one row did
+// not make it, which matters for rescued rows because nothing else holds them.
+// Having nothing to do is not an error.
+func backfillMediaUserData(ctx context.Context, db *database.Database, rescued []database.MediaUserData) error {
 	if db == nil || db.UserDB == nil {
-		return
+		if len(rescued) > 0 {
+			return errors.New("no user database to import media user data into")
+		}
+		return nil
 	}
 
 	existing, err := db.UserDB.ListMediaUserData()
 	if err != nil {
-		log.Warn().Err(err).Msg("skipping media user data backfill: failed to read user database")
-		return
+		return fmt.Errorf("reading media user data from user database: %w", err)
 	}
 	if len(existing) > 0 {
-		return
+		return nil
 	}
 
 	rows := rescued
 	if len(rows) == 0 {
 		if db.MediaDB == nil {
-			return
+			return nil
 		}
 		rows, err = db.MediaDB.GetExistingMediaUserData(ctx)
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to read existing media user data for backfill")
-			return
+			return fmt.Errorf("reading media user data from media database: %w", err)
 		}
 	}
 	if len(rows) == 0 {
-		return
+		return nil
 	}
 
 	migrated := 0
+	var firstErr error
 	for i := range rows {
 		row := rows[i]
 		if upErr := db.UserDB.UpsertMediaUserData(&row); upErr != nil {
 			log.Warn().Err(upErr).
 				Str("system", row.SystemID).Str("path", row.Path).
 				Msg("failed to backfill media user data row")
+			if firstErr == nil {
+				firstErr = upErr
+			}
 			continue
 		}
 		migrated++
 	}
 	log.Info().Int("migrated", migrated).Int("found", len(rows)).
 		Msg("backfilled media user data into user database")
+	if firstErr != nil {
+		return fmt.Errorf("imported %d of %d media user data rows: %w", migrated, len(rows), firstErr)
+	}
+	return nil
 }
 
 func openAndRecoverUserDB(ctx context.Context, pl platforms.Platform) (*userdb.UserDB, error) {
