@@ -361,7 +361,7 @@ func Start(
 
 	log.Info().Msg("opening databases")
 	databaseStarted := time.Now()
-	db, err := makeDatabase(st.GetContext(), pl)
+	db, mediaDBReset, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
@@ -377,6 +377,10 @@ func Start(
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+
+	if mediaDBReset {
+		notifyMediaDBSchemaReset(st)
+	}
 
 	// Initialize profiles and restore the persisted active profile before
 	// the limits manager starts, so limit checks see the right profile.

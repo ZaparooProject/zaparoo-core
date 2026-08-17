@@ -23,6 +23,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -35,6 +36,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -72,7 +75,10 @@ func setupEnvironmentFS(fs afero.Fs, pl platforms.Platform) error {
 	return nil
 }
 
-func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Database, error) {
+// makeDatabase opens both databases. The returned flag reports that the media
+// database was discarded because its schema was newer than this build supports,
+// so the caller can tell the user why a full reindex is starting.
+func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Database, bool, error) {
 	db := &database.Database{
 		MediaDB: nil,
 		UserDB:  nil,
@@ -87,14 +93,30 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	log.Debug().Msg("opening media database")
 	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
-		return db, fmt.Errorf("failed to open media database: %w", err)
+		return db, false, fmt.Errorf("failed to open media database: %w", err)
 	}
 	db.MediaDB = mediaDB
 
 	log.Debug().Msg("running media database migrations")
+	mediaDBReset := false
 	err = mediaDB.MigrateUp()
-	if err != nil {
-		return db, fmt.Errorf("error migrating mediadb: %w", err)
+	switch {
+	case errors.Is(err, database.ErrSchemaAhead):
+		// A newer build migrated this file and the device has since gone back to
+		// an older one. Everything in the media database can be rebuilt by a
+		// reindex, so discarding it is better than refusing to start: a device
+		// that will not boot is a far worse outcome than a rebuild. The user
+		// database holds data nothing can reconstruct, so it stays fatal.
+		//
+		// No recovery gate is taken around the rebuild: nothing else has a handle
+		// on this database yet, so there is no background work to lock out.
+		log.Warn().Err(err).Msg("media database schema is newer than this build supports, rebuilding it")
+		if resetErr := resetMediaDBForNewerSchema(mediaDB); resetErr != nil {
+			return db, false, fmt.Errorf("rebuilding media database with a newer schema: %w", resetErr)
+		}
+		mediaDBReset = true
+	case err != nil:
+		return db, false, fmt.Errorf("error migrating mediadb: %w", err)
 	}
 
 	log.Debug().Msg("opening user database")
@@ -104,7 +126,7 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	// is stored on db. Assigning here ensures that handle is not leaked.
 	db.UserDB = userDB
 	if err != nil {
-		return db, err
+		return db, false, err
 	}
 
 	// migrate old boltdb mappings if required
@@ -120,7 +142,48 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	backfillMediaUserData(ctx, db)
 
 	success = true
-	return db, nil
+	return db, mediaDBReset, nil
+}
+
+// resetMediaDBForNewerSchema replaces a media database this build cannot read
+// with an empty one at this build's schema, left marked pending so the startup
+// resume check reindexes it. No forensic copy is kept: the cause is known, the
+// contents are reproducible, and the platforms most likely to hit this are the
+// ones with the least free space.
+func resetMediaDBForNewerSchema(mediaDB *mediadb.MediaDB) error {
+	if err := mediaDB.Recreate(false); err != nil {
+		return fmt.Errorf("recreating media database: %w", err)
+	}
+	// Recreate's reopen allocates the schema, but the extra work MigrateUp does
+	// on top of that — seeding planner statistics so the reindex about to start
+	// has sane query plans — only happens on this path.
+	if err := mediaDB.MigrateUp(); err != nil {
+		return fmt.Errorf("migrating recreated media database: %w", err)
+	}
+	return nil
+}
+
+// notifyMediaDBSchemaReset tells the user why their media is being indexed
+// again. makeDatabase discards the database before the inbox service exists, so
+// the message is posted from Start once it does.
+func notifyMediaDBSchemaReset(st *state.State) {
+	if st == nil {
+		return
+	}
+	inboxSvc := st.Inbox()
+	if inboxSvc == nil {
+		log.Warn().Msg("inbox unavailable, cannot report media database rebuild")
+		return
+	}
+	if err := inboxSvc.Add("Media database was rebuilt after a version change",
+		inbox.WithBody("This version of Zaparoo is older than the one that last ran and could not read "+
+			"the media database it left behind. The database has been rebuilt and your media is being "+
+			"indexed again. Re-scrape your library to restore box art and metadata."),
+		inbox.WithSeverity(inbox.SeverityWarning),
+		inbox.WithCategory(inbox.CategoryMediaDBSchemaReset),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to add inbox message about media database rebuild")
+	}
 }
 
 // backfillMediaHistoryUUIDs assigns stable IDs to history written by older
