@@ -17,395 +17,360 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// generate-update-manifest builds a manifest.yaml for go-selfupdate's
-// HttpSource from a directory of release assets.
+// generate-update-manifest maintains the signed update manifest published to
+// the Zaparoo CDN. It is the only writer of that document: releases enter the
+// manifest through an explicit promote, leave through a withdraw, and have
+// their automatic rollout adjusted in place, with a monotonic generation
+// counter stamped on every publish.
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
-	"gopkg.in/yaml.v3"
 )
 
-//nolint:tagliatelle // yaml field names are dictated by go-selfupdate HttpManifest format
-type manifest struct {
-	Releases      []*release `yaml:"releases"`
-	LastReleaseID int64      `yaml:"last_release_id"`
-	LastAssetID   int64      `yaml:"last_asset_id"`
+const (
+	modePromote  = "promote"
+	modeRollout  = "rollout"
+	modeWithdraw = "withdraw"
+)
+
+// options holds the parsed command line.
+type options struct {
+	mode            string
+	manifestPath    string
+	checksumsPath   string
+	outDir          string
+	summaryPath     string
+	keyID           string
+	tag             string
+	channel         string
+	minUpgradeFrom  string
+	releaseNotes    string
+	githubRelease   string
+	archivesDir     string
+	generationFloor int64
+	retainStable    int
+	retainBeta      int
+	notesLimit      int
+	rollout         int
+	replace         bool
 }
 
-//nolint:tagliatelle // yaml field names are dictated by go-selfupdate HttpManifest format
-type release struct {
-	PublishedAt  time.Time `yaml:"published_at"`
-	Name         string    `yaml:"name"`
-	TagName      string    `yaml:"tag_name"`
-	URL          string    `yaml:"url"`
-	ReleaseNotes string    `yaml:"release_notes"`
-	Assets       []*asset  `yaml:"assets"`
-	ID           int64     `yaml:"id"`
-	Draft        bool      `yaml:"draft"`
-	Prerelease   bool      `yaml:"prerelease"`
+// result is what the run produced, for logging and the CI job summary.
+type result struct {
+	tag           string
+	channel       string
+	dropped       []string
+	archives      int
+	rollout       int
+	generation    int64
+	releases      int
+	checksumBytes int
 }
 
-type asset struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
-	ID   int64  `yaml:"id"`
-	Size int64  `yaml:"size"`
-}
+var (
+	errUsage = errors.New("invalid arguments")
 
-type releaseAsset struct {
-	Name string
-	URL  string
-	Size int64
-}
+	// errPromotedReleasePruned guards the case where retention drops the very
+	// release being promoted, which would otherwise report success while
+	// publishing a manifest the release is not in.
+	errPromotedReleasePruned = errors.New("retention pruned the promoted release")
+)
 
-type githubRelease struct {
-	TagName     string        `json:"tagName"`
-	URL         string        `json:"url"`
-	PublishedAt time.Time     `json:"publishedAt"`
-	Assets      []githubAsset `json:"assets"`
-}
-
-type githubAsset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Size int64  `json:"size"`
-}
-
-var errNoAssets = errors.New("no release assets found in directory")
-
-const githubReleaseDownloadBase = "https://github.com/ZaparooProject/zaparoo-core/releases/download"
-
-// loadManifest reads an existing manifest YAML file for merging.
-func loadManifest(path string) (*manifest, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // Path from CLI flag, not user input
-	if err != nil {
-		return nil, fmt.Errorf("reading existing manifest: %w", err)
+// retainedForChannel reports how many releases the promoted channel keeps, for
+// the error message when retention prunes the release being promoted.
+func retainedForChannel(opts *options) int {
+	if opts.channel == channelBeta {
+		return opts.retainBeta
 	}
-
-	var m manifest
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parsing existing manifest: %w", err)
-	}
-	normalizeManifestForMerge(&m)
-
-	return &m, nil
+	return opts.retainStable
 }
 
-func normalizeManifestForMerge(m *manifest) {
-	lastAssetID := m.LastAssetID
-	for _, release := range m.Releases {
-		for _, asset := range release.Assets {
-			if asset.ID > lastAssetID {
-				lastAssetID = asset.ID
-			}
+func parseFlags() *options {
+	opts := &options{}
+
+	flag.StringVar(&opts.mode, "mode", modePromote,
+		"operation: promote, rollout or withdraw")
+	flag.StringVar(&opts.manifestPath, "manifest", "",
+		"path to the currently published manifest (omit only to bootstrap)")
+	flag.StringVar(&opts.checksumsPath, "checksums", "",
+		"path to the currently published checksums.txt, used to carry digests forward")
+	flag.StringVar(&opts.outDir, "out-dir", "_publish",
+		"directory to write manifest.yaml and checksums.txt into")
+	flag.StringVar(&opts.summaryPath, "summary", "",
+		"optional path to write a markdown summary of the change")
+	flag.StringVar(&opts.keyID, "key-id", "k1",
+		"identifier of the signing key the manifest will be signed with")
+	flag.Int64Var(&opts.generationFloor, "generation-floor", 0,
+		"lower bound for the new generation counter; the published generation plus one is used if higher")
+	flag.IntVar(&opts.retainStable, "retain-stable", 5,
+		"number of stable releases to keep")
+	flag.IntVar(&opts.retainBeta, "retain-beta", 5,
+		"number of beta releases to keep")
+	flag.IntVar(&opts.notesLimit, "notes-limit", 2000,
+		"maximum release notes length for superseded releases, in runes")
+
+	flag.StringVar(&opts.tag, "tag", "",
+		"release tag to promote, adjust or withdraw")
+	flag.StringVar(&opts.channel, "channel", channelStable,
+		"channel to promote into: stable or beta")
+	flag.IntVar(&opts.rollout, "rollout", fullRollout,
+		"percentage of devices eligible for automatic installation, 0 to 100")
+	flag.StringVar(&opts.minUpgradeFrom, "min-upgrade-from", "",
+		"minimum version a device must already run to install this release directly")
+	flag.StringVar(&opts.releaseNotes, "release-notes", "",
+		"release notes text to include in the manifest")
+	flag.StringVar(&opts.githubRelease, "github-release", "",
+		"GitHub release metadata JSON from gh release view")
+	flag.StringVar(&opts.archivesDir, "archives-dir", "",
+		"directory containing the downloaded release archives to hash")
+	flag.BoolVar(&opts.replace, "replace", false,
+		"allow promote to overwrite a release already in the manifest")
+
+	flag.Parse()
+	return opts
+}
+
+func (o *options) validate() error {
+	switch o.mode {
+	case modePromote:
+		if o.tag == "" || o.archivesDir == "" {
+			return fmt.Errorf("%w: promote requires --tag and --archives-dir", errUsage)
 		}
-	}
-
-	for _, release := range m.Releases {
-		hasChecksums := false
-		hasSignature := false
-		for _, asset := range release.Assets {
-			if isUpdateArchive(asset.Name) && !strings.HasPrefix(asset.URL, githubReleaseDownloadBase+"/") {
-				asset.URL = githubReleaseDownloadBase + "/" + release.TagName + "/" + asset.Name
-			}
-			if asset.Name == "checksums.txt" {
-				hasChecksums = true
-			}
-			if asset.Name == "checksums.txt.sig" {
-				hasSignature = true
-			}
+		if o.channel != channelStable && o.channel != channelBeta {
+			return fmt.Errorf("%w: --channel must be %s or %s", errUsage, channelStable, channelBeta)
 		}
-		if hasChecksums && !hasSignature {
-			lastAssetID++
-			release.Assets = append(release.Assets, &asset{
-				ID:   lastAssetID,
-				Name: "checksums.txt.sig",
-				URL:  "checksums.txt.sig",
-			})
+	case modeRollout, modeWithdraw:
+		if o.tag == "" {
+			return fmt.Errorf("%w: %s requires --tag", errUsage, o.mode)
 		}
-	}
-	m.LastAssetID = lastAssetID
-}
-
-// buildManifest reads assetsDir for release files and returns a manifest.
-// When merging with an existing manifest, IDs continue from the existing values.
-func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, existing *manifest) (*manifest, error) {
-	entries, err := os.ReadDir(assetsDir)
-	if err != nil {
-		return nil, fmt.Errorf("reading assets directory: %w", err)
-	}
-
-	var releaseAssets []releaseAsset
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+		if o.manifestPath == "" {
+			return fmt.Errorf("%w: %s requires --manifest", errUsage, o.mode)
 		}
-
-		name := entry.Name()
-		if name == "manifest.yaml" {
-			continue
-		}
-
-		if !isUpdateArchive(name) && name != "checksums.txt" && name != "checksums.txt.sig" {
-			continue
-		}
-
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			return nil, fmt.Errorf("getting file info for %s: %w", name, infoErr)
-		}
-
-		assetURL := version + "/" + name
-		if name == "checksums.txt" || name == "checksums.txt.sig" {
-			assetURL = name
-		}
-
-		releaseAssets = append(releaseAssets, releaseAsset{
-			Name: name,
-			Size: info.Size(),
-			URL:  assetURL,
-		})
+	default:
+		return fmt.Errorf("%w: unknown mode %q", errUsage, o.mode)
 	}
-
-	return buildManifestFromAssets(version, "", time.Now().UTC(), releaseNotes, prerelease, releaseAssets, existing)
-}
-
-// buildManifestFromAssets returns a manifest from already-resolved asset metadata.
-// When merging with an existing manifest, IDs continue from the existing values.
-func buildManifestFromAssets(
-	version string,
-	releaseURL string,
-	publishedAt time.Time,
-	releaseNotes string,
-	prerelease bool,
-	releaseAssets []releaseAsset,
-	existing *manifest,
-) (*manifest, error) {
-	var startReleaseID int64
-	var startAssetID int64
-	if existing != nil {
-		startReleaseID = existing.LastReleaseID
-		startAssetID = existing.LastAssetID
-	}
-
-	assets := make([]*asset, 0, len(releaseAssets))
-	assetID := startAssetID
-	hasInstallableAsset := false
-	for _, releaseAsset := range releaseAssets {
-		if isUpdateArchive(releaseAsset.Name) {
-			hasInstallableAsset = true
-		}
-		assetID++
-		assets = append(assets, &asset{
-			ID:   assetID,
-			Name: releaseAsset.Name,
-			Size: releaseAsset.Size,
-			URL:  releaseAsset.URL,
-		})
-	}
-
-	if !hasInstallableAsset {
-		return nil, errNoAssets
-	}
-	if publishedAt.IsZero() {
-		publishedAt = time.Now().UTC()
-	}
-
-	releaseID := startReleaseID + 1
-	newRelease := &release{
-		ID:           releaseID,
-		Name:         version,
-		TagName:      version,
-		URL:          releaseURL,
-		ReleaseNotes: releaseNotes,
-		PublishedAt:  publishedAt.UTC(),
-		Assets:       assets,
-		Prerelease:   prerelease,
-	}
-
-	var releases []*release
-	if existing != nil {
-		releases = append(releases, existing.Releases...)
-	}
-	releases = append(releases, newRelease)
-
-	return &manifest{
-		LastReleaseID: releaseID,
-		LastAssetID:   assetID,
-		Releases:      releases,
-	}, nil
-}
-
-func loadGithubRelease(fs afero.Fs, path string) (*githubRelease, error) {
-	data, err := afero.ReadFile(fs, path)
-	if err != nil {
-		return nil, fmt.Errorf("reading GitHub release metadata: %w", err)
-	}
-
-	var release githubRelease
-	if err := json.Unmarshal(data, &release); err != nil {
-		return nil, fmt.Errorf("parsing GitHub release metadata: %w", err)
-	}
-
-	return &release, nil
-}
-
-func validateGithubReleaseMetadata(release *githubRelease, version string) error {
-	if release.TagName == "" {
-		return errors.New("GitHub release metadata is missing tagName")
-	}
-	if release.TagName != version {
-		return fmt.Errorf("GitHub release metadata tag %q does not match version %q", release.TagName, version)
-	}
-	if release.URL == "" {
-		return fmt.Errorf("GitHub release metadata for %s is missing url", release.TagName)
-	}
-	if release.PublishedAt.IsZero() {
-		return fmt.Errorf("GitHub release metadata for %s is missing publishedAt", release.TagName)
-	}
-
 	return nil
 }
 
-func isUpdateArchive(name string) bool {
-	return strings.HasPrefix(name, "zaparoo-") &&
-		(strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip"))
-}
-
-func assetsFromGithubRelease(fs afero.Fs, release *githubRelease, metadataDir string) ([]releaseAsset, error) {
-	assets := make([]releaseAsset, 0, len(release.Assets)+2)
-	for _, githubAsset := range release.Assets {
-		if !isUpdateArchive(githubAsset.Name) {
-			continue
-		}
-		if githubAsset.URL == "" {
-			return nil, fmt.Errorf("GitHub asset %s has no download URL", githubAsset.Name)
-		}
-		assets = append(assets, releaseAsset(githubAsset))
+// loadCurrent reads the published manifest, or returns an empty one when
+// bootstrapping. The second return value is the generation it arrived with,
+// captured before any mutation so the new generation can be validated against
+// what is actually live on the CDN.
+func loadCurrent(fs afero.Fs, path string) (current *manifest, publishedGen int64, err error) {
+	if path == "" {
+		return &manifest{}, 0, nil
 	}
 
-	metadataFiles := []string{"checksums.txt", "checksums.txt.sig"}
-	for _, name := range metadataFiles {
-		info, err := fs.Stat(filepath.Join(metadataDir, name))
-		if err != nil {
-			return nil, fmt.Errorf("reading metadata asset %s: %w", name, err)
-		}
-		assets = append(assets, releaseAsset{
-			Name: name,
-			URL:  name,
-			Size: info.Size(),
-		})
-	}
-
-	return assets, nil
-}
-
-// writeManifest marshals the manifest to YAML and writes it to outputPath.
-func writeManifest(m *manifest, outputPath string) error {
-	data, err := yaml.Marshal(m)
+	current, err = loadManifest(fs, path)
 	if err != nil {
-		return fmt.Errorf("marshalling manifest: %w", err)
+		return nil, 0, err
+	}
+	return current, current.Generation, nil
+}
+
+func loadPublishedChecksums(fs afero.Fs, path string) ([]checksumEntry, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := afero.ReadFile(fs, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading published checksums: %w", err)
+	}
+	entries, err := parseChecksums(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing published checksums: %w", err)
+	}
+	return entries, nil
+}
+
+// applyPromote gathers the local archives, cross-checks them against the
+// GitHub release, and adds the release to the manifest.
+func applyPromote(fs afero.Fs, m *manifest, opts *options) (*release, error) {
+	archives, err := scanArchives(fs, opts.archivesDir)
+	if err != nil {
+		return nil, err
 	}
 
-	if dir := filepath.Dir(outputPath); dir != "." {
-		if mkdirErr := os.MkdirAll(dir, 0o750); mkdirErr != nil {
-			return fmt.Errorf("creating output directory: %w", mkdirErr)
+	publishedAt := time.Now().UTC()
+	releaseURL := ""
+	if opts.githubRelease != "" {
+		ghRelease, loadErr := loadGithubRelease(fs, opts.githubRelease)
+		if loadErr != nil {
+			return nil, loadErr
 		}
+		if validateErr := validateGithubReleaseMetadata(ghRelease, opts.tag, opts.channel); validateErr != nil {
+			return nil, validateErr
+		}
+		if checkErr := crossCheckGithubDigests(ghRelease, archives); checkErr != nil {
+			return nil, checkErr
+		}
+		publishedAt = ghRelease.PublishedAt.UTC()
+		releaseURL = ghRelease.URL
 	}
 
-	if writeErr := os.WriteFile(outputPath, data, 0o600); writeErr != nil {
-		return fmt.Errorf("writing manifest: %w", writeErr)
+	return promote(m, &promoteOptions{
+		Tag:            opts.tag,
+		Channel:        opts.channel,
+		Rollout:        opts.rollout,
+		MinUpgradeFrom: opts.minUpgradeFrom,
+		ReleaseNotes:   opts.releaseNotes,
+		ReleaseURL:     releaseURL,
+		PublishedAt:    publishedAt,
+		Archives:       archives,
+		Replace:        opts.replace,
+	})
+}
+
+func run(fs afero.Fs, opts *options, now time.Time) (*result, error) {
+	if err := opts.validate(); err != nil {
+		return nil, err
 	}
 
+	m, publishedGen, err := loadCurrent(fs, opts.manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	published, err := loadPublishedChecksums(fs, opts.checksumsPath)
+	if err != nil {
+		return nil, err
+	}
+
+	res := &result{}
+	switch opts.mode {
+	case modePromote:
+		rel, promoteErr := applyPromote(fs, m, opts)
+		if promoteErr != nil {
+			return nil, promoteErr
+		}
+		res.tag, res.channel, res.rollout = rel.TagName, rel.Channel, rel.Rollout
+		res.archives = len(archiveAssets(rel))
+	case modeRollout:
+		rel, rolloutErr := setRollout(m, opts.tag, opts.rollout)
+		if rolloutErr != nil {
+			return nil, rolloutErr
+		}
+		res.tag, res.channel, res.rollout = rel.TagName, rel.Channel, rel.Rollout
+	case modeWithdraw:
+		rel, withdrawErr := withdraw(m, opts.tag)
+		if withdrawErr != nil {
+			return nil, withdrawErr
+		}
+		res.tag, res.channel = rel.TagName, rel.Channel
+	}
+
+	backfillDigests(m, published)
+	res.dropped = applyRetention(m, opts.retainStable, opts.retainBeta, opts.notesLimit)
+	if opts.mode == modePromote && findRelease(m, opts.tag) == nil {
+		return nil, fmt.Errorf("%w: %s is older than the %d releases already retained in %s",
+			errPromotedReleasePruned, opts.tag, retainedForChannel(opts), opts.channel)
+	}
+	if err := requireDigests(m); err != nil {
+		return nil, err
+	}
+
+	checksums := renderChecksums(checksumsFromManifest(m))
+	setMetadataAssetSizes(m, int64(len(checksums)))
+
+	generation := publishedGen + 1
+	if opts.generationFloor > generation {
+		generation = opts.generationFloor
+	}
+	if err := validateGeneration(publishedGen, generation); err != nil {
+		return nil, err
+	}
+	stampManifest(m, generation, opts.keyID, now)
+
+	if err := writeManifest(fs, m, filepath.Join(opts.outDir, manifestName)); err != nil {
+		return nil, err
+	}
+	if err := afero.WriteFile(fs, filepath.Join(opts.outDir, checksumsName), checksums, 0o600); err != nil {
+		return nil, fmt.Errorf("writing checksums: %w", err)
+	}
+
+	res.generation = m.Generation
+	res.releases = len(m.Releases)
+	res.checksumBytes = len(checksums)
+
+	return res, nil
+}
+
+func writeSummary(fs afero.Fs, path, mode string, res *result) error {
+	if path == "" {
+		return nil
+	}
+
+	var b strings.Builder
+	write := func(format string, args ...any) {
+		_, _ = fmt.Fprintf(&b, format, args...)
+	}
+
+	write("## Update manifest %s\n\n", mode)
+	write("| Field | Value |\n|---|---|\n")
+	if res.tag != "" {
+		write("| Release | `%s` |\n", res.tag)
+		write("| Channel | %s |\n", res.channel)
+	}
+	if mode == modePromote || mode == modeRollout {
+		write("| Rollout | %d%% |\n", res.rollout)
+	}
+	if res.archives > 0 {
+		write("| Archives | %d |\n", res.archives)
+	}
+	write("| Generation | %d |\n", res.generation)
+	write("| Releases in manifest | %d |\n", res.releases)
+	write("| checksums.txt size | %d bytes |\n", res.checksumBytes)
+	if len(res.dropped) > 0 {
+		sorted := make([]string, len(res.dropped))
+		copy(sorted, res.dropped)
+		sort.Strings(sorted)
+		write("\nPruned by retention: `%s`\n", strings.Join(sorted, "`, `"))
+	}
+
+	if err := afero.WriteFile(fs, path, []byte(b.String()), 0o600); err != nil {
+		return fmt.Errorf("writing summary: %w", err)
+	}
 	return nil
 }
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
-	version := flag.String("version", "", "release version tag (e.g. v2.10.0)")
-	assetsDir := flag.String("assets-dir", "", "directory containing release asset files")
-	githubReleasePath := flag.String("github-release", "", "GitHub release metadata JSON from gh release view")
-	metadataDir := flag.String("metadata-dir", "", "directory containing checksums.txt and checksums.txt.sig")
-	releaseNotes := flag.String("release-notes", "", "release notes text to include in manifest")
-	output := flag.String("output", "manifest.yaml", "output manifest file path")
-	prerelease := flag.Bool("prerelease", false, "mark release as pre-release in manifest")
-	merge := flag.String("merge", "", "path to existing manifest to merge into")
-	flag.Parse()
-
+	opts := parseFlags()
 	fs := afero.NewOsFs()
 
-	if *version == "" || (*assetsDir == "" && *githubReleasePath == "") {
-		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> " +
-			"[--github-release <path> --metadata-dir <dir>] [--output <path>] [--prerelease] [--merge <path>]")
-	}
-	if *assetsDir != "" && *githubReleasePath != "" {
-		log.Fatal().Msg("--assets-dir and --github-release are mutually exclusive")
-	}
-	if *githubReleasePath != "" && *metadataDir == "" {
-		log.Fatal().Msg("--metadata-dir is required with --github-release")
-	}
-
-	var existing *manifest
-	if *merge != "" {
-		var err error
-		existing, err = loadManifest(*merge)
-		if err != nil {
-			log.Fatal().Err(err).Msg("error loading existing manifest for merge")
-		}
-		log.Info().Int("releases", len(existing.Releases)).Msg("loaded existing manifest for merge")
-	}
-
-	var m *manifest
-	var err error
-	if *githubReleasePath != "" {
-		release, loadErr := loadGithubRelease(fs, *githubReleasePath)
-		if loadErr != nil {
-			log.Fatal().Err(loadErr).Msg("error loading GitHub release metadata")
-		}
-		if validateErr := validateGithubReleaseMetadata(release, *version); validateErr != nil {
-			log.Fatal().Err(validateErr).Msg("invalid GitHub release metadata")
-		}
-		assets, assetsErr := assetsFromGithubRelease(fs, release, *metadataDir)
-		if assetsErr != nil {
-			log.Fatal().Err(assetsErr).Msg("error loading GitHub release assets")
-		}
-		m, err = buildManifestFromAssets(
-			*version,
-			release.URL,
-			release.PublishedAt,
-			*releaseNotes,
-			*prerelease,
-			assets,
-			existing,
-		)
-	} else {
-		m, err = buildManifest(*version, *assetsDir, *releaseNotes, *prerelease, existing)
-	}
+	res, err := run(fs, opts, time.Now())
 	if err != nil {
-		log.Fatal().Err(err).Msg("error building manifest")
+		if errors.Is(err, errUsage) {
+			flag.Usage()
+		}
+		log.Fatal().Err(err).Str("mode", opts.mode).Msg("update manifest generation failed")
 	}
 
-	if err := writeManifest(m, *output); err != nil {
-		log.Fatal().Err(err).Msg("error writing manifest")
+	if err := writeSummary(fs, opts.summaryPath, opts.mode, res); err != nil {
+		log.Fatal().Err(err).Msg("writing summary failed")
 	}
 
-	log.Info().
-		Str("path", *output).
-		Int("releases", len(m.Releases)).
-		Int("new_assets", len(m.Releases[len(m.Releases)-1].Assets)).
-		Msg("manifest written")
+	event := log.Info().
+		Str("mode", opts.mode).
+		Int64("generation", res.generation).
+		Int("releases", res.releases)
+	if res.tag != "" {
+		event = event.Str("tag", res.tag).Str("channel", res.channel)
+	}
+	if len(res.dropped) > 0 {
+		event = event.Strs("pruned", res.dropped)
+	}
+	event.Msg("update manifest written")
 }

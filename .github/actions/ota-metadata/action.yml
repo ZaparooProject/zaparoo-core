@@ -1,0 +1,387 @@
+name: Update OTA metadata
+description: >
+  Read the live update metadata from the storage origin, apply one change to it,
+  sign it, publish it to the CDN and verify what actually landed.
+
+inputs:
+  mode:
+    description: Operation to perform - promote, rollout or withdraw.
+    required: true
+  tag:
+    description: Release tag to promote, adjust or withdraw.
+    default: ""
+  channel:
+    description: Channel to promote into - stable or beta.
+    default: stable
+  rollout:
+    description: Percentage of devices eligible for automatic installation.
+    default: "100"
+  min-upgrade-from:
+    description: Minimum version a device must run to install this release directly.
+    default: ""
+  release-notes-file:
+    description: Path to a file holding the release notes to embed.
+    default: ""
+  archives-dir:
+    description: Directory holding the downloaded release archives to hash.
+    default: ""
+  github-release:
+    description: Path to `gh release view --json` output to cross-check against.
+    default: ""
+  replace:
+    description: Allow promote to overwrite a release already in the manifest.
+    default: "false"
+  retain-stable:
+    description: Number of stable releases to keep in the manifest.
+    default: "5"
+  retain-beta:
+    description: Number of beta releases to keep in the manifest.
+    default: "5"
+  notes-limit:
+    description: Maximum release notes length for superseded releases, in runes.
+    default: "2000"
+  key-id:
+    description: Identifier of the signing key the manifest is signed with.
+    default: k1
+  generation-floor:
+    description: Lower bound for the new generation counter.
+    default: "0"
+  dry-run:
+    description: Generate, sign and validate, but do not publish.
+    default: "true"
+  signing-key:
+    description: PEM-encoded ed25519 private key used to sign the metadata.
+    required: true
+  storage-endpoint:
+    description: Bunny.net storage endpoint.
+    default: https://storage.bunnycdn.com
+  storage-zone:
+    description: Bunny.net storage zone name.
+    required: true
+  storage-password:
+    description: Bunny.net storage zone password.
+    required: true
+  bunny-api-key:
+    description: Bunny.net account API key, used to purge the pull zone.
+    required: true
+  pull-zone-id:
+    description: Bunny.net pull zone to purge after upload.
+    required: true
+  cdn-path:
+    description: Path within the storage zone that the metadata lives at.
+    default: ZaparooProject/zaparoo-core
+  public-base-url:
+    description: Public URL the metadata is served from, used for verification.
+    default: https://updates.zaparoo.org/ZaparooProject/zaparoo-core
+
+runs:
+  using: composite
+  steps:
+    - name: Build the verification key
+      shell: bash
+      run: |
+        set -euo pipefail
+        raw_pub=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
+        {
+          echo "-----BEGIN PUBLIC KEY-----"
+          (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$raw_pub" | base64 -d) | base64 | fold -w 64
+          echo "-----END PUBLIC KEY-----"
+        } > "$RUNNER_TEMP/ota-verify.pem"
+
+    # Read from the storage origin rather than the CDN. A stale edge response
+    # would hand us an old generation, and republishing a generation clients
+    # have already seen stalls updates for everyone holding that watermark.
+    - name: Fetch live metadata from the storage origin
+      id: live
+      shell: bash
+      env:
+        STORAGE_ENDPOINT: ${{ inputs.storage-endpoint }}
+        STORAGE_ZONE: ${{ inputs.storage-zone }}
+        STORAGE_PASSWORD: ${{ inputs.storage-password }}
+        CDN_PATH: ${{ inputs.cdn-path }}
+      run: |
+        set -euo pipefail
+        mkdir -p _live
+        origin="${STORAGE_ENDPOINT%/}/${STORAGE_ZONE}/${CDN_PATH}"
+
+        fetch() {
+          if curl -fsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \
+              -H "AccessKey: ${STORAGE_PASSWORD}" "$origin/$1" -o "_live/$1"; then
+            return 0
+          fi
+          rm -f "_live/$1"
+          return 1
+        }
+
+        for f in manifest.yaml checksums.txt checksums.txt.sig; do
+          if ! fetch "$f"; then
+            echo "::error::$f is missing from the storage origin; refusing to replace live update metadata"
+            exit 1
+          fi
+        done
+        if fetch manifest.yaml.sig; then
+          echo "manifest-signed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "manifest-signed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Verify live metadata
+      id: verify-live
+      shell: bash
+      env:
+        MANIFEST_SIGNED: ${{ steps.live.outputs.manifest-signed }}
+        GENERATION_FLOOR: ${{ inputs.generation-floor }}
+      run: |
+        set -euo pipefail
+        pem="$RUNNER_TEMP/ota-verify.pem"
+        # A dispatcher can clear the workflow input, which arrives here empty.
+        floor=${GENERATION_FLOOR:-0}
+
+        openssl pkeyutl -verify -pubin -inkey "$pem" -rawin \
+          -in _live/checksums.txt -sigfile _live/checksums.txt.sig
+
+        # Top level fields are unindented, so this cannot match a release field.
+        generation=$(grep -m1 -E '^generation: [0-9]+$' _live/manifest.yaml | awk '{ print $2 }' || true)
+        generation=${generation:-0}
+
+        # An unsigned live manifest means its generation cannot be trusted, so
+        # publishing on top of it would reset the counter to whatever the origin
+        # claims. That is only acceptable once, for the legacy manifest that
+        # predates signing, and only when an operator names the floor to resume
+        # from - otherwise a stripped signature silently rewinds every device's
+        # watermark and stalls updates for the fleet.
+        if [ "$MANIFEST_SIGNED" = "true" ]; then
+          openssl pkeyutl -verify -pubin -inkey "$pem" -rawin \
+            -in _live/manifest.yaml -sigfile _live/manifest.yaml.sig
+        elif [ "$generation" -gt 0 ]; then
+          echo "::error::live manifest declares generation $generation but is not signed"
+          exit 1
+        elif [ "$floor" -gt 0 ]; then
+          echo "::warning::live manifest predates manifest signing; bootstrapping at the requested generation floor $floor"
+        else
+          echo "::error::live manifest is not signed. If this is the one-time bootstrap of the pre-signing manifest, re-run with an explicit generation floor above any generation already published. Otherwise the signature is missing and must be investigated before publishing."
+          exit 1
+        fi
+
+        echo "generation=$generation" >> "$GITHUB_OUTPUT"
+        echo "Live manifest generation: $generation (signed: $MANIFEST_SIGNED)"
+
+    - name: Generate metadata
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        TAG: ${{ inputs.tag }}
+        CHANNEL: ${{ inputs.channel }}
+        ROLLOUT: ${{ inputs.rollout }}
+        MIN_UPGRADE_FROM: ${{ inputs.min-upgrade-from }}
+        RELEASE_NOTES_FILE: ${{ inputs.release-notes-file }}
+        ARCHIVES_DIR: ${{ inputs.archives-dir }}
+        GITHUB_RELEASE: ${{ inputs.github-release }}
+        REPLACE: ${{ inputs.replace }}
+        RETAIN_STABLE: ${{ inputs.retain-stable }}
+        RETAIN_BETA: ${{ inputs.retain-beta }}
+        NOTES_LIMIT: ${{ inputs.notes-limit }}
+        KEY_ID: ${{ inputs.key-id }}
+        GENERATION_FLOOR: ${{ inputs.generation-floor }}
+      run: |
+        set -euo pipefail
+        mkdir -p _publish _work
+
+        args=(
+          --mode "$MODE"
+          --manifest _live/manifest.yaml
+          --checksums _live/checksums.txt
+          --out-dir _publish
+          --summary _work/summary.md
+          --key-id "$KEY_ID"
+          --generation-floor "${GENERATION_FLOOR:-0}"
+          --retain-stable "$RETAIN_STABLE"
+          --retain-beta "$RETAIN_BETA"
+          --notes-limit "$NOTES_LIMIT"
+          --channel "$CHANNEL"
+          --rollout "$ROLLOUT"
+        )
+        if [ -n "$TAG" ]; then
+          args+=(--tag "$TAG")
+        fi
+        if [ -n "$MIN_UPGRADE_FROM" ]; then
+          args+=(--min-upgrade-from "$MIN_UPGRADE_FROM")
+        fi
+        if [ -n "$RELEASE_NOTES_FILE" ]; then
+          args+=(--release-notes "$(cat "$RELEASE_NOTES_FILE")")
+        fi
+        if [ -n "$ARCHIVES_DIR" ]; then
+          args+=(--archives-dir "$ARCHIVES_DIR")
+        fi
+        if [ -n "$GITHUB_RELEASE" ]; then
+          args+=(--github-release "$GITHUB_RELEASE")
+        fi
+        if [ "$REPLACE" = "true" ]; then
+          args+=(--replace)
+        fi
+
+        go run ./scripts/generate-update-manifest "${args[@]}"
+        cat _work/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Sign metadata
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+      run: |
+        set -euo pipefail
+        if [ -z "$SIGNING_KEY" ]; then
+          echo "::error::the update signing key is not configured for this environment"
+          exit 1
+        fi
+
+        key="$RUNNER_TEMP/ota-signing.pem"
+        pem="$RUNNER_TEMP/ota-verify.pem"
+        # Armed before the key is written, so a failed or partial write still
+        # leaves nothing behind.
+        trap 'rm -f "$key"' EXIT
+        install -m 600 /dev/stdin "$key" <<< "$SIGNING_KEY"
+
+        for f in manifest.yaml checksums.txt; do
+          openssl pkeyutl -sign -inkey "$key" -rawin -in "_publish/$f" > "_publish/$f.sig"
+        done
+        rm -f "$key"
+
+        for f in manifest.yaml checksums.txt; do
+          openssl pkeyutl -verify -pubin -inkey "$pem" -rawin \
+            -in "_publish/$f" -sigfile "_publish/$f.sig"
+          size=$(stat -c '%s' "_publish/$f.sig")
+          if [ "$size" -ne 64 ]; then
+            echo "::error::$f.sig is $size bytes, expected a 64 byte ed25519 signature"
+            exit 1
+          fi
+        done
+
+    - name: Validate publish directory
+      shell: bash
+      env:
+        LIVE_GENERATION: ${{ steps.verify-live.outputs.generation }}
+      run: |
+        set -euo pipefail
+
+        files=$(find _publish -maxdepth 1 -type f -printf '%f\n' | sort | paste -sd ',' -)
+        expected="checksums.txt,checksums.txt.sig,manifest.yaml,manifest.yaml.sig"
+        if [ "$files" != "$expected" ]; then
+          echo "::error::unexpected files in _publish: $files"
+          exit 1
+        fi
+
+        if grep -q 'updates.zaparoo.org.*/zaparoo-' _publish/manifest.yaml; then
+          echo "::error::manifest contains CDN-hosted release archive URLs"
+          exit 1
+        fi
+        if grep -Eq '^ +url: (zaparoo-|v[^/]+/zaparoo-)' _publish/manifest.yaml; then
+          echo "::error::manifest contains relative release archive URLs"
+          exit 1
+        fi
+
+        # The generator already enforces this; re-checking here means a bug in
+        # it cannot publish a generation a client would reject as a rollback.
+        new_generation=$(grep -m1 -E '^generation: [0-9]+$' _publish/manifest.yaml | awk '{ print $2 }')
+        if [ "$new_generation" -le "$LIVE_GENERATION" ]; then
+          echo "::error::generation $new_generation does not advance past the live $LIVE_GENERATION"
+          exit 1
+        fi
+        echo "Publishing generation $new_generation"
+
+    - name: Upload metadata for review
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ota-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          _publish/
+          _live/
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: Dry run stops here
+      if: ${{ inputs.dry-run == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo
+          echo "**Dry run** - nothing was published. The signed metadata is attached as an artifact."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Publish to Bunny.net storage
+      if: ${{ inputs.dry-run != 'true' }}
+      uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
+      with:
+        storage-zone-password: ${{ inputs.storage-password }}
+        storage-endpoint: ${{ inputs.storage-endpoint }}
+        storage-zone-name: ${{ inputs.storage-zone }}
+        directory-to-upload: "_publish"
+        target-directory: ${{ inputs.cdn-path }}
+        concurrency: "10"
+        access-key: ${{ inputs.bunny-api-key }}
+        pull-zone-id: ${{ inputs.pull-zone-id }}
+        enable-delete-action: false
+        enable-purge-pull-zone: true
+        replication-timeout: "15000"
+
+    # Devices read the CDN, not the origin, so the run is not finished until
+    # the edge serves exactly the bytes we signed.
+    - name: Verify published metadata
+      if: ${{ inputs.dry-run != 'true' }}
+      shell: bash
+      env:
+        PUBLIC_BASE_URL: ${{ inputs.public-base-url }}
+      run: |
+        set -euo pipefail
+        pem="$RUNNER_TEMP/ota-verify.pem"
+        base="${PUBLIC_BASE_URL%/}"
+        names="manifest.yaml manifest.yaml.sig checksums.txt checksums.txt.sig"
+
+        matched=false
+        for attempt in 1 2 3 4 5 6; do
+          rm -rf _verify
+          mkdir -p _verify
+
+          fetched=true
+          for f in $names; do
+            if ! curl -fsS --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 \
+                -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                "$base/$f?cb=${GITHUB_RUN_ID}-${attempt}" -o "_verify/$f"; then
+              fetched=false
+              break
+            fi
+          done
+
+          if [ "$fetched" = true ]; then
+            drifted=false
+            for f in $names; do
+              if ! cmp -s "_publish/$f" "_verify/$f"; then
+                drifted=true
+                break
+              fi
+            done
+            if [ "$drifted" = false ]; then
+              matched=true
+              break
+            fi
+          fi
+
+          echo "Attempt $attempt: the edge is still serving older metadata, retrying"
+          sleep 15
+        done
+
+        if [ "$matched" != true ]; then
+          echo "::error::published metadata does not match what was signed after the purge"
+          exit 1
+        fi
+
+        for f in manifest.yaml checksums.txt; do
+          openssl pkeyutl -verify -pubin -inkey "$pem" -rawin \
+            -in "_verify/$f" -sigfile "_verify/$f.sig"
+        done
+
+        generation=$(grep -m1 -E '^generation: [0-9]+$' _verify/manifest.yaml | awk '{ print $2 }')
+        {
+          echo
+          echo "Published and verified at \`$base\` - generation $generation."
+        } >> "$GITHUB_STEP_SUMMARY"

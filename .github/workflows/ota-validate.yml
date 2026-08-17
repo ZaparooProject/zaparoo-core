@@ -1,0 +1,87 @@
+name: OTA validate
+
+# Runs on every published release, holds no secrets and publishes nothing. It
+# answers one question: if someone dispatched OTA promote for this tag right
+# now, would it succeed? Catching a missing platform archive here beats
+# discovering it while a promotion is half done.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    # Stable releases and non-nightly pre-releases are the ones that can be promoted.
+    if: ${{ !github.event.release.prerelease || !contains(github.event.release.tag_name, 'nightly') }}
+    name: Check ${{ github.event.release.tag_name }} is promotable
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/generate-update-manifest/
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p _release _archives
+          gh release view "$TAG" \
+            --json assets,tagName,url,publishedAt,isDraft,isPrerelease \
+            > _release/release.json
+          gh release download "$TAG" --dir _archives \
+            --pattern 'zaparoo-*.tar.gz' --pattern 'zaparoo-*.zip'
+
+      # A bootstrap promote into a throwaway directory runs exactly the checks
+      # the real promotion runs: every archive is hashed locally and
+      # cross-checked against GitHub, the asset matrix is compared against the
+      # build workflow's target list, and the draft and prerelease flags must
+      # agree with the channel.
+      - name: Validate the release against the promote rules
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          channel=stable
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            channel=beta
+          fi
+
+          go run ./scripts/generate-update-manifest \
+            --mode promote \
+            --tag "$TAG" \
+            --channel "$channel" \
+            --archives-dir _archives \
+            --github-release _release/release.json \
+            --out-dir _validate
+
+          archives=$(find _archives -maxdepth 1 -type f -name 'zaparoo-*' | wc -l)
+          {
+            echo "## Ready to promote"
+            echo
+            echo "\`$TAG\` passes every check the OTA promote workflow applies."
+            echo "It is **not** published yet - run the **OTA promote** workflow to publish it."
+            echo
+            echo "| Input | Value |"
+            echo "|---|---|"
+            echo "| tag | \`$TAG\` |"
+            echo "| channel | $channel |"
+            echo "| archives verified | $archives |"
+          } >> "$GITHUB_STEP_SUMMARY"

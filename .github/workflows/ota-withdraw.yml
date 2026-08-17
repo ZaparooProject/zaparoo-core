@@ -1,0 +1,90 @@
+name: OTA withdraw
+
+# The hard kill switch. Removes a release from the manifest and prunes its
+# digests from checksums.txt, so it stops being an installable target for both
+# automatic and manual updates. The GitHub release itself is untouched.
+#
+# Withdrawing does not roll devices back - anything already updated stays on
+# that version. Follow a withdrawal by promoting a fix at rollout 100 with no
+# min_upgrade_from, so every device is offered it, including the ones sitting
+# on the withdrawn version.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to withdraw, for example v2.16.1
+        required: true
+        type: string
+      reason:
+        description: Why the release is being withdrawn
+        required: true
+        type: string
+      dry_run:
+        description: Generate and sign, but do not publish
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ota-metadata
+  cancel-in-progress: false
+
+jobs:
+  withdraw:
+    name: Withdraw ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    environment: ota-publish
+    timeout-minutes: 20
+    steps:
+      - name: Record the request
+        env:
+          TAG: ${{ inputs.tag }}
+          REASON: ${{ inputs.reason }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Withdrawal request"
+            echo
+            echo "| Input | Value |"
+            echo "|---|---|"
+            echo "| tag | \`$TAG\` |"
+            echo "| dry run | $DRY_RUN |"
+            echo "| requested by | @${GITHUB_ACTOR} |"
+            echo
+            echo "> $REASON"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/ota-metadata/
+            scripts/generate-update-manifest/
+            pkg/service/updater/update_signing.pub
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Publish the update metadata
+        uses: ./.github/actions/ota-metadata
+        with:
+          mode: withdraw
+          tag: ${{ inputs.tag }}
+          dry-run: ${{ inputs.dry_run }}
+          signing-key: ${{ secrets.UPDATE_SIGNING_KEY }}
+          storage-zone: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          storage-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
+          bunny-api-key: ${{ secrets.BUNNY_API_KEY }}
+          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
