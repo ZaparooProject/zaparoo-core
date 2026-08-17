@@ -145,6 +145,11 @@ func loadCachedManifest(dir string) []byte {
 		log.Debug().Err(err).Msg("could not read cached update manifest")
 		return nil
 	}
+	// Re-checked against what was actually read: the file can grow between the
+	// stat and the read, and the cap has to hold for the bytes in hand.
+	if int64(len(data)) > maxCachedManifestLen {
+		return nil
+	}
 	return data
 }
 
