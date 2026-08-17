@@ -20,6 +20,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -176,11 +177,12 @@ func TestRun_Verify(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	m := newTestManifest(t, []string{"v2.16.0"}, []string{channelStable})
 	m.Generation = 412
-	writeManifestFor(t, fs, m, "published/manifest.yaml")
+	manifestPath := filepath.Join("published", "manifest.yaml")
+	writeManifestFor(t, fs, m, manifestPath)
 
 	res, err := run(fs, &options{
 		mode:         modeVerify,
-		manifestPath: "published/manifest.yaml",
+		manifestPath: manifestPath,
 	}, testNow)
 	require.NoError(t, err)
 	assert.Equal(t, int64(412), res.generation)
