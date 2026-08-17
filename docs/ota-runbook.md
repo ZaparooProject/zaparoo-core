@@ -114,20 +114,42 @@ Every path to the signing key therefore goes through a human. What stops that
 being circumvented by editing a workflow is CODEOWNERS:
 `.github/workflows/ota-*.yml`, `.github/actions/ota-metadata/` and
 `scripts/generate-update-manifest/` are owned by `@ZaparooProject/admins`.
-Changing any of them needs the same review as changing the signing key.
+Changing any of them needs the same review as changing the signing key. So is
+`pkg/service/updater/otameta/keys/`, because adding a file there makes every
+device trust manifests signed with that key.
+
+### CDN edge rule
+
+Release archives are served from GitHub, not from Bunny, so the pull zone has
+an edge rule that redirects requests on to GitHub releases. The four metadata
+files are the exception and must be served from the storage zone:
+`manifest.yaml`, `manifest.yaml.sig`, `checksums.txt` and `checksums.txt.sig`.
+
+If a metadata file is not exempted from that rule it still uploads to storage
+perfectly well, and then the public URL answers with a 302 to a GitHub release
+asset that does not exist. The publish succeeds and step 8 below fails,
+reporting that the edge is serving older metadata — which is misleading, since
+what actually came back was a redirect page rather than stale bytes. Anything
+added to the publish set needs the edge rule updated first.
 
 ### Key rotation
 
-The public key is embedded in the client at
-`pkg/service/updater/update_signing.pub` and the manifest names the key it was
-signed with in `key_id`. An unknown `key_id` is a hard reject — clients do not
-try every key, because that would defeat revocation.
+Public keys are embedded in the client from
+`pkg/service/updater/otameta/keys/`, one bare base64 key per file, named for its
+key id — `k1.pub` is key id `k1`. The manifest names the key it was signed with
+in `key_id`, and an unknown `key_id` is a hard reject: clients do not try every
+key, because that would defeat revocation.
 
-To rotate: ship a release that embeds both the old and new keys, wait for it to
-reach the fleet, then change the `key-id` input default in
+Publishing builds its verification key from the same directory, so a `key-id`
+with no matching `.pub` file fails the run before the signing key is loaded
+rather than publishing a manifest no device trusts.
+
+To rotate: add the new `.pub` file and ship a release embedding both keys, wait
+for it to reach the fleet, then change the `key-id` input default in
 `.github/actions/ota-metadata/action.yml` and swap the signing secret. Devices
 that never took the intermediate release stop updating rather than accepting an
-unknown key, so do not rush the middle step.
+unknown key, so do not rush the middle step. Removing an old key from the
+directory is what revokes it, and should be a separate later release.
 
 ## How a publish is verified
 
@@ -140,11 +162,16 @@ Every publishing run does the same thing, in this order:
 2. Verify the live signatures before trusting anything in them.
 3. Apply exactly one change, and stamp a generation strictly greater than the
    live one.
-4. Sign both documents and verify those signatures locally.
-5. Check the publish directory holds those four files and nothing else, and
+4. Run the client's own asset selection over the generated manifest, for every
+   platform and architecture the build produces. Two archives a device could
+   both install fails anywhere in the manifest; a missing archive fails on the
+   newest release in each channel, which is the one devices are offered. This
+   runs before the signing key is loaded.
+5. Sign both documents and verify those signatures locally.
+6. Check the publish directory holds those four files and nothing else, and
    that no archive URL points anywhere but GitHub.
-6. Upload and purge the pull zone.
-7. Re-fetch all four files from the public URL, cache-busted, and require them
+7. Upload and purge the pull zone.
+8. Re-fetch all four files from the public URL, cache-busted, and require them
    to be byte-identical to what was signed. Retries for a while, because purge
    propagation is not instant. **A run that reaches this step and fails it has
    published something unverified** — investigate before dispatching anything

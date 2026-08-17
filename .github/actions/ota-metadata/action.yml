@@ -77,11 +77,27 @@ inputs:
 runs:
   using: composite
   steps:
+    # The key the manifest will be signed with is the same one clients resolve
+    # from key_id, so building the verification PEM from the embedded keyset is
+    # what stops CI signing with a key no device trusts.
     - name: Build the verification key
       shell: bash
+      env:
+        KEY_ID: ${{ inputs.key-id }}
       run: |
         set -euo pipefail
-        raw_pub=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
+        if ! [[ "$KEY_ID" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+          echo "::error::key id '$KEY_ID' is not a bare identifier"
+          exit 1
+        fi
+
+        key_file="pkg/service/updater/otameta/keys/${KEY_ID}.pub"
+        if [ ! -f "$key_file" ]; then
+          echo "::error::no embedded public key for key id '$KEY_ID'; clients would reject the manifest"
+          exit 1
+        fi
+
+        raw_pub=$(tr -d '[:space:]' < "$key_file")
         {
           echo "-----BEGIN PUBLIC KEY-----"
           (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$raw_pub" | base64 -d) | base64 | fold -w 64
@@ -222,6 +238,20 @@ runs:
 
         go run ./scripts/generate-update-manifest "${args[@]}"
         cat _work/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    # Runs the client's own asset selection over the bytes about to be signed,
+    # for every platform and architecture the build produces. A release whose
+    # archives are misnamed fails here rather than on a device, and it fails
+    # before the signing key is loaded.
+    - name: Verify selection matrix
+      shell: bash
+      run: |
+        set -euo pipefail
+        go run ./scripts/generate-update-manifest \
+          --mode verify \
+          --manifest _publish/manifest.yaml \
+          --summary _work/selection.md
+        cat _work/selection.md >> "$GITHUB_STEP_SUMMARY"
 
     - name: Sign metadata
       shell: bash

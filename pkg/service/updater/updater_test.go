@@ -25,13 +25,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"regexp"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
@@ -39,20 +40,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type stubSource struct {
-	data string
-}
-
-func (stubSource) ListReleases(context.Context, selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
-	return nil, nil
-}
-
-func (s stubSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
-	if s.data == "" {
-		return nil, selfupdate.ErrAssetNotFound
-	}
-
-	return io.NopCloser(strings.NewReader(s.data)), nil
+func linuxOptions() Options {
+	return Options{PlatformID: "linux", Channel: config.UpdateChannelStable}
 }
 
 func TestCheck_DevelopmentVersion(t *testing.T) {
@@ -64,7 +53,7 @@ func TestCheck_DevelopmentVersion(t *testing.T) {
 			config.AppVersion = v
 			t.Cleanup(func() { config.AppVersion = original })
 
-			result, err := Check(t.Context(), "linux", "stable")
+			result, err := Check(t.Context(), linuxOptions())
 			require.ErrorIs(t, err, ErrDevelopmentVersion)
 			assert.Nil(t, result)
 		})
@@ -80,7 +69,7 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 			config.AppVersion = v
 			t.Cleanup(func() { config.AppVersion = original })
 
-			version, err := Apply(t.Context(), "linux", "stable")
+			version, err := Apply(t.Context(), linuxOptions())
 			require.ErrorIs(t, err, ErrDevelopmentVersion)
 			assert.Empty(t, version)
 		})
@@ -95,7 +84,7 @@ func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
 	cfg := &config.Instance{} // AutoUpdate is nil
 
 	waitCalled := false
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
 		return true
 	}, Check, true)
@@ -110,7 +99,7 @@ func TestCheckAndNotify_DisabledConfig(t *testing.T) {
 	cfg.SetAutoUpdate(false)
 
 	waitCalled := false
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
 		return true
 	}, Check, false)
@@ -126,7 +115,7 @@ func TestCheckAndNotify_DevelopmentVersion(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, Check, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, Check, false)
 }
 
 func TestCheckAndNotify_NoInternet(t *testing.T) {
@@ -135,7 +124,7 @@ func TestCheckAndNotify_NoInternet(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		return false
 	}, Check, false)
 }
@@ -155,7 +144,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	ns := make(chan models.Notification, 10)
 	inboxSvc := inbox.NewService(mockUserDB, ns)
 
-	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return &Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0",
@@ -164,7 +153,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 		}, nil
 	}
 
-	CheckAndNotify(t.Context(), cfg, "linux", inboxSvc, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), inboxSvc, alwaysOnline, checkFn, false)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -177,8 +166,8 @@ func TestCheckAndNotify_BetaChannel(t *testing.T) {
 	cfg.SetUpdateChannel(config.UpdateChannelBeta)
 
 	var receivedChannel string
-	checkFn := func(_ context.Context, _, channel string) (*Result, error) {
-		receivedChannel = channel
+	checkFn := func(_ context.Context, opts Options) (*Result, error) {
+		receivedChannel = opts.Channel
 		return &Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -186,9 +175,11 @@ func TestCheckAndNotify_BetaChannel(t *testing.T) {
 		}, nil
 	}
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+	// The caller-supplied channel is deliberately wrong: the configured channel
+	// must win, or a stale Options would pin a device to the wrong track.
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, checkFn, false)
 
-	assert.Equal(t, "beta", receivedChannel)
+	assert.Equal(t, config.UpdateChannelBeta, receivedChannel)
 }
 
 func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
@@ -197,7 +188,7 @@ func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return &Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -206,7 +197,7 @@ func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	}
 
 	// inboxSvc is nil — would panic if code tried to post a message
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, checkFn, false)
 }
 
 func TestCheckAndNotify_CheckError(t *testing.T) {
@@ -215,12 +206,12 @@ func TestCheckAndNotify_CheckError(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return nil, errors.New("network timeout")
 	}
 
 	// inboxSvc is nil — would panic if code tried to post a message
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, checkFn, false)
 }
 
 func TestCheck_CancelledContext(t *testing.T) {
@@ -231,7 +222,7 @@ func TestCheck_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	result, err := Check(ctx, "linux", "stable")
+	result, err := Check(ctx, linuxOptions())
 	require.Error(t, err)
 	assert.Nil(t, result)
 }
@@ -244,12 +235,36 @@ func TestApply_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	version, err := Apply(ctx, "linux", "stable")
+	version, err := Apply(ctx, linuxOptions())
 	require.Error(t, err)
 	assert.Empty(t, version)
 }
 
-func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) {
+func TestAssetFilter_RejectsWiderArchOnSamePlatform(t *testing.T) {
+	t.Parallel()
+
+	// Regression guard: the filter used to be ^zaparoo-<plat>_<arch> with no
+	// trailing separator, so an arm device prefix-matched arm64 archives.
+	confusables := []struct{ platform, goarch string }{
+		{platform: "mister", goarch: "arm"},
+		{platform: "batocera", goarch: "arm"},
+		{platform: "libreelec", goarch: "arm"},
+	}
+
+	for _, c := range confusables {
+		t.Run(c.platform, func(t *testing.T) {
+			t.Parallel()
+
+			re := regexp.MustCompile(assetFilter(c.platform, c.goarch))
+			assert.True(t, re.MatchString(
+				otameta.ArchiveBaseName(c.platform, c.goarch, "2.16.1")+".zip"))
+			assert.False(t, re.MatchString(
+				otameta.ArchiveBaseName(c.platform, c.goarch+"64", "2.16.1")+".zip"))
+		})
+	}
+}
+
+func TestVerifiedSource_DownloadsNestedValidationAsset(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,10 +273,7 @@ func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	source := &validationChainHTTPSource{
-		source:    stubSource{},
-		transport: http.DefaultTransport.(*http.Transport).Clone(),
-	}
+	source := testSource()
 	release := testValidationChainRelease(server.URL)
 
 	reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
@@ -275,23 +287,30 @@ func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) 
 	assert.Equal(t, []byte("signature"), data)
 }
 
-func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
+func TestVerifiedSource_DownloadReleaseAssetBranches(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil release returns error", func(t *testing.T) {
 		t.Parallel()
 
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), nil, 1)
+		reader, err := testSource().DownloadReleaseAsset(t.Context(), nil, 1)
 		require.ErrorIs(t, err, selfupdate.ErrInvalidRelease)
 		assert.Nil(t, reader)
 	})
 
-	t.Run("delegates primary asset", func(t *testing.T) {
+	t.Run("downloads primary asset", func(t *testing.T) {
 		t.Parallel()
 
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/archive.zip", r.URL.Path)
+			_, _ = w.Write([]byte("primary"))
+		}))
+		t.Cleanup(server.Close)
+
+		release := testValidationChainRelease(server.URL)
+		release.AssetURL = server.URL + "/archive.zip"
+
+		reader, err := testSource().DownloadReleaseAsset(t.Context(), release, 1)
 		require.NoError(t, err)
 		defer func() {
 			require.NoError(t, reader.Close())
@@ -302,11 +321,19 @@ func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
 		assert.Equal(t, "primary", string(data))
 	})
 
-	t.Run("delegates first validation asset", func(t *testing.T) {
+	t.Run("downloads first validation asset", func(t *testing.T) {
 		t.Parallel()
 
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 2)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/checksums.txt", r.URL.Path)
+			_, _ = w.Write([]byte("checksums"))
+		}))
+		t.Cleanup(server.Close)
+
+		release := testValidationChainRelease(server.URL)
+		release.ValidationAssetURL = server.URL + "/checksums.txt"
+
+		reader, err := testSource().DownloadReleaseAsset(t.Context(), release, 2)
 		require.NoError(t, err)
 		defer func() {
 			require.NoError(t, reader.Close())
@@ -314,14 +341,13 @@ func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
 
 		data, err := io.ReadAll(reader)
 		require.NoError(t, err)
-		assert.Equal(t, "primary", string(data))
+		assert.Equal(t, "checksums", string(data))
 	})
 
 	t.Run("unknown asset returns error", func(t *testing.T) {
 		t.Parallel()
 
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 99)
+		reader, err := testSource().DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 99)
 		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
 		assert.Nil(t, reader)
 	})
@@ -329,10 +355,9 @@ func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
 	t.Run("empty nested validation URL returns error", func(t *testing.T) {
 		t.Parallel()
 
-		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
 		release := testValidationChainRelease("")
 		release.ValidationChain[1].ValidationAssetURL = ""
-		reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
+		reader, err := testSource().DownloadReleaseAsset(t.Context(), release, 3)
 		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
 		assert.Nil(t, reader)
 	})
@@ -343,15 +368,21 @@ func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
 		server := httptest.NewServer(http.NotFoundHandler())
 		t.Cleanup(server.Close)
 
-		source := &validationChainHTTPSource{
-			source:    stubSource{data: "primary"},
-			transport: http.DefaultTransport.(*http.Transport).Clone(),
-		}
-		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(server.URL), 3)
+		reader, err := testSource().DownloadReleaseAsset(t.Context(), testValidationChainRelease(server.URL), 3)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "status code 404")
+		assert.Contains(t, err.Error(), "status 404")
 		assert.Nil(t, reader)
 	})
+}
+
+func testSource() *verifiedSource {
+	return &verifiedSource{
+		baseURL:    updateURL,
+		transport:  http.DefaultTransport.(*http.Transport).Clone(),
+		platformID: "linux",
+		goarch:     "amd64",
+		key:        &keyRef{},
+	}
 }
 
 func testValidationChainRelease(serverURL string) *selfupdate.Release {

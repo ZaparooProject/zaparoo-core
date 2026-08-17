@@ -100,7 +100,7 @@ jobs:
           sparse-checkout: |
             .github/actions/ota-metadata/
             scripts/generate-update-manifest/
-            pkg/service/updater/update_signing.pub
+            pkg/service/updater/otameta/
             go.mod
             go.sum
           sparse-checkout-cone-mode: false

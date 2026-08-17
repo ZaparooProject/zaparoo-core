@@ -629,7 +629,9 @@ func Start(
 		5*time.Second, 300*time.Second,
 		func(ctx context.Context) {
 			updater.CheckAndNotify(
-				ctx, cfg, pl.ID(), st.Inbox(),
+				ctx, cfg,
+				updater.Options{PlatformID: pl.ID(), DataDir: helpers.DataDir(pl)},
+				st.Inbox(),
 				helpers.WaitForInternetContext, updater.Check,
 				pl.ManagedByPackageManager(),
 			)
