@@ -105,7 +105,7 @@ func (s *verifiedSource) ListReleases(
 // them, and enforces the generation watermark. The signature is always fetched
 // fresh; the manifest body is only re-downloaded when the CDN says it changed.
 func (s *verifiedSource) fetchManifest(ctx context.Context, base string) (*otameta.Manifest, error) {
-	sig, err := s.get(ctx, base+"/"+manifestSigFileName, "", ed25519.SignatureSize)
+	sig, err := s.get(ctx, base+"/"+manifestSigFileName, cacheValidators{}, ed25519.SignatureSize)
 	if err != nil {
 		return nil, fmt.Errorf("fetching manifest signature: %w", err)
 	}
@@ -119,12 +119,16 @@ func (s *verifiedSource) fetchManifest(ctx context.Context, base string) (*otame
 	st := loadState(s.stateDir)
 	cached := loadCachedManifest(s.stateDir)
 
-	etag := ""
+	// Only conditional when there are bytes on disk for a 304 to refer back to.
+	var validators cacheValidators
 	if len(cached) > 0 {
-		etag = st.ManifestETag
+		validators = cacheValidators{
+			etag:         st.ManifestETag,
+			lastModified: st.ManifestLastModified,
+		}
 	}
 
-	res, err := s.get(ctx, base+"/"+manifestFileName, etag, maxManifestBytes)
+	res, err := s.get(ctx, base+"/"+manifestFileName, validators, maxManifestBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetching manifest: %w", err)
 	}
@@ -162,11 +166,13 @@ func (s *verifiedSource) persist(st *updaterState, generation int64, res *httpRe
 	if !res.notModified {
 		if err := saveCachedManifest(s.stateDir, res.body); err != nil {
 			log.Warn().Err(err).Msg("could not cache verified update manifest")
-			// An ETag pointing at a manifest we failed to store would make the
-			// next check take a 304 with nothing to pair it with.
+			// Validators pointing at a manifest we failed to store would make
+			// the next check take a 304 with nothing to pair it with.
 			res.etag = ""
+			res.lastModified = ""
 		}
 		st.ManifestETag = res.etag
+		st.ManifestLastModified = res.lastModified
 	}
 
 	st.ManifestGeneration = generation
@@ -300,26 +306,40 @@ func (s *verifiedSource) DownloadReleaseAsset(
 	return res.Body, nil
 }
 
+// cacheValidators are the conditional-request tokens for a copy already on
+// disk. Both are sent when known: servers that offer an ETag prefer it, and the
+// ones that do not still answer If-Modified-Since.
+type cacheValidators struct {
+	etag         string
+	lastModified string
+}
+
 // httpResult is a size-capped response body, or the fact that the cached copy
 // is still current.
 type httpResult struct {
-	etag        string
-	body        []byte
-	notModified bool
+	etag         string
+	lastModified string
+	body         []byte
+	notModified  bool
 }
 
 // get reads at most limit bytes from a URL. Accept-Encoding is deliberately
 // left to the transport so responses are transparently gzipped on the wire and
 // handed back as the original bytes the signature covers.
-func (s *verifiedSource) get(ctx context.Context, target, etag string, limit int64) (*httpResult, error) {
+func (s *verifiedSource) get(
+	ctx context.Context, target string, validators cacheValidators, limit int64,
+) (*httpResult, error) {
 	client := &http.Client{Timeout: manifestFetchTimeout, Transport: s.transport}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
-	if etag != "" {
-		req.Header.Set("If-None-Match", etag)
+	if validators.etag != "" {
+		req.Header.Set("If-None-Match", validators.etag)
+	}
+	if validators.lastModified != "" {
+		req.Header.Set("If-Modified-Since", validators.lastModified)
 	}
 
 	res, err := client.Do(req)
@@ -333,7 +353,11 @@ func (s *verifiedSource) get(ctx context.Context, target, etag string, limit int
 	}()
 
 	if res.StatusCode == http.StatusNotModified {
-		return &httpResult{notModified: true, etag: etag}, nil
+		return &httpResult{
+			notModified:  true,
+			etag:         validators.etag,
+			lastModified: validators.lastModified,
+		}, nil
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("request failed with status %d", res.StatusCode)
@@ -349,7 +373,11 @@ func (s *verifiedSource) get(ctx context.Context, target, etag string, limit int
 		return nil, fmt.Errorf("response is larger than the %d byte limit", limit)
 	}
 
-	return &httpResult{body: body, etag: res.Header.Get("ETag")}, nil
+	return &httpResult{
+		body:         body,
+		etag:         res.Header.Get("ETag"),
+		lastModified: res.Header.Get("Last-Modified"),
+	}, nil
 }
 
 // resolveAssetURL turns the manifest's relative metadata URLs into absolute

@@ -44,14 +44,16 @@ func TestState_RoundTrip(t *testing.T) {
 	seen := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
 
 	require.NoError(t, saveState(dir, updaterState{
-		ManifestGeneration: 412,
-		ManifestETag:       `"abc123"`,
-		ManifestSeenAt:     seen,
+		ManifestGeneration:   412,
+		ManifestETag:         `"abc123"`,
+		ManifestLastModified: "Mon, 17 Aug 2026 01:26:54 GMT",
+		ManifestSeenAt:       seen,
 	}))
 
 	got := loadState(dir)
 	assert.Equal(t, int64(412), got.ManifestGeneration)
 	assert.Equal(t, `"abc123"`, got.ManifestETag)
+	assert.Equal(t, "Mon, 17 Aug 2026 01:26:54 GMT", got.ManifestLastModified)
 	assert.True(t, seen.Equal(got.ManifestSeenAt))
 	assert.Equal(t, currentStateVersion, got.StateVersion)
 }
