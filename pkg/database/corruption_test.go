@@ -86,6 +86,34 @@ func TestCorruptMarkerLifecycle(t *testing.T) {
 	require.NoError(t, ClearCorruptMarker(dbPath))
 }
 
+// Both databases rename files aside to this path, so the mapping has to stay
+// distinct from the marker itself — otherwise keeping a copy would clear the flag
+// saying why it was kept.
+func TestCorruptBackupPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		dbPath string
+		want   string
+	}{
+		{name: "database file", dbPath: "media.db", want: "media.db" + CorruptMarkerSuffix + ".bak"},
+		{name: "sidecar file", dbPath: "media.db-wal", want: "media.db-wal" + CorruptMarkerSuffix + ".bak"},
+		{
+			name:   "nested path",
+			dbPath: filepath.Join("data", "user.db"),
+			want:   filepath.Join("data", "user.db") + CorruptMarkerSuffix + ".bak",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, CorruptBackupPath(tt.dbPath))
+			assert.NotEqual(t, CorruptMarkerPath(tt.dbPath), CorruptBackupPath(tt.dbPath),
+				"the kept copy must not collide with the marker")
+		})
+	}
+}
+
 func TestNoteCorruption(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
