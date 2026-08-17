@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,11 +32,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	testmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,6 +164,91 @@ func TestMakeDatabase_SchemaAheadUserDBIsFatal(t *testing.T) {
 	assert.False(t, mediaDBReset)
 }
 
+// Favourites and launcher overrides can still be sitting only in media.db when the
+// rebuild happens, and a reindex cannot bring them back, so the rebuild has to hand
+// them to the backfill on its way out.
+func TestMakeDatabase_SchemaAheadPreservesMediaUserData(t *testing.T) {
+	ctx := context.Background()
+	pl, dataDir := newMediaDBPlatform(t)
+
+	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.MigrateUp())
+	favPath, overridePath := seedMediaUserData(ctx, t, mediaDB)
+	require.NoError(t, mediaDB.Close())
+
+	markSchemaAhead(ctx, t, dataDir, config.MediaDbFile)
+
+	db, mediaDBReset, err := makeDatabase(ctx, pl)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err)
+	require.True(t, mediaDBReset)
+
+	fav, found, err := db.UserDB.GetMediaUserData("NES", favPath)
+	require.NoError(t, err)
+	require.True(t, found, "a favourite held only in the discarded database must survive")
+	assert.True(t, fav.IsFavorite)
+
+	override, found, err := db.UserDB.GetMediaUserData("NES", overridePath)
+	require.NoError(t, err)
+	require.True(t, found, "a launcher override held only in the discarded database must survive")
+	assert.Equal(t, "RetroArch", override.LauncherOverride)
+}
+
+// Start posts the notice rather than makeDatabase, because the media database is
+// discarded before the inbox service exists. Covering that wiring takes Start
+// itself, run as far as the API bind — occupied here — which is past the inbox
+// message and short of the reindex the rebuilt database is now due.
+func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
+	ctx := context.Background()
+
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+
+	testRoot := t.TempDir()
+	settings := platforms.Settings{
+		ConfigDir: testRoot,
+		DataDir:   testRoot,
+		LogDir:    testRoot,
+		TempDir:   testRoot,
+	}
+
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, testRoot, "127.0.0.1", tcpAddr.Port)
+	require.NoError(t, err)
+	cfg.SetAutoUpdate(false)
+
+	mockPlatform := testmocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Settings").Return(settings)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{testRoot})
+	mockPlatform.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	mockPlatform.On("ManagedByPackageManager").Return(false)
+	mockPlatform.On("StartPre", cfg).Return(nil)
+	mockPlatform.On("Stop").Return(nil).Maybe()
+
+	seedMigratedMediaDB(ctx, t, mockPlatform)
+	markSchemaAhead(ctx, t, testRoot, config.MediaDbFile)
+
+	svcResult, startErr := Start(mockPlatform, cfg)
+	require.Nil(t, svcResult)
+	require.Error(t, startErr, "the occupied API port is what stops this run, not the rebuild")
+
+	db, mediaDBReset, err := makeDatabase(ctx, mockPlatform)
+	t.Cleanup(func() { closeDatabase(db) })
+	require.NoError(t, err)
+	assert.False(t, mediaDBReset, "the database Start rebuilt must now be readable")
+
+	messages, err := db.UserDB.GetInboxMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, inbox.CategoryMediaDBSchemaReset, messages[0].Category)
+	assert.Equal(t, inbox.SeverityWarning, messages[0].Severity)
+}
+
 func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 	ctx := context.Background()
 	pl, _ := newMediaDBPlatform(t)
@@ -179,6 +268,22 @@ func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 	require.Len(t, messages, 1)
 	assert.Equal(t, inbox.CategoryMediaDBSchemaReset, messages[0].Category)
 	assert.Equal(t, inbox.SeverityWarning, messages[0].Severity)
+}
+
+// The notice is an explanation, not part of the rebuild, so a failed write is
+// logged and startup continues.
+func TestNotifyMediaDBSchemaReset_InboxWriteFailureIsNotFatal(t *testing.T) {
+	userDB := testhelpers.NewMockUserDBI()
+	userDB.On("AddInboxMessage", mock.Anything).
+		Return((*database.InboxMessage)(nil), errors.New("user database is unwritable"))
+
+	st, _ := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
+	st.SetInbox(inbox.NewService(userDB, st.Notifications))
+
+	notifyMediaDBSchemaReset(st)
+
+	userDB.AssertExpectations(t)
 }
 
 func TestNotifyMediaDBSchemaReset_WithoutInboxIsNoOp(_ *testing.T) {
