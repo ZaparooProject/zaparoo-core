@@ -49,6 +49,7 @@ const (
 	CategoryMediaDBCorruptionRecoveryFailure = "mediadb_corruption_recovery_failure"
 	CategoryMediaDBCorruptionRecoveryLimit   = "mediadb_corruption_recovery_limit"
 	CategoryMediaDBInterruptedRebuild        = "mediadb_interrupted_rebuild"
+	CategoryMediaDBSchemaReset               = "mediadb_schema_reset"
 	CategoryMediaIndexResumeLimit            = "media_index_resume_limit"
 	CategoryUpdateAvailable                  = "update_available"
 	CategoryBackupRemoteNotAvailable         = "backup_remote_not_available"

@@ -1036,7 +1036,7 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	db.inTransaction = false
 
 	if keepBackup {
-		backup := database.CorruptMarkerPath(db.dbPath) + ".bak"
+		backup := database.CorruptBackupPath(db.dbPath)
 		_ = os.Remove(backup)
 		if err := os.Rename(db.dbPath, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn().Err(err).Msg("failed to preserve corrupt media database backup; deleting instead")

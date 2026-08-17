@@ -639,7 +639,7 @@ func preserveCorruptFile(path string) {
 		log.Warn().Err(err).Str("path", path).Msg("failed to stat corrupt user database file")
 		return
 	}
-	backup := path + database.CorruptMarkerSuffix + ".bak"
+	backup := database.CorruptBackupPath(path)
 	_ = os.Remove(backup)
 	if err := os.Rename(path, backup); err != nil {
 		log.Warn().Err(err).Str("path", path).Msg("failed to preserve corrupt user database file")

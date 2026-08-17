@@ -64,6 +64,13 @@ func CorruptMarkerPath(dbPath string) string {
 	return dbPath + CorruptMarkerSuffix
 }
 
+// CorruptBackupPath returns where a database file is renamed aside when it is
+// replaced but worth keeping. Both databases do this, so the mapping lives here
+// rather than being spelled out at each site.
+func CorruptBackupPath(dbPath string) string {
+	return CorruptMarkerPath(dbPath) + ".bak"
+}
+
 // MarkCorrupt writes the corrupt marker sidecar next to dbPath recording that
 // corruption was detected. Best-effort — failures are logged, not returned.
 func MarkCorrupt(dbPath, reason string, now time.Time) {

@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +46,7 @@ func TestBackfillMediaHistoryUUIDs(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
-// seedMediaUserData inserts one favourited and one launcher-overridden media into
+// seedMediaUserData inserts one favorited and one launcher-overridden media into
 // media.db, mimicking a database written by a version that stored this data only
 // there. Returns the two paths.
 func seedMediaUserData(ctx context.Context, t *testing.T, mediaDB *mediadb.MediaDB) (favPath, overridePath string) {
@@ -103,7 +105,7 @@ func TestBackfillMediaUserData(t *testing.T) {
 	favPath, overridePath := seedMediaUserData(ctx, t, mediaDB)
 	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
 
-	backfillMediaUserData(ctx, db)
+	require.NoError(t, backfillMediaUserData(ctx, db, nil))
 
 	fav, found, err := userDB.GetMediaUserData("NES", favPath)
 	require.NoError(t, err)
@@ -125,7 +127,7 @@ func TestBackfillMediaUserDataGuardSkipsWhenPopulated(t *testing.T) {
 	t.Cleanup(userCleanup)
 
 	// UserDB already has a row, so the one-time backfill must not run — even though
-	// media.db has favourites/overrides that aren't in UserDB.
+	// media.db has favorites/overrides that aren't in UserDB.
 	manualPath := filepath.Join("roms", "SNES", "Manual.sfc")
 	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
 		SystemID: "SNES", Path: manualPath, IsFavorite: true,
@@ -133,7 +135,7 @@ func TestBackfillMediaUserDataGuardSkipsWhenPopulated(t *testing.T) {
 	favPath, _ := seedMediaUserData(ctx, t, mediaDB)
 
 	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
-	backfillMediaUserData(ctx, db)
+	require.NoError(t, backfillMediaUserData(ctx, db, nil))
 
 	_, found, err := userDB.GetMediaUserData("NES", favPath)
 	require.NoError(t, err)
@@ -142,4 +144,145 @@ func TestBackfillMediaUserDataGuardSkipsWhenPopulated(t *testing.T) {
 	all, err := userDB.ListMediaUserData()
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "only the pre-existing row remains")
+}
+
+// Rows rescued from a media database that has already been discarded are the only
+// copy left, so the backfill has to take them in place of a read it can no longer
+// do.
+func TestBackfillMediaUserDataUsesRescuedRows(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	rescuedPath := filepath.Join("roms", "NES", "Rescued.nes")
+	rescued := []database.MediaUserData{{
+		SystemID: "NES", Path: rescuedPath, IsFavorite: true, LauncherOverride: "RetroArch",
+	}}
+
+	// An empty media database stands in for the rebuilt one: without the rescued
+	// rows there would be nothing to import.
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+	require.NoError(t, backfillMediaUserData(ctx, db, rescued))
+
+	row, found, err := userDB.GetMediaUserData("NES", rescuedPath)
+	require.NoError(t, err)
+	require.True(t, found, "rescued rows must be imported when UserDB is empty")
+	assert.True(t, row.IsFavorite)
+	assert.Equal(t, "RetroArch", row.LauncherOverride)
+}
+
+// A media database written by a newer build may not answer these queries at all. The
+// caller cannot tell that from "there was nothing to rescue" — one means the file held
+// no favorites, the other means it may have held some that are about to be deleted
+// unread — so it is reported as an error.
+func TestRescueMediaUserDataOnUnreadableDatabase(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	require.NoError(t, mediaDB.Close())
+
+	rows, err := rescueMediaUserData(ctx, mediaDB)
+	require.Error(t, err)
+	assert.Empty(t, rows)
+}
+
+// The read failure is reported, but nothing was lost: media.db is still there to retry
+// from on the next boot, and startup is not stopped either way.
+func TestBackfillMediaUserDataReportsUnreadableMediaDB(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+	require.NoError(t, mediaDB.Close())
+
+	require.Error(t, backfillMediaUserData(ctx, &database.Database{MediaDB: mediaDB, UserDB: userDB}, nil))
+
+	all, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+// A caller that is about to destroy the rows' only copy needs to know they did not all
+// land, so a failing upsert is reported rather than only logged — including when some
+// rows did make it, which is the case a count alone would hide.
+func TestBackfillMediaUserDataReportsFailedRescuedRows(t *testing.T) {
+	t.Parallel()
+	firstPath := filepath.Join("roms", "NES", "One.nes")
+	secondPath := filepath.Join("roms", "NES", "Two.nes")
+
+	// NewMockUserDBI already answers ListMediaUserData with no rows, which is the
+	// state the backfill runs in.
+	userDB := testhelpers.NewMockUserDBI()
+	userDB.On("UpsertMediaUserData", mock.MatchedBy(func(row *database.MediaUserData) bool {
+		return row.Path == firstPath
+	})).Return(nil).Once()
+	userDB.On("UpsertMediaUserData", mock.MatchedBy(func(row *database.MediaUserData) bool {
+		return row.Path == secondPath
+	})).Return(errors.New("no space left on device")).Once()
+
+	err := backfillMediaUserData(context.Background(),
+		&database.Database{UserDB: userDB},
+		[]database.MediaUserData{
+			{SystemID: "NES", Path: firstPath, IsFavorite: true},
+			{SystemID: "NES", Path: secondPath, IsFavorite: true},
+		})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "imported 1 of 2")
+
+	userDB.AssertExpectations(t)
+}
+
+// Rescued rows with nowhere to go is a failure too: reporting success would tell the
+// caller the rows are safe when they are about to be deleted.
+func TestBackfillMediaUserDataWithoutUserDBRejectsRescuedRows(t *testing.T) {
+	t.Parallel()
+	err := backfillMediaUserData(context.Background(), &database.Database{},
+		[]database.MediaUserData{{SystemID: "NES", Path: filepath.Join("roms", "NES", "One.nes")}})
+	require.Error(t, err)
+}
+
+// Nothing to read and nothing rescued means there is no work to do.
+func TestBackfillMediaUserDataWithoutMediaDB(t *testing.T) {
+	ctx := context.Background()
+
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	require.NoError(t, backfillMediaUserData(ctx, &database.Database{UserDB: userDB}, nil))
+
+	all, err := userDB.ListMediaUserData()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+// The rescued rows are as stale as any other media.db copy, so the guard that makes
+// UserDB authoritative applies to them too.
+func TestBackfillMediaUserDataIgnoresRescuedRowsWhenPopulated(t *testing.T) {
+	ctx := context.Background()
+
+	mediaDB, mediaCleanup := testhelpers.NewInMemoryMediaDB(t)
+	t.Cleanup(mediaCleanup)
+	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
+	t.Cleanup(userCleanup)
+
+	manualPath := filepath.Join("roms", "SNES", "Manual.sfc")
+	require.NoError(t, userDB.UpsertMediaUserData(&database.MediaUserData{
+		SystemID: "SNES", Path: manualPath, IsFavorite: true,
+	}))
+
+	rescuedPath := filepath.Join("roms", "NES", "Rescued.nes")
+	db := &database.Database{MediaDB: mediaDB, UserDB: userDB}
+	require.NoError(t, backfillMediaUserData(ctx, db, []database.MediaUserData{{
+		SystemID: "NES", Path: rescuedPath, IsFavorite: true,
+	}}))
+
+	_, found, err := userDB.GetMediaUserData("NES", rescuedPath)
+	require.NoError(t, err)
+	assert.False(t, found, "guard must skip rescued rows when UserDB already has data")
 }
