@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
@@ -73,6 +74,23 @@ type verifiedSource struct {
 	stateDir   string
 	platformID string
 	goarch     string
+}
+
+// cacheValidators are the conditional-request tokens for a copy already on
+// disk. Both are sent when known: servers that offer an ETag prefer it, and the
+// ones that do not still answer If-Modified-Since.
+type cacheValidators struct {
+	etag         string
+	lastModified string
+}
+
+// httpResult is a size-capped response body, or the fact that the cached copy
+// is still current.
+type httpResult struct {
+	etag         string
+	lastModified string
+	body         []byte
+	notModified  bool
 }
 
 func (s *verifiedSource) ListReleases(
@@ -306,23 +324,6 @@ func (s *verifiedSource) DownloadReleaseAsset(
 	return res.Body, nil
 }
 
-// cacheValidators are the conditional-request tokens for a copy already on
-// disk. Both are sent when known: servers that offer an ETag prefer it, and the
-// ones that do not still answer If-Modified-Since.
-type cacheValidators struct {
-	etag         string
-	lastModified string
-}
-
-// httpResult is a size-capped response body, or the fact that the cached copy
-// is still current.
-type httpResult struct {
-	etag         string
-	lastModified string
-	body         []byte
-	notModified  bool
-}
-
 // get reads at most limit bytes from a URL. Accept-Encoding is deliberately
 // left to the transport so responses are transparently gzipped on the wire and
 // handed back as the original bytes the signature covers.
@@ -400,11 +401,11 @@ func resolveAssetURL(raw, base string) string {
 // isReleaseArchive reports whether a name looks like an installable archive
 // for any platform, as opposed to a metadata file published alongside them.
 func isReleaseArchive(name string) bool {
-	if len(name) < len("zaparoo-") || name[:len("zaparoo-")] != "zaparoo-" {
+	if !strings.HasPrefix(name, "zaparoo-") {
 		return false
 	}
 	for _, ext := range []string{".tar.gz", ".zip"} {
-		if len(name) > len(ext) && name[len(name)-len(ext):] == ext {
+		if strings.HasSuffix(name, ext) {
 			return true
 		}
 	}
