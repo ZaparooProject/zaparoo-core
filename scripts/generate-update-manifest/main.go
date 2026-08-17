@@ -43,6 +43,9 @@ const (
 	modePromote  = "promote"
 	modeRollout  = "rollout"
 	modeWithdraw = "withdraw"
+	// modeVerify is read-only: it checks an already-generated manifest with the
+	// client's own selection code and writes nothing.
+	modeVerify = "verify"
 )
 
 // options holds the parsed command line.
@@ -77,6 +80,9 @@ type result struct {
 	generation    int64
 	releases      int
 	checksumBytes int
+	// selections is how many release/target pairs the verify mode resolved to
+	// exactly one archive.
+	selections int
 }
 
 var (
@@ -101,7 +107,7 @@ func parseFlags() *options {
 	opts := &options{}
 
 	flag.StringVar(&opts.mode, "mode", modePromote,
-		"operation: promote, rollout or withdraw")
+		"operation: promote, rollout, withdraw or verify")
 	flag.StringVar(&opts.manifestPath, "manifest", "",
 		"path to the currently published manifest (omit only to bootstrap)")
 	flag.StringVar(&opts.checksumsPath, "checksums", "",
@@ -157,6 +163,10 @@ func (o *options) validate() error {
 		}
 		if o.manifestPath == "" {
 			return fmt.Errorf("%w: %s requires --manifest", errUsage, o.mode)
+		}
+	case modeVerify:
+		if o.manifestPath == "" {
+			return fmt.Errorf("%w: verify requires --manifest", errUsage)
 		}
 	default:
 		return fmt.Errorf("%w: unknown mode %q", errUsage, o.mode)
@@ -236,6 +246,12 @@ func applyPromote(fs afero.Fs, m *manifest, opts *options) (*release, error) {
 func run(fs afero.Fs, opts *options, now time.Time) (*result, error) {
 	if err := opts.validate(); err != nil {
 		return nil, err
+	}
+
+	// Verify reads the published bytes and writes nothing, so it shares none of
+	// the generate path below.
+	if opts.mode == modeVerify {
+		return verifySelectionMatrix(fs, opts.manifestPath)
 	}
 
 	m, publishedGen, err := loadCurrent(fs, opts.manifestPath)
@@ -330,7 +346,11 @@ func writeSummary(fs afero.Fs, path, mode string, res *result) error {
 	}
 	write("| Generation | %d |\n", res.generation)
 	write("| Releases in manifest | %d |\n", res.releases)
-	write("| checksums.txt size | %d bytes |\n", res.checksumBytes)
+	if mode == modeVerify {
+		write("| Installable selections | %d |\n", res.selections)
+	} else {
+		write("| checksums.txt size | %d bytes |\n", res.checksumBytes)
+	}
 	if len(res.dropped) > 0 {
 		sorted := make([]string, len(res.dropped))
 		copy(sorted, res.dropped)
@@ -371,6 +391,10 @@ func main() {
 	}
 	if len(res.dropped) > 0 {
 		event = event.Strs("pruned", res.dropped)
+	}
+	if opts.mode == modeVerify {
+		event.Int("selections", res.selections).Msg("update manifest selection matrix verified")
+		return
 	}
 	event.Msg("update manifest written")
 }

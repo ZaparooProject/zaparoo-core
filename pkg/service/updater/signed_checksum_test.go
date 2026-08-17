@@ -25,10 +25,27 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testValidator builds a validator whose only known key is pub, under the id
+// the manifest is pretending to have named.
+func testValidator(keyID string, pub ed25519.PublicKey) *ed25519Validator {
+	ref := &keyRef{}
+	ref.set(keyID)
+	return &ed25519Validator{
+		key: ref,
+		lookup: func(id string) (ed25519.PublicKey, error) {
+			if id != keyID {
+				return nil, otameta.ErrUnknownKeyID
+			}
+			return pub, nil
+		},
+	}
+}
 
 func TestEd25519Validator_ValidSignature(t *testing.T) {
 	t.Parallel()
@@ -39,8 +56,7 @@ func TestEd25519Validator_ValidSignature(t *testing.T) {
 	data := []byte("checksums content")
 	sig := ed25519.Sign(priv, data)
 
-	v := &ed25519Validator{publicKey: pub}
-	require.NoError(t, v.Validate("checksums.txt", data, sig))
+	require.NoError(t, testValidator("k1", pub).Validate("checksums.txt", data, sig))
 }
 
 func TestEd25519Validator_InvalidSignature(t *testing.T) {
@@ -49,8 +65,8 @@ func TestEd25519Validator_InvalidSignature(t *testing.T) {
 	pub, _, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
 
-	v := &ed25519Validator{publicKey: pub}
-	err = v.Validate("checksums.txt", []byte("data"), []byte("bad signature that is not valid"))
+	err = testValidator("k1", pub).
+		Validate("checksums.txt", []byte("data"), []byte("bad signature that is not valid"))
 	assert.ErrorIs(t, err, errInvalidSignature)
 }
 
@@ -66,8 +82,7 @@ func TestEd25519Validator_WrongKey(t *testing.T) {
 	data := []byte("checksums content")
 	sig := ed25519.Sign(priv, data)
 
-	v := &ed25519Validator{publicKey: otherPub}
-	assert.ErrorIs(t, v.Validate("checksums.txt", data, sig), errInvalidSignature)
+	assert.ErrorIs(t, testValidator("k1", otherPub).Validate("checksums.txt", data, sig), errInvalidSignature)
 }
 
 func TestEd25519Validator_TamperedData(t *testing.T) {
@@ -79,8 +94,45 @@ func TestEd25519Validator_TamperedData(t *testing.T) {
 	data := []byte("original checksums")
 	sig := ed25519.Sign(priv, data)
 
-	v := &ed25519Validator{publicKey: pub}
-	assert.ErrorIs(t, v.Validate("checksums.txt", []byte("tampered checksums"), sig), errInvalidSignature)
+	err = testValidator("k1", pub).Validate("checksums.txt", []byte("tampered checksums"), sig)
+	assert.ErrorIs(t, err, errInvalidSignature)
+}
+
+// The checksums chain runs after the manifest, so it should only ever see a key
+// id that a verified manifest named. If it somehow runs first, refusing is the
+// only safe answer — falling back to a build-time default would validate
+// against a key the publisher may have rotated away from.
+func TestEd25519Validator_NoKeyEstablished(t *testing.T) {
+	t.Parallel()
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	data := []byte("checksums content")
+	sig := ed25519.Sign(priv, data)
+
+	v := &ed25519Validator{
+		key:    &keyRef{},
+		lookup: func(string) (ed25519.PublicKey, error) { return pub, nil },
+	}
+	assert.ErrorIs(t, v.Validate("checksums.txt", data, sig), errNoVerifiedKey)
+}
+
+// An id with no embedded key is a hard reject rather than a prompt to try the
+// other keys, which is what makes revocation mean anything.
+func TestEd25519Validator_UnknownKeyID(t *testing.T) {
+	t.Parallel()
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	data := []byte("checksums content")
+	sig := ed25519.Sign(priv, data)
+
+	v := testValidator("k1", pub)
+	v.key.set("k99")
+
+	assert.ErrorIs(t, v.Validate("checksums.txt", data, sig), otameta.ErrUnknownKeyID)
 }
 
 func TestEd25519Validator_GetValidationAssetName(t *testing.T) {
@@ -93,9 +145,7 @@ func TestEd25519Validator_GetValidationAssetName(t *testing.T) {
 func TestNewSignedChecksumValidator(t *testing.T) {
 	t.Parallel()
 
-	v, err := newSignedChecksumValidator()
-	require.NoError(t, err)
-	assert.NotNil(t, v)
+	assert.NotNil(t, newSignedChecksumValidator(&keyRef{}))
 }
 
 func TestSignedChecksumValidator_EndToEnd(t *testing.T) {
@@ -110,12 +160,8 @@ func TestSignedChecksumValidator_EndToEnd(t *testing.T) {
 	checksums := []byte(hex.EncodeToString(digest[:]) + "  test.tar.gz\n")
 	sig := ed25519.Sign(priv, checksums)
 
-	// Wire up the same PatternValidator chain that newSignedChecksumValidator
-	// creates, but with our test key.
-	v := &ed25519Validator{publicKey: pub}
-
 	// Step 1: verify checksums.txt signature.
-	require.NoError(t, v.Validate("checksums.txt", checksums, sig))
+	require.NoError(t, testValidator("k1", pub).Validate("checksums.txt", checksums, sig))
 
 	// Step 2: verify release against checksums.txt.
 	cv := &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"}

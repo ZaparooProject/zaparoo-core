@@ -28,15 +28,25 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/rs/zerolog/log"
 )
 
+// updaterOptions describes the device to the updater.
+func updaterOptions(env *requests.RequestEnv) updater.Options {
+	return updater.Options{
+		PlatformID: env.Platform.ID(),
+		Channel:    env.Config.UpdateChannel(),
+		DataDir:    helpers.DataDir(env.Platform),
+	}
+}
+
 func HandleUpdateCheck(
 	env requests.RequestEnv, //nolint:gocritic // hugeParam
-	checkFn func(ctx context.Context, platformID, channel string) (*updater.Result, error),
+	checkFn func(ctx context.Context, opts updater.Options) (*updater.Result, error),
 ) (any, error) {
-	result, err := checkFn(env.Context, env.Platform.ID(), env.Config.UpdateChannel())
+	result, err := checkFn(env.Context, updaterOptions(&env))
 	if errors.Is(err, updater.ErrDevelopmentVersion) {
 		return models.UpdateCheckResponse{
 			CurrentVersion:  config.AppVersion,
@@ -57,7 +67,7 @@ func HandleUpdateCheck(
 
 func HandleUpdateApply(
 	env requests.RequestEnv, //nolint:gocritic // hugeParam
-	applyFn func(ctx context.Context, platformID, channel string) (string, error),
+	applyFn func(ctx context.Context, opts updater.Options) (string, error),
 	restartFn func(),
 ) (any, error) {
 	// Reject updates while media indexing is in progress to avoid
@@ -72,7 +82,7 @@ func HandleUpdateApply(
 
 	previousVersion := config.AppVersion
 
-	newVersion, err := applyFn(env.Context, env.Platform.ID(), env.Config.UpdateChannel())
+	newVersion, err := applyFn(env.Context, updaterOptions(&env))
 	if errors.Is(err, updater.ErrDevelopmentVersion) {
 		return nil, models.ClientErrf("cannot apply updates on development builds")
 	}

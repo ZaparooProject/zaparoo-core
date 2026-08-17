@@ -21,34 +21,66 @@ package updater
 
 import (
 	"crypto/ed25519"
-	_ "embed"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 )
 
-// updateSigningPublicKey is the ed25519 public key used to verify the
-// signature on checksums.txt. The corresponding private key is stored as
-// a GitHub Actions secret and used to sign checksums at release time.
-// Changes to update_signing.pub require review from @ZaparooProject/admins
-// via CODEOWNERS.
-//
-//go:embed update_signing.pub
-var updateSigningPublicKey string
+var (
+	errInvalidSignature = errors.New("ed25519 signature verification failed")
 
-var errInvalidSignature = errors.New("ed25519 signature verification failed")
+	// errNoVerifiedKey means the checksums validator ran without a verified
+	// manifest having named a key first. It cannot happen in the normal flow —
+	// listing releases is what triggers a download — so it is treated as a bug
+	// and fails the update rather than falling back to a default key.
+	errNoVerifiedKey = errors.New("no signing key established from a verified manifest")
+)
+
+// keyRef carries the key id from the verified manifest to the checksums
+// validator, which go-selfupdate runs later and gives no manifest access.
+// Resolving the key here rather than at build time is what lets a rotation take
+// effect for the checksums chain at the same moment it does for the manifest.
+type keyRef struct {
+	keyID string
+	mu    syncutil.Mutex
+}
+
+func (k *keyRef) set(keyID string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.keyID = keyID
+}
+
+func (k *keyRef) get() string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.keyID
+}
+
+// keyLookup resolves a key id to a verification key.
+type keyLookup func(keyID string) (ed25519.PublicKey, error)
 
 // ed25519Validator verifies a detached ed25519 signature over the input bytes.
 type ed25519Validator struct {
-	publicKey ed25519.PublicKey
+	key    *keyRef
+	lookup keyLookup
 }
 
 func (v *ed25519Validator) Validate(_ string, input, signature []byte) error {
-	if !ed25519.Verify(v.publicKey, input, signature) {
-		return errInvalidSignature
+	keyID := v.key.get()
+	if keyID == "" {
+		return errNoVerifiedKey
+	}
+
+	pub, err := v.lookup(keyID)
+	if err != nil {
+		return fmt.Errorf("resolving signing key: %w", err)
+	}
+	if !ed25519.Verify(pub, input, signature) {
+		return fmt.Errorf("%w with key %q", errInvalidSignature, keyID)
 	}
 	return nil
 }
@@ -58,22 +90,12 @@ func (*ed25519Validator) GetValidationAssetName(releaseFilename string) string {
 }
 
 // newSignedChecksumValidator creates a PatternValidator that verifies release
-// archives against checksums.txt, and verifies checksums.txt itself against
-// an ed25519 signature in checksums.txt.sig.
-func newSignedChecksumValidator() (*selfupdate.PatternValidator, error) {
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(updateSigningPublicKey))
-	if err != nil {
-		return nil, fmt.Errorf("decoding update signing public key: %w", err)
-	}
-
-	if len(pubKeyBytes) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid public key size: got %d, want %d", len(pubKeyBytes), ed25519.PublicKeySize)
-	}
-
-	v := new(selfupdate.PatternValidator).
-		Add("checksums.txt", &ed25519Validator{publicKey: pubKeyBytes}).
+// archives against checksums.txt, and verifies checksums.txt itself against an
+// ed25519 signature in checksums.txt.sig, using whichever key the verified
+// manifest named.
+func newSignedChecksumValidator(key *keyRef) *selfupdate.PatternValidator {
+	return new(selfupdate.PatternValidator).
+		Add("checksums.txt", &ed25519Validator{key: key, lookup: otameta.PublicKey}).
 		SkipValidation("*.sig").
 		Add("*", &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"})
-
-	return v, nil
 }

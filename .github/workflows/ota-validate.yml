@@ -25,6 +25,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             scripts/generate-update-manifest/
+            pkg/service/updater/otameta/
             go.mod
             go.sum
           sparse-checkout-cone-mode: false
@@ -52,7 +53,9 @@ jobs:
       # the real promotion runs: every archive is hashed locally and
       # cross-checked against GitHub, the asset matrix is compared against the
       # build workflow's target list, and the draft and prerelease flags must
-      # agree with the channel.
+      # agree with the channel. The generated manifest is then run through the
+      # client's own asset selection, so a misnamed archive fails here rather
+      # than mid-promotion.
       - name: Validate the release against the promote rules
         env:
           TAG: ${{ github.event.release.tag_name }}
@@ -71,6 +74,10 @@ jobs:
             --archives-dir _archives \
             --github-release _release/release.json \
             --out-dir _validate
+
+          go run ./scripts/generate-update-manifest \
+            --mode verify \
+            --manifest _validate/manifest.yaml
 
           archives=$(find _archives -maxdepth 1 -type f -name 'zaparoo-*' | wc -l)
           {

@@ -78,7 +78,7 @@ func TestHandleUpdateCheck_UpdateAvailable(t *testing.T) {
 		Config:   &config.Instance{},
 	}
 
-	checkFn := func(_ context.Context, _, _ string) (*updater.Result, error) {
+	checkFn := func(_ context.Context, _ updater.Options) (*updater.Result, error) {
 		return &updater.Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0",
@@ -114,8 +114,8 @@ func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 	}
 
 	var receivedChannel string
-	checkFn := func(_ context.Context, _, channel string) (*updater.Result, error) {
-		receivedChannel = channel
+	checkFn := func(_ context.Context, opts updater.Options) (*updater.Result, error) {
+		receivedChannel = opts.Channel
 		return &updater.Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0-beta1",
@@ -140,7 +140,7 @@ func TestHandleUpdateCheck_NoUpdateAvailable(t *testing.T) {
 		Config:   &config.Instance{},
 	}
 
-	checkFn := func(_ context.Context, _, _ string) (*updater.Result, error) {
+	checkFn := func(_ context.Context, _ updater.Options) (*updater.Result, error) {
 		return &updater.Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -169,7 +169,7 @@ func TestHandleUpdateCheck_Error(t *testing.T) {
 		Config:   &config.Instance{},
 	}
 
-	checkFn := func(_ context.Context, _, _ string) (*updater.Result, error) {
+	checkFn := func(_ context.Context, _ updater.Options) (*updater.Result, error) {
 		return nil, errors.New("network timeout")
 	}
 
@@ -218,7 +218,7 @@ func TestHandleUpdateApply_Error(t *testing.T) {
 		Config:   &config.Instance{},
 	}
 
-	applyFn := func(_ context.Context, _, _ string) (string, error) {
+	applyFn := func(_ context.Context, _ updater.Options) (string, error) {
 		return "", errors.New("download failed")
 	}
 
@@ -254,7 +254,7 @@ func TestHandleUpdateApply_IndexingInProgress(t *testing.T) {
 				Database: &database.Database{MediaDB: mockMediaDB},
 			}
 
-			applyFn := func(_ context.Context, _, _ string) (string, error) {
+			applyFn := func(_ context.Context, _ updater.Options) (string, error) {
 				t.Fatal("applyFn should not be called during indexing")
 				return "", nil
 			}
@@ -285,7 +285,7 @@ func TestHandleUpdateApply_IndexingCompleted(t *testing.T) {
 		Database: &database.Database{MediaDB: mockMediaDB},
 	}
 
-	applyFn := func(_ context.Context, _, _ string) (string, error) {
+	applyFn := func(_ context.Context, _ updater.Options) (string, error) {
 		return "2.10.0", nil
 	}
 
