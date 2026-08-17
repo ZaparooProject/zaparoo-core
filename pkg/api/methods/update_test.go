@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -101,8 +102,13 @@ func TestHandleUpdateCheck_UpdateAvailable(t *testing.T) {
 func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 	t.Parallel()
 
+	// Set up by hand rather than through SetupBasicMock: the basic mock reports
+	// an empty DataDir, and an empty DataDir is what silently disables the
+	// generation watermark, so this test needs a platform that has one.
+	dataDir := t.TempDir()
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.SetupBasicMock()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir})
 
 	cfg := &config.Instance{}
 	cfg.SetUpdateChannel(config.UpdateChannelBeta)
@@ -113,9 +119,9 @@ func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 		Config:   cfg,
 	}
 
-	var receivedChannel string
+	var received updater.Options
 	checkFn := func(_ context.Context, opts updater.Options) (*updater.Result, error) {
-		receivedChannel = opts.Channel
+		received = opts
 		return &updater.Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0-beta1",
@@ -125,7 +131,10 @@ func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 
 	_, err := HandleUpdateCheck(env, checkFn)
 	require.NoError(t, err)
-	assert.Equal(t, "beta", receivedChannel)
+	assert.Equal(t, "beta", received.Channel)
+	// An empty PlatformID selects no archive at all, so it has to arrive too.
+	assert.Equal(t, "mock-platform", received.PlatformID)
+	assert.Equal(t, dataDir, received.DataDir)
 }
 
 func TestHandleUpdateCheck_NoUpdateAvailable(t *testing.T) {
