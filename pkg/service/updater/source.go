@@ -105,7 +105,7 @@ func (s *verifiedSource) ListReleases(
 // them, and enforces the generation watermark. The signature is always fetched
 // fresh; the manifest body is only re-downloaded when the CDN says it changed.
 func (s *verifiedSource) fetchManifest(ctx context.Context, base string) (*otameta.Manifest, error) {
-	sig, err := s.get(ctx, base+"/"+manifestSigFileName, "", ed25519.SignatureSize+1)
+	sig, err := s.get(ctx, base+"/"+manifestSigFileName, "", ed25519.SignatureSize)
 	if err != nil {
 		return nil, fmt.Errorf("fetching manifest signature: %w", err)
 	}
@@ -339,11 +339,13 @@ func (s *verifiedSource) get(ctx context.Context, target, etag string, limit int
 		return nil, fmt.Errorf("request failed with status %d", res.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(res.Body, limit))
+	// One byte past the limit, so a body of exactly limit bytes is accepted and
+	// anything longer is detected rather than silently truncated.
+	body, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
-	if int64(len(body)) >= limit {
+	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("response is larger than the %d byte limit", limit)
 	}
 
