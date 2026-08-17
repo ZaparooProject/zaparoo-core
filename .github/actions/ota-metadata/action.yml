@@ -372,11 +372,15 @@ runs:
           rm -rf _verify
           mkdir -p _verify
 
+          # Deliberately the plain URL a device would request, with no
+          # cache-busting: the check is that the edge serves what we signed, so
+          # bypassing the cache would verify the origin and miss the case that
+          # matters. The purge above is what makes the edge current, and a
+          # mismatch here means the purge has not landed yet.
           fetched=true
           for f in $names; do
             if ! curl -fsS --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 \
-                -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
-                "$base/$f?cb=${GITHUB_RUN_ID}-${attempt}" -o "_verify/$f"; then
+                -D "_verify/$f.headers" "$base/$f" -o "_verify/$f"; then
               fetched=false
               break
             fi
@@ -397,10 +401,19 @@ runs:
           fi
 
           echo "Attempt $attempt: the edge is still serving older metadata, retrying"
+          for f in $names; do
+            # curl appends a header block per --retry attempt, so report the last.
+            state=$(grep -i '^cdn-cache:' "_verify/$f.headers" 2>/dev/null |
+              tail -n1 | tr -d '\r' || true)
+            echo "  $f: ${state:-cdn-cache: unreported}"
+          done
           sleep 15
         done
 
         if [ "$matched" != true ]; then
+          # A HIT in the states logged above means the purge did not take; a MISS
+          # means the origin itself is serving something other than what we
+          # uploaded. The two have completely different fixes.
           echo "::error::published metadata does not match what was signed after the purge"
           exit 1
         fi
