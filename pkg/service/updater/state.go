@@ -209,7 +209,19 @@ func writeFileAtomic(dir, name string, data []byte) error {
 	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
 		return fmt.Errorf("replacing updater state file: %w", err)
 	}
-	return syncDir(dir)
+
+	// The rename has already happened, so the write succeeded whatever the
+	// directory sync does. Reporting a sync failure as a write failure would be
+	// actively harmful: callers respond by discarding what they just stored, so
+	// a filesystem that cannot flush a directory handle would permanently throw
+	// away the cache validators and the generation watermark. Not all of them
+	// can — vfat and exFAT are the ones these devices actually run on — and
+	// losing durability across a power cut is the smaller loss.
+	if err := syncDir(dir); err != nil {
+		log.Warn().Err(err).Str("file", name).
+			Msg("updater state was written but the directory could not be flushed")
+	}
+	return nil
 }
 
 func syncDir(dir string) error {
@@ -220,7 +232,8 @@ func syncDir(dir string) error {
 	syncErr := handle.Sync()
 	closeErr := handle.Close()
 
-	// Windows cannot flush a directory handle through os.File.Sync.
+	// Windows cannot flush a directory handle through os.File.Sync, so there is
+	// nothing to report there.
 	if syncErr != nil && (runtime.GOOS != "windows" || !errors.Is(syncErr, os.ErrPermission)) {
 		return fmt.Errorf("syncing updater state directory: %w", syncErr)
 	}
