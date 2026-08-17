@@ -59,7 +59,18 @@ type Result struct {
 	UpdateAvailable bool
 }
 
-func makeUpdater(opts Options) (*selfupdate.Updater, selfupdate.Repository, error) {
+// session is one update operation's updater and the transport backing it.
+type session struct {
+	updater *selfupdate.Updater
+	// close releases the transport's pooled connections. Callers must defer it:
+	// each operation builds a fresh transport, so without it the keep-alive
+	// connections and their goroutines outlive the operation until the idle
+	// timeout expires.
+	close func()
+	repo  selfupdate.Repository
+}
+
+func makeUpdater(opts Options) (*session, error) {
 	// tlsroots hands back a transport this updater owns outright, so setting the
 	// header timeout here does not affect anything else in the process.
 	transport := tlsroots.Transport(nil)
@@ -83,11 +94,15 @@ func makeUpdater(opts Options) (*selfupdate.Updater, selfupdate.Repository, erro
 		Prerelease: opts.Channel == config.UpdateChannelBeta,
 	})
 	if err != nil {
-		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating updater: %w", err)
+		transport.CloseIdleConnections()
+		return nil, fmt.Errorf("creating updater: %w", err)
 	}
 
-	repo := selfupdate.NewRepositorySlug("ZaparooProject", "zaparoo-core")
-	return updater, repo, nil
+	return &session{
+		updater: updater,
+		repo:    selfupdate.NewRepositorySlug("ZaparooProject", "zaparoo-core"),
+		close:   transport.CloseIdleConnections,
+	}, nil
 }
 
 // assetFilter is the pattern go-selfupdate matches asset names against. The
@@ -104,12 +119,13 @@ func Check(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrDevelopmentVersion
 	}
 
-	updater, repo, err := makeUpdater(opts)
+	s, err := makeUpdater(opts)
 	if err != nil {
 		return nil, err
 	}
+	defer s.close()
 
-	release, found, err := updater.DetectLatest(ctx, repo)
+	release, found, err := s.updater.DetectLatest(ctx, s.repo)
 	if err != nil {
 		return nil, fmt.Errorf("detecting latest release: %w", err)
 	}
@@ -132,19 +148,20 @@ func Apply(ctx context.Context, opts Options) (string, error) {
 		return "", ErrDevelopmentVersion
 	}
 
-	u, repo, err := makeUpdater(opts)
+	s, err := makeUpdater(opts)
 	if err != nil {
 		return "", err
 	}
+	defer s.close()
 
 	// When running as a daemon subprocess, the binary is a temp copy and
 	// os.Executable() would point to it. ZAPAROO_APP holds the path to
 	// the original binary that should be updated instead.
 	var release *selfupdate.Release
 	if appPath := os.Getenv(config.AppEnv); appPath != "" {
-		release, err = u.UpdateCommand(ctx, appPath, config.AppVersion, repo)
+		release, err = s.updater.UpdateCommand(ctx, appPath, config.AppVersion, s.repo)
 	} else {
-		release, err = u.UpdateSelf(ctx, config.AppVersion, repo)
+		release, err = s.updater.UpdateSelf(ctx, config.AppVersion, s.repo)
 	}
 	if err != nil {
 		return "", fmt.Errorf("applying update: %w", err)

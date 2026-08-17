@@ -36,7 +36,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testRepoPath = "/ZaparooProject/zaparoo-core"
+const (
+	testRepoPath = "/ZaparooProject/zaparoo-core"
+	// testLastModified is a fixed HTTP-date; nothing under test reads a clock.
+	testLastModified = "Mon, 17 Aug 2026 01:26:54 GMT"
+)
 
 // manifestServer serves a signed manifest, counting how often each document was
 // actually fetched so conditional-GET behaviour is observable.
@@ -44,9 +48,11 @@ type manifestServer struct {
 	*httptest.Server
 	body         atomic.Pointer[[]byte]
 	etag         atomic.Pointer[string]
+	lastModified atomic.Pointer[string]
 	priv         ed25519.PrivateKey
 	pub          ed25519.PublicKey
 	manifestGets atomic.Int64
+	manifest304s atomic.Int64
 	sigGets      atomic.Int64
 	sigStatus    atomic.Int64
 }
@@ -59,6 +65,7 @@ func newManifestServer(t *testing.T, body string) *manifestServer {
 
 	ms := &manifestServer{pub: pub, priv: priv}
 	ms.setBody(body, `"v1"`)
+	ms.setLastModified(testLastModified)
 
 	ms.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data := *ms.body.Load()
@@ -73,10 +80,28 @@ func newManifestServer(t *testing.T, body string) *manifestServer {
 		case testRepoPath + "/" + manifestFileName:
 			ms.manifestGets.Add(1)
 			etag := *ms.etag.Load()
-			w.Header().Set("ETag", etag)
-			if r.Header.Get("If-None-Match") == etag {
-				w.WriteHeader(http.StatusNotModified)
-				return
+			lastMod := *ms.lastModified.Load()
+			if etag != "" {
+				w.Header().Set("ETag", etag)
+			}
+			if lastMod != "" {
+				w.Header().Set("Last-Modified", lastMod)
+			}
+			// RFC 7232 has a server that offers both prefer If-None-Match, so
+			// only one validator is consulted per request.
+			switch {
+			case etag != "":
+				if r.Header.Get("If-None-Match") == etag {
+					ms.manifest304s.Add(1)
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+			case lastMod != "":
+				if r.Header.Get("If-Modified-Since") == lastMod {
+					ms.manifest304s.Add(1)
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
 			}
 			_, _ = w.Write(data)
 		default:
@@ -92,6 +117,10 @@ func (ms *manifestServer) setBody(body, etag string) {
 	data := []byte(body)
 	ms.body.Store(&data)
 	ms.etag.Store(&etag)
+}
+
+func (ms *manifestServer) setLastModified(lastModified string) {
+	ms.lastModified.Store(&lastModified)
 }
 
 // source returns a source pointed at this server, verifying against the key
@@ -288,6 +317,7 @@ func TestVerifiedSource_AdvancesWatermark(t *testing.T) {
 	st := loadState(dir)
 	assert.Equal(t, int64(412), st.ManifestGeneration)
 	assert.Equal(t, `"v1"`, st.ManifestETag)
+	assert.Equal(t, testLastModified, st.ManifestLastModified)
 	assert.False(t, st.ManifestSeenAt.IsZero())
 	assert.Equal(t, []byte(twoReleaseManifest(412)), loadCachedManifest(dir))
 }
@@ -345,7 +375,86 @@ func TestVerifiedSource_ConditionalGETUsesCache(t *testing.T) {
 	require.Len(t, releases, 2)
 
 	assert.Equal(t, int64(2), ms.manifestGets.Load())
+	assert.Equal(t, int64(1), ms.manifest304s.Load(),
+		"the second check should have been answered from cache via If-None-Match")
 	assert.Equal(t, int64(2), ms.sigGets.Load(), "the signature must be fetched fresh every check")
+}
+
+// The production shape: Bunny never sends an ETag, because it only forwards one
+// the origin sends and Bunny Storage sends none. Last-Modified alone has to be
+// enough to reuse the cache, or every check re-downloads the whole manifest.
+func TestVerifiedSource_ConditionalGETWithoutETag(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	ms.setBody(twoReleaseManifest(412), "")
+
+	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+
+	st := loadState(dir)
+	require.Empty(t, st.ManifestETag)
+	require.Equal(t, testLastModified, st.ManifestLastModified)
+
+	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+	assert.Len(t, releases, 2)
+	assert.Equal(t, int64(1), ms.manifest304s.Load(),
+		"the second check should have been answered from cache via If-Modified-Since")
+	assert.Equal(t, int64(2), ms.sigGets.Load(), "the signature must be fetched fresh every check")
+}
+
+// A CDN caches the manifest and its signature as independent objects, so there
+// is a window after a republish where the two can disagree. The cached bytes
+// must lose to the fresh signature rather than being accepted: a check that
+// fails is recoverable on the next one, a mismatched pair being trusted is not.
+func TestVerifiedSource_RejectsCachedManifestAgainstNewerSignature(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	ms.setBody(twoReleaseManifest(412), "")
+
+	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+
+	// The body moves on, but Last-Modified does not, so the manifest is still
+	// answered 304 while the signature is re-fetched over the new bytes.
+	ms.setBody(twoReleaseManifest(413), "")
+
+	_, err = ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	require.ErrorIs(t, err, otameta.ErrBadSignature)
+	require.Equal(t, int64(1), ms.manifest304s.Load())
+
+	// The rejected fetch must leave the watermark and the cache as they were.
+	assert.Equal(t, int64(412), loadState(dir).ManifestGeneration)
+	assert.Equal(t, []byte(twoReleaseManifest(412)), loadCachedManifest(dir))
+}
+
+// A changed Last-Modified means the manifest moved, so the cache must not be
+// reused even though the request was conditional.
+func TestVerifiedSource_NewLastModifiedRefetches(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	ms.setBody(twoReleaseManifest(412), "")
+
+	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+
+	ms.setBody(twoReleaseManifest(413), "")
+	ms.setLastModified("Tue, 18 Aug 2026 09:00:00 GMT")
+
+	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+	assert.Len(t, releases, 2)
+
+	st := loadState(dir)
+	assert.Equal(t, int64(413), st.ManifestGeneration, "the newer manifest must have been read")
+	assert.Equal(t, "Tue, 18 Aug 2026 09:00:00 GMT", st.ManifestLastModified)
+	assert.Equal(t, []byte(twoReleaseManifest(413)), loadCachedManifest(dir))
 }
 
 // An ETag with no cached bytes behind it must produce a full refetch, not a 304
@@ -363,7 +472,8 @@ func TestVerifiedSource_MissingCacheRefetches(t *testing.T) {
 	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
 	require.NoError(t, err)
 	assert.Len(t, releases, 2)
-	assert.NotNil(t, loadCachedManifest(dir), "the cache should be rewritten")
+	assert.Equal(t, []byte(twoReleaseManifest(412)), loadCachedManifest(dir),
+		"the cache should be rewritten from the served bytes")
 }
 
 func TestVerifiedSource_RejectsOversizedManifest(t *testing.T) {

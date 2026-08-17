@@ -57,10 +57,17 @@ type updaterState struct {
 	// ManifestSeenAt records when the generation below was accepted. It is for
 	// operators reading the file; nothing in the verification path reads a clock.
 	ManifestSeenAt time.Time `json:"manifestSeenAt"`
-	// ManifestETag lets the next check ask the CDN for the manifest only if it
-	// changed. The cached bytes are re-verified on every use, so a tampered
-	// cache is caught rather than trusted.
-	ManifestETag string `json:"manifestETag"`
+	// ManifestETag and ManifestLastModified let the next check ask the CDN for
+	// the manifest only if it changed. The cached bytes are re-verified on every
+	// use, so a tampered cache is caught rather than trusted.
+	//
+	// Both are kept because which one fires depends on the origin. Bunny does
+	// not generate ETags; it only forwards one the origin sends, and Bunny
+	// Storage sends none, so in production Last-Modified is the validator that
+	// actually works. ETag is still honoured when present because it is the
+	// stronger of the two and servers that offer both prefer it.
+	ManifestETag         string `json:"manifestETag"`
+	ManifestLastModified string `json:"manifestLastModified"`
 	// ManifestGeneration is the highest generation this device has accepted.
 	ManifestGeneration int64 `json:"manifestGeneration"`
 	StateVersion       int   `json:"stateVersion"`
@@ -127,8 +134,9 @@ func saveState(dir string, st updaterState) error {
 	return writeFileAtomic(dir, stateFileName, data)
 }
 
-// loadCachedManifest returns the manifest bytes kept alongside the ETag. The
-// caller re-verifies them, so a caller receiving nil simply refetches.
+// loadCachedManifest returns the manifest bytes kept alongside the cache
+// validators. The caller re-verifies them, so a caller receiving nil simply
+// refetches.
 func loadCachedManifest(dir string) []byte {
 	if dir == "" {
 		return nil
@@ -201,7 +209,19 @@ func writeFileAtomic(dir, name string, data []byte) error {
 	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
 		return fmt.Errorf("replacing updater state file: %w", err)
 	}
-	return syncDir(dir)
+
+	// The rename has already happened, so the write succeeded whatever the
+	// directory sync does. Reporting a sync failure as a write failure would be
+	// actively harmful: callers respond by discarding what they just stored, so
+	// a filesystem that cannot flush a directory handle would permanently throw
+	// away the cache validators and the generation watermark. Not all of them
+	// can — vfat and exFAT are the ones these devices actually run on — and
+	// losing durability across a power cut is the smaller loss.
+	if err := syncDir(dir); err != nil {
+		log.Warn().Err(err).Str("file", name).
+			Msg("updater state was written but the directory could not be flushed")
+	}
+	return nil
 }
 
 func syncDir(dir string) error {
@@ -212,7 +232,8 @@ func syncDir(dir string) error {
 	syncErr := handle.Sync()
 	closeErr := handle.Close()
 
-	// Windows cannot flush a directory handle through os.File.Sync.
+	// Windows cannot flush a directory handle through os.File.Sync, so there is
+	// nothing to report there.
 	if syncErr != nil && (runtime.GOOS != "windows" || !errors.Is(syncErr, os.ErrPermission)) {
 		return fmt.Errorf("syncing updater state directory: %w", syncErr)
 	}

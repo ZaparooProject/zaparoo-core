@@ -171,9 +171,16 @@ Every publishing run does the same thing, in this order:
 6. Check the publish directory holds those four files and nothing else, and
    that no archive URL points anywhere but GitHub.
 7. Upload and purge the pull zone.
-8. Re-fetch all four files from the public URL, cache-busted, and require them
-   to be byte-identical to what was signed. Retries for a while, because purge
-   propagation is not instant. **A run that reaches this step and fails it has
+8. Re-fetch all four files from the public URL — the plain URL a device would
+   request, through the edge cache — and require them to be byte-identical to
+   what was signed. Cache-busting is deliberately not used: the thing being
+   checked is what the edge serves, and bypassing the cache would verify the
+   storage origin instead and miss the case that matters. Step 7's purge is what
+   makes the edge current, so a mismatch here means the purge has not landed
+   yet, and the step retries for a while because propagation is not instant.
+   Each failed attempt logs the `Cdn-Cache` header per file: a `HIT` means the
+   purge did not take, a `MISS` means the origin itself is serving something
+   other than what was uploaded. **A run that reaches this step and fails it has
    published something unverified** — investigate before dispatching anything
    else.
 
