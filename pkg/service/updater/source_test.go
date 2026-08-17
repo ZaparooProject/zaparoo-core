@@ -375,6 +375,8 @@ func TestVerifiedSource_ConditionalGETUsesCache(t *testing.T) {
 	require.Len(t, releases, 2)
 
 	assert.Equal(t, int64(2), ms.manifestGets.Load())
+	assert.Equal(t, int64(1), ms.manifest304s.Load(),
+		"the second check should have been answered from cache via If-None-Match")
 	assert.Equal(t, int64(2), ms.sigGets.Load(), "the signature must be fetched fresh every check")
 }
 
@@ -470,7 +472,8 @@ func TestVerifiedSource_MissingCacheRefetches(t *testing.T) {
 	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
 	require.NoError(t, err)
 	assert.Len(t, releases, 2)
-	assert.NotNil(t, loadCachedManifest(dir), "the cache should be rewritten")
+	assert.Equal(t, []byte(twoReleaseManifest(412)), loadCachedManifest(dir),
+		"the cache should be rewritten from the served bytes")
 }
 
 func TestVerifiedSource_RejectsOversizedManifest(t *testing.T) {

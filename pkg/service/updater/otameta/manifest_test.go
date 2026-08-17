@@ -377,9 +377,12 @@ func TestFindRelease(t *testing.T) {
 	assert.Nil(t, FindRelease(nil, "v2.16.1"))
 }
 
-// Guard against the manifest growing a field whose yaml name does not match
-// what go-selfupdate's HttpManifest expects, which would silently drop data for
-// deployed 2.x clients.
+// The channel names and the archive prefix are wire values: the publisher writes
+// them and the client matches on them, so a rename here is a fleet-wide break.
+// The separate guard that the manifest's yaml field names still decode into
+// go-selfupdate's HttpManifest is
+// TestRun_ProducedManifestDecodesInGoSelfupdate, which runs against a manifest
+// the generator actually produced.
 func TestManifest_ChannelNames(t *testing.T) {
 	t.Parallel()
 
