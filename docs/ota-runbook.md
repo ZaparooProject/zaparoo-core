@@ -57,6 +57,15 @@ Promote downloads every archive to the runner and hashes it there. GitHub's
 reported digests are cross-checked against those hashes in both directions, but
 what gets signed is always the bytes on disk.
 
+The first promote is different. The manifest currently live predates signing, so
+there is no `manifest.yaml.sig` to verify and no `generation` to advance from.
+Publishing on top of an unsigned manifest is refused by default — a stripped
+signature would otherwise rewind the counter and stall updates for every device
+holding a watermark. To bootstrap, dispatch that one promote with
+`generation_floor` set above any generation already published (0 has never been
+published, so any positive value works). Every promote after it verifies a
+signature and needs no floor.
+
 Start a significant release at a partial `rollout` — 5, then 25, then 100 over a
 few days — and widen it with **OTA rollout**. Bucketing is salted per release,
 so widening keeps the devices already on it and a different release picks a

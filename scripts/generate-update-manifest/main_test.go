@@ -219,6 +219,43 @@ func TestRun_PromoteRetainsNewestReleases(t *testing.T) {
 	}
 }
 
+// TestRun_PromoteRejectsReleasePrunedByRetention covers promoting a release
+// older than everything already retained in its channel. Retention would drop
+// it again immediately, so the run would report success while publishing a
+// manifest the release is not in.
+func TestRun_PromoteRejectsReleasePrunedByRetention(t *testing.T) {
+	t.Parallel()
+
+	f := newPublishFixture(t,
+		[]string{"v2.17.0", "v2.18.0", "v2.19.0"},
+		[]string{channelStable, channelStable, channelStable},
+	)
+
+	// The staged manifest dates its releases well before the promoted one, so
+	// push them past it to make the promoted release the oldest in the channel.
+	live, err := loadManifest(f.fs, f.manifestPath)
+	require.NoError(t, err)
+	for i, rel := range live.Releases {
+		rel.PublishedAt = time.Date(2026, 9, 1+i, 0, 0, 0, 0, time.UTC)
+	}
+	require.NoError(t, writeManifest(f.fs, live, f.manifestPath))
+
+	files := f.stageArchives(t, "v2.16.1")
+	writeGithubRelease(t, f.fs, "release.json", "v2.16.1", false, files)
+
+	opts := f.promoteOpts("v2.16.1", channelStable)
+	opts.githubRelease = "release.json"
+	opts.retainStable = 3
+
+	_, err = run(f.fs, opts, testNow)
+	require.ErrorIs(t, err, errPromotedReleasePruned)
+
+	// Nothing is published, so the live manifest stands.
+	exists, statErr := afero.Exists(f.fs, filepath.Join(testOutDir, manifestName))
+	require.NoError(t, statErr)
+	assert.False(t, exists, "a pruned promote must not publish a manifest")
+}
+
 // TestRun_PromoteBackfillsLegacyDigests covers releases promoted before the
 // manifest carried per-asset digests: their hashes come from the previously
 // published, signature-verified checksums file.

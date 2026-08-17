@@ -105,7 +105,7 @@ runs:
         origin="${STORAGE_ENDPOINT%/}/${STORAGE_ZONE}/${CDN_PATH}"
 
         fetch() {
-          if curl -fsS --retry 3 --retry-delay 2 \
+          if curl -fsS --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 \
               -H "AccessKey: ${STORAGE_PASSWORD}" "$origin/$1" -o "_live/$1"; then
             return 0
           fi
@@ -130,9 +130,12 @@ runs:
       shell: bash
       env:
         MANIFEST_SIGNED: ${{ steps.live.outputs.manifest-signed }}
+        GENERATION_FLOOR: ${{ inputs.generation-floor }}
       run: |
         set -euo pipefail
         pem="$RUNNER_TEMP/ota-verify.pem"
+        # A dispatcher can clear the workflow input, which arrives here empty.
+        floor=${GENERATION_FLOOR:-0}
 
         openssl pkeyutl -verify -pubin -inkey "$pem" -rawin \
           -in _live/checksums.txt -sigfile _live/checksums.txt.sig
@@ -141,14 +144,23 @@ runs:
         generation=$(grep -m1 -E '^generation: [0-9]+$' _live/manifest.yaml | awk '{ print $2 }' || true)
         generation=${generation:-0}
 
+        # An unsigned live manifest means its generation cannot be trusted, so
+        # publishing on top of it would reset the counter to whatever the origin
+        # claims. That is only acceptable once, for the legacy manifest that
+        # predates signing, and only when an operator names the floor to resume
+        # from - otherwise a stripped signature silently rewinds every device's
+        # watermark and stalls updates for the fleet.
         if [ "$MANIFEST_SIGNED" = "true" ]; then
           openssl pkeyutl -verify -pubin -inkey "$pem" -rawin \
             -in _live/manifest.yaml -sigfile _live/manifest.yaml.sig
         elif [ "$generation" -gt 0 ]; then
           echo "::error::live manifest declares generation $generation but is not signed"
           exit 1
+        elif [ "$floor" -gt 0 ]; then
+          echo "::warning::live manifest predates manifest signing; bootstrapping at the requested generation floor $floor"
         else
-          echo "::warning::live manifest predates manifest signing, so its generation is not trusted"
+          echo "::error::live manifest is not signed. If this is the one-time bootstrap of the pre-signing manifest, re-run with an explicit generation floor above any generation already published. Otherwise the signature is missing and must be investigated before publishing."
+          exit 1
         fi
 
         echo "generation=$generation" >> "$GITHUB_OUTPUT"
@@ -182,7 +194,7 @@ runs:
           --out-dir _publish
           --summary _work/summary.md
           --key-id "$KEY_ID"
-          --generation-floor "$GENERATION_FLOOR"
+          --generation-floor "${GENERATION_FLOOR:-0}"
           --retain-stable "$RETAIN_STABLE"
           --retain-beta "$RETAIN_BETA"
           --notes-limit "$NOTES_LIMIT"
@@ -224,8 +236,10 @@ runs:
 
         key="$RUNNER_TEMP/ota-signing.pem"
         pem="$RUNNER_TEMP/ota-verify.pem"
-        install -m 600 /dev/stdin "$key" <<< "$SIGNING_KEY"
+        # Armed before the key is written, so a failed or partial write still
+        # leaves nothing behind.
         trap 'rm -f "$key"' EXIT
+        install -m 600 /dev/stdin "$key" <<< "$SIGNING_KEY"
 
         for f in manifest.yaml checksums.txt; do
           openssl pkeyutl -sign -inkey "$key" -rawin -in "_publish/$f" > "_publish/$f.sig"
@@ -330,7 +344,7 @@ runs:
 
           fetched=true
           for f in $names; do
-            if ! curl -fsS --retry 2 --retry-delay 2 \
+            if ! curl -fsS --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 \
                 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
                 "$base/$f?cb=${GITHUB_RUN_ID}-${attempt}" -o "_verify/$f"; then
               fetched=false

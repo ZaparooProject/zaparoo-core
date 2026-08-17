@@ -22,7 +22,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,6 +94,34 @@ func TestExpectedTargets_MatchesBuildWorkflow(t *testing.T) {
 
 	assert.Equal(t, keysOf(fromWorkflow), keysOf(fromCode),
 		"expectedTargets() is out of step with the build matrix in build.yml")
+
+	// The extension is half of the archive name validateAssetMatrix expects, so
+	// it has to track build.yml's case statement too, not just the pair list.
+	zipFromWorkflow := zipPlatformsFromWorkflow(t, string(data))
+	for _, target := range expectedTargets() {
+		wantExt := "tar.gz"
+		if zipFromWorkflow[target.Platform] {
+			wantExt = "zip"
+		}
+		assert.Equal(t, wantExt, target.Ext,
+			"%s_%s archive extension is out of step with build.yml", target.Platform, target.Arch)
+	}
+}
+
+// zipPlatformsFromWorkflow recovers the set of platforms build.yml archives as
+// zip from the case statement that picks the extension. Windows is built by a
+// separate job that names its own zip, so it is added here rather than parsed.
+func zipPlatformsFromWorkflow(t *testing.T, workflow string) map[string]bool {
+	t.Helper()
+
+	match := regexp.MustCompile(`(?m)^\s+([a-z|]+)\)\s*\n\s+EXT="zip"`).FindStringSubmatch(workflow)
+	require.NotNil(t, match, "could not find the zip extension case in build.yml")
+
+	zip := map[string]bool{"windows": true}
+	for _, platform := range strings.Split(match[1], "|") {
+		zip[platform] = true
+	}
+	return zip
 }
 
 func keysOf(m map[string]bool) []string {

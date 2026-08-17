@@ -79,7 +79,23 @@ type result struct {
 	checksumBytes int
 }
 
-var errUsage = errors.New("invalid arguments")
+var (
+	errUsage = errors.New("invalid arguments")
+
+	// errPromotedReleasePruned guards the case where retention drops the very
+	// release being promoted, which would otherwise report success while
+	// publishing a manifest the release is not in.
+	errPromotedReleasePruned = errors.New("retention pruned the promoted release")
+)
+
+// retainedForChannel reports how many releases the promoted channel keeps, for
+// the error message when retention prunes the release being promoted.
+func retainedForChannel(opts *options) int {
+	if opts.channel == channelBeta {
+		return opts.retainBeta
+	}
+	return opts.retainStable
+}
 
 func parseFlags() *options {
 	opts := &options{}
@@ -256,6 +272,10 @@ func run(fs afero.Fs, opts *options, now time.Time) (*result, error) {
 
 	backfillDigests(m, published)
 	res.dropped = applyRetention(m, opts.retainStable, opts.retainBeta, opts.notesLimit)
+	if opts.mode == modePromote && findRelease(m, opts.tag) == nil {
+		return nil, fmt.Errorf("%w: %s is older than the %d releases already retained in %s",
+			errPromotedReleasePruned, opts.tag, retainedForChannel(opts), opts.channel)
+	}
 	if err := requireDigests(m); err != nil {
 		return nil, err
 	}

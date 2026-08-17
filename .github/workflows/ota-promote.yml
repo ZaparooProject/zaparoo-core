@@ -46,6 +46,13 @@ on:
         required: true
         default: true
         type: boolean
+      generation_floor:
+        description: >
+          Bootstrap only. Lowest generation this publish may use, required once
+          to adopt the unsigned pre-signing manifest. Leave at 0 otherwise.
+        required: false
+        default: "0"
+        type: string
 
 permissions:
   contents: read
@@ -89,6 +96,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           sparse-checkout: |
             .github/actions/ota-metadata/
             scripts/generate-update-manifest/
@@ -129,6 +137,7 @@ jobs:
           archives-dir: _archives
           github-release: _release/release.json
           replace: ${{ inputs.replace }}
+          generation-floor: ${{ inputs.generation_floor }}
           dry-run: ${{ inputs.dry_run }}
           signing-key: ${{ secrets.UPDATE_SIGNING_KEY }}
           storage-zone: ${{ secrets.BUNNY_STORAGE_ZONE }}
