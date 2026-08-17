@@ -22,6 +22,7 @@ package updater
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -162,5 +163,11 @@ func TestWriteFileAtomic_FilePermissions(t *testing.T) {
 
 	info, err := os.Stat(filepath.Join(dir, stateFileName))
 	require.NoError(t, err)
+
+	if runtime.GOOS == "windows" {
+		// Windows has no POSIX mode bits, so Chmod only toggles the read-only
+		// flag and Perm reports 0666. The write itself is still worth asserting.
+		return
+	}
 	assert.Equal(t, os.FileMode(stateFilePerm), info.Mode().Perm())
 }
