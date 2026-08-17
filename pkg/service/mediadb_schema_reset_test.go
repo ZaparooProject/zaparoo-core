@@ -155,6 +155,8 @@ func TestMakeDatabase_SchemaAheadUserDBIsFatal(t *testing.T) {
 
 	db, _, err := makeDatabase(ctx, pl)
 	require.NoError(t, err)
+	_, err = db.MediaDB.InsertSystem(database.System{Name: "Test System", SystemID: testSystemID})
+	require.NoError(t, err)
 	closeDatabase(db)
 	markSchemaAhead(ctx, t, dataDir, config.UserDbFile)
 
@@ -162,6 +164,16 @@ func TestMakeDatabase_SchemaAheadUserDBIsFatal(t *testing.T) {
 	t.Cleanup(func() { closeDatabase(db) })
 	require.ErrorIs(t, err, database.ErrSchemaAhead)
 	assert.False(t, mediaDBReset)
+
+	// A downgrade usually leaves both databases ahead. Startup ends here either
+	// way, so the media index — expensive to rebuild, and holding scraped
+	// metadata — must still be there when the newer build is put back.
+	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mediaDB.Close()) })
+	system, err := mediaDB.FindSystemBySystemID(testSystemID)
+	require.NoError(t, err, "an unreadable user database must not cost the media index")
+	assert.Equal(t, "Test System", system.Name)
 }
 
 // Favourites and launcher overrides can still be sitting only in media.db when the

@@ -90,6 +90,19 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		}
 	}()
 
+	// The user database goes first because it is the one that can end startup: if
+	// its schema is newer than this build understands there is nothing to be done
+	// about it, and the media database must not have been thrown away by then.
+	log.Debug().Msg("opening user database")
+	userDB, err := openAndRecoverUserDB(ctx, pl)
+	// Assign before the error check: openAndRecoverUserDB can return a non-nil
+	// handle alongside an error, and the deferred closeDatabase only closes what
+	// is stored on db. Assigning here ensures that handle is not leaked.
+	db.UserDB = userDB
+	if err != nil {
+		return db, false, err
+	}
+
 	log.Debug().Msg("opening media database")
 	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
@@ -99,11 +112,6 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	log.Debug().Msg("running media database migrations")
 	mediaDBReset := false
-	// Favourites and launcher overrides written before UserDB became their home
-	// exist only in the media database. If the backfill below has not managed to
-	// copy them across yet, discarding the file destroys the only copy, so they
-	// are read out first and handed to the backfill instead.
-	var rescuedUserData []database.MediaUserData
 	err = mediaDB.MigrateUp()
 	switch {
 	case errors.Is(err, database.ErrSchemaAhead):
@@ -116,23 +124,19 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		// No recovery gate is taken around the rebuild: nothing else has a handle
 		// on this database yet, so there is no background work to lock out.
 		log.Warn().Err(err).Msg("media database schema is newer than this build supports, rebuilding it")
-		rescuedUserData = rescueMediaUserData(ctx, mediaDB)
+		// Favourites and launcher overrides written before UserDB became their
+		// home exist only in this file. Import them now rather than carrying them
+		// to the backfill below: once the file is gone the rescue is the only copy
+		// there is, and anything that ends startup in between would take it.
+		if rescued := rescueMediaUserData(ctx, mediaDB); len(rescued) > 0 {
+			backfillMediaUserData(ctx, db, rescued)
+		}
 		if resetErr := resetMediaDBForNewerSchema(mediaDB); resetErr != nil {
 			return db, false, fmt.Errorf("rebuilding media database with a newer schema: %w", resetErr)
 		}
 		mediaDBReset = true
 	case err != nil:
 		return db, false, fmt.Errorf("error migrating mediadb: %w", err)
-	}
-
-	log.Debug().Msg("opening user database")
-	userDB, err := openAndRecoverUserDB(ctx, pl)
-	// Assign before the error check: openAndRecoverUserDB can return a non-nil
-	// handle alongside an error, and the deferred closeDatabase only closes what
-	// is stored on db. Assigning here ensures that handle is not leaked.
-	db.UserDB = userDB
-	if err != nil {
-		return db, false, err
 	}
 
 	// migrate old boltdb mappings if required
@@ -145,17 +149,17 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	// One-time import of favourites/launcher overrides that older versions wrote
 	// only to media.db, so they live in UserDB (the source of truth) and survive a
 	// future media.db rebuild.
-	backfillMediaUserData(ctx, db, rescuedUserData)
+	backfillMediaUserData(ctx, db, nil)
 
 	success = true
 	return db, mediaDBReset, nil
 }
 
 // rescueMediaUserData reads the favourites and launcher overrides out of a media
-// database that is about to be discarded. Best-effort by necessity: the file was
-// written by a newer build, so these queries may not fit its schema at all. A
-// failure here leaves the rebuild to go ahead without them, which is what would
-// have happened regardless.
+// database that is about to be discarded, for the caller to hand straight to the
+// backfill. Best-effort by necessity: the file was written by a newer build, so
+// these queries may not fit its schema at all. A failure here leaves the rebuild
+// to go ahead without them, which is what would have happened regardless.
 func rescueMediaUserData(ctx context.Context, mediaDB *mediadb.MediaDB) []database.MediaUserData {
 	rows, err := mediaDB.GetExistingMediaUserData(ctx)
 	if err != nil {
