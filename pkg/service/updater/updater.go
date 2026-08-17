@@ -60,7 +60,10 @@ type Result struct {
 }
 
 func makeUpdater(opts Options) (*selfupdate.Updater, selfupdate.Repository, error) {
+	// tlsroots hands back a transport this updater owns outright, so setting the
+	// header timeout here does not affect anything else in the process.
 	transport := tlsroots.Transport(nil)
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 	key := &keyRef{}
 
 	source := &verifiedSource{

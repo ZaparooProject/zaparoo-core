@@ -44,7 +44,13 @@ const (
 	manifestSigFileName = "manifest.yaml.sig"
 
 	manifestFetchTimeout = 60 * time.Second
-	assetFetchTimeout    = 30 * time.Second
+
+	// responseHeaderTimeout bounds how long a request may sit before the server
+	// starts answering. It is applied at the transport rather than as a client
+	// deadline because an archive download on a MiSTer over a slow SD-card-backed
+	// link can legitimately run for minutes: a stalled connection has to fail
+	// fast without capping a slow-but-progressing transfer.
+	responseHeaderTimeout = 30 * time.Second
 )
 
 // ErrGenerationRollback means the CDN served metadata older than something this
@@ -270,7 +276,10 @@ func (s *verifiedSource) DownloadReleaseAsset(
 		return nil, fmt.Errorf("asset ID %d: %w", assetID, selfupdate.ErrAssetNotFound)
 	}
 
-	client := &http.Client{Timeout: assetFetchTimeout, Transport: s.transport}
+	// No client deadline: the archive is the one response whose size is not
+	// bounded by a small constant, so total duration is the caller's context to
+	// bound. The transport's response-header timeout still catches a dead server.
+	client := &http.Client{Transport: s.transport}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating asset request: %w", err)
