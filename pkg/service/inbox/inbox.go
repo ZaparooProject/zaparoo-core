@@ -52,6 +52,7 @@ const (
 	CategoryMediaDBSchemaReset               = "mediadb_schema_reset"
 	CategoryMediaIndexResumeLimit            = "media_index_resume_limit"
 	CategoryUpdateAvailable                  = "update_available"
+	CategoryUpdateResult                     = "update_result"
 	CategoryBackupRemoteNotAvailable         = "backup_remote_not_available"
 	CategoryBackupRemoteQuotaExceeded        = "backup_remote_quota_exceeded"
 	CategoryBackupRemoteUnlinked             = "backup_remote_unlinked"

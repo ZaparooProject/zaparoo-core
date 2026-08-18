@@ -22,7 +22,10 @@ package methods
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -30,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -189,6 +193,38 @@ func TestHandleUpdateCheck_Error(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestUpdateRestartGuard_AfterWriteSupersedesFallback(t *testing.T) {
+	t.Parallel()
+
+	var restartCalls atomic.Int32
+	var releaseCalls atomic.Int32
+	guard := newUpdateRestartGuard(time.Hour, "2.9.0", "2.10.0",
+		func() { restartCalls.Add(1) }, func() { releaseCalls.Add(1) })
+
+	guard.afterWrite()
+	guard.afterWrite()
+
+	assert.Equal(t, int32(1), restartCalls.Load())
+	assert.Equal(t, int32(1), releaseCalls.Load())
+}
+
+func TestUpdateRestartGuard_FallbackSupersedesLateAfterWrite(t *testing.T) {
+	t.Parallel()
+
+	var restartCalls atomic.Int32
+	var releaseCalls atomic.Int32
+	guard := newUpdateRestartGuard(5*time.Millisecond, "2.9.0", "2.10.0",
+		func() { restartCalls.Add(1) }, func() { releaseCalls.Add(1) })
+
+	require.Eventually(t, func() bool {
+		return restartCalls.Load() == 1 && releaseCalls.Load() == 1
+	}, time.Second, 5*time.Millisecond)
+	guard.afterWrite()
+
+	assert.Equal(t, int32(1), restartCalls.Load())
+	assert.Equal(t, int32(1), releaseCalls.Load())
+}
+
 func TestHandleUpdateApply_DevelopmentVersion(t *testing.T) {
 	devVersions := []string{"DEVELOPMENT", "abc1234-dev"}
 
@@ -236,6 +272,100 @@ func TestHandleUpdateApply_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "update apply failed")
 	assert.Contains(t, err.Error(), "download failed")
 	assert.Nil(t, result)
+}
+
+func TestHandleUpdateApply_UpdateInProgress(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+	}
+	applyFn := func(context.Context, updater.Options) (string, error) {
+		return "", updater.ErrUpdateInProgress
+	}
+
+	result, err := HandleUpdateApply(env, applyFn, func() {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update already in progress")
+	assert.Nil(t, result)
+}
+
+func TestHandleUpdateApply_ActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+	st.SetActiveMedia(models.NewActiveMedia(
+		"SNES", "Super Nintendo", filepath.Join("roms", "game.sfc"), "Game", "test-launcher",
+	))
+
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+		State:    st,
+	}
+	applyFn := func(context.Context, updater.Options) (string, error) {
+		t.Fatal("applyFn should not be called while media is active")
+		return "", nil
+	}
+
+	result, err := HandleUpdateApply(env, applyFn, func() {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media is active")
+	assert.Nil(t, result)
+}
+
+func TestHandleUpdateApply_HoldsMediaGateUntilRestart(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+		State:    st,
+	}
+	applyFn := func(context.Context, updater.Options) (string, error) {
+		return "2.10.0", nil
+	}
+
+	result, err := HandleUpdateApply(env, applyFn, st.RestartService)
+	require.NoError(t, err)
+	response, ok := result.(models.ResponseWithCallback)
+	require.True(t, ok)
+
+	launchErr := make(chan error, 1)
+	go func() {
+		release, acquireErr := st.AcquireMediaLaunch()
+		if release != nil {
+			release()
+		}
+		launchErr <- acquireErr
+	}()
+	select {
+	case err := <-launchErr:
+		require.NoError(t, err)
+		t.Fatal("media launch gate released before update restart")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	response.AfterWrite()
+	select {
+	case err := <-launchErr:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("queued media launch did not stop after update restart")
+	}
 }
 
 func TestHandleUpdateApply_IndexingInProgress(t *testing.T) {
@@ -286,15 +416,17 @@ func TestHandleUpdateApply_IndexingCompleted(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
+	mockUserDB := helpers.NewMockUserDBI()
 
 	env := requests.RequestEnv{
 		Context:  t.Context(),
 		Platform: mockPlatform,
 		Config:   &config.Instance{},
-		Database: &database.Database{MediaDB: mockMediaDB},
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
 	}
 
-	applyFn := func(_ context.Context, _ updater.Options) (string, error) {
+	applyFn := func(_ context.Context, opts updater.Options) (string, error) {
+		assert.Same(t, mockUserDB, opts.UserDB)
 		return "2.10.0", nil
 	}
 

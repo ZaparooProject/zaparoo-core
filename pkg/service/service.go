@@ -23,6 +23,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -64,6 +65,10 @@ const (
 	backupShutdownHardDeadline  = 2 * time.Minute
 	startupMediaIdleQuietWindow = 5 * time.Second
 	startupMediaIdleMaximumWait = 300 * time.Second
+	// updateConfirmDelay is how long an updated version has to stay up before its
+	// update is committed. Long enough to catch a build that starts and then dies
+	// on its first real work, short enough that recovery files do not fill storage.
+	updateConfirmDelay = 30 * time.Second
 )
 
 // StartResult holds the return values from Start.
@@ -288,12 +293,54 @@ func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
 	svc.State.SetBackgroundAutoPaused(false)
 }
 
+// Start brings the service up and resolves any update still waiting on this
+// boot to prove itself.
+//
+// The wrapper around startService exists for the failure path. Most of the platforms
+// this runs on have no supervisor, so a version that cannot start is not
+// restarted by anything: the device is simply gone until someone reflashes it.
+// Routing every way startService can fail through one deferred hook puts the previous
+// version back and reports ErrRolledBack, and the caller re-execs into it
+// rather than exiting.
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
-) (*StartResult, error) {
+) (res *StartResult, err error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
+	dataDir := helpers.DataDir(pl)
+
+	// Deliberately before config, databases and network are touched: the
+	// failure this exists to catch is a binary that cannot reach any of them.
+	// It has its own context because st.GetContext does not exist yet.
+	if watchdogErr := updater.RunStartupWatchdog(
+		context.Background(), dataDir, config.AppVersion,
+	); watchdogErr != nil {
+		if errors.Is(watchdogErr, updater.ErrRolledBack) {
+			return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
+		}
+		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
+	}
+
+	defer func() {
+		if err == nil {
+			return
+		}
+		// Only does anything when this boot is the first one after an update.
+		if rollbackErr := updater.RollBackFailedStart(
+			context.Background(), dataDir, config.AppVersion,
+		); rollbackErr != nil {
+			err = fmt.Errorf("%w: %w", rollbackErr, err)
+		}
+	}()
+
+	return startService(pl, cfg)
+}
+
+func startService(
+	pl platforms.Platform,
+	cfg *config.Instance,
+) (*StartResult, error) {
 	// A config file created outside Core can lack a device ID. The service
 	// daemon owns device identity (TUI/CLI processes only read it), so
 	// mint and persist one before anything reads it. Save generates a
@@ -736,6 +783,9 @@ func Start(
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
+		if shutdownErr := updater.RecordCleanShutdown(helpers.DataDir(pl), config.AppVersion); shutdownErr != nil {
+			log.Warn().Err(shutdownErr).Msg("could not record clean shutdown during update confirmation")
+		}
 		if backupErr := waitForBackupShutdown(
 			st.BackupCoordinator(), backupShutdownWarningAfter, backupShutdownHardDeadline,
 		); backupErr != nil {
@@ -797,6 +847,19 @@ func Start(
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
+	// A rollback finishes before there is a database to post to and then
+	// re-execs, so this is the first point at which the user can be told about
+	// one. It is deliberately after StartPost: a boot that still fails after
+	// here rolls back and restores the database, which would take the message
+	// with it.
+	updater.ReportLastUpdate(helpers.DataDir(pl), st.Inbox())
+
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		confirmPendingUpdate(st, helpers.DataDir(pl))
+	}()
+
 	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
 		backgroundWG.Add(1)
 		go func() {
@@ -814,4 +877,25 @@ func Start(
 		Done:             doneCh,
 		RestartRequested: st.RestartRequested,
 	}, nil
+}
+
+// confirmPendingUpdate commits an update once the version it installed has run
+// for a while without falling over. Shutting down before then proves nothing, so
+// the marker stays and the next boot starts the wait again.
+func confirmPendingUpdate(st *state.State, dataDir string) {
+	select {
+	case <-time.After(updateConfirmDelay):
+	case <-st.GetContext().Done():
+		return
+	}
+
+	version, err := updater.Confirm(st.GetContext(), dataDir, config.AppVersion)
+	if err != nil {
+		log.Error().Err(err).Msg("could not confirm the installed update")
+		return
+	}
+	if version == "" {
+		return
+	}
+	updater.ReportLastUpdate(dataDir, st.Inbox())
 }

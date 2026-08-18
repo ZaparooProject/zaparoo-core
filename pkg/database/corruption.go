@@ -30,6 +30,7 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // CorruptMarkerSuffix names the sidecar file written next to a database to flag
@@ -91,7 +92,12 @@ func IsMarkedCorrupt(dbPath string) bool {
 
 // ClearCorruptMarker removes the corrupt marker sidecar for dbPath. No-op when absent.
 func ClearCorruptMarker(dbPath string) error {
-	if err := os.Remove(CorruptMarkerPath(dbPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	return ClearCorruptMarkerFS(afero.NewOsFs(), dbPath)
+}
+
+// ClearCorruptMarkerFS removes the corrupt marker through fs.
+func ClearCorruptMarkerFS(fs afero.Fs, dbPath string) error {
+	if err := fs.Remove(CorruptMarkerPath(dbPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to clear corrupt marker: %w", err)
 	}
 	return nil
@@ -114,8 +120,13 @@ func NoteCorruption(dbPath string, err error, now time.Time) bool {
 // RemoveSidecars deletes the -wal and -shm sidecar files for dbPath. A stale WAL
 // left next to a freshly restored or recreated database would re-corrupt it.
 func RemoveSidecars(dbPath string) {
+	RemoveSidecarsFS(afero.NewOsFs(), dbPath)
+}
+
+// RemoveSidecarsFS deletes database sidecars through fs.
+func RemoveSidecarsFS(fs afero.Fs, dbPath string) {
 	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
-		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := fs.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn().Err(err).Str("path", sidecar).Msg("failed to remove database sidecar")
 		}
 	}

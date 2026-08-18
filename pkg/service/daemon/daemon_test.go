@@ -807,6 +807,7 @@ func TestRestartExecConfigUsesCachedServiceBinary(t *testing.T) {
 	t.Setenv(config.AppEnv, srcPath)
 
 	cfg, err := svc.restartExecConfig(
+		"",
 		[]string{"old-cache", "-service", "exec"},
 		[]string{"A=B", config.AppEnv + "=/old/path"},
 	)
@@ -818,6 +819,47 @@ func TestRestartExecConfigUsesCachedServiceBinary(t *testing.T) {
 	assert.FileExists(t, cfg.serviceBin)
 	assert.Equal(t, []string{cfg.serviceBin, "-service", "exec"}, cfg.args)
 	assert.Contains(t, cfg.env, config.AppEnv+"="+srcPath)
+}
+
+func TestRestartExecConfigUsesRollbackTargetWithoutAppEnv(t *testing.T) {
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	targetPath := filepath.Join(srcDir, "restored-zaparoo.sh")
+	require.NoError(t, os.WriteFile(targetPath, []byte("restored-binary"), 0o600))
+	t.Setenv(config.AppEnv, "")
+
+	cfg, err := svc.restartExecConfig(
+		targetPath,
+		[]string{"failed-cache", "-service", "exec"},
+		[]string{"A=B"},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, targetPath, cfg.binPath)
+	assert.Contains(t, cfg.env, config.AppEnv+"="+targetPath)
+	cached, err := os.ReadFile(cfg.serviceBin) //nolint:gosec // test-owned path
+	require.NoError(t, err)
+	assert.Equal(t, []byte("restored-binary"), cached)
+}
+
+// A rollback that names a binary which is no longer there must fail loudly:
+// exec'ing whatever the stale cache happens to hold would silently undo the
+// rollback.
+func TestRestartExecConfigFailsWhenRollbackTargetIsMissing(t *testing.T) {
+	svc := newTestService(t)
+	t.Setenv(config.AppEnv, "")
+
+	missing := filepath.Join(t.TempDir(), "restored-zaparoo.sh")
+	cfg, err := svc.restartExecConfig(
+		missing,
+		[]string{"failed-cache", "-service", "exec"},
+		[]string{"A=B"},
+	)
+
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Empty(t, cfg.serviceBin)
+	assert.Empty(t, cfg.args)
 }
 
 func TestRunningRemovesStalePIDFile(t *testing.T) {

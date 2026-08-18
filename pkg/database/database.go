@@ -902,6 +902,7 @@ type UserDBI interface {
 	GetDeviceState(key string) (string, bool, error)
 	DeleteDeviceState(key string) error
 	Backup(reason string, manual bool) (BackupInfo, error)
+	BackupForUpdate(targetVersion string) (BackupInfo, func() error, error)
 	BackupForTransfer(ctx context.Context, reason string) (BackupInfo, func() error, error)
 	EnsureRecentBackup(maxAge time.Duration) (BackupInfo, bool, error)
 	ListBackups() ([]BackupInfo, error)

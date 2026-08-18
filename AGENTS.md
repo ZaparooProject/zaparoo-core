@@ -1,226 +1,76 @@
-# AGENTS.md - Zaparoo Core
+# Agent Instructions
 
-Hardware-agnostic game launcher bridging physical tokens (NFC, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go with WebSocket/JSON-RPC API, dual SQLite databases, and a custom ZapScript command language.
+## Repository purpose
 
-**Tech Stack**: Go 1.25.7+, SQLite (UserDB + MediaDB), WebSocket/HTTP JSON-RPC 2.0, malgo+beep/v2 (audio), testify/mock, sqlmock, afero
-
-For architecture details, API reference, and key concepts: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-
-## Safety & Permissions
-
-**Allowed without asking**: Read files, run file-scoped tests (`go test ./pkg/specific/`), run `task lint-fix`, package-level linting, `gofumpt`, `actionlint`, view git history.
-
-**Ask before**: Installing dependencies, `git push`/`git commit`, deleting files, changing DB schema/migrations, modifying config schema, adding platform support, breaking API changes.
-
-## Rules
-
-- Write tests for all new code — see [TESTING.md](TESTING.md) and `pkg/testing/README.md`
-- Use `task lint-fix` to resolve all linting and formatting issues
-- Keep diffs small and focused — one concern per change
-- Use file-scoped commands for faster feedback over full-suite runs
-- Reference existing patterns before writing new code
-- Define Go types and consts near the top of the file, before functions and methods
-- Use `filepath.Join` for path construction everywhere, including test files — never hardcode POSIX-style paths like `"/roms/snes/game.sfc"` as string literals
-- Use afero for filesystem operations in testable code
-- NEVER use `sync.Mutex`/`sync.RWMutex` — use `syncutil.Mutex`/`syncutil.RWMutex` (forbidigo linter enforces this)
-- NEVER use standard `log` or `fmt.Println` — use zerolog (depguard enforces this)
-- NEVER run builds, lints, or tests for another OS (e.g., `GOOS=windows`) — CGO dependencies. Rely on CI
-- NEVER amend commits — always create new commits
-- NEVER add dependencies without discussion
-
-## Testing
-
-Full guide: [TESTING.md](TESTING.md) | Quick reference: `pkg/testing/README.md`
-
-The goal is useful tests, not coverage metrics. Mock at interface boundaries — all hardware interactions must be mocked. Use existing mocks/fixtures from `pkg/testing/` instead of creating new ones.
-
-**Mock setup pattern**:
-
-```go
-import (
-    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
-)
-
-mockPlatform := mocks.NewMockPlatform()
-mockReader := mocks.NewMockReader()
-mockUserDB := helpers.NewMockUserDBI()
-mockMediaDB := helpers.NewMockMediaDBI()
-```
+- Go daemon that turns physical token scans into cross-platform game and media actions through ZapScript.
+- Public interfaces include JSON-RPC over WebSocket/HTTP, configuration schemas, UserDB and MediaDB schemas, reader and platform interfaces, and update metadata.
+- Use the Go version declared in `go.mod`. Read `docs/ARCHITECTURE.md` when a task crosses subsystem boundaries.
 
 ## Commands
 
-```bash
-# File-scoped (preferred for speed)
-go test ./pkg/service/tokens/             # Test a package
-go test -run TestSpecificFunc ./pkg/api/  # Test by name
-go test -race ./pkg/service/tokens/       # Race detection
-gofumpt -w pkg/config/config.go           # Format a file
-golangci-lint run --fix pkg/service/      # Package-level lint
+- Build current platform: `task build`
+- Targeted tests: `task test -- ./pkg/path/...`
+- Full tests with race detection: `task test`
+- Non-mutating lint: `task lint`
+- Apply lint and formatting fixes deliberately: `task lint-fix`
+- Supported cross-platform lint: `task cross-lint:all`
+- Vulnerabilities: `task vulncheck`
+- Nil analysis: `task nilcheck`
+- Deadlock detection: `task deadlock`
+- Fuzz targets: `task fuzz`
+- Benchmarks: `task bench`, `task bench-db`, `task bench-compare`
 
-# Project-wide
-task test              # Full test suite with race detection
-task lint-fix          # Full lint with auto-fixes
-task cross-lint:all    # Cross-OS lint via repository zigcc Docker task
-task hooks:install     # Install local pre-push hook in .git/hooks
-task build             # Build binary
-task fuzz              # Run fuzz tests
-task vulncheck         # Security vulnerability scan
-task nilcheck          # Nil-pointer analysis
-task deadlock          # Detect lock ordering violations
+Use targeted package tests while iterating, then `task test` and `task lint` before finishing normal Go changes. Do not use `task lint-fix` as a read-only check because it can rewrite unrelated files.
 
-# DON'T use file-level golangci-lint (not well supported)
-# golangci-lint run pkg/config/config.go  # BAD
+Do not run ad hoc `GOOS=...` builds, tests, or lints. Core has CGO and platform-native dependencies; use `task cross-lint:all` for supported cross-platform analysis and leave native execution to CI.
 
-# Find total index duration from MCP logs:
-# grep "media indexing completed" <log-file>
+## Testing
 
-# GitHub Actions workflow linting (use when editing .github/workflows/*.yml)
-actionlint .github/workflows/fuzz.yml    # Lint a specific workflow
-actionlint                                # Lint all workflows
-```
+- Read `TESTING.md` and `pkg/testing/README.md` before adding substantial test infrastructure.
+- Add or update tests for behavior changes and bug fixes. Prefer a regression test that fails before a bug fix.
+- Mock hardware, network, process, and platform boundaries. Tests must not require a physical reader or target device.
+- Reuse mocks, fixtures, database helpers, and examples under `pkg/testing/` instead of creating parallel infrastructure.
+- Use afero for testable filesystem code and fake clocks for time-dependent behavior. Avoid sleeps when deterministic synchronization is possible.
+- Use `filepath.Join` for filesystem paths, including tests. Do not encode host-OS separators into production path logic.
+- Treat useful behavior coverage as the goal; do not weaken assertions merely to make a test pass.
 
-## Project Structure
+## Code and compatibility rules
 
-```
-zaparoo-core/
-├── cmd/{platform}/        # Platform entry points (12 platforms)
-├── pkg/
-│   ├── api/               # WebSocket/HTTP JSON-RPC server
-│   │   ├── methods/       # RPC method handlers
-│   │   └── models/        # API data models
-│   ├── assets/            # Embedded static files (App web build)
-│   ├── audio/             # Cross-platform audio playback
-│   ├── cli/               # CLI interface
-│   ├── config/            # Configuration management (TOML)
-│   ├── database/          # Dual database system
-│   │   ├── userdb/        # User mappings, history, playlists
-│   │   ├── mediadb/       # Indexed media content
-│   │   └── mediascanner/  # Media indexing engine
-│   ├── groovyproxy/       # Groovy scripting proxy
-│   ├── helpers/           # Utilities (syncutil, etc.)
-│   ├── platforms/         # 12 platform implementations
-│   ├── readers/           # 11 reader type drivers
-│   ├── service/           # Core business logic
-│   │   ├── broker/        # Event brokering
-│   │   ├── daemon/        # Background service management
-│   │   ├── discovery/     # mDNS service discovery
-│   │   ├── inbox/         # Message inbox
-│   │   ├── playlists/     # Playlist management
-│   │   ├── playtime/      # Play time tracking
-│   │   ├── publishers/    # Event publishing
-│   │   ├── state/         # Application state
-│   │   └── tokens/        # Token processing
-│   ├── testing/           # Testing infrastructure
-│   │   ├── README.md      # Quick reference
-│   │   ├── mocks/         # Pre-built mocks
-│   │   ├── helpers/       # Testing utilities (DB, FS, API)
-│   │   ├── fixtures/      # Sample test data
-│   │   └── examples/      # Example test patterns
-│   ├── ui/                # UI components (systray, TUI)
-│   └── zapscript/         # ZapScript language + advargs parser
-├── docs/                  # Architecture, API docs, plans
-├── scripts/               # Build and platform scripts
-├── TESTING.md             # Testing guide
-└── Taskfile.dist.yml      # Build and development tasks
-```
+- Use `syncutil.Mutex` and `syncutil.RWMutex`, never the standard mutex types. Deadlock instrumentation depends on these wrappers.
+- Use zerolog, not the standard `log` package or direct print statements.
+- Preserve backward compatibility for JSON-RPC methods, notifications, API models, configuration files, mappings, launchers, and persisted database data unless a breaking change is explicitly approved.
+- Keep UserDB and MediaDB access behind their interfaces. Existing applied migrations in `pkg/database/{userdb,mediadb}/migrations/` are immutable; add a new migration instead.
+- Configuration schema changes need migration and compatibility handling for existing installations.
+- Treat token contents, NDEF records, barcodes, MQTT messages, ZapScript, API requests, archives, and update metadata as untrusted input.
+- Do not hand-edit generated files such as `pkg/database/mediadb/stat1_seed_data.go`; use their documented generator.
+- Do not add dependencies, platforms, readers, launchers, or public API surface without discussion.
 
-## Reference Files
+## High-risk areas
 
-Copy these patterns for new code:
+- Authentication and authorization: `pkg/api/middleware/`, `pkg/config/auth.go`, client pairing, encryption, and profile permissions.
+- Parsing and execution: `pkg/readers/shared/ndef/`, `pkg/zapscript/`, command execution, archive extraction, and launcher handling.
+- Durable state: database migrations, backups, config migration, and profile data swapping.
+- Updates: `pkg/service/updater/`, `pkg/service/updater/otameta/`, `.github/workflows/ota-*.yml`, `.github/actions/ota-metadata/`, and `scripts/generate-update-manifest/`.
 
-- **Tests**: `pkg/testing/examples/` — 7 example files covering services, mocks, API, DB, filesystem, state, and ZapScript patterns
-- **API**: `pkg/api/methods/` — JSON-RPC method handler pattern
-- **Config**: `pkg/config/config.go` — Thread-safe config with RWMutex
-- **Database**: `pkg/database/userdb/` and `pkg/database/mediadb/` — Database interface pattern
-- **Platform**: `pkg/platforms/linux/platform.go` — Platform implementation pattern
-- **Service**: `pkg/service/tokens/tokens.go` — Service layer pattern
+For updater, signing, promotion, rollout, withdrawal, or key changes, read `docs/ota-runbook.md` first. Never publish OTA metadata, alter a rollout, rotate trust keys, tag a release, or run deployment workflows without explicit approval. Preserve signature verification, monotonic manifest generations, asset digests, rollback protections, and fail-closed install behavior.
 
-## Git & Commits
+Do not read, print, or commit `.env`, API keys, private signing material, local databases, logs containing user data, or generated runtime state.
 
-Zaparoo uses **Conventional Commits**: `<type>[scope]: <description>`
+## Specialized validation
 
-Types: `feat` (minor bump), `fix` (patch), `docs`, `refactor`, `style`, `perf`, `test`, `build`, `ci`, `chore`. Breaking changes: add `!` after type (`feat!:`) or `BREAKING CHANGE:` footer.
+- Concurrency, lifecycle, or lock changes: `task deadlock` and relevant race tests.
+- Untrusted parsers or protocol changes: run the relevant fuzz target; use `task fuzz` when the scope warrants the full set.
+- Dependency or security-sensitive changes: `task vulncheck`.
+- Performance work: read `docs/optimization-targets.md`, use allocation-reporting benchmarks with `b.Loop()`, and include `task bench-compare` evidence. Do not replace committed baselines without approval.
+- Workflow changes: run `actionlint` on the changed workflow or all workflows.
+- Before pushing cross-platform changes: `task cross-lint:all` and the repository's normal test/lint checks.
 
-```bash
-# Good:
-git commit -m "feat: add support for new NFC reader type"
-git commit -m "fix(api): resolve websocket reconnection issue"
-git commit -m "feat(database)!: change migration format"
+## Git and pull requests
 
-# Bad:
-git commit -m "Fixed bug"           # Missing type
-git commit -m "add reader support"  # Missing type prefix
-```
+- PR titles use Conventional Commit types enforced by `.github/workflows/pr-title.yml`.
+- PR descriptions must not include a test-plan section.
+- Do not commit, push, rewrite history, update benchmark baselines, or modify release state unless explicitly asked.
 
-Before committing: run `task lint-fix` then `task test`.
-Before pushing: run `task lint-fix`, `task test`, and `task cross-lint:all`; install the local pre-push hook with `task hooks:install`.
+## Completion
 
-Pull requests should NOT include a test plan section.
-
-## Benchmarks
-
-Naming convention: `Benchmark{Component}_{Operation}_{Scale}` (e.g., `BenchmarkSlugSearchCache_Search_500k`)
-
-All benchmarks must:
-- Call `b.ReportAllocs()` for allocation tracking
-- Use `b.Run()` subtests for scale tiers or variants
-- Set up data before `b.ResetTimer()`
-- Use `for b.Loop()` iteration pattern
-
-```bash
-task bench              # Run all benchmarks
-task bench-db           # Run database benchmarks only
-task bench-baseline     # Generate baseline (commit the output)
-task bench-compare      # Compare current vs baseline via benchstat
-```
-
-Optimization targets and thresholds: [docs/optimization-targets.md](docs/optimization-targets.md)
-
-## Background Agent Mode
-
-When running as a background agent (scheduled, headless, or autonomous):
-
-### Always Allowed
-- Run `task test`, `task lint`, `task vulncheck`, `task nilcheck`, `task deadlock`
-- Run `task bench` and `task bench-compare`
-- Read any file, run `go vet`, analyze code
-- Report findings as GitHub issues with `agent-finding` label
-- Run `task fuzz` with default time limits
-
-### Create PR with Evidence (Human Review Required)
-- Performance optimizations — must include before/after benchstat output in PR description
-- Refactoring that changes function signatures or public API
-- Adding new dependencies
-- Changes to security-sensitive files:
-  - `pkg/api/middleware/` (auth)
-  - `pkg/zapscript/utils.go` (command execution)
-  - `pkg/readers/shared/ndef/` (untrusted input parsing)
-  - `pkg/config/auth.go` (auth config)
-- Database schema changes or migrations
-
-### Never
-- Modify tests to make failing code pass (fix the code, not the test)
-- Remove or weaken linter rules
-- Add `nolint` directives without justification
-- Disable security checks (gosec, govulncheck)
-- Change the `forbidigo` rules for sync.Mutex/RWMutex
-- Modify CI workflow files
-- Push directly to main
-- Change benchmark baselines without human review
-
-### Reporting Format
-Title: `[agent:{type}] {summary}` — types: security, perf, quality
-Body: evidence, affected files, proposed fix, risk assessment
-Label: `agent-finding`
-For perf findings: include benchstat comparison
-
-## When Stuck
-
-Don't guess — ask for help or gather more information first.
-
-- **Ask clarifying questions** before coding
-- **Propose a plan first** — outline approach, then implement
-- **Reference existing patterns** — check similar code for consistency
-- **Look at git history** — `git log -p filename` shows how code evolved
+Report exactly which checks ran and any that were skipped. Do not claim completion while a relevant check is failing or the implementation is partial.

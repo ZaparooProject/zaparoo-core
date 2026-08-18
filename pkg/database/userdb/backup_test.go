@@ -934,3 +934,334 @@ func TestUserDBOpenRefusesWhenRecoveryFails(t *testing.T) {
 	require.Len(t, mappings, 1)
 	assert.Equal(t, "Survivor", mappings[0].Label)
 }
+
+func TestBackupName_KindDecidesRetention(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 18, 4, 30, 0, 1, time.UTC)
+
+	autoName := backupName(backupKindAuto, now)
+	manualName := backupName(backupKindManual, now)
+	updateName := backupName(backupKindUpdate, now)
+
+	assert.True(t, isBackupName(autoName))
+	assert.True(t, isBackupName(manualName))
+	assert.True(t, isBackupName(updateName), "an update snapshot is still restorable by name")
+
+	assert.True(t, isAutoBackupName(autoName))
+	assert.False(t, isAutoBackupName(manualName))
+	assert.False(t, isAutoBackupName(updateName), "retention must not reclaim update snapshots")
+
+	assert.False(t, IsUpdateSnapshotName(autoName))
+	assert.False(t, IsUpdateSnapshotName(manualName))
+	assert.True(t, IsUpdateSnapshotName(updateName))
+}
+
+// An update snapshot is not a manual backup, so it does not claim the exemption
+// the app shows for one, and it is not an auto backup, so retention leaves it
+// alone. The updater is what deletes it, once the update has been resolved.
+func TestUserDBBackupForUpdate_SurvivesPruningAndIsNotManual(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	snapshot, resume, err := userDB.BackupForUpdate("2.2.0")
+	require.NoError(t, err)
+	require.NoError(t, resume())
+	assert.False(t, snapshot.Manual)
+	assert.True(t, snapshot.Valid)
+	assert.True(t, IsUpdateSnapshotName(snapshot.Name))
+
+	for range autoBackupKeep + 2 {
+		_, backupErr := userDB.Backup("scheduled", false)
+		require.NoError(t, backupErr)
+	}
+
+	backups, err := userDB.ListBackups()
+	require.NoError(t, err)
+
+	autoCount := 0
+	snapshotPresent := false
+	for _, b := range backups {
+		if isAutoBackupName(b.Name) {
+			autoCount++
+		}
+		if b.Name == snapshot.Name {
+			snapshotPresent = true
+		}
+	}
+	assert.Equal(t, autoBackupKeep, autoCount, "auto backups pruned to retention limit")
+	assert.True(t, snapshotPresent, "update snapshot must survive pruning")
+	assert.FileExists(t, snapshot.Path)
+}
+
+func TestUserDBBackupForUpdate_QuiescesWritersUntilResume(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	_, resume, err := userDB.BackupForUpdate("2.2.0")
+	require.NoError(t, err)
+
+	err = userDB.AddMapping(&database.Mapping{
+		Label:    "too-late",
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "after-update-snapshot",
+		Override: "**launch.system:snes",
+		Enabled:  true,
+	})
+	require.Error(t, err, "writes after the update snapshot must remain quiesced")
+
+	require.NoError(t, resume())
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "after-resume",
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "after-aborted-update",
+		Override: "**launch.system:snes",
+		Enabled:  true,
+	}))
+}
+
+func TestRestoreFileTo_UsesSuppliedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("data", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	backupPath := filepath.Join(dir, "backup.db")
+	dbPath := filepath.Join(dir, "user.db")
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("replacement"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, dbPath, []byte("original"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, dbPath+"-wal", []byte("stale wal"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, database.CorruptMarkerPath(dbPath), []byte("corrupt"), 0o600))
+
+	checked := false
+	err := restoreFileToWithCheck(t.Context(), fs, backupPath, dbPath,
+		func(_ context.Context, gotFS afero.Fs, gotPath string) (bool, string, error) {
+			checked = true
+			assert.Same(t, fs, gotFS)
+			assert.Equal(t, backupPath, gotPath)
+			return true, "ok", nil
+		})
+	require.NoError(t, err)
+	assert.True(t, checked)
+
+	contents, err := afero.ReadFile(fs, dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("replacement"), contents)
+	for _, removed := range []string{dbPath + "-wal", database.CorruptMarkerPath(dbPath)} {
+		exists, existsErr := afero.Exists(fs, removed)
+		require.NoError(t, existsErr)
+		assert.False(t, exists)
+	}
+}
+
+func TestRestoreFileTo_ReplacesTheLiveDatabase(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, userDB.AddMapping(&database.Mapping{
+		Label:    "restore-file-to",
+		Type:     MappingTypeID,
+		Match:    MatchTypeExact,
+		Pattern:  "restore-file-to-token",
+		Override: "**launch.system:snes",
+		Enabled:  true,
+	}))
+
+	snapshot, _, err := userDB.BackupForUpdate("2.2.0")
+	require.NoError(t, err)
+
+	dbPath := userDB.GetDBPath()
+	require.NoError(t, userDB.Close())
+
+	require.NoError(t, RestoreFileTo(context.Background(), afero.NewOsFs(), snapshot.Path, dbPath))
+
+	restored, err := sql.Open("sqlite3", dbPath+"?mode=ro&_query_only=ON")
+	require.NoError(t, err)
+	defer func() { _ = restored.Close() }()
+
+	var count int
+	require.NoError(t, restored.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM Mappings WHERE pattern = ?`, "restore-file-to-token",
+	).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+// A backup that fails quick_check is not installed over a working database:
+// replacing a good file with a broken one is worse than refusing the restore.
+func TestRestoreFileTo_RejectsACorruptBackup(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	snapshot, _, err := userDB.BackupForUpdate("2.2.0")
+	require.NoError(t, err)
+
+	dbPath := userDB.GetDBPath()
+	require.NoError(t, userDB.Close())
+
+	live, err := os.ReadFile(dbPath) // #nosec G304 -- test-owned path.
+	require.NoError(t, err)
+
+	corrupt, err := os.ReadFile(snapshot.Path) // #nosec G304 -- test-owned path.
+	require.NoError(t, err)
+	// Leave the header intact so it is opened as a database and then found bad,
+	// rather than rejected as some other kind of file.
+	for i := 100; i < len(corrupt) && i < 4096; i++ {
+		corrupt[i] = 0xFF
+	}
+	require.NoError(t, os.WriteFile(snapshot.Path, corrupt, 0o600)) // #nosec G703 -- test-owned path.
+
+	err = RestoreFileTo(context.Background(), afero.NewOsFs(), snapshot.Path, dbPath)
+	require.ErrorIs(t, err, ErrInvalidBackup)
+	assert.Contains(t, err.Error(), "quick_check", "the backup must be rejected by the integrity check")
+
+	after, err := os.ReadFile(dbPath) // #nosec G304 -- test-owned path.
+	require.NoError(t, err)
+	assert.Equal(t, live, after, "the live database must be untouched")
+}
+
+func TestBackupsDir(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, filepath.Join("data", backupDirName), BackupsDir("data"))
+}
+
+// quick_check runs through SQLite, which reads the real filesystem. Passing an
+// in-memory filesystem would have it check some other file — or nothing — so it
+// has to be refused rather than silently report a healthy backup.
+func TestRestoreFileTo_RequiresAnOSFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("data", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	backupPath := filepath.Join(dir, "backup.db")
+	dbPath := filepath.Join(dir, "user.db")
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("replacement"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, dbPath, []byte("original"), 0o600))
+
+	err := RestoreFileTo(t.Context(), fs, backupPath, dbPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OS filesystem")
+
+	contents, readErr := afero.ReadFile(fs, dbPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("original"), contents, "the live database must be untouched")
+}
+
+// Whatever quick_check reports, a backup that is not known-good must never be
+// installed over a working database.
+func TestRestoreFileTo_LeavesTheDatabaseAloneWhenTheBackupIsNotKnownGood(t *testing.T) {
+	t.Parallel()
+
+	checkFailed := errors.New("could not open the backup")
+	tests := []struct {
+		check     restoreQuickCheck
+		wantIs    error
+		name      string
+		wantError string
+	}{
+		{
+			name: "quick_check reports damage",
+			check: func(context.Context, afero.Fs, string) (bool, string, error) {
+				return false, "*** in database main: page 3 is never used", nil
+			},
+			wantIs:    ErrInvalidBackup,
+			wantError: "page 3 is never used",
+		},
+		{
+			name: "quick_check finds corruption",
+			check: func(context.Context, afero.Fs, string) (bool, string, error) {
+				return false, "", errors.New("database disk image is malformed")
+			},
+			wantIs:    ErrInvalidBackup,
+			wantError: "quick_check",
+		},
+		{
+			name: "quick_check could not run",
+			check: func(context.Context, afero.Fs, string) (bool, string, error) {
+				return false, "", checkFailed
+			},
+			wantIs:    checkFailed,
+			wantError: "failed to check user database backup",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			dir := filepath.Join("data", "zaparoo")
+			require.NoError(t, fs.MkdirAll(dir, 0o750))
+			backupPath := filepath.Join(dir, "backup.db")
+			dbPath := filepath.Join(dir, "user.db")
+			require.NoError(t, afero.WriteFile(fs, backupPath, []byte("replacement"), 0o600))
+			require.NoError(t, afero.WriteFile(fs, dbPath, []byte("original"), 0o600))
+
+			err := restoreFileToWithCheck(t.Context(), fs, backupPath, dbPath, tt.check)
+			require.ErrorIs(t, err, tt.wantIs)
+			assert.Contains(t, err.Error(), tt.wantError)
+
+			contents, readErr := afero.ReadFile(fs, dbPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, []byte("original"), contents, "the live database must be untouched")
+		})
+	}
+}
+
+// An update install asks for the snapshot before it touches anything. Without a
+// connection there is nothing to snapshot, and the install has to stop rather
+// than proceed with no rollback point.
+func TestUserDBBackupForUpdate_WithoutAConnection(t *testing.T) {
+	t.Parallel()
+
+	snapshot, resume, err := (&UserDB{}).BackupForUpdate("2.2.0")
+	require.ErrorIs(t, err, ErrNullSQL)
+	assert.Nil(t, resume)
+	assert.Empty(t, snapshot.Path)
+}
+
+// A drain that fails leaves writers still attached, so the snapshot cannot be
+// consistent. The install is told to stop, and the database is put back the way
+// it was found: the caller never closed it and has no way to reopen it.
+func TestUserDBBackupForUpdate_ReopensAfterAFailedDrain(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, userDB.sql.Load().Close())
+	sqlDB, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	closeErr := errors.New("driver refused to close")
+	mock.ExpectClose().WillReturnError(closeErr)
+	userDB.sql.Store(sqlDB)
+
+	snapshot, resume, err := userDB.BackupForUpdate("2.2.0")
+	require.ErrorIs(t, err, closeErr)
+	assert.Nil(t, resume)
+	assert.Empty(t, snapshot.Path)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	_, err = userDB.GetAllMappings()
+	require.NoError(t, err, "the database must be usable again after a refused drain")
+}
+
+// A snapshot that fails must not leave the connection pool drained: the install
+// is abandoned, but the service keeps running on the database it already had.
+func TestUserDBBackupForUpdate_ReopensWhenTheSnapshotFails(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	backupDir := userDB.backupDir()
+	require.NoError(t, os.RemoveAll(backupDir))
+	require.NoError(t, os.WriteFile(backupDir, []byte("not a directory"), 0o600))
+
+	snapshot, resume, err := userDB.BackupForUpdate("2.2.0")
+	require.Error(t, err)
+	assert.Nil(t, resume)
+	assert.Empty(t, snapshot.Path)
+
+	_, err = userDB.GetAllMappings()
+	require.NoError(t, err, "the database must be usable again after a failed snapshot")
+}

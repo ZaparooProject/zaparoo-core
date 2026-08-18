@@ -23,13 +23,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/rs/zerolog/log"
@@ -37,19 +39,19 @@ import (
 
 const updateURL = "https://updates.zaparoo.org/"
 
-var ErrDevelopmentVersion = errors.New("update check skipped for development version")
+var (
+	ErrDevelopmentVersion = errors.New("update check skipped for development version")
+	ErrUpdateInProgress   = errors.New("update already in progress")
+	applyMu               syncutil.Mutex
+	applyInProgress       atomic.Bool
+)
 
 // Options describes the device an update is being resolved for.
 type Options struct {
-	// PlatformID is the platform half of the archive name.
+	UserDB     UpdateBackupper
 	PlatformID string
-	// Channel is stable or beta.
-	Channel string
-	// DataDir is the platform data directory. The generation watermark and the
-	// verified manifest cache live in a subdirectory of it. An empty value
-	// disables both: checks still work and are still verified, they just lose
-	// replay protection and re-download the manifest each time.
-	DataDir string
+	Channel    string
+	DataDir    string
 }
 
 type Result struct {
@@ -62,6 +64,7 @@ type Result struct {
 // session is one update operation's updater and the transport backing it.
 type session struct {
 	updater *selfupdate.Updater
+	source  *verifiedSource
 	// close releases the transport's pooled connections. Callers must defer it:
 	// each operation builds a fresh transport, so without it the keep-alive
 	// connections and their goroutines outlive the operation until the idle
@@ -100,6 +103,7 @@ func makeUpdater(opts Options) (*session, error) {
 
 	return &session{
 		updater: updater,
+		source:  source,
 		repo:    selfupdate.NewRepositorySlug("ZaparooProject", "zaparoo-core"),
 		close:   transport.CloseIdleConnections,
 	}, nil
@@ -147,6 +151,24 @@ func Apply(ctx context.Context, opts Options) (string, error) {
 	if config.IsDevelopmentVersion() {
 		return "", ErrDevelopmentVersion
 	}
+	if !applyInProgress.CompareAndSwap(false, true) {
+		return "", ErrUpdateInProgress
+	}
+	defer applyInProgress.Store(false)
+
+	if opts.UserDB == nil {
+		return "", errors.New("applying an update needs the user database")
+	}
+	if opts.DataDir == "" {
+		return "", errors.New("applying an update needs the platform data directory")
+	}
+
+	applyMu.Lock()
+	defer applyMu.Unlock()
+
+	if err := ensureNoPendingUpdate(opts.DataDir); err != nil {
+		return "", err
+	}
 
 	s, err := makeUpdater(opts)
 	if err != nil {
@@ -154,20 +176,63 @@ func Apply(ctx context.Context, opts Options) (string, error) {
 	}
 	defer s.close()
 
-	// When running as a daemon subprocess, the binary is a temp copy and
-	// os.Executable() would point to it. ZAPAROO_APP holds the path to
-	// the original binary that should be updated instead.
-	var release *selfupdate.Release
-	if appPath := os.Getenv(config.AppEnv); appPath != "" {
-		release, err = s.updater.UpdateCommand(ctx, appPath, config.AppVersion, s.repo)
-	} else {
-		release, err = s.updater.UpdateSelf(ctx, config.AppVersion, s.repo)
-	}
+	release, found, err := s.updater.DetectLatest(ctx, s.repo)
 	if err != nil {
-		return "", fmt.Errorf("applying update: %w", err)
+		return "", fmt.Errorf("detecting the release to apply: %w", err)
+	}
+	if !found || !release.GreaterThan(config.AppVersion) {
+		return "", fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion)
 	}
 
-	return release.Version(), nil
+	manifestRelease, err := s.source.releaseForVersion(release.Version())
+	if err != nil {
+		return "", err
+	}
+	targetPath, err := restart.BinaryPath()
+	if err != nil {
+		return "", fmt.Errorf("resolving the binary to update: %w", err)
+	}
+	staged, err := Stage(ctx, &StageOptions{
+		Release:        manifestRelease,
+		PlatformID:     opts.PlatformID,
+		Arch:           runtime.GOARCH,
+		OS:             runtime.GOOS,
+		TargetPath:     targetPath,
+		StagingRoot:    stagingRootFor(opts.DataDir),
+		CurrentVersion: config.AppVersion,
+	})
+	if err != nil {
+		return "", fmt.Errorf("staging update: %w", err)
+	}
+
+	if err := installStaged(ctx, &installOptions{
+		Staged:             staged,
+		UserDB:             opts.UserDB,
+		TargetPath:         targetPath,
+		DataDir:            opts.DataDir,
+		PreviousVersion:    config.AppVersion,
+		PlatformID:         opts.PlatformID,
+		ManifestGeneration: s.source.manifestGeneration(),
+		Trigger:            triggerManual,
+	}); err != nil {
+		return "", fmt.Errorf("installing update: %w", err)
+	}
+
+	return staged.Version, nil
+}
+
+func ensureNoPendingUpdate(dataDir string) error {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	m, err := loadMarker(stateDirFor(dataDir))
+	if err != nil {
+		return fmt.Errorf("checking for an unresolved update: %w", err)
+	}
+	if m != nil {
+		return fmt.Errorf("an update to %s is still unresolved", m.TargetVersion)
+	}
+	return nil
 }
 
 // CheckFn is the signature for a function that checks for updates.

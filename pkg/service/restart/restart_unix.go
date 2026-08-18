@@ -22,6 +22,7 @@
 package restart
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -44,6 +45,8 @@ func Exec() error {
 		Msg("re-executing binary for update restart")
 
 	//nolint:gosec // Safe: binPath is from os.Executable() or ZAPAROO_APP env var
-	err = syscall.Exec(binPath, os.Args, os.Environ())
-	return fmt.Errorf("exec failed: %w", err)
+	if err := syscall.Exec(binPath, os.Args, os.Environ()); err != nil {
+		return fmt.Errorf("exec failed: %w", err)
+	}
+	return errors.New("exec returned without replacing process")
 }

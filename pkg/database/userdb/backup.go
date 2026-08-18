@@ -30,12 +30,15 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+var ErrInvalidBackup = errors.New("user database backup is invalid")
 
 const (
 	backupDirName            = "backups"
@@ -52,15 +55,29 @@ const (
 	restoreStagePattern = ".userdb-restore-*"
 )
 
+// backupKind is the suffix a backup filename carries, and the only record on
+// disk of why it was taken. Retention reads it back rather than any metadata:
+// pruneAutoBackups reclaims backupKindAuto and nothing else, so the other kinds
+// survive until something deletes them deliberately.
+type backupKind string
+
+type restoreQuickCheck func(context.Context, afero.Fs, string) (bool, string, error)
+
+const (
+	backupKindAuto   backupKind = "auto"
+	backupKindManual backupKind = "manual"
+	// backupKindUpdate marks the snapshot taken before an update installs a new
+	// binary. Rolling that update back needs a database the previous version can
+	// still open, so retention must not reclaim it on a schedule; the updater
+	// deletes it once the update is confirmed or rolled back.
+	backupKindUpdate backupKind = "update"
+)
+
 func (db *UserDB) backupDir() string {
 	return filepath.Join(filepath.Dir(db.GetDBPath()), backupDirName)
 }
 
-func backupName(manual bool, now time.Time) string {
-	kind := "auto"
-	if manual {
-		kind = "manual"
-	}
+func backupName(kind backupKind, now time.Time) string {
 	return fmt.Sprintf("%s%s-%09d-%s%s",
 		backupPrefix,
 		now.UTC().Format("20060102-150405"),
@@ -70,9 +87,29 @@ func backupName(manual bool, now time.Time) string {
 	)
 }
 
-func isAutoBackupName(name string) bool {
+// hasBackupKind reports whether name is a backup filename of a given kind. The
+// suffix is built from the same constant backupName writes, so a new kind cannot
+// be added without retention and reporting agreeing on what it looks like.
+func hasBackupKind(name string, kind backupKind) bool {
 	return strings.HasPrefix(name, backupPrefix) &&
-		strings.HasSuffix(name, "-auto"+backupExt)
+		strings.HasSuffix(name, "-"+string(kind)+backupExt)
+}
+
+func isAutoBackupName(name string) bool {
+	return hasBackupKind(name, backupKindAuto)
+}
+
+// IsUpdateSnapshotName reports whether name is an update snapshot. The updater
+// needs this to reclaim snapshots whose update is long resolved, and it holds no
+// database handle when it runs.
+func IsUpdateSnapshotName(name string) bool {
+	return hasBackupKind(name, backupKindUpdate)
+}
+
+// BackupsDir returns the directory backups live in for a data directory, so a
+// caller with no open database can still find them.
+func BackupsDir(dataDir string) string {
+	return filepath.Join(dataDir, backupDirName)
 }
 
 func isBackupName(name string) bool {
@@ -93,7 +130,7 @@ func backupInfoContext(ctx context.Context, path string, quickCheck bool) (datab
 		Path:      path,
 		CreatedAt: info.ModTime(),
 		Size:      info.Size(),
-		Manual:    strings.HasSuffix(filepath.Base(path), "-manual"+backupExt),
+		Manual:    hasBackupKind(filepath.Base(path), backupKindManual),
 	}
 	if quickCheck {
 		valid, check, checkErr := quickCheckDBContext(ctx, path)
@@ -150,19 +187,78 @@ func (db *UserDB) pruneAutoBackups() error {
 }
 
 func (db *UserDB) Backup(reason string, manual bool) (database.BackupInfo, error) {
-	return db.createBackup(db.ctx, reason, manual)
+	kind := backupKindAuto
+	if manual {
+		kind = backupKindManual
+	}
+	return db.createBackup(db.ctx, reason, kind)
 }
 
-func (db *UserDB) createBackup(ctx context.Context, reason string, manual bool) (database.BackupInfo, error) {
+// BackupForUpdate drains and closes the live connection pool before taking the
+// snapshot. The pool remains closed until the caller invokes resume after an
+// aborted install; a successful install restarts the process instead. This
+// closes the window where acknowledged outgoing-version writes could land after
+// the rollback snapshot.
+func (db *UserDB) BackupForUpdate(
+	targetVersion string,
+) (database.BackupInfo, func() error, error) {
 	if db.sql.Load() == nil {
+		return database.BackupInfo{}, nil, ErrNullSQL
+	}
+	if err := db.closeAndDrain(); err != nil {
+		if openErr := db.Open(); openErr != nil {
+			return database.BackupInfo{}, nil, errors.Join(err,
+				fmt.Errorf("reopening user database after failed update drain: %w", openErr))
+		}
+		return database.BackupInfo{}, nil, err
+	}
+
+	resume := sync.OnceValue(func() error {
+		if err := db.Open(); err != nil {
+			return fmt.Errorf("reopening user database after aborted update: %w", err)
+		}
+		return nil
+	})
+	fail := func(cause error) (database.BackupInfo, func() error, error) {
+		return database.BackupInfo{}, nil, errors.Join(cause, resume())
+	}
+
+	snapshotDB, err := db.openSQLConnection(db.GetDBPath())
+	if err != nil {
+		return fail(fmt.Errorf("opening drained user database for update snapshot: %w", err))
+	}
+	snapshot, backupErr := db.createBackupWithSQL(
+		db.ctx, "update-"+targetVersion, backupKindUpdate, snapshotDB,
+	)
+	closeErr := snapshotDB.Close()
+	if backupErr != nil {
+		return fail(backupErr)
+	}
+	if closeErr != nil {
+		return fail(fmt.Errorf("closing update snapshot connection: %w", closeErr))
+	}
+	return snapshot, resume, nil
+}
+
+func (db *UserDB) createBackup(
+	ctx context.Context, reason string, kind backupKind,
+) (database.BackupInfo, error) {
+	sqlInstance := db.sql.Load()
+	if sqlInstance == nil {
 		return database.BackupInfo{}, ErrNullSQL
 	}
+	return db.createBackupWithSQL(ctx, reason, kind, sqlInstance)
+}
+
+func (db *UserDB) createBackupWithSQL(
+	ctx context.Context, reason string, kind backupKind, sqlInstance *sql.DB,
+) (database.BackupInfo, error) {
 	if err := os.MkdirAll(db.backupDir(), 0o750); err != nil {
 		return database.BackupInfo{}, fmt.Errorf("failed to create user database backup directory: %w", err)
 	}
 
-	backupPath := filepath.Join(db.backupDir(), backupName(manual, time.Now()))
-	if _, err := db.sql.Load().ExecContext(ctx, "VACUUM INTO ?", backupPath); err != nil {
+	backupPath := filepath.Join(db.backupDir(), backupName(kind, time.Now()))
+	if _, err := sqlInstance.ExecContext(ctx, "VACUUM INTO ?", backupPath); err != nil {
 		db.NoteCorruption(err)
 		return database.BackupInfo{}, fmt.Errorf("failed to back up user database: %w", err)
 	}
@@ -180,7 +276,7 @@ func (db *UserDB) createBackup(ctx context.Context, reason string, manual bool) 
 		_ = os.Remove(backupPath)
 		return info, fmt.Errorf("user database backup failed validation: %s", info.QuickCheck)
 	}
-	if !manual {
+	if kind == backupKindAuto {
 		if pruneErr := db.pruneAutoBackups(); pruneErr != nil {
 			return info, pruneErr
 		}
@@ -188,7 +284,7 @@ func (db *UserDB) createBackup(ctx context.Context, reason string, manual bool) 
 	log.Info().
 		Str("path", info.Path).
 		Int64("size", info.Size).
-		Bool("manual", manual).
+		Str("kind", string(kind)).
 		Str("reason", reason).
 		Msg("created user database backup")
 	return info, nil
@@ -200,7 +296,7 @@ func (db *UserDB) createBackup(ctx context.Context, reason string, manual bool) 
 func (db *UserDB) BackupForTransfer(
 	ctx context.Context, reason string,
 ) (database.BackupInfo, func() error, error) {
-	full, err := db.createBackup(ctx, reason, false)
+	full, err := db.createBackup(ctx, reason, backupKindAuto)
 	if err != nil {
 		return database.BackupInfo{}, nil, err
 	}
@@ -220,7 +316,7 @@ func (db *UserDB) BackupForTransfer(
 	}
 
 	transferPath := filepath.Join(transferDir, "user.db")
-	if err = copyFileSyncContext(ctx, full.Path, transferPath, 0o600); err != nil {
+	if err = copyFileSyncContext(ctx, afero.NewOsFs(), full.Path, transferPath, 0o600); err != nil {
 		return fail(fmt.Errorf("failed to copy transfer backup: %w", err))
 	}
 	if err = sanitizeTransferBackup(ctx, transferPath); err != nil {
@@ -343,20 +439,18 @@ func (r *contextReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func copyFileSync(src, dst string, mode os.FileMode) error {
-	return copyFileSyncContext(context.Background(), src, dst, mode)
+func copyFileSync(fs afero.Fs, src, dst string, mode os.FileMode) error {
+	return copyFileSyncContext(context.Background(), fs, src, dst, mode)
 }
 
-func copyFileSyncContext(ctx context.Context, src, dst string, mode os.FileMode) error {
-	//nolint:gosec // src is selected by backup validation/recovery code, not raw user input.
-	in, err := os.Open(src)
+func copyFileSyncContext(ctx context.Context, fs afero.Fs, src, dst string, mode os.FileMode) error {
+	in, err := fs.Open(src)
 	if err != nil {
 		return fmt.Errorf("failed to open source file: %w", err)
 	}
 	defer func() { _ = in.Close() }()
 
-	//nolint:gosec // dst is the known user database path controlled by this package.
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	out, err := fs.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("failed to open destination file: %w", err)
 	}
@@ -418,7 +512,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 	}
 	defer func() { _ = fs.Remove(tmpPath) }()
 
-	if err = copyFileSync(backupPath, tmpPath, 0o600); err != nil {
+	if err = copyFileSync(fs, backupPath, tmpPath, 0o600); err != nil {
 		return fmt.Errorf("failed to stage user database backup: %w", err)
 	}
 
@@ -438,7 +532,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 		}
 	}
 
-	database.RemoveSidecars(dbPath)
+	database.RemoveSidecarsFS(fs, dbPath)
 	if err = renameDatabaseFile(fs, tmpPath, dbPath); err != nil {
 		if originalPreserved {
 			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
@@ -560,6 +654,56 @@ func syncAferoDirectory(fs afero.Fs, path string) error {
 	return nil
 }
 
+// RestoreFileTo installs a backup over a user database that nothing has open.
+//
+// RestoreBackup is the normal path and cannot be used here: it needs a live
+// *UserDB, and the only way to get one is OpenUserDB, which creates a fresh
+// empty schema when the file is missing. The update watchdog runs before any
+// database is opened — that is what lets it decide without consulting a schema
+// version — so it needs the swap on its own.
+//
+// The backup is quick_checked first, because installing a corrupt file over a
+// working database turns a recoverable situation into an unrecoverable one. A
+// crash partway through is repaired by recoverInterruptedRestore, which Open
+// already runs before anything else touches the file.
+func RestoreFileTo(ctx context.Context, fs afero.Fs, backupPath, dbPath string) error {
+	return restoreFileToWithCheck(ctx, fs, backupPath, dbPath, quickCheckRestoreDBContext)
+}
+
+func quickCheckRestoreDBContext(
+	ctx context.Context, fs afero.Fs, path string,
+) (valid bool, result string, err error) {
+	if _, ok := fs.(*afero.OsFs); !ok {
+		return false, "", errors.New("user database quick_check requires an OS filesystem")
+	}
+	return quickCheckDBContext(ctx, path)
+}
+
+func restoreFileToWithCheck(
+	ctx context.Context,
+	fs afero.Fs,
+	backupPath, dbPath string,
+	quickCheck restoreQuickCheck,
+) error {
+	valid, check, err := quickCheck(ctx, fs, backupPath)
+	if err != nil {
+		if database.IsCorruptionError(err) {
+			return fmt.Errorf("%w: quick_check: %w", ErrInvalidBackup, err)
+		}
+		return fmt.Errorf("failed to check user database backup: %w", err)
+	}
+	if !valid {
+		return fmt.Errorf("%w: quick_check: %s", ErrInvalidBackup, check)
+	}
+	if err = replaceDatabaseFromBackup(fs, backupPath, dbPath); err != nil {
+		return fmt.Errorf("failed to restore user database backup: %w", err)
+	}
+	if err = database.ClearCorruptMarkerFS(fs, dbPath); err != nil {
+		return fmt.Errorf("failed to clear user database corrupt marker after restore: %w", err)
+	}
+	return nil
+}
+
 func (db *UserDB) RestoreBackup(name string) (database.RestoreInfo, error) {
 	backupPath, err := db.resolveBackupPath(name)
 	if err != nil {
@@ -665,7 +809,7 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 		if !backup.Valid {
 			continue
 		}
-		if err = copyFileSync(backup.Path, db.GetDBPath(), 0o600); err != nil {
+		if err = copyFileSync(afero.NewOsFs(), backup.Path, db.GetDBPath(), 0o600); err != nil {
 			log.Warn().Err(err).Str("path", backup.Path).Msg("failed to restore user database backup")
 			continue
 		}

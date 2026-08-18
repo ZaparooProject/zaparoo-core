@@ -527,6 +527,23 @@ func TestVerifiedSource_SkipsAmbiguousRelease(t *testing.T) {
 	assert.Equal(t, "v2.15.1", releases[0].GetTagName())
 }
 
+func TestResolvedAssetCopies(t *testing.T) {
+	t.Parallel()
+
+	archive := &otameta.Asset{ID: 1, Name: "zaparoo-linux_amd64-2.2.0.tar.gz", URL: "assets/core.tar.gz"}
+	metadata := &otameta.Asset{ID: 2, Name: "checksums.txt", URL: "assets/checksums.txt"}
+	resolved := resolvedAssetCopies(
+		[]*otameta.Asset{nil, archive, metadata},
+		"https://updates.example/releases",
+		func(asset *otameta.Asset) bool { return asset == archive },
+	)
+
+	require.Len(t, resolved, 1)
+	assert.NotSame(t, archive, resolved[0])
+	assert.Equal(t, "https://updates.example/releases/assets/core.tar.gz", resolved[0].URL)
+	assert.Equal(t, "assets/core.tar.gz", archive.URL, "resolving must not mutate signed manifest assets")
+}
+
 func TestIsReleaseArchive(t *testing.T) {
 	t.Parallel()
 
@@ -555,4 +572,110 @@ func assetNames(rel selfupdate.SourceRelease) []string {
 		names = append(names, a.GetName())
 	}
 	return names
+}
+
+func TestVerifiedSource_ReleaseForVersionNeedsALoadedManifest(t *testing.T) {
+	t.Parallel()
+
+	src := newManifestServer(t, twoReleaseManifest(412)).source(t.TempDir(), "linux", "amd64")
+
+	_, err := src.releaseForVersion("2.16.1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has not been loaded")
+	assert.Equal(t, int64(0), src.manifestGeneration())
+}
+
+// TestVerifiedSource_ReleaseForVersion covers the second lookup an install does:
+// go-selfupdate picked a version, and the install has to re-find that release in
+// the manifest this process verified rather than trusting the detection result.
+func TestVerifiedSource_ReleaseForVersion(t *testing.T) {
+	t.Parallel()
+
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	src := ms.source(t.TempDir(), "linux", "amd64")
+	_, err := src.ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+	assert.Equal(t, int64(412), src.manifestGeneration())
+
+	rel, err := src.releaseForVersion("2.16.1")
+	require.NoError(t, err)
+	assert.Equal(t, "v2.16.1", rel.TagName)
+
+	// Unlike ListReleases this keeps every asset: the caller selects by name and
+	// still needs the checksum files alongside its own archive.
+	names := make([]string, 0, len(rel.Assets))
+	for _, asset := range rel.Assets {
+		names = append(names, asset.Name)
+	}
+	assert.Equal(t, []string{
+		"zaparoo-linux_amd64-2.16.1.tar.gz",
+		"zaparoo-zapos_arm64-2.16.1.tar.gz",
+		"checksums.txt",
+		"checksums.txt.sig",
+	}, names)
+
+	// Manifest-relative URLs resolve against the manifest, and the cached
+	// manifest keeps its original values so a second lookup resolves the same.
+	assert.Equal(t, ms.URL+testRepoPath+"/checksums.txt", rel.Assets[2].URL)
+	assert.Equal(t, "checksums.txt", src.manifest.Releases[0].Assets[2].URL,
+		"resolving asset URLs must not rewrite the verified manifest")
+
+	again, err := src.releaseForVersion("2.16.1")
+	require.NoError(t, err)
+	assert.Equal(t, ms.URL+testRepoPath+"/checksums.txt", again.Assets[2].URL)
+}
+
+// A version tag that is not in the manifest must fail the install rather than
+// fall through to some other release.
+func TestVerifiedSource_ReleaseForVersionRejectsUnknownVersions(t *testing.T) {
+	t.Parallel()
+
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	src := ms.source(t.TempDir(), "linux", "amd64")
+	_, err := src.ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+
+	for name, version := range map[string]string{
+		"absent from the manifest": "2.99.0",
+		"not a version at all":     "not-a-version",
+		"empty":                    "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := src.releaseForVersion(version)
+			require.Error(t, err)
+		})
+	}
+}
+
+// A data directory that cannot be written is ordinary on read-only install
+// media. Bookkeeping the check could not persist must not fail the check.
+func TestVerifiedSource_ReadOnlyStateDirStillChecks(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	dir := t.TempDir()
+	//nolint:gosec // an unwritable-but-readable directory is the failure under test
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, stateDirPerm) })
+	src := ms.source(dir, "linux", "amd64")
+
+	releases, err := src.ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+	require.Len(t, releases, 2)
+
+	// Nothing was stored, so the next check has to fetch the manifest in full
+	// rather than send validators it cannot pair with a cached body.
+	releases, err = src.ListReleases(t.Context(), testRepo())
+	require.NoError(t, err)
+	require.Len(t, releases, 2)
+	assert.Equal(t, int64(2), ms.manifestGets.Load())
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
