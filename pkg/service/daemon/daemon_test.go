@@ -843,6 +843,25 @@ func TestRestartExecConfigUsesRollbackTargetWithoutAppEnv(t *testing.T) {
 	assert.Equal(t, []byte("restored-binary"), cached)
 }
 
+// A rollback that names a binary which is no longer there must fail loudly:
+// exec'ing whatever the stale cache happens to hold would silently undo the
+// rollback.
+func TestRestartExecConfigFailsWhenRollbackTargetIsMissing(t *testing.T) {
+	svc := newTestService(t)
+	t.Setenv(config.AppEnv, "")
+
+	missing := filepath.Join(t.TempDir(), "restored-zaparoo.sh")
+	cfg, err := svc.restartExecConfig(
+		missing,
+		[]string{"failed-cache", "-service", "exec"},
+		[]string{"A=B"},
+	)
+
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Empty(t, cfg.serviceBin)
+	assert.Empty(t, cfg.args)
+}
+
 func TestRunningRemovesStalePIDFile(t *testing.T) {
 	t.Parallel()
 

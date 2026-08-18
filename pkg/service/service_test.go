@@ -1796,3 +1796,35 @@ func TestCheckAndResumeIndexing_WaitGroupRace(t *testing.T) {
 		})
 	}
 }
+
+// An update is only committed once the version that installed it has stayed up
+// for a while. Shutting down before then proves nothing, so the wait must be
+// abandoned and the marker left for the next boot to judge.
+func TestConfirmPendingUpdate_ShutdownAbandonsTheWait(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for len(notifCh) > 0 {
+			<-notifCh
+		}
+	})
+
+	dataDir := t.TempDir()
+	st.StopService()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		confirmPendingUpdate(st, dataDir)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(updateConfirmDelay):
+		t.Fatal("confirmPendingUpdate kept waiting after the service shut down")
+	}
+}

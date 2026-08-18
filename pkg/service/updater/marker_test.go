@@ -150,3 +150,35 @@ func TestClearMarker_ToleratesAbsence(t *testing.T) {
 	require.NoError(t, clearMarker(dir))
 	assert.NoFileExists(t, markerPath(dir))
 }
+
+// Platforms with no data directory get an empty state dir. Nothing there can be
+// persisted, and none of it may fail: the update path just has no marker.
+func TestMarker_NoStateDirIsInert(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, markerPath(""))
+
+	m, err := loadMarker("")
+	require.NoError(t, err)
+	assert.Nil(t, m)
+
+	require.NoError(t, saveMarker("", &pendingMarker{State: markerInstalled}))
+	require.NoError(t, clearMarker(""))
+}
+
+// A marker from a newer schema is left for the build that wrote it, so saving
+// over one must be refused rather than silently downgrade its contents.
+func TestSaveMarker_RefusesToDowngradeANewerSchema(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, saveMarker(dir, &pendingMarker{
+		MarkerVersion: currentMarkerVersion + 1,
+		State:         markerInstalled,
+		TargetVersion: testTargetVersion,
+	}))
+	assert.NoFileExists(t, markerPath(dir))
+
+	require.NoError(t, saveMarker(dir, nil))
+	assert.NoFileExists(t, markerPath(dir))
+}

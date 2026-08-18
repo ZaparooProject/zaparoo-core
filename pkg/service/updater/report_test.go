@@ -130,3 +130,79 @@ func TestReportLastUpdate_RetriesAfterInboxFailure(t *testing.T) {
 	assert.Nil(t, peekUpdateResult(dir), "successful retry must acknowledge the result")
 	mockUserDB.AssertExpectations(t)
 }
+
+func TestReportLastUpdate_MessagePerOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		outcome  updateOutcome
+		title    string
+		body     string
+		severity int
+	}{
+		{
+			outcome:  outcomeSucceeded,
+			severity: inbox.SeverityInfo,
+			title:    "Update installed",
+			body:     "Updated from version 2.1.0 to version 2.2.0.",
+		},
+		{
+			outcome:  outcomeRollbackBlocked,
+			severity: inbox.SeverityError,
+			title:    "Update could not be rolled back",
+			body: "Version 2.2.0 did not start and version 2.1.0 could not be restored " +
+				"automatically. The snapshot taken before the update is still in your " +
+				"backups and can be restored by hand.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.outcome), func(t *testing.T) {
+			t.Parallel()
+
+			dataDir := t.TempDir()
+			dir := stateDirFor(dataDir)
+			require.NoError(t, recordUpdateResult(dir, &updateResult{
+				At:          time.Date(2026, 8, 18, 5, 0, 0, 0, time.UTC),
+				Outcome:     tt.outcome,
+				FromVersion: testPrevVersion,
+				ToVersion:   testTargetVersion,
+				Detail:      "disk was full",
+			}))
+
+			mockUserDB := helpers.NewMockUserDBI()
+			mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
+				return msg.Title == tt.title &&
+					msg.Severity == tt.severity &&
+					// A detail from the failure is appended so support has the
+					// reason, not just the outcome.
+					msg.Body == tt.body+"\n\ndisk was full" &&
+					msg.Category == inbox.CategoryUpdateResult
+			})).Return(&database.InboxMessage{
+				DBID:     1,
+				Title:    tt.title,
+				Category: inbox.CategoryUpdateResult,
+			}, nil).Once()
+
+			ns := make(chan models.Notification, 1)
+			ReportLastUpdate(dataDir, inbox.NewService(mockUserDB, ns))
+
+			assert.Nil(t, peekUpdateResult(dir), "a delivered result must not be shown again")
+			mockUserDB.AssertExpectations(t)
+		})
+	}
+}
+
+// Nothing to report and nowhere to report to are both ordinary: most boots have
+// no update result, and some platforms start without an inbox.
+func TestReportLastUpdate_QuietWithNothingToSay(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	ReportLastUpdate(dataDir, nil)
+
+	mockUserDB := helpers.NewMockUserDBI()
+	ns := make(chan models.Notification, 1)
+	ReportLastUpdate(dataDir, inbox.NewService(mockUserDB, ns))
+	mockUserDB.AssertNotCalled(t, "AddInboxMessage", mock.Anything)
+}

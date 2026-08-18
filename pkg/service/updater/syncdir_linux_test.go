@@ -95,3 +95,76 @@ func TestSyncDirWithOps_PropagatesSyncfsFailure(t *testing.T) {
 	assert.Equal(t, 42, gotFD)
 	assert.Equal(t, 1, handle.closeCalls)
 }
+
+func TestSyncDirWithOps_ReportsOpenFailure(t *testing.T) {
+	t.Parallel()
+
+	openErr := errors.New("no such directory")
+	syncfsCalls := 0
+	err := syncDirWithOps("update-dir", linuxDirectorySyncOps{
+		open: func(string) (directorySyncHandle, error) { return nil, openErr },
+		syncfs: func(int) error {
+			syncfsCalls++
+			return nil
+		},
+	})
+
+	require.ErrorIs(t, err, openErr)
+	assert.Zero(t, syncfsCalls)
+}
+
+// A close failure after a successful sync still has to surface: on some
+// filesystems it is where a deferred write error is reported.
+func TestSyncDirWithOps_ReportsCloseFailure(t *testing.T) {
+	t.Parallel()
+
+	closeErr := errors.New("close failed")
+	handle := &fakeDirectorySyncHandle{closeErr: closeErr, fd: 42}
+	err := syncDirWithOps("update-dir", linuxDirectorySyncOps{
+		open:   func(string) (directorySyncHandle, error) { return handle, nil },
+		syncfs: func(int) error { return nil },
+	})
+
+	require.ErrorIs(t, err, closeErr)
+	assert.Equal(t, 1, handle.syncCalls)
+}
+
+// syncfs recovering an unsupported directory fsync is the whole point of the
+// fallback: vfat and exFAT reject the fsync but the barrier still has to happen.
+func TestSyncDirWithOps_SyncfsRecoversUnsupportedFsync(t *testing.T) {
+	t.Parallel()
+
+	handle := &fakeDirectorySyncHandle{syncErr: syscall.EINVAL, fd: 7}
+	gotFD := -1
+	err := syncDirWithOps("update-dir", linuxDirectorySyncOps{
+		open: func(string) (directorySyncHandle, error) { return handle, nil },
+		syncfs: func(fd int) error {
+			gotFD = fd
+			return nil
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 7, gotFD)
+	assert.Equal(t, 1, handle.closeCalls)
+}
+
+// An fsync failure that is not about support is a real durability failure and
+// must not be papered over by a filesystem-wide sync.
+func TestSyncDirWithOps_DoesNotFallBackOnRealSyncFailures(t *testing.T) {
+	t.Parallel()
+
+	handle := &fakeDirectorySyncHandle{syncErr: syscall.EIO, fd: 42}
+	syncfsCalls := 0
+	err := syncDirWithOps("update-dir", linuxDirectorySyncOps{
+		open: func(string) (directorySyncHandle, error) { return handle, nil },
+		syncfs: func(int) error {
+			syncfsCalls++
+			return nil
+		},
+	})
+
+	require.ErrorIs(t, err, syscall.EIO)
+	assert.Zero(t, syncfsCalls)
+	assert.Equal(t, 1, handle.closeCalls)
+}

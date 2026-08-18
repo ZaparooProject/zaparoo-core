@@ -225,3 +225,64 @@ func TestWriteFileAtomic_FilePermissions(t *testing.T) {
 	}
 	assert.Equal(t, os.FileMode(stateFilePerm), info.Mode().Perm())
 }
+
+// Delivery peeks a result, writes it to the inbox, then acknowledges it. If a
+// newer outcome is recorded in between, the acknowledgement must not swallow it.
+func TestMarkUpdateResultReported_OnlyAcknowledgesTheResultItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	rolledBack := &updateResult{
+		At:          time.Date(2026, 8, 18, 4, 30, 0, 0, time.UTC),
+		Outcome:     outcomeRolledBack,
+		FromVersion: "2.1.0",
+		ToVersion:   "2.2.0",
+	}
+	require.NoError(t, recordUpdateResult(dir, rolledBack))
+	require.Equal(t, rolledBack.Outcome, peekUpdateResult(dir).Outcome)
+
+	succeeded := &updateResult{
+		At:          time.Date(2026, 8, 18, 5, 0, 0, 0, time.UTC),
+		Outcome:     outcomeSucceeded,
+		FromVersion: "2.1.0",
+		ToVersion:   "2.3.0",
+	}
+	require.NoError(t, recordUpdateResult(dir, succeeded))
+	require.NoError(t, markUpdateResultReported(dir, rolledBack))
+
+	pending := peekUpdateResult(dir)
+	require.NotNil(t, pending, "the newer result must still be waiting to be shown")
+	assert.Equal(t, outcomeSucceeded, pending.Outcome)
+	assert.Equal(t, "2.3.0", pending.ToVersion)
+}
+
+// Recording the same outcome again — the watchdog re-finalizing after an
+// interrupted boot — must not resurrect a result the user has already seen.
+func TestRecordUpdateResult_RepeatDoesNotUnreportADeliveredResult(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	res := &updateResult{
+		At:          time.Date(2026, 8, 18, 4, 30, 0, 0, time.UTC),
+		Outcome:     outcomeSucceeded,
+		FromVersion: "2.1.0",
+		ToVersion:   "2.2.0",
+	}
+	require.NoError(t, recordUpdateResult(dir, res))
+	require.NoError(t, markUpdateResultReported(dir, res))
+	require.Nil(t, peekUpdateResult(dir))
+
+	require.NoError(t, recordUpdateResult(dir, res))
+	assert.Nil(t, peekUpdateResult(dir))
+}
+
+func TestUpdateResult_NilIsNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, recordUpdateResult(dir, nil))
+	require.NoError(t, markUpdateResultReported(dir, nil))
+
+	assert.Nil(t, peekUpdateResult(dir))
+	assert.NoFileExists(t, filepath.Join(dir, stateFileName))
+}

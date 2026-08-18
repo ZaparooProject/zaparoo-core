@@ -1126,3 +1126,142 @@ func TestBackupsDir(t *testing.T) {
 
 	assert.Equal(t, filepath.Join("data", backupDirName), BackupsDir("data"))
 }
+
+// quick_check runs through SQLite, which reads the real filesystem. Passing an
+// in-memory filesystem would have it check some other file — or nothing — so it
+// has to be refused rather than silently report a healthy backup.
+func TestRestoreFileTo_RequiresAnOSFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("data", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	backupPath := filepath.Join(dir, "backup.db")
+	dbPath := filepath.Join(dir, "user.db")
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("replacement"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, dbPath, []byte("original"), 0o600))
+
+	err := RestoreFileTo(t.Context(), fs, backupPath, dbPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OS filesystem")
+
+	contents, readErr := afero.ReadFile(fs, dbPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("original"), contents, "the live database must be untouched")
+}
+
+// Whatever quick_check reports, a backup that is not known-good must never be
+// installed over a working database.
+func TestRestoreFileTo_LeavesTheDatabaseAloneWhenTheBackupIsNotKnownGood(t *testing.T) {
+	t.Parallel()
+
+	checkFailed := errors.New("could not open the backup")
+	tests := []struct {
+		check     restoreQuickCheck
+		wantIs    error
+		name      string
+		wantError string
+	}{
+		{
+			name: "quick_check reports damage",
+			check: func(context.Context, afero.Fs, string) (bool, string, error) {
+				return false, "*** in database main: page 3 is never used", nil
+			},
+			wantIs:    ErrInvalidBackup,
+			wantError: "page 3 is never used",
+		},
+		{
+			name: "quick_check finds corruption",
+			check: func(context.Context, afero.Fs, string) (bool, string, error) {
+				return false, "", errors.New("database disk image is malformed")
+			},
+			wantIs:    ErrInvalidBackup,
+			wantError: "quick_check",
+		},
+		{
+			name: "quick_check could not run",
+			check: func(context.Context, afero.Fs, string) (bool, string, error) {
+				return false, "", checkFailed
+			},
+			wantIs:    checkFailed,
+			wantError: "failed to check user database backup",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := afero.NewMemMapFs()
+			dir := filepath.Join("data", "zaparoo")
+			require.NoError(t, fs.MkdirAll(dir, 0o750))
+			backupPath := filepath.Join(dir, "backup.db")
+			dbPath := filepath.Join(dir, "user.db")
+			require.NoError(t, afero.WriteFile(fs, backupPath, []byte("replacement"), 0o600))
+			require.NoError(t, afero.WriteFile(fs, dbPath, []byte("original"), 0o600))
+
+			err := restoreFileToWithCheck(t.Context(), fs, backupPath, dbPath, tt.check)
+			require.ErrorIs(t, err, tt.wantIs)
+			assert.Contains(t, err.Error(), tt.wantError)
+
+			contents, readErr := afero.ReadFile(fs, dbPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, []byte("original"), contents, "the live database must be untouched")
+		})
+	}
+}
+
+// An update install asks for the snapshot before it touches anything. Without a
+// connection there is nothing to snapshot, and the install has to stop rather
+// than proceed with no rollback point.
+func TestUserDBBackupForUpdate_WithoutAConnection(t *testing.T) {
+	t.Parallel()
+
+	snapshot, resume, err := (&UserDB{}).BackupForUpdate("2.2.0")
+	require.ErrorIs(t, err, ErrNullSQL)
+	assert.Nil(t, resume)
+	assert.Empty(t, snapshot.Path)
+}
+
+// A drain that fails leaves writers still attached, so the snapshot cannot be
+// consistent. The install is told to stop, and the database is put back the way
+// it was found: the caller never closed it and has no way to reopen it.
+func TestUserDBBackupForUpdate_ReopensAfterAFailedDrain(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	require.NoError(t, userDB.sql.Load().Close())
+	sqlDB, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	closeErr := errors.New("driver refused to close")
+	mock.ExpectClose().WillReturnError(closeErr)
+	userDB.sql.Store(sqlDB)
+
+	snapshot, resume, err := userDB.BackupForUpdate("2.2.0")
+	require.ErrorIs(t, err, closeErr)
+	assert.Nil(t, resume)
+	assert.Empty(t, snapshot.Path)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	_, err = userDB.GetAllMappings()
+	require.NoError(t, err, "the database must be usable again after a refused drain")
+}
+
+// A snapshot that fails must not leave the connection pool drained: the install
+// is abandoned, but the service keeps running on the database it already had.
+func TestUserDBBackupForUpdate_ReopensWhenTheSnapshotFails(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	backupDir := userDB.backupDir()
+	require.NoError(t, os.RemoveAll(backupDir))
+	require.NoError(t, os.WriteFile(backupDir, []byte("not a directory"), 0o600))
+
+	snapshot, resume, err := userDB.BackupForUpdate("2.2.0")
+	require.Error(t, err)
+	assert.Nil(t, resume)
+	assert.Empty(t, snapshot.Path)
+
+	_, err = userDB.GetAllMappings()
+	require.NoError(t, err, "the database must be usable again after a failed snapshot")
+}

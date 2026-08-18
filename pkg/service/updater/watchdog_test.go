@@ -22,6 +22,9 @@ package updater
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -693,4 +696,244 @@ func TestSweepUpdateSnapshots(t *testing.T) {
 	assert.NoFileExists(t, keep)
 	assert.FileExists(t, auto)
 	assert.FileExists(t, manual)
+}
+
+func TestRolledBackError(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("re-exec is unavailable")
+	withCause := newRolledBackError("/usr/bin/zaparoo", cause)
+	require.ErrorIs(t, withCause, ErrRolledBack)
+	require.ErrorIs(t, withCause, cause)
+	assert.Equal(t, ErrRolledBack.Error()+": "+cause.Error(), withCause.Error())
+
+	// A rollback with no underlying cause still has to read as ErrRolledBack so
+	// callers re-exec instead of exiting into the version that failed.
+	bare := newRolledBackError("/usr/bin/zaparoo", nil)
+	require.ErrorIs(t, bare, ErrRolledBack)
+	assert.Equal(t, ErrRolledBack.Error(), bare.Error())
+}
+
+func TestRollbackTargetPath(t *testing.T) {
+	t.Parallel()
+
+	target, ok := RollbackTargetPath(newRolledBackError("/usr/bin/zaparoo", errors.New("boom")))
+	assert.True(t, ok)
+	assert.Equal(t, "/usr/bin/zaparoo", target)
+
+	// Without a target there is nothing to re-exec, so callers must not be told
+	// to try. Neither must an unrelated failure be mistaken for a rollback.
+	for name, err := range map[string]error{
+		"rollback without a target": newRolledBackError("", errors.New("boom")),
+		"unrelated failure":         errors.New("boom"),
+		"sentinel on its own":       ErrRolledBack,
+		"no error":                  nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			target, ok := RollbackTargetPath(err)
+			assert.False(t, ok)
+			assert.Empty(t, target)
+		})
+	}
+}
+
+// A marker written by a newer build must survive this one untouched: only the
+// build that understands it can decide what its update needs.
+func TestWatchdog_LeavesANewerSchemaMarkerAlone(t *testing.T) {
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	m := f.marker(markerConfirming)
+	m.MarkerVersion = currentMarkerVersion + 1
+	raw, err := json.MarshalIndent(m, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, stateDirPerm))
+	require.NoError(t, os.WriteFile(markerPath(dir), raw, 0o600))
+	before := readFileString(t, markerPath(dir))
+
+	confirmed, err := Confirm(t.Context(), f.dataDir, testTargetVersion)
+	require.NoError(t, err)
+	assert.Empty(t, confirmed)
+	assert.Equal(t, before, readFileString(t, markerPath(dir)))
+
+	require.NoError(t, RecordCleanShutdown(f.dataDir, testTargetVersion))
+	assert.Equal(t, before, readFileString(t, markerPath(dir)),
+		"a marker this build cannot interpret must not be rewritten")
+	assert.NoFileExists(t, markerPath(dir)+markerBadSuffix,
+		"a newer schema is not corruption and must not be quarantined")
+}
+
+// RecordCleanShutdown runs on the way out of a boot that may have nothing to do
+// with the pending update, so it must only touch a marker awaiting this version.
+func TestRecordCleanShutdown_IgnoresAMarkerItDoesNotOwn(t *testing.T) {
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+
+	for name, m := range map[string]*pendingMarker{
+		"another version is confirming": func() *pendingMarker {
+			m := f.marker(markerConfirming)
+			m.TargetVersion = "9.9.9"
+			return m
+		}(),
+		"already resolved": func() *pendingMarker {
+			m := f.marker(markerConfirming)
+			m.Outcome = outcomeSucceeded
+			return m
+		}(),
+		"not confirming yet": f.marker(markerInstalled),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, saveMarker(dir, m))
+			before := readFileString(t, markerPath(dir))
+
+			require.NoError(t, RecordCleanShutdown(f.dataDir, testTargetVersion))
+			assert.Equal(t, before, readFileString(t, markerPath(dir)))
+		})
+	}
+}
+
+func TestRecordCleanShutdown_WithoutAMarkerDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	require.NoError(t, RecordCleanShutdown(dataDir, testTargetVersion))
+	assert.NoFileExists(t, markerPath(stateDirFor(dataDir)))
+}
+
+// finalizeTerminalUpdate deletes the binary backup and snapshot, so it must
+// refuse anything that has not actually reached an outcome.
+func TestFinalizeTerminalUpdate_RequiresAnOutcome(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	ops := defaultWatchdogFileOps()
+
+	require.Error(t, finalizeTerminalUpdate(t.Context(), f.dataDir, nil, ops))
+	require.Error(t, finalizeTerminalUpdate(t.Context(), f.dataDir, f.marker(markerConfirming), ops))
+
+	assert.FileExists(t, f.backupPath)
+	assert.FileExists(t, f.snapshotPath)
+}
+
+// A snapshot that fails its integrity check cannot be written over a working
+// database: that would turn a failed update into lost data. The rollback is
+// blocked instead, leaving the new binary and the snapshot for manual recovery.
+func TestRunStartupWatchdog_CorruptSnapshotBlocksRollback(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	ops := defaultWatchdogFileOps()
+	restoreCalls := 0
+	ops.restoreDatabase = func(context.Context, afero.Fs, string, string) error {
+		restoreCalls++
+		return fmt.Errorf("%w: quick_check: page 3 is never used", userdb.ErrInvalidBackup)
+	}
+
+	require.NoError(t, runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops))
+	assert.Equal(t, 1, restoreCalls)
+
+	assert.Equal(t, "new binary", readFileString(t, f.targetPath))
+	assert.FileExists(t, f.backupPath)
+	assert.FileExists(t, f.snapshotPath, "the snapshot is the only remaining copy of the old data")
+	assert.Equal(t, "after the update", readTestDBNote(t, f.dbPath))
+
+	m, err := loadMarker(dir)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	assert.Equal(t, outcomeRollbackBlocked, m.Outcome)
+}
+
+// An install that never recorded a snapshot leaves nothing to roll the database
+// back to, so the binary must not be rolled back either: an old binary in front
+// of a migrated database is worse than the failed update.
+func TestRunStartupWatchdog_MarkerWithoutASnapshotBlocksRollback(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	m := f.marker(markerConfirming)
+	m.UserDBSnapshotPath = ""
+	require.NoError(t, saveMarker(dir, m))
+
+	ops := defaultWatchdogFileOps()
+	ops.restoreDatabase = func(context.Context, afero.Fs, string, string) error {
+		t.Fatal("a marker with no snapshot must not reach the database restore")
+		return nil
+	}
+
+	require.NoError(t, runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops))
+
+	assert.Equal(t, "new binary", readFileString(t, f.targetPath))
+	assert.FileExists(t, f.backupPath)
+	assert.Equal(t, "after the update", readTestDBNote(t, f.dbPath))
+
+	blocked, err := loadMarker(dir)
+	require.NoError(t, err)
+	require.NotNil(t, blocked)
+	assert.Equal(t, outcomeRollbackBlocked, blocked.Outcome)
+}
+
+// Payload extras have no producer yet, but the rollback already restores them,
+// and the binary has to go last: a failure part way through then leaves the new
+// binary in place, which is the state a blocked rollback can live with.
+func TestRunStartupWatchdog_RestoresPayloadFilesBeforeTheBinary(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	assetDir := t.TempDir()
+	assetPath := filepath.Join(assetDir, "menu.png")
+	assetBackup := filepath.Join(assetDir, ".menu.png.zap-old")
+	require.NoError(t, os.WriteFile(assetPath, []byte("new asset"), 0o600))
+	require.NoError(t, os.WriteFile(assetBackup, []byte("old asset"), 0o600))
+
+	m := f.marker(markerConfirming)
+	m.PayloadBackups = []payloadBackup{{TargetPath: assetPath, BackupPath: assetBackup}}
+	require.NoError(t, saveMarker(dir, m))
+
+	ops := defaultWatchdogFileOps()
+	replace := ops.replace
+	var restored []string
+	ops.replace = func(src, dst string) error {
+		restored = append(restored, dst)
+		return replace(src, dst)
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, ErrRolledBack)
+
+	assert.Equal(t, []string{assetPath, f.targetPath}, restored)
+	assert.Equal(t, "old asset", readFileString(t, assetPath))
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, assetBackup, "a restored backup is not left behind")
+}
+
+// A payload entry with no backup recorded cannot be restored, and guessing is
+// not an option: the rollback is blocked before anything moves.
+func TestRunStartupWatchdog_PayloadWithoutABackupBlocksRollback(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	m := f.marker(markerConfirming)
+	m.PayloadBackups = []payloadBackup{{TargetPath: filepath.Join(t.TempDir(), "menu.png")}}
+	require.NoError(t, saveMarker(dir, m))
+
+	require.NoError(t, runStartupWatchdogWithOps(
+		t.Context(), f.dataDir, testTargetVersion, defaultWatchdogFileOps()))
+
+	assert.Equal(t, "new binary", readFileString(t, f.targetPath))
+	assert.FileExists(t, f.backupPath)
+	// The database goes back first by design, so a blocked rollback leaves the
+	// new binary in front of the old data rather than the reverse.
+	assert.Equal(t, "before the update", readTestDBNote(t, f.dbPath))
+
+	blocked, err := loadMarker(dir)
+	require.NoError(t, err)
+	require.NotNil(t, blocked)
+	assert.Equal(t, outcomeRollbackBlocked, blocked.Outcome)
 }

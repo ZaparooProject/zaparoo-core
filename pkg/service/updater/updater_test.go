@@ -247,8 +247,60 @@ func TestApply_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	version, err := Apply(ctx, linuxOptions())
+	opts := linuxOptions()
+	opts.UserDB = &installTestBackupper{}
+	opts.DataDir = t.TempDir()
+
+	version, err := Apply(ctx, opts)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, version)
+}
+
+func TestApply_RejectsIncompleteOptions(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	withDataDir := linuxOptions()
+	withDataDir.DataDir = t.TempDir()
+
+	withUserDB := linuxOptions()
+	withUserDB.UserDB = &installTestBackupper{}
+
+	for name, opts := range map[string]Options{
+		"no user database":   withDataDir,
+		"no data directory":  withUserDB,
+		"neither of the two": linuxOptions(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			version, err := Apply(t.Context(), opts)
+			require.Error(t, err)
+			assert.Empty(t, version)
+		})
+	}
+}
+
+// An update that has not been confirmed or rolled back yet owns the binary
+// backup and the marker, so a second Apply must refuse before it reaches the
+// network rather than overwrite them.
+func TestApply_RefusesWhileAnUpdateIsUnresolved(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	require.NoError(t, saveMarker(stateDirFor(dataDir), &pendingMarker{
+		State:         markerConfirming,
+		TargetVersion: "2.2.0",
+	}))
+
+	opts := linuxOptions()
+	opts.UserDB = &installTestBackupper{}
+	opts.DataDir = dataDir
+
+	version, err := Apply(t.Context(), opts)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2.2.0")
 	assert.Empty(t, version)
 }
 
