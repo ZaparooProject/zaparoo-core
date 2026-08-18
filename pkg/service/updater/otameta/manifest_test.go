@@ -390,3 +390,34 @@ func TestManifest_ChannelNames(t *testing.T) {
 	assert.Equal(t, "beta", ChannelBeta)
 	assert.True(t, strings.HasPrefix(ArchiveBaseName("linux", "amd64", "2.16.1"), "zaparoo-"))
 }
+
+func TestArchiveExtension(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		want string
+	}{
+		{name: "zaparoo-mister_arm-2.16.1.zip", want: ".zip"},
+		{name: "zaparoo-linux_amd64-2.16.1.tar.gz", want: ".tar.gz"},
+		// .gz alone is not one of the two, so the suffix check must not treat the
+		// tail of .tar.gz as a match on its own.
+		{name: "zaparoo-linux_amd64-2.16.1.gz", want: ""},
+		{name: "zaparoo-windows_amd64-2.16.1.exe", want: ""},
+		{name: "checksums.txt", want: ""},
+		{name: "", want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ArchiveExtension(tt.name)
+			if tt.want == "" {
+				require.ErrorIs(t, err, ErrNoAsset)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

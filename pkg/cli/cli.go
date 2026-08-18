@@ -98,7 +98,7 @@ func SetupFlags() *Flags {
 			"send method and params to API and print response",
 		),
 		Version: flag.Bool(
-			"version",
+			config.VersionFlagName,
 			false,
 			"print version and exit",
 		),
@@ -166,7 +166,9 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	flag.Parse()
 
 	if *f.Version {
-		_, _ = fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.ID())
+		// config.VersionLine, not a literal: the self-update probe compares a
+		// staged binary's output against it, so the two must not drift.
+		_, _ = fmt.Printf("%s\n", config.VersionLine(config.AppVersion, pl.ID()))
 		os.Exit(0)
 	}
 }

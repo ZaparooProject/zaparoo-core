@@ -585,8 +585,14 @@ func TestWebSocketRunJobStartsMethodTimeoutAtExecution(t *testing.T) {
 					tt.method,
 				)),
 			}
-			time.Sleep(25 * time.Millisecond)
-			require.Error(t, enqueuedCtx.Err(), "pre-existing enqueue-time context should be expired")
+			// Waited for rather than slept past: a deadline is recorded by a timer
+			// goroutine, so under load the wall clock passes the deadline well
+			// before anything runs to set the error.
+			select {
+			case <-enqueuedCtx.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("pre-existing enqueue-time context should be expired")
+			}
 
 			beforeRun := time.Now()
 			d.runJob(job)

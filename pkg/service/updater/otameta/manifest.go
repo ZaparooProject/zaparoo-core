@@ -47,8 +47,15 @@ const (
 	ChannelBeta   = "beta"
 )
 
-// archiveExts are the extensions release builds package update archives with.
-var archiveExts = []string{".tar.gz", ".zip"}
+// ArchiveExtTarGz and ArchiveExtZip are the extensions release builds package
+// update archives with. They live here because selection decides which one a
+// platform gets and extraction has to agree with that decision.
+const (
+	ArchiveExtTarGz = ".tar.gz"
+	ArchiveExtZip   = ".zip"
+)
+
+var archiveExts = []string{ArchiveExtTarGz, ArchiveExtZip}
 
 var (
 	// ErrNoAsset means no archive in the release is installable here. That is
@@ -225,6 +232,18 @@ func isArchiveName(name, base string) bool {
 		}
 	}
 	return false
+}
+
+// ArchiveExtension returns the extension of an archive name, which is what
+// decides how it is unpacked. The list of extensions lives here so the client
+// and the publisher cannot disagree about what an update archive is.
+func ArchiveExtension(name string) (string, error) {
+	for _, ext := range archiveExts {
+		if strings.HasSuffix(name, ext) {
+			return ext, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %q is not an update archive", ErrNoAsset, name)
 }
 
 // FindRelease returns the release carrying a tag, or nil.
