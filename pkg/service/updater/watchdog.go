@@ -66,16 +66,6 @@ type watchdogFileOps struct {
 	restoreDatabase func(context.Context, afero.Fs, string, string) error
 }
 
-func defaultWatchdogFileOps() watchdogFileOps {
-	return watchdogFileOps{
-		fs:              afero.NewOsFs(),
-		replace:         replaceFile,
-		syncDirectory:   syncDir,
-		removeStaging:   removeStagingDir,
-		restoreDatabase: userdb.RestoreFileTo,
-	}
-}
-
 // ErrRolledBack means an update was rolled back and the previous version is now
 // on disk. The process is still running the image that failed, so every caller
 // of Start has to re-exec rather than exit: on the platforms this matters for
@@ -102,6 +92,16 @@ func (e *rolledBackError) Unwrap() []error {
 		return []error{ErrRolledBack}
 	}
 	return []error{ErrRolledBack, e.cause}
+}
+
+func defaultWatchdogFileOps() watchdogFileOps {
+	return watchdogFileOps{
+		fs:              afero.NewOsFs(),
+		replace:         replaceFile,
+		syncDirectory:   syncDir,
+		removeStaging:   removeStagingDir,
+		restoreDatabase: userdb.RestoreFileTo,
+	}
 }
 
 func newRolledBackError(targetPath string, cause error) error {
