@@ -317,9 +317,13 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 		runner.SimulateArrowDown()
 		close(scrollDone)
 	}()
+	// If the prefetch ran on the event loop the key press would block until
+	// releaseNextPage is closed, so this timeout only has to outlast scheduler
+	// jitter — it is not a latency budget. A short one false-fails when the
+	// whole suite is running under the race detector.
 	select {
 	case <-scrollDone:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		close(releaseNextPage)
 		<-scrollDone
 		t.Fatal("scrolling blocked while the next page loaded")
