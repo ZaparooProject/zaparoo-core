@@ -335,10 +335,10 @@ func (s *stager) run(ctx context.Context) (*StagedUpdate, error) {
 
 	// A previous attempt that died without cleaning up would otherwise collide
 	// with this one's exclusive file creation.
-	if rmErr := removeStagingDir(dir); rmErr != nil {
+	if rmErr := removeStagingDir(ctx, dir); rmErr != nil {
 		return nil, fmt.Errorf("clearing previous update staging directory: %w", rmErr)
 	}
-	pruneStagingRoot(s.stagingRoot, version)
+	pruneStagingRoot(ctx, s.stagingRoot, version)
 	//nolint:gosec // G703: the version is asserted above to be a single path element
 	if mkErr := os.MkdirAll(dir, stateDirPerm); mkErr != nil {
 		return nil, fmt.Errorf("creating update staging directory: %w", mkErr)
@@ -348,7 +348,7 @@ func (s *stager) run(ctx context.Context) (*StagedUpdate, error) {
 	if err != nil {
 		// Nothing outside this directory has been written, so discarding it
 		// leaves no trace of the attempt.
-		if rmErr := removeStagingDir(dir); rmErr != nil {
+		if rmErr := removeStagingDir(ctx, dir); rmErr != nil {
 			log.Warn().Err(rmErr).Str("dir", dir).Msg("could not remove failed update staging directory")
 		}
 		return nil, err
@@ -374,7 +374,7 @@ func (s *stager) run(ctx context.Context) (*StagedUpdate, error) {
 //
 // Failures are logged and not returned. Being unable to tidy up is not a reason
 // to refuse an update.
-func pruneStagingRoot(root, keep string) {
+func pruneStagingRoot(ctx context.Context, root, keep string) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -388,7 +388,7 @@ func pruneStagingRoot(root, keep string) {
 			continue
 		}
 		stale := filepath.Join(root, entry.Name())
-		if rmErr := removeStagingDir(stale); rmErr != nil {
+		if rmErr := removeStagingDir(ctx, stale); rmErr != nil {
 			log.Warn().Err(rmErr).Str("dir", stale).Msg("could not remove an orphaned update staging directory")
 			continue
 		}
@@ -400,12 +400,19 @@ func pruneStagingRoot(root, keep string) {
 //
 // See stagingRemoveAttempts for why one attempt is not enough. Sleeping only
 // happens when a removal has actually failed, so the ordinary path is a single
-// call.
-func removeStagingDir(dir string) error {
+// call and never consults the context. Once it is retrying, a cancelled context
+// ends it: two seconds of sharing-violation retries is not worth holding up a
+// shutdown for, and the directory left behind is collected by the next
+// attempt's sweep.
+func removeStagingDir(ctx context.Context, dir string) error {
 	var err error
 	for attempt := range stagingRemoveAttempts {
 		if attempt > 0 {
-			time.Sleep(stagingRemoveDelay)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("removing update staging directory %q: %w", dir, ctx.Err())
+			case <-time.After(stagingRemoveDelay):
+			}
 		}
 		//nolint:gosec // G703: callers pass a path this package built under its own staging root
 		if err = os.RemoveAll(dir); err == nil {
