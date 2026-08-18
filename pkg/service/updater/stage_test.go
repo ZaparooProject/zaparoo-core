@@ -1046,6 +1046,7 @@ func TestStageRelease_ChmodFailureIsLeftToTheProbe(t *testing.T) {
 		chmod       func(*testing.T) func(string, os.FileMode) error
 		name        string
 		wantSuccess bool
+		needsModes  bool
 	}{
 		{
 			name: "mask already granted the exec bit",
@@ -1068,13 +1069,20 @@ func TestStageRelease_ChmodFailureIsLeftToTheProbe(t *testing.T) {
 				t.Helper()
 				return func(string, os.FileMode) error { return chmodFailed }
 			},
-			wantErr: ErrProbeFailed,
+			wantErr:    ErrProbeFailed,
+			needsModes: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
+			if tt.needsModes && runtime.GOOS == "windows" {
+				// There is no exec bit to withhold: the staged file runs whether
+				// the chmod worked or not, so the probe has nothing to catch.
+				t.Skip("windows has no permission bit for a failed chmod to leave unset")
+			}
 
 			ext := otameta.ArchiveExtTarGz
 			asset := servedAsset(t, testArchiveName(testStageVersion, ext),
