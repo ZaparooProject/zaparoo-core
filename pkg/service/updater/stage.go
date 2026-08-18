@@ -87,6 +87,14 @@ const (
 	// update rather than fail it.
 	probeWaitDelay = 2 * time.Second
 
+	// probeOutputLimit caps how much of the staged binary's output the probe
+	// keeps. The probe runs a binary that arrived over the network moments ago,
+	// and one that fails by printing without stopping would otherwise be held
+	// whole in memory on a device that has a few hundred megabytes of it. Only
+	// the first line matters here, so keeping a few kilobytes loses nothing the
+	// error message would have used.
+	probeOutputLimit = 8 << 10
+
 	// stagingRemoveAttempts and stagingRemoveDelay bound how long removing a
 	// staging directory is retried. A staging directory holds a binary this
 	// process may have just finished executing for the probe, and Windows can keep
@@ -187,6 +195,26 @@ type StagedUpdate struct {
 // assetFetcher retrieves an asset URL. Production hands back the CDN response
 // body; tests serve archives from a local server.
 type assetFetcher func(ctx context.Context, target string) (io.ReadCloser, error)
+
+// cappedBuilder keeps the first probeOutputLimit bytes written to it and
+// discards the rest. It reports every write as fully consumed, so the process
+// on the other end drains normally instead of blocking on a pipe nobody is
+// reading.
+type cappedBuilder struct {
+	buf strings.Builder
+}
+
+func (b *cappedBuilder) Write(p []byte) (int, error) {
+	if room := probeOutputLimit - b.buf.Len(); room > 0 {
+		// strings.Builder.Write never fails.
+		_, _ = b.buf.Write(p[:min(room, len(p))])
+	}
+	return len(p), nil
+}
+
+func (b *cappedBuilder) String() string {
+	return b.buf.String()
+}
 
 // stager holds the resolved settings for one staging attempt. The limits and
 // timeouts are fields rather than constants read at the point of use so tests
@@ -618,7 +646,7 @@ func (s *stager) probeBinary(ctx context.Context, binaryPath, version string) er
 
 	//nolint:gosec // the path is a file this process just created inside its own staging directory
 	cmd := exec.CommandContext(probeCtx, binaryPath, "-"+config.VersionFlagName)
-	var stdout, stderr strings.Builder
+	var stdout, stderr cappedBuilder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	// Killing the process is not enough to unblock Wait if it left a child

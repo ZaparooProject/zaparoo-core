@@ -1171,3 +1171,29 @@ func TestClip(t *testing.T) {
 	assert.Equal(t, "short", clip("  short\n", 32))
 	assert.Equal(t, "abc…", clip("abcdef", 3))
 }
+
+// TestCappedBuilder_KeepsThePrefixAndDrainsTheRest covers the probe's output
+// handling: a staged binary that fails by printing without stopping must not be
+// able to grow the updater's memory, and must not block on a pipe nobody reads
+// either, so every write is reported as consumed whatever happened to it.
+func TestCappedBuilder_KeepsThePrefixAndDrainsTheRest(t *testing.T) {
+	t.Parallel()
+
+	var b cappedBuilder
+	first := strings.Repeat("a", probeOutputLimit-1)
+	n, err := b.Write([]byte(first))
+	require.NoError(t, err)
+	assert.Equal(t, len(first), n)
+
+	n, err = b.Write([]byte("bcde"))
+	require.NoError(t, err)
+	assert.Equal(t, 4, n, "a partially kept write still has to report every byte consumed")
+
+	n, err = b.Write([]byte(strings.Repeat("f", 1<<20)))
+	require.NoError(t, err)
+	assert.Equal(t, 1<<20, n, "a write past the cap still has to report every byte consumed")
+
+	got := b.String()
+	assert.Len(t, got, probeOutputLimit)
+	assert.Equal(t, first+"b", got)
+}
