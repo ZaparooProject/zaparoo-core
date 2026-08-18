@@ -148,7 +148,10 @@ func TestProgressReader_CountsBytesAndPassesThrough(t *testing.T) {
 	defer guard.stop()
 
 	before := guard.progress.Load()
-	time.Sleep(time.Millisecond)
+	// Long enough that since() has moved on even where the clock is coarse, so
+	// the assertion below is about the read counting as progress rather than
+	// about the platform's timer resolution.
+	time.Sleep(20 * time.Millisecond)
 
 	r := guard.reader(strings.NewReader("zaparoo"))
 	buf := make([]byte, 4)
