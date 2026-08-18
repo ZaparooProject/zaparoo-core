@@ -159,13 +159,13 @@ func releaseArchive(t *testing.T, ext, memberName string, binary []byte) []byte 
 
 	path := filepath.Join(t.TempDir(), "release"+ext)
 	switch ext {
-	case archiveExtTarGz:
+	case otameta.ArchiveExtTarGz:
 		writeTarGz(t, path, []tarMember{
 			{name: "LICENSE.txt", body: []byte("gpl")},
 			{name: "README.txt", body: []byte("readme")},
 			{name: memberName, body: binary, mode: 0o755},
 		})
-	case archiveExtZip:
+	case otameta.ArchiveExtZip:
 		writeZip(t, path, []zipMember{
 			{name: "LICENSE.txt", body: []byte("gpl")},
 			{name: "README.txt", body: []byte("readme")},
@@ -355,7 +355,7 @@ func TestSelectArchive(t *testing.T) {
 	t.Parallel()
 
 	asset := func(version string) *otameta.Asset {
-		return &otameta.Asset{Name: testArchiveName(version, archiveExtTarGz), Size: 1024}
+		return &otameta.Asset{Name: testArchiveName(version, otameta.ArchiveExtTarGz), Size: 1024}
 	}
 
 	tests := []struct {
@@ -483,7 +483,7 @@ func TestSelectArchive(t *testing.T) {
 			name: "no archive for this platform",
 			build: func() *otameta.Release {
 				return testRelease("v2.11.0", &otameta.Asset{
-					Name: otameta.ArchiveBaseName("windows", "amd64", "2.11.0") + archiveExtZip,
+					Name: otameta.ArchiveBaseName("windows", "amd64", "2.11.0") + otameta.ArchiveExtZip,
 				})
 			},
 			current: "2.10.1",
@@ -505,7 +505,7 @@ func TestSelectArchive(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, got)
 				assert.Equal(t, tt.wantVersion, version)
-				assert.Equal(t, testArchiveName(tt.wantVersion, archiveExtTarGz), got.Name)
+				assert.Equal(t, testArchiveName(tt.wantVersion, otameta.ArchiveExtTarGz), got.Name)
 				return
 			}
 
@@ -525,7 +525,7 @@ func TestSelectArchive_ArmDoesNotPickUpArm64(t *testing.T) {
 	t.Parallel()
 
 	rel := testRelease("v2.11.0", &otameta.Asset{
-		Name: otameta.ArchiveBaseName("mister", "arm64", "2.11.0") + archiveExtZip,
+		Name: otameta.ArchiveBaseName("mister", "arm64", "2.11.0") + otameta.ArchiveExtZip,
 	})
 	opts := testStageOptions(t, rel, "zaparoo.sh")
 	opts.PlatformID = "mister"
@@ -607,7 +607,7 @@ func TestDownloadArchive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			asset := servedAsset(t, testArchiveName(testStageVersion, archiveExtTarGz), body)
+			asset := servedAsset(t, testArchiveName(testStageVersion, otameta.ArchiveExtTarGz), body)
 			tt.mutate(asset)
 
 			opts := testStageOptions(t, testRelease("v"+testStageVersion, asset), "zaparoo")
@@ -645,7 +645,7 @@ func TestDownloadArchive_ServerError(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	asset := &otameta.Asset{
-		Name:   testArchiveName(testStageVersion, archiveExtTarGz),
+		Name:   testArchiveName(testStageVersion, otameta.ArchiveExtTarGz),
 		URL:    srv.URL + "/missing",
 		SHA256: strings.Repeat("00", sha256.Size),
 		Size:   1024,
@@ -679,7 +679,7 @@ func TestDownloadArchive_Stalls(t *testing.T) {
 
 	sum := sha256.Sum256(body)
 	asset := &otameta.Asset{
-		Name:   testArchiveName(testStageVersion, archiveExtTarGz),
+		Name:   testArchiveName(testStageVersion, otameta.ArchiveExtTarGz),
 		URL:    srv.URL + "/archive",
 		SHA256: hex.EncodeToString(sum[:]),
 		Size:   int64(len(body)),
@@ -712,7 +712,7 @@ func TestDownloadArchive_CallerCancels(t *testing.T) {
 
 	sum := sha256.Sum256(body)
 	asset := &otameta.Asset{
-		Name:   testArchiveName(testStageVersion, archiveExtTarGz),
+		Name:   testArchiveName(testStageVersion, otameta.ArchiveExtTarGz),
 		URL:    srv.URL + "/archive",
 		SHA256: hex.EncodeToString(sum[:]),
 		Size:   int64(len(body)),
@@ -756,7 +756,7 @@ func TestDownloadArchive_StallsBeforeTheFirstByte(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	asset := &otameta.Asset{
-		Name:   testArchiveName(testStageVersion, archiveExtTarGz),
+		Name:   testArchiveName(testStageVersion, otameta.ArchiveExtTarGz),
 		URL:    srv.URL + "/archive",
 		SHA256: strings.Repeat("00", sha256.Size),
 		Size:   4096,
@@ -791,7 +791,7 @@ func TestDownloadArchive_TransportDeadlineStalls(t *testing.T) {
 	t.Cleanup(transport.CloseIdleConnections)
 
 	asset := &otameta.Asset{
-		Name:   testArchiveName(testStageVersion, archiveExtTarGz),
+		Name:   testArchiveName(testStageVersion, otameta.ArchiveExtTarGz),
 		URL:    srv.URL + "/archive",
 		SHA256: strings.Repeat("00", sha256.Size),
 		Size:   4096,
@@ -813,13 +813,13 @@ func TestDownloadArchive_TransportDeadlineStalls(t *testing.T) {
 func TestStageRelease_TarGz(t *testing.T) {
 	t.Parallel()
 
-	assertStagesCleanly(t, archiveExtTarGz)
+	assertStagesCleanly(t, otameta.ArchiveExtTarGz)
 }
 
 func TestStageRelease_Zip(t *testing.T) {
 	t.Parallel()
 
-	assertStagesCleanly(t, archiveExtZip)
+	assertStagesCleanly(t, otameta.ArchiveExtZip)
 }
 
 func assertStagesCleanly(t *testing.T, ext string) {
@@ -862,7 +862,7 @@ func assertStagesCleanly(t *testing.T, ext string) {
 func TestStageRelease_ReplacesAStaleStagingDirectory(t *testing.T) {
 	t.Parallel()
 
-	ext := archiveExtTarGz
+	ext := otameta.ArchiveExtTarGz
 	asset := servedAsset(t, testArchiveName(testStageVersion, ext),
 		releaseArchive(t, ext, testBinaryName("zaparoo"), fakeBinaryBytes(t)))
 	opts := testStageOptions(t, testRelease("v"+testStageVersion, asset), "zaparoo")
@@ -887,7 +887,7 @@ func TestStageRelease_ReplacesAStaleStagingDirectory(t *testing.T) {
 func TestStageRelease_PrunesOrphanedStagingDirectories(t *testing.T) {
 	t.Parallel()
 
-	ext := archiveExtTarGz
+	ext := otameta.ArchiveExtTarGz
 	asset := servedAsset(t, testArchiveName(testStageVersion, ext),
 		releaseArchive(t, ext, testBinaryName("zaparoo"), fakeBinaryBytes(t)))
 	opts := testStageOptions(t, testRelease("v"+testStageVersion, asset), "zaparoo")
@@ -907,7 +907,7 @@ func TestStageRelease_PrunesOrphanedStagingDirectories(t *testing.T) {
 func TestStageRelease_FailureLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 
-	ext := archiveExtTarGz
+	ext := otameta.ArchiveExtTarGz
 	asset := servedAsset(t, testArchiveName(testStageVersion, ext),
 		releaseArchive(t, ext, testBinaryName("zaparoo"), fakeBinaryBytes(t)))
 	asset.SHA256 = strings.Repeat("cd", sha256.Size)
@@ -922,7 +922,7 @@ func TestStageRelease_FailureLeavesNothingBehind(t *testing.T) {
 func TestStageRelease_ArchiveWithoutTheBinary(t *testing.T) {
 	t.Parallel()
 
-	ext := archiveExtTarGz
+	ext := otameta.ArchiveExtTarGz
 	path := filepath.Join(t.TempDir(), "release"+ext)
 	writeTarGz(t, path, []tarMember{{name: "LICENSE.txt", body: []byte("gpl")}})
 	body, err := os.ReadFile(path) //nolint:gosec // test path under t.TempDir
@@ -983,7 +983,7 @@ func TestStageRelease_ProbeFailures(t *testing.T) {
 				binary = fakeBinaryBytes(t)
 			}
 
-			ext := archiveExtTarGz
+			ext := otameta.ArchiveExtTarGz
 			member := testBinaryName(tt.stem)
 			asset := servedAsset(t, testArchiveName(testStageVersion, ext),
 				releaseArchive(t, ext, member, binary))
@@ -1016,7 +1016,7 @@ func TestStageRelease_ProbeFailures(t *testing.T) {
 func TestStageRelease_AcceptsProbeOutputBesideTheVersionLine(t *testing.T) {
 	t.Parallel()
 
-	ext := archiveExtTarGz
+	ext := otameta.ArchiveExtTarGz
 	asset := servedAsset(t, testArchiveName(testStageVersion, ext),
 		releaseArchive(t, ext, testBinaryName("zaparoo-chatty"), fakeBinaryBytes(t)))
 	opts := testStageOptions(t, testRelease("v"+testStageVersion, asset), "zaparoo-chatty")
@@ -1076,7 +1076,7 @@ func TestStageRelease_ChmodFailureIsLeftToTheProbe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ext := archiveExtTarGz
+			ext := otameta.ArchiveExtTarGz
 			asset := servedAsset(t, testArchiveName(testStageVersion, ext),
 				releaseArchive(t, ext, testBinaryName("zaparoo"), fakeBinaryBytes(t)))
 			opts := testStageOptions(t, testRelease("v"+testStageVersion, asset), "zaparoo")

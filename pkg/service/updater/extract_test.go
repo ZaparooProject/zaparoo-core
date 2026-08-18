@@ -36,6 +36,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -342,7 +343,7 @@ func TestWantsMember_RejectsAnythingWithAPathInIt(t *testing.T) {
 func TestExtractFromTarGz_TakesOnlyTheBinary(t *testing.T) {
 	t.Parallel()
 
-	h := newExtractHarness(t, archiveExtTarGz)
+	h := newExtractHarness(t, otameta.ArchiveExtTarGz)
 	binary := []byte("this stands in for the executable")
 	writeTarGz(t, h.archivePath, []tarMember{
 		{name: "LICENSE.txt", body: []byte("gpl")},
@@ -350,7 +351,7 @@ func TestExtractFromTarGz_TakesOnlyTheBinary(t *testing.T) {
 		{name: "zaparoo", body: binary, mode: 0o755},
 	})
 
-	require.NoError(t, h.extract(t, archiveExtTarGz))
+	require.NoError(t, h.extract(t, otameta.ArchiveExtTarGz))
 
 	got, err := os.ReadFile(h.destPath) //nolint:gosec // test path under t.TempDir
 	require.NoError(t, err)
@@ -367,7 +368,7 @@ func TestExtractFromTarGz_TakesOnlyTheBinary(t *testing.T) {
 func TestExtractFromZip_TakesOnlyTheBinary(t *testing.T) {
 	t.Parallel()
 
-	h := newExtractHarness(t, archiveExtZip)
+	h := newExtractHarness(t, otameta.ArchiveExtZip)
 	binary := []byte("this stands in for the executable")
 	writeZip(t, h.archivePath, []zipMember{
 		{name: "LICENSE.txt", body: []byte("gpl")},
@@ -375,7 +376,7 @@ func TestExtractFromZip_TakesOnlyTheBinary(t *testing.T) {
 		{name: "zaparoo", body: binary, mode: 0o755},
 	})
 
-	require.NoError(t, h.extract(t, archiveExtZip))
+	require.NoError(t, h.extract(t, otameta.ArchiveExtZip))
 
 	got, err := os.ReadFile(h.destPath) //nolint:gosec // test path under t.TempDir
 	require.NoError(t, err)
@@ -390,13 +391,13 @@ func TestExtractFromZip_TakesOnlyTheBinary(t *testing.T) {
 func TestExtractFromTarGz_VersionedMemberName(t *testing.T) {
 	t.Parallel()
 
-	h := newExtractHarness(t, archiveExtTarGz)
+	h := newExtractHarness(t, otameta.ArchiveExtTarGz)
 	binary := []byte("versioned")
 	writeTarGz(t, h.archivePath, []tarMember{
 		{name: "zaparoo_2.11.0_linux_amd64", body: binary, mode: 0o755},
 	})
 
-	require.NoError(t, h.extract(t, archiveExtTarGz))
+	require.NoError(t, h.extract(t, otameta.ArchiveExtTarGz))
 
 	// It landed under the name this package chose, not the one in the archive.
 	got, err := os.ReadFile(h.destPath) //nolint:gosec // test path under t.TempDir
@@ -424,7 +425,7 @@ func TestExtractBinary_UnknownExtension(t *testing.T) {
 func TestExtractBinary_RejectsBytesChangedOnDisk(t *testing.T) {
 	t.Parallel()
 
-	for _, ext := range []string{archiveExtTarGz, archiveExtZip} {
+	for _, ext := range []string{otameta.ArchiveExtTarGz, otameta.ArchiveExtZip} {
 		t.Run(ext, func(t *testing.T) {
 			t.Parallel()
 
@@ -452,7 +453,7 @@ func TestExtractBinary_RejectsBytesChangedOnDisk(t *testing.T) {
 func TestExtractBinary_StopsOnCancellation(t *testing.T) {
 	t.Parallel()
 
-	for _, ext := range []string{archiveExtTarGz, archiveExtZip} {
+	for _, ext := range []string{otameta.ArchiveExtTarGz, otameta.ArchiveExtZip} {
 		t.Run(ext, func(t *testing.T) {
 			t.Parallel()
 
@@ -486,13 +487,13 @@ func TestExtractWalk_StopsOnCancellation(t *testing.T) {
 		ext  string
 	}{
 		{
-			ext: archiveExtTarGz,
+			ext: otameta.ArchiveExtTarGz,
 			walk: func(h *extractHarness, ctx context.Context, f *os.File, _ int64) error {
 				return h.stager.extractFromTarGz(ctx, f, h.destPath)
 			},
 		},
 		{
-			ext: archiveExtZip,
+			ext: otameta.ArchiveExtZip,
 			walk: func(h *extractHarness, ctx context.Context, f *os.File, size int64) error {
 				return h.stager.extractFromZip(ctx, f, size, h.destPath)
 			},
@@ -532,7 +533,7 @@ func TestExtractWalk_StopsOnCancellation(t *testing.T) {
 func TestExtractFromTarGz_InflateBudget(t *testing.T) {
 	t.Parallel()
 
-	h := newExtractHarness(t, archiveExtTarGz)
+	h := newExtractHarness(t, otameta.ArchiveExtTarGz)
 	// Compresses to almost nothing on the wire and to well over the budget once
 	// inflated, which is the shape of the attack.
 	writeTarGz(t, h.archivePath, []tarMember{
@@ -541,7 +542,7 @@ func TestExtractFromTarGz_InflateBudget(t *testing.T) {
 	})
 	h.stager.maxInflatedBytes = 4 << 10
 
-	err := h.extract(t, archiveExtTarGz)
+	err := h.extract(t, otameta.ArchiveExtTarGz)
 	require.ErrorIs(t, err, ErrArchiveRejected)
 	assert.Contains(t, err.Error(), "bytes of content in it")
 	assert.NoFileExists(t, h.destPath)
@@ -553,7 +554,7 @@ func TestExtractFromTarGz_InflateBudget(t *testing.T) {
 func TestExtractFromZip_NeedsNoInflateBudget(t *testing.T) {
 	t.Parallel()
 
-	h := newExtractHarness(t, archiveExtZip)
+	h := newExtractHarness(t, otameta.ArchiveExtZip)
 	binary := []byte("the binary")
 	writeZip(t, h.archivePath, []zipMember{
 		{name: "filler.bin", body: make([]byte, 64<<10)},
@@ -561,7 +562,7 @@ func TestExtractFromZip_NeedsNoInflateBudget(t *testing.T) {
 	})
 	h.stager.maxInflatedBytes = 4 << 10
 
-	require.NoError(t, h.extract(t, archiveExtZip))
+	require.NoError(t, h.extract(t, otameta.ArchiveExtZip))
 
 	got, err := os.ReadFile(h.destPath) //nolint:gosec // test path under t.TempDir
 	require.NoError(t, err)
@@ -573,9 +574,9 @@ func writeArchive(t *testing.T, path, ext, memberName string, binary []byte) {
 	t.Helper()
 
 	switch ext {
-	case archiveExtTarGz:
+	case otameta.ArchiveExtTarGz:
 		writeTarGz(t, path, []tarMember{{name: memberName, body: binary, mode: 0o755}})
-	case archiveExtZip:
+	case otameta.ArchiveExtZip:
 		writeZip(t, path, []zipMember{{name: memberName, body: binary, mode: 0o755}})
 	default:
 		t.Fatalf("unsupported archive extension %q", ext)
@@ -714,13 +715,13 @@ func TestExtractFromTarGz_HostileMembers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := newExtractHarness(t, archiveExtTarGz)
+			h := newExtractHarness(t, otameta.ArchiveExtTarGz)
 			if tt.limit > 0 {
 				h.stager.maxFileBytes = tt.limit
 			}
 			writeTarGz(t, h.archivePath, tt.members)
 
-			err := h.extract(t, archiveExtTarGz)
+			err := h.extract(t, otameta.ArchiveExtTarGz)
 			require.ErrorIs(t, err, ErrArchiveRejected)
 			assert.Contains(t, err.Error(), tt.wantMsg)
 		})
@@ -835,13 +836,13 @@ func TestExtractFromZip_HostileMembers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := newExtractHarness(t, archiveExtZip)
+			h := newExtractHarness(t, otameta.ArchiveExtZip)
 			if tt.limit > 0 {
 				h.stager.maxFileBytes = tt.limit
 			}
 			writeZip(t, h.archivePath, tt.members)
 
-			err := h.extract(t, archiveExtZip)
+			err := h.extract(t, otameta.ArchiveExtZip)
 			require.ErrorIs(t, err, ErrArchiveRejected)
 			assert.Contains(t, err.Error(), tt.wantMsg)
 		})
@@ -854,10 +855,10 @@ func TestExtractFromTarGz_CorruptArchive(t *testing.T) {
 	t.Run("not gzip at all", func(t *testing.T) {
 		t.Parallel()
 
-		h := newExtractHarness(t, archiveExtTarGz)
+		h := newExtractHarness(t, otameta.ArchiveExtTarGz)
 		require.NoError(t, os.WriteFile(h.archivePath, []byte("this is not gzip"), 0o600))
 
-		err := h.extract(t, archiveExtTarGz)
+		err := h.extract(t, otameta.ArchiveExtTarGz)
 		require.ErrorIs(t, err, ErrArchiveRejected)
 		assert.NoFileExists(t, h.destPath)
 	})
@@ -865,7 +866,7 @@ func TestExtractFromTarGz_CorruptArchive(t *testing.T) {
 	t.Run("truncated tar inside valid gzip", func(t *testing.T) {
 		t.Parallel()
 
-		h := newExtractHarness(t, archiveExtTarGz)
+		h := newExtractHarness(t, otameta.ArchiveExtTarGz)
 		full := filepath.Join(t.TempDir(), "full.tar.gz")
 		writeTarGz(t, full, []tarMember{
 			{name: "LICENSE.txt", body: bytes.Repeat([]byte("gpl"), 4096)},
@@ -876,7 +877,7 @@ func TestExtractFromTarGz_CorruptArchive(t *testing.T) {
 		//nolint:gosec // G703: test path under t.TempDir
 		require.NoError(t, os.WriteFile(h.archivePath, body[:len(body)/2], 0o600))
 
-		err = h.extract(t, archiveExtTarGz)
+		err = h.extract(t, otameta.ArchiveExtTarGz)
 		require.ErrorIs(t, err, ErrArchiveRejected)
 	})
 }
@@ -884,10 +885,10 @@ func TestExtractFromTarGz_CorruptArchive(t *testing.T) {
 func TestExtractFromZip_CorruptArchive(t *testing.T) {
 	t.Parallel()
 
-	h := newExtractHarness(t, archiveExtZip)
+	h := newExtractHarness(t, otameta.ArchiveExtZip)
 	require.NoError(t, os.WriteFile(h.archivePath, []byte("this is not a zip"), 0o600))
 
-	err := h.extract(t, archiveExtZip)
+	err := h.extract(t, otameta.ArchiveExtZip)
 	require.ErrorIs(t, err, ErrArchiveRejected)
 	assert.NoFileExists(t, h.destPath)
 }

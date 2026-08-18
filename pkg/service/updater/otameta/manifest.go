@@ -47,8 +47,15 @@ const (
 	ChannelBeta   = "beta"
 )
 
-// archiveExts are the extensions release builds package update archives with.
-var archiveExts = []string{".tar.gz", ".zip"}
+// ArchiveExtTarGz and ArchiveExtZip are the extensions release builds package
+// update archives with. They live here because selection decides which one a
+// platform gets and extraction has to agree with that decision.
+const (
+	ArchiveExtTarGz = ".tar.gz"
+	ArchiveExtZip   = ".zip"
+)
+
+var archiveExts = []string{ArchiveExtTarGz, ArchiveExtZip}
 
 var (
 	// ErrNoAsset means no archive in the release is installable here. That is

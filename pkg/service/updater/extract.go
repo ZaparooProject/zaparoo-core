@@ -40,12 +40,11 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 )
 
 const (
-	archiveExtTarGz = ".tar.gz"
-	archiveExtZip   = ".zip"
-
 	// semverPattern matches a version inside an archive member name.
 	semverPattern = `(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)` +
 		`(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?` +
@@ -119,9 +118,9 @@ func (s *stager) extractBinary(ctx context.Context, archivePath, ext string, wan
 	}
 
 	switch ext {
-	case archiveExtTarGz:
+	case otameta.ArchiveExtTarGz:
 		return s.extractFromTarGz(ctx, f, destPath)
-	case archiveExtZip:
+	case otameta.ArchiveExtZip:
 		return s.extractFromZip(ctx, f, size, destPath)
 	default:
 		return fmt.Errorf("%w: %q is not an archive type this build unpacks", ErrArchiveRejected, ext)
