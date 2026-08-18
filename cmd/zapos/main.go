@@ -22,6 +22,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/zapos"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -71,6 +72,14 @@ func run() error {
 
 	serviceResult, err := service.Start(platform, cfg)
 	if err != nil {
+		// The previous version is back on disk, but this process is still the
+		// image that failed and nothing here would start the restored one.
+		if errors.Is(err, updater.ErrRolledBack) {
+			// Exec does not return on success: it replaces this process.
+			execErr := restart.Exec()
+			return fmt.Errorf("failed to re-exec after rolling back an update: %w", execErr)
+		}
+
 		log.Error().Err(err).Msg("error starting service")
 		return fmt.Errorf("error starting service: %w", err)
 	}

@@ -48,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/cespare/xxhash/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -850,9 +851,18 @@ func (s *Service) startService() {
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
 
-		err = s.removePidFile()
-		if err != nil {
-			log.Error().Err(err).Msg("error removing pid file")
+		if pidErr := s.removePidFile(); pidErr != nil {
+			log.Error().Err(pidErr).Msg("error removing pid file")
+		}
+
+		// The previous version is back on disk but this process is still the
+		// image that failed, and on these platforms nothing would start the
+		// restored one. Re-exec instead of exiting: restartServiceBinary
+		// re-prepares the binary from the source path, which is where the
+		// rollback put it.
+		if errors.Is(err, updater.ErrRolledBack) {
+			execErr := s.restartServiceBinary()
+			log.Error().Err(execErr).Msg("failed to re-exec after rolling back an update")
 		}
 
 		os.Exit(1)

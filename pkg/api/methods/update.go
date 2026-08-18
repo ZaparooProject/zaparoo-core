@@ -35,11 +35,15 @@ import (
 
 // updaterOptions describes the device to the updater.
 func updaterOptions(env *requests.RequestEnv) updater.Options {
-	return updater.Options{
+	opts := updater.Options{
 		PlatformID: env.Platform.ID(),
 		Channel:    env.Config.UpdateChannel(),
 		DataDir:    helpers.DataDir(env.Platform),
 	}
+	if env.Database != nil {
+		opts.UserDB = env.Database.UserDB
+	}
+	return opts
 }
 
 func HandleUpdateCheck(
@@ -80,22 +84,46 @@ func HandleUpdateApply(
 		}
 	}
 
+	releaseMediaGate := func() {}
+	if env.State != nil {
+		release, err := env.State.AcquireUpdateMediaGate(env.Context)
+		if err != nil {
+			return nil, fmt.Errorf("waiting for media activity to settle before update: %w", err)
+		}
+		releaseMediaGate = release
+		if env.State.ActiveMedia() != nil {
+			releaseMediaGate()
+			return nil, models.ClientErrf("cannot apply update while media is active")
+		}
+	}
+	releaseBeforeRestart := true
+	defer func() {
+		if releaseBeforeRestart {
+			releaseMediaGate()
+		}
+	}()
+
 	previousVersion := config.AppVersion
 
 	newVersion, err := applyFn(env.Context, updaterOptions(&env))
 	if errors.Is(err, updater.ErrDevelopmentVersion) {
 		return nil, models.ClientErrf("cannot apply updates on development builds")
 	}
+	if errors.Is(err, updater.ErrUpdateInProgress) {
+		return nil, models.ClientErrf("update already in progress")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("update apply failed: %w", err)
 	}
 
+	releaseBeforeRestart = false
 	return models.ResponseWithCallback{
 		Result: models.UpdateApplyResponse{
 			PreviousVersion: previousVersion,
 			NewVersion:      newVersion,
 		},
 		AfterWrite: func() {
+			defer releaseMediaGate()
 			log.Info().
 				Str("previous", previousVersion).
 				Str("new", newVersion).

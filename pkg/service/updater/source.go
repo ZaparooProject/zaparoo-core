@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/rs/zerolog/log"
@@ -65,15 +66,15 @@ var ErrGenerationRollback = errors.New("update manifest is older than one alread
 // unverified document, and hands back only the releases this device may
 // install, each reduced to the single archive that belongs to it.
 type verifiedSource struct {
-	transport *http.Transport
-	key       *keyRef
-	// verify is otameta.Verify in production; tests replace it so they can sign
-	// with a generated key pair.
-	verify     func(data, sig []byte) (*otameta.Manifest, error)
-	baseURL    string
-	stateDir   string
-	platformID string
-	goarch     string
+	transport    *http.Transport
+	key          *keyRef
+	verify       func(data, sig []byte) (*otameta.Manifest, error)
+	manifest     *otameta.Manifest
+	baseURL      string
+	stateDir     string
+	platformID   string
+	goarch       string
+	manifestBase string
 }
 
 // cacheValidators are the conditional-request tokens for a copy already on
@@ -115,8 +116,53 @@ func (s *verifiedSource) ListReleases(
 	// The checksum validator runs later in the same update and has to use the
 	// key the publisher actually signed with, not a build-time default.
 	s.key.set(manifest.KeyID)
+	s.manifest = manifest
+	s.manifestBase = base
 
 	return s.releasesFor(manifest, base), nil
+}
+
+// releaseForVersion returns the signed manifest release chosen by
+// go-selfupdate's channel/latest-version selection. Asset URLs are resolved the
+// same way releasesFor resolves them for go-selfupdate.
+func (s *verifiedSource) releaseForVersion(version string) (*otameta.Release, error) {
+	if s.manifest == nil {
+		return nil, errors.New("update manifest has not been loaded")
+	}
+	want, err := semver.NewVersion(version)
+	if err != nil {
+		return nil, fmt.Errorf("reading selected release version %q: %w", version, err)
+	}
+
+	for _, rel := range s.manifest.Releases {
+		if rel == nil {
+			continue
+		}
+		candidate, parseErr := semver.NewVersion(otameta.VersionFromTag(rel.TagName))
+		if parseErr != nil || !candidate.Equal(want) {
+			continue
+		}
+
+		resolved := *rel
+		resolved.Assets = make([]*otameta.Asset, 0, len(rel.Assets))
+		for _, asset := range rel.Assets {
+			if asset == nil {
+				continue
+			}
+			copyAsset := *asset
+			copyAsset.URL = resolveAssetURL(asset.URL, s.manifestBase)
+			resolved.Assets = append(resolved.Assets, &copyAsset)
+		}
+		return &resolved, nil
+	}
+	return nil, fmt.Errorf("selected release %s is missing from the verified manifest", version)
+}
+
+func (s *verifiedSource) manifestGeneration() int64 {
+	if s.manifest == nil {
+		return 0
+	}
+	return s.manifest.Generation
 }
 
 // fetchManifest retrieves the manifest and its detached signature, verifies
@@ -195,7 +241,7 @@ func (s *verifiedSource) persist(st *updaterState, generation int64, res *httpRe
 
 	st.ManifestGeneration = generation
 	st.ManifestSeenAt = time.Now().UTC()
-	if err := saveState(s.stateDir, *st); err != nil {
+	if err := saveState(s.stateDir, st); err != nil {
 		log.Warn().Err(err).Msg("could not record update manifest generation")
 	}
 }

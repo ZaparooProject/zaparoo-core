@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -54,23 +53,23 @@ var stateMu syncutil.Mutex
 // would roll backwards whenever an old backup was restored, which is a
 // self-inflicted downgrade window.
 type updaterState struct {
-	// ManifestSeenAt records when the generation below was accepted. It is for
-	// operators reading the file; nothing in the verification path reads a clock.
-	ManifestSeenAt time.Time `json:"manifestSeenAt"`
-	// ManifestETag and ManifestLastModified let the next check ask the CDN for
-	// the manifest only if it changed. The cached bytes are re-verified on every
-	// use, so a tampered cache is caught rather than trusted.
-	//
-	// Both are kept because which one fires depends on the origin. Bunny does
-	// not generate ETags; it only forwards one the origin sends, and Bunny
-	// Storage sends none, so in production Last-Modified is the validator that
-	// actually works. ETag is still honoured when present because it is the
-	// stronger of the two and servers that offer both prefer it.
-	ManifestETag         string `json:"manifestETag"`
-	ManifestLastModified string `json:"manifestLastModified"`
-	// ManifestGeneration is the highest generation this device has accepted.
-	ManifestGeneration int64 `json:"manifestGeneration"`
-	StateVersion       int   `json:"stateVersion"`
+	ManifestSeenAt       time.Time     `json:"manifestSeenAt"`
+	LastResult           *updateResult `json:"lastResult,omitempty"`
+	ManifestETag         string        `json:"manifestETag"`
+	ManifestLastModified string        `json:"manifestLastModified"`
+	ManifestGeneration   int64         `json:"manifestGeneration"`
+	StateVersion         int           `json:"stateVersion"`
+}
+
+// updateResult records the terminal outcome of an update for the boot that
+// follows it.
+type updateResult struct {
+	At          time.Time     `json:"at"`
+	Outcome     updateOutcome `json:"outcome"`
+	FromVersion string        `json:"fromVersion"`
+	ToVersion   string        `json:"toVersion"`
+	Detail      string        `json:"detail,omitempty"`
+	Reported    bool          `json:"reported"`
 }
 
 // stateDirFor returns the updater's private directory inside the data dir.
@@ -118,7 +117,7 @@ func loadState(dir string) updaterState {
 }
 
 // saveState replaces state.json atomically.
-func saveState(dir string, st updaterState) error {
+func saveState(dir string, st *updaterState) error {
 	if dir == "" {
 		return nil
 	}
@@ -170,9 +169,15 @@ func saveCachedManifest(dir string, data []byte) error {
 
 // writeFileAtomic writes name inside dir via a temporary file and a rename, so
 // a reader either sees the previous contents or the new ones and never a
-// partial write. The directory is synced afterwards so the rename survives a
-// power cut, which these devices take regularly.
+// partial write. Success means both file contents and directory entry reached a
+// durability barrier; callers may delete rollback prerequisites afterwards.
 func writeFileAtomic(dir, name string, data []byte) error {
+	return writeFileAtomicWithSync(dir, name, data, syncDir)
+}
+
+func writeFileAtomicWithSync(
+	dir, name string, data []byte, syncDirectory func(string) error,
+) error {
 	if err := os.MkdirAll(dir, stateDirPerm); err != nil {
 		return fmt.Errorf("creating updater state directory: %w", err)
 	}
@@ -206,39 +211,80 @@ func writeFileAtomic(dir, name string, data []byte) error {
 		return fmt.Errorf("closing updater state file: %w", err)
 	}
 
-	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
+	if err := replaceStateFile(tmpName, filepath.Join(dir, name)); err != nil {
 		return fmt.Errorf("replacing updater state file: %w", err)
 	}
-
-	// The rename has already happened, so the write succeeded whatever the
-	// directory sync does. Reporting a sync failure as a write failure would be
-	// actively harmful: callers respond by discarding what they just stored, so
-	// a filesystem that cannot flush a directory handle would permanently throw
-	// away the cache validators and the generation watermark. Not all of them
-	// can — vfat and exFAT are the ones these devices actually run on — and
-	// losing durability across a power cut is the smaller loss.
-	if err := syncDir(dir); err != nil {
-		log.Warn().Err(err).Str("file", name).
-			Msg("updater state was written but the directory could not be flushed")
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("flushing updater state file %q: %w", name, err)
 	}
 	return nil
 }
 
-func syncDir(dir string) error {
-	handle, err := os.Open(dir) //nolint:gosec // path is derived from the platform data dir
-	if err != nil {
-		return fmt.Errorf("opening updater state directory for sync: %w", err)
+// recordUpdateResult stores how an update finished so the boot after it can say
+// so. Terminal cleanup keeps its marker until this succeeds, allowing a later
+// boot to retry result persistence without repeating rollback.
+//
+// Callers already holding markerMu take it before stateMu; nothing takes them
+// the other way round.
+func recordUpdateResult(dir string, res *updateResult) error {
+	if res == nil {
+		return nil
 	}
-	syncErr := handle.Sync()
-	closeErr := handle.Close()
 
-	// Windows cannot flush a directory handle through os.File.Sync, so there is
-	// nothing to report there.
-	if syncErr != nil && (runtime.GOOS != "windows" || !errors.Is(syncErr, os.ErrPermission)) {
-		return fmt.Errorf("syncing updater state directory: %w", syncErr)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st := loadState(dir)
+	if sameUpdateResult(st.LastResult, res) {
+		return nil
 	}
-	if closeErr != nil {
-		return fmt.Errorf("closing updater state directory: %w", closeErr)
+	copyResult := *res
+	copyResult.Reported = false
+	st.LastResult = &copyResult
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording the update result for the next boot: %w", err)
 	}
 	return nil
+}
+
+// peekUpdateResult returns an update result that has not been shown yet without
+// acknowledging it. Delivery acknowledges only after the inbox write succeeds.
+func peekUpdateResult(dir string) *updateResult {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st := loadState(dir)
+	if st.LastResult == nil || st.LastResult.Reported {
+		return nil
+	}
+	res := *st.LastResult
+	return &res
+}
+
+func markUpdateResultReported(dir string, res *updateResult) error {
+	if res == nil {
+		return nil
+	}
+
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st := loadState(dir)
+	if st.LastResult == nil || st.LastResult.Reported || !sameUpdateResult(st.LastResult, res) {
+		return nil
+	}
+	st.LastResult.Reported = true
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("marking the update result as reported: %w", err)
+	}
+	return nil
+}
+
+func sameUpdateResult(a, b *updateResult) bool {
+	return a != nil && b != nil &&
+		a.At.Equal(b.At) &&
+		a.Outcome == b.Outcome &&
+		a.FromVersion == b.FromVersion &&
+		a.ToVersion == b.ToVersion &&
+		a.Detail == b.Detail
 }

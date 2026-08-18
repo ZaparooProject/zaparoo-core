@@ -152,6 +152,66 @@ func TestMediaStopGateWaitsForLaunchAndBlocksReplacement(t *testing.T) {
 	}
 }
 
+func TestUpdateMediaGateBlocksExternalPublicationThroughRestart(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	releaseUpdate, err := st.AcquireUpdateMediaGate(context.Background())
+	require.NoError(t, err)
+
+	published := make(chan struct{})
+	go func() {
+		st.SetActiveMedia(&models.ActiveMedia{SystemID: "SNES", Name: "Game"})
+		close(published)
+	}()
+	select {
+	case <-published:
+		t.Fatal("external ActiveMedia publication bypassed update gate")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.Nil(t, st.ActiveMedia())
+
+	st.RestartService()
+	releaseUpdate()
+	select {
+	case <-published:
+	case <-time.After(time.Second):
+		t.Fatal("external ActiveMedia publication did not stop after restart")
+	}
+	assert.Nil(t, st.ActiveMedia())
+}
+
+func TestUpdateMediaGateReleasesLaunchGateWhenPublicationWaitIsCanceled(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	st.activeMediaPublishMu.RLock()
+	defer st.activeMediaPublishMu.RUnlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		release, err := st.AcquireUpdateMediaGate(ctx)
+		if release != nil {
+			release()
+		}
+		result <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		if st.mediaLaunchMu.TryRLock() {
+			st.mediaLaunchMu.RUnlock()
+			return false
+		}
+		return true
+	}, time.Second, 5*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+	require.True(t, st.mediaLaunchMu.TryRLock(), "canceled update gate retained media launch lock")
+	st.mediaLaunchMu.RUnlock()
+}
+
 func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 	st, _ := NewState(nil, "test-boot")
@@ -273,6 +333,16 @@ func TestSuccessfulRestoreGateBlocksLaunchUntilRestart(t *testing.T) {
 	require.ErrorIs(t, err, ErrRestoreRestartRequired)
 	_, err = st.BeginRestoreGate()
 	require.ErrorIs(t, err, ErrRestoreRestartRequired)
+}
+
+func TestAcquireMediaLaunch_RejectsStoppedService(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	st.StopService()
+
+	release, err := st.AcquireMediaLaunch()
+	assert.Nil(t, release)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestSetRunZapScript(t *testing.T) {

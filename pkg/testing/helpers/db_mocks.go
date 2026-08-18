@@ -785,6 +785,24 @@ func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, e
 	return info, nil
 }
 
+func (m *MockUserDBI) BackupForUpdate(
+	targetVersion string,
+) (database.BackupInfo, func() error, error) {
+	args := m.Called(targetVersion)
+	info, ok := args.Get(0).(database.BackupInfo)
+	if !ok {
+		return database.BackupInfo{}, nil, errors.New("mock UserDBI update backup returned invalid backup info")
+	}
+	resume, ok := args.Get(1).(func() error)
+	if !ok {
+		return info, nil, errors.New("mock UserDBI update backup returned invalid resume function")
+	}
+	if err := args.Error(2); err != nil {
+		return info, resume, fmt.Errorf("mock UserDBI update backup failed: %w", err)
+	}
+	return info, resume, nil
+}
+
 func (m *MockUserDBI) BackupForTransfer(
 	ctx context.Context, reason string,
 ) (database.BackupInfo, func() error, error) {

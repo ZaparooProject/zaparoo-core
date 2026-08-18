@@ -95,6 +95,7 @@ type State struct {
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
+	activeMediaPublishMu  syncutil.RWMutex
 	activeMediaReady      bool
 	restartRequested      bool
 	restorePendingRestart bool
@@ -613,6 +614,11 @@ func (s *State) AcquireMediaLaunch() (func(), error) {
 	// side through Platform.LaunchMedia keeps stop requests behind platform
 	// launch settling and active-media readiness setup.
 	s.mediaLaunchMu.RLock()
+	if err := s.ctx.Err(); err != nil {
+		s.mediaLaunchMu.RUnlock()
+		releaseRestore()
+		return nil, err
+	}
 	s.mu.Lock()
 	s.mediaLaunchAccesses++
 	s.mu.Unlock()
@@ -628,6 +634,29 @@ func (s *State) AcquireMediaLaunch() (func(), error) {
 // AcquireMediaStop waits for in-flight media launches, then prevents another
 // launch from starting until the returned release function is called.
 func (s *State) AcquireMediaStop(ctx context.Context) (func(), error) {
+	return acquireExclusiveGate(ctx, &s.mediaLaunchMu)
+}
+
+// AcquireUpdateMediaGate waits for in-flight launches and ActiveMedia
+// publications, then prevents either from starting until release. The updater
+// holds this gate from its final safety check through restart cancellation.
+func (s *State) AcquireUpdateMediaGate(ctx context.Context) (func(), error) {
+	releaseLaunch, err := s.AcquireMediaStop(ctx)
+	if err != nil {
+		return nil, err
+	}
+	releasePublish, err := acquireExclusiveGate(ctx, &s.activeMediaPublishMu)
+	if err != nil {
+		releaseLaunch()
+		return nil, err
+	}
+	return func() {
+		releasePublish()
+		releaseLaunch()
+	}, nil
+}
+
+func acquireExclusiveGate(ctx context.Context, gate *syncutil.RWMutex) (func(), error) {
 	const retryInterval = 5 * time.Millisecond
 
 	retry := time.NewTicker(retryInterval)
@@ -640,9 +669,9 @@ func (s *State) AcquireMediaStop(ctx context.Context) (func(), error) {
 		}
 
 		// TryLock avoids registering a writer that would keep blocking new
-		// launches after this request is canceled.
-		if s.mediaLaunchMu.TryLock() {
-			return s.mediaLaunchMu.Unlock, nil
+		// readers after this request is canceled.
+		if gate.TryLock() {
+			return gate.Unlock, nil
 		}
 
 		select {
@@ -746,6 +775,16 @@ func (s *State) MarkActiveMediaReady(gen uint64) {
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	if media != nil {
+		// This gate is separate from mediaLaunchMu because normal launch code
+		// already holds that lock when it publishes ActiveMedia. External
+		// lifecycle trackers do not, so every publication takes this read side.
+		s.activeMediaPublishMu.RLock()
+		defer s.activeMediaPublishMu.RUnlock()
+		if err := s.ctx.Err(); err != nil {
+			log.Debug().Err(err).Msg("active media update rejected while service is stopping")
+			return
+		}
+
 		s.mu.RLock()
 		launchAccessHeld := s.mediaLaunchAccesses > 0
 		s.mu.RUnlock()

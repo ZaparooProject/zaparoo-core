@@ -227,6 +227,18 @@ func TestCheck_CancelledContext(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestApply_UpdateInProgress(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+	applyInProgress.Store(true)
+	t.Cleanup(func() { applyInProgress.Store(false) })
+
+	version, err := Apply(t.Context(), Options{})
+	require.ErrorIs(t, err, ErrUpdateInProgress)
+	assert.Empty(t, version)
+}
+
 func TestApply_CancelledContext(t *testing.T) {
 	original := config.AppVersion
 	config.AppVersion = "1.0.0"

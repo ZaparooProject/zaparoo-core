@@ -1,0 +1,615 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package updater
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
+)
+
+// watchdogAction is what the boot after an update has to do about it.
+type watchdogAction int
+
+const (
+	// actionNone means there is nothing to resolve and startup carries on.
+	actionNone watchdogAction = iota
+	// actionConfirm means the new version is running and now has to prove it
+	// stays up. The marker moves to confirming and startup carries on.
+	actionConfirm
+	// actionClear means the marker describes an update this process is not part
+	// of, so it is discarded and startup carries on.
+	actionClear
+	// actionAbortInstall means the outgoing version is still running after an
+	// interrupted binary swap, so only the old binary and unused artifacts need
+	// restoring; the live UserDB was never opened by the target version.
+	actionAbortInstall
+	// actionFinalize completes idempotent cleanup after a terminal outcome was
+	// durably recorded.
+	actionFinalize
+	// actionRollBack means the update did not work and the previous version has
+	// to be put back.
+	actionRollBack
+)
+
+// ErrRolledBack means an update was rolled back and the previous version is now
+// on disk. The process is still running the image that failed, so every caller
+// of Start has to re-exec rather than exit: on the platforms this matters for
+// there is no supervisor to start anything again.
+var (
+	ErrRolledBack           = errors.New("update rolled back, restart into the restored version")
+	errRollbackPrerequisite = errors.New("rollback prerequisite is unavailable")
+)
+
+// decideWatchdogAction maps a marker and the version actually running onto what
+// to do about it. It is separated from the work so the table can be tested
+// without a filesystem, which matters because getting a row wrong here either
+// bricks a device or undoes a good update.
+func decideWatchdogAction(m *pendingMarker, currentVersion string) watchdogAction {
+	if m == nil {
+		return actionNone
+	}
+	// A durable terminal outcome turns startup into idempotent cleanup, never
+	// another rollback. A blocked rollback deliberately retains its marker and
+	// snapshot for manual recovery.
+	switch m.Outcome {
+	case outcomeSucceeded, outcomeRolledBack:
+		return actionFinalize
+	case outcomeRollbackBlocked:
+		return actionNone
+	case "":
+		// Continue with the in-progress state below.
+	default:
+		return actionNone
+	}
+
+	switch m.State {
+	case markerInstalling:
+		if m.PreviousVersion == currentVersion {
+			return actionAbortInstall
+		}
+		return actionRollBack
+
+	case markerRollingBack:
+		// A rollback started and did not finish. Whatever is running now, the
+		// files are half swapped and the only way out is through.
+		return actionRollBack
+
+	case markerInstalled:
+		// The install completed and this is the first boot after it. Running the
+		// version the update aimed for means the binary at least starts.
+		if m.TargetVersion == currentVersion {
+			return actionConfirm
+		}
+		// If the outgoing version is still running, the target never opened the
+		// UserDB and the install can be aborted without restoring its snapshot.
+		if m.PreviousVersion == currentVersion {
+			return actionAbortInstall
+		}
+		return actionRollBack
+
+	case markerConfirming:
+		if m.TargetVersion == currentVersion {
+			// The previous boot got this far and then never confirmed, so the
+			// new version starts but does not survive startup.
+			return actionRollBack
+		}
+		// A different version is running, so this marker belongs to an update
+		// that was superseded or undone by other means.
+		return actionClear
+
+	default:
+		// Same schema version, unrecognised state: the file is damaged in a way
+		// parsing did not catch, and it cannot direct a rollback.
+		return actionClear
+	}
+}
+
+// RunStartupWatchdog resolves any update left pending by a previous boot. It
+// runs before configuration, the databases or the network are available,
+// because the failure it exists to catch is a binary that cannot get that far.
+//
+// It returns ErrRolledBack when the previous version has been put back and the
+// caller must re-exec into it. Every other error is advisory: startup continues,
+// because refusing to boot over a bookkeeping problem is the outcome this whole
+// mechanism exists to avoid.
+func RunStartupWatchdog(ctx context.Context, dataDir, currentVersion string) error {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	dir := stateDirFor(dataDir)
+	m, err := loadMarker(dir)
+	if err != nil {
+		// A newer or unusable marker cannot safely direct this build. Leave it and
+		// every update snapshot alone so a compatible build or operator still has
+		// the evidence and recovery files.
+		log.Warn().Err(err).Msg("leaving an update marker this build cannot safely resolve")
+		return nil
+	}
+
+	switch decideWatchdogAction(m, currentVersion) {
+	case actionNone:
+		if m != nil && m.Outcome == outcomeRollbackBlocked {
+			if err := recordMarkerResult(dir, m); err != nil {
+				log.Warn().Err(err).Msg("could not retain the blocked rollback result")
+			}
+		}
+		sweepUpdateSnapshots(dataDir, snapshotToKeep(m))
+		return nil
+
+	case actionClear:
+		log.Info().
+			Str("markerVersion", m.TargetVersion).
+			Str("running", currentVersion).
+			Msg("discarding an update marker that does not describe this version")
+		if err := clearMarker(dir); err != nil {
+			return err
+		}
+		sweepUpdateSnapshots(dataDir, "")
+		return nil
+
+	case actionConfirm:
+		m.State = markerConfirming
+		m.Attempts++
+		if err := saveMarker(dir, m); err != nil {
+			// Without confirming on disk a failed startup looks like a first
+			// boot to the next one, so it would try to confirm again instead of
+			// rolling back. Report it; the next boot re-runs this same step.
+			return fmt.Errorf("recording that the updated version is being confirmed: %w", err)
+		}
+		log.Info().
+			Str("from", m.PreviousVersion).
+			Str("to", m.TargetVersion).
+			Int("attempts", m.Attempts).
+			Msg("confirming an updated version")
+		return nil
+
+	case actionAbortInstall:
+		return abortInstall(ctx, dataDir, m, installSidecarPath(m.TargetPath, installCandidateSuffix))
+
+	case actionFinalize:
+		return finalizeTerminalUpdate(ctx, dataDir, m)
+
+	case actionRollBack:
+		return rollBack(ctx, dataDir, m)
+
+	default:
+		return nil
+	}
+}
+
+// RollBackFailedStart is the same recovery driven by a startup that got past the
+// watchdog and then failed anyway. The watchdog only sees a process that never
+// started; this sees one that started and could not finish, which on a device
+// with no supervisor is just as fatal.
+func RollBackFailedStart(ctx context.Context, dataDir, currentVersion string) error {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	m, err := loadMarker(stateDirFor(dataDir))
+	if err != nil || m == nil {
+		return nil //nolint:nilerr // a marker this build cannot own is not ours to act on
+	}
+	if m.Outcome != "" || m.TargetVersion != currentVersion {
+		return nil
+	}
+	log.Error().
+		Str("from", m.PreviousVersion).
+		Str("to", m.TargetVersion).
+		Msg("the updated version failed to start, rolling back")
+	return rollBack(ctx, dataDir, m)
+}
+
+// RecordCleanShutdown resets a confirming marker so an orderly stop during the
+// soak window restarts confirmation on the next boot instead of looking like a
+// crash. A startup failure still rolls back through Start's deferred hook after
+// cleanup completes.
+func RecordCleanShutdown(dataDir, currentVersion string) error {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	dir := stateDirFor(dataDir)
+	m, err := loadMarker(dir)
+	if err != nil || m == nil {
+		return nil // an unreadable or foreign marker is not ours to change
+	}
+	if m.State != markerConfirming || m.Outcome != "" || m.TargetVersion != currentVersion {
+		return nil
+	}
+	m.State = markerInstalled
+	return saveMarker(dir, m)
+}
+
+// Confirm commits an update that has stayed up long enough to be trusted. The
+// terminal outcome is made durable before cleanup, so a crash at any cleanup
+// boundary resumes cleanup rather than attempting rollback without its files.
+func Confirm(ctx context.Context, dataDir, currentVersion string) (string, error) {
+	markerMu.Lock()
+	defer markerMu.Unlock()
+
+	dir := stateDirFor(dataDir)
+	m, err := loadMarker(dir)
+	if err != nil || m == nil {
+		return "", nil //nolint:nilerr // a marker this build cannot read is not ours to commit
+	}
+	if m.State != markerConfirming || m.Outcome != "" || m.TargetVersion != currentVersion {
+		return "", nil
+	}
+
+	m.Outcome = outcomeSucceeded
+	m.OutcomeAt = time.Now().UTC()
+	if err := saveMarker(dir, m); err != nil {
+		return "", fmt.Errorf("recording the confirmed update: %w", err)
+	}
+	if err := finalizeTerminalUpdate(ctx, dataDir, m); err != nil {
+		return m.TargetVersion, err
+	}
+
+	log.Info().
+		Str("from", m.PreviousVersion).
+		Str("to", m.TargetVersion).
+		Msg("update confirmed")
+	return m.TargetVersion, nil
+}
+
+// ReportLastUpdate posts the outcome of an update that finished before there was
+// an inbox to post it to. Rollbacks are exactly that case: they run before the
+// databases are open and then re-exec, so this is the only chance the user gets
+// to hear that the version they installed did not work.
+func ReportLastUpdate(dataDir string, inboxSvc *inbox.Service) {
+	if inboxSvc == nil {
+		return
+	}
+	dir := stateDirFor(dataDir)
+	res := peekUpdateResult(dir)
+	if res == nil {
+		return
+	}
+
+	var title, body string
+	severity := inbox.SeverityWarning
+	switch res.Outcome {
+	case outcomeRolledBack:
+		title = "Update rolled back"
+		body = fmt.Sprintf(
+			"Version %s did not start, so version %s was restored. "+
+				"Your data was restored from the snapshot taken before the update.",
+			res.ToVersion, res.FromVersion)
+	case outcomeRollbackBlocked:
+		severity = inbox.SeverityError
+		title = "Update could not be rolled back"
+		body = fmt.Sprintf(
+			"Version %s did not start and version %s could not be restored automatically. "+
+				"The snapshot taken before the update is still in your backups and can be "+
+				"restored by hand.",
+			res.ToVersion, res.FromVersion)
+	case outcomeSucceeded:
+		severity = inbox.SeverityInfo
+		title = "Update installed"
+		body = fmt.Sprintf("Updated from version %s to version %s.", res.FromVersion, res.ToVersion)
+	default:
+		return
+	}
+	if res.Detail != "" {
+		body += "\n\n" + res.Detail
+	}
+
+	if err := inboxSvc.Add(
+		title,
+		inbox.WithBody(body),
+		inbox.WithCategory(inbox.CategoryUpdateResult),
+		inbox.WithSeverity(severity),
+	); err != nil {
+		log.Error().Err(err).Msg("failed to add update result inbox message")
+		return
+	}
+	if err := markUpdateResultReported(dir, res); err != nil {
+		log.Warn().Err(err).Msg("update result was posted but could not be marked reported")
+	}
+}
+
+// rollBack puts the previous version back. Callers hold markerMu.
+//
+// The order is deliberate. The user database is restored first, because that is
+// the step with a way out: if it fails, nothing has moved and the device carries
+// on running the new version, which at worst is suspect. Restoring the binary
+// first and then failing on the database would leave an old binary in front of a
+// database migrated past what it can open, and that combination does not boot.
+func rollBack(ctx context.Context, dataDir string, m *pendingMarker) error {
+	dir := stateDirFor(dataDir)
+	if m.State != markerRollingBack {
+		m.State = markerRollingBack
+		if err := saveMarker(dir, m); err != nil {
+			// Nothing has been moved yet, and without this on disk an
+			// interrupted rollback would not know to resume. Stop here rather
+			// than start a swap that cannot be finished.
+			return fmt.Errorf("recording the start of the rollback: %w", err)
+		}
+	}
+
+	if err := restoreUserDB(ctx, dataDir, m); err != nil {
+		return handleRollbackFailure(dir, m, err)
+	}
+	if err := restoreReplacedFiles(dir, m); err != nil {
+		return handleRollbackFailure(dir, m, err)
+	}
+
+	m.Outcome = outcomeRolledBack
+	m.OutcomeAt = time.Now().UTC()
+	if err := saveMarker(dir, m); err != nil {
+		return fmt.Errorf("%w: recording the completed rollback: %w", ErrRolledBack, err)
+	}
+	if err := finalizeTerminalUpdate(ctx, dataDir, m); err != nil {
+		return fmt.Errorf("%w: finalizing the completed rollback: %w", ErrRolledBack, err)
+	}
+
+	log.Warn().
+		Str("failed", m.TargetVersion).
+		Str("restored", m.PreviousVersion).
+		Msg("update rolled back")
+	return ErrRolledBack
+}
+
+func handleRollbackFailure(dir string, m *pendingMarker, cause error) error {
+	if errors.Is(cause, errRollbackPrerequisite) {
+		return blockRollback(dir, m, cause)
+	}
+	log.Error().Err(cause).
+		Str("failed", m.TargetVersion).
+		Str("wanted", m.PreviousVersion).
+		Msg("rollback hit a retryable error; leaving it pending")
+	return fmt.Errorf("rollback remains pending after a retryable error: %w", cause)
+}
+
+// blockRollback gives up on a rollback only when a prerequisite is permanently
+// missing or corrupt. Retryable I/O errors leave markerRollingBack intact.
+func blockRollback(dir string, m *pendingMarker, cause error) error {
+	log.Error().Err(cause).
+		Str("failed", m.TargetVersion).
+		Str("wanted", m.PreviousVersion).
+		Msg("could not roll the update back, leaving the new version installed")
+
+	m.Outcome = outcomeRollbackBlocked
+	m.OutcomeAt = time.Now().UTC()
+	m.OutcomeDetail = cause.Error()
+	if err := saveMarker(dir, m); err != nil {
+		return fmt.Errorf("recording that rollback was abandoned: %w", err)
+	}
+	if err := recordMarkerResult(dir, m); err != nil {
+		log.Warn().Err(err).Msg("could not record the blocked rollback result")
+	}
+	return nil
+}
+
+// restoreUserDB puts the snapshot taken before the install back over the live
+// database. It runs on every rollback, including one that resumes: the snapshot
+// is still on disk, and writing it again costs a copy where guessing whether the
+// previous attempt got this far costs correctness.
+func restoreUserDB(ctx context.Context, dataDir string, m *pendingMarker) error {
+	if m.UserDBSnapshotPath == "" {
+		return fmt.Errorf("%w: the update recorded no user database snapshot", errRollbackPrerequisite)
+	}
+	if _, err := os.Stat(m.UserDBSnapshotPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: user database snapshot: %w", errRollbackPrerequisite, err)
+		}
+		return fmt.Errorf("reading the user database snapshot: %w", err)
+	}
+	dbPath := filepath.Join(dataDir, config.UserDbFile)
+	if err := userdb.RestoreFileTo(ctx, afero.NewOsFs(), m.UserDBSnapshotPath, dbPath); err != nil {
+		if errors.Is(err, userdb.ErrInvalidBackup) {
+			return fmt.Errorf("%w: %w", errRollbackPrerequisite, err)
+		}
+		return fmt.Errorf("restoring the user database snapshot: %w", err)
+	}
+	return nil
+}
+
+// restoreReplacedFiles renames what the install displaced back over what it
+// installed. The binary goes last so that a failure part way through leaves the
+// new one in place, which is the state blockRollback is willing to run in.
+func restoreReplacedFiles(dir string, m *pendingMarker) error {
+	for _, p := range m.PayloadBackups {
+		if err := restoreReplacedFile(dir, m, p.BackupPath, p.TargetPath); err != nil {
+			return err
+		}
+	}
+	return restoreReplacedFile(dir, m, m.BackupPath, m.TargetPath)
+}
+
+// restoreReplacedFile records the path about to move before renaming it. If a
+// power cut lands after the rename but before the marker can advance, a missing
+// backup is then proof that this exact move completed, not a guess based on the
+// rollback's coarse state.
+func restoreReplacedFile(dir string, m *pendingMarker, backupPath, targetPath string) error {
+	if backupPath == "" || targetPath == "" {
+		return fmt.Errorf("%w: the update recorded no backup for a file it replaced", errRollbackPrerequisite)
+	}
+
+	_, statErr := os.Stat(backupPath)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) && m.RestoringPath == targetPath {
+			if _, targetErr := os.Stat(targetPath); targetErr != nil {
+				return fmt.Errorf("restored backup and target are both unavailable for %q: %w", targetPath, targetErr)
+			}
+			m.RestoringPath = ""
+			if saveErr := saveMarker(dir, m); saveErr != nil {
+				return fmt.Errorf("recording the completed file restore: %w", saveErr)
+			}
+			return nil
+		}
+		if errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("%w: backup of %q: %w", errRollbackPrerequisite, targetPath, statErr)
+		}
+		return fmt.Errorf("reading the backup of %q: %w", targetPath, statErr)
+	}
+
+	if m.RestoringPath != targetPath {
+		m.RestoringPath = targetPath
+		if err := saveMarker(dir, m); err != nil {
+			return fmt.Errorf("recording the file being restored: %w", err)
+		}
+	}
+
+	if err := replaceFile(backupPath, targetPath); err != nil {
+		return fmt.Errorf("restoring %q: %w", targetPath, err)
+	}
+	if err := syncDir(filepath.Dir(targetPath)); err != nil {
+		return fmt.Errorf("flushing restored file %q: %w", targetPath, err)
+	}
+	m.RestoringPath = ""
+	if err := saveMarker(dir, m); err != nil {
+		return fmt.Errorf("recording the completed file restore: %w", err)
+	}
+	return nil
+}
+
+func finalizeTerminalUpdate(ctx context.Context, dataDir string, m *pendingMarker) error {
+	if m == nil || (m.Outcome != outcomeSucceeded && m.Outcome != outcomeRolledBack) {
+		return errors.New("finalizing an update needs a completed outcome")
+	}
+	dir := stateDirFor(dataDir)
+	if err := recordMarkerResult(dir, m); err != nil {
+		return err
+	}
+
+	if m.Outcome == outcomeSucceeded {
+		if err := removeReplacedFiles(m); err != nil {
+			return err
+		}
+	}
+	if m.StagingDir != "" {
+		if err := removeStagingDir(ctx, m.StagingDir); err != nil {
+			log.Warn().Err(err).Str("dir", m.StagingDir).
+				Msg("could not remove the staging directory of a completed update")
+		}
+	}
+	sweepUpdateSnapshots(dataDir, "")
+	if err := clearMarker(dir); err != nil {
+		return fmt.Errorf("clearing the completed update marker: %w", err)
+	}
+	return nil
+}
+
+func recordMarkerResult(dir string, m *pendingMarker) error {
+	if m == nil || m.Outcome == "" {
+		return nil
+	}
+	at := m.OutcomeAt
+	if at.IsZero() {
+		at = m.InstalledAt
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	return recordUpdateResult(dir, &updateResult{
+		At:          at,
+		Outcome:     m.Outcome,
+		FromVersion: m.PreviousVersion,
+		ToVersion:   m.TargetVersion,
+		Detail:      m.OutcomeDetail,
+	})
+}
+
+// removeReplacedFiles deletes the copies of what an update displaced, once that
+// update is confirmed and they can no longer be needed.
+func removeReplacedFiles(m *pendingMarker) error {
+	paths := make([]string, 0, len(m.PayloadBackups)+1)
+	if m.BackupPath != "" {
+		paths = append(paths, m.BackupPath)
+	}
+	for _, p := range m.PayloadBackups {
+		if p.BackupPath != "" {
+			paths = append(paths, p.BackupPath)
+		}
+	}
+
+	var cleanupErr error
+	dirs := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr,
+				fmt.Errorf("removing backup of replaced file %q: %w", path, err))
+			continue
+		}
+		dirs[filepath.Dir(path)] = struct{}{}
+	}
+	for dir := range dirs {
+		if err := syncDir(dir); err != nil {
+			cleanupErr = errors.Join(cleanupErr,
+				fmt.Errorf("flushing removed binary backups in %q: %w", dir, err))
+		}
+	}
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	return nil
+}
+
+// snapshotToKeep returns the snapshot a marker still depends on.
+//
+// A marker on disk always depends on its snapshot. The two outcomes that finish
+// an update delete their marker, so the only one that survives to be read again
+// is an abandoned rollback — and that is precisely the case where the snapshot
+// is the user's remaining way back, which the inbox message tells them to use.
+func snapshotToKeep(m *pendingMarker) string {
+	if m == nil {
+		return ""
+	}
+	return m.UserDBSnapshotPath
+}
+
+// sweepUpdateSnapshots deletes update snapshots no marker depends on any more.
+// Retention deliberately ignores them, so without this a device that updated a
+// dozen times would keep a dozen copies of its database forever.
+func sweepUpdateSnapshots(dataDir, keep string) {
+	dir := userdb.BackupsDir(dataDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// A device that has never taken a backup has no directory here.
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Debug().Err(err).Str("dir", dir).Msg("could not list backups to sweep update snapshots")
+		}
+		return
+	}
+
+	keep = filepath.Clean(keep)
+	for _, entry := range entries {
+		if entry.IsDir() || !userdb.IsUpdateSnapshotName(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if keep != "." && filepath.Clean(path) == keep {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn().Err(err).Str("path", path).Msg("could not remove an unreferenced update snapshot")
+		}
+	}
+}

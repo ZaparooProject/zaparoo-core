@@ -20,6 +20,7 @@
 package updater
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,7 +44,7 @@ func TestState_RoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "updater")
 	seen := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
 
-	require.NoError(t, saveState(dir, updaterState{
+	require.NoError(t, saveState(dir, &updaterState{
 		ManifestGeneration:   412,
 		ManifestETag:         `"abc123"`,
 		ManifestLastModified: "Mon, 17 Aug 2026 01:26:54 GMT",
@@ -92,7 +93,7 @@ func TestState_NewerVersionIsReadButNotOverwritten(t *testing.T) {
 	assert.Equal(t, int64(500), got.ManifestGeneration)
 	assert.Equal(t, 99, got.StateVersion)
 
-	require.NoError(t, saveState(dir, got))
+	require.NoError(t, saveState(dir, &got))
 
 	after, err := os.ReadFile(filepath.Join(dir, stateFileName)) //nolint:gosec // test temp dir
 	require.NoError(t, err)
@@ -102,7 +103,7 @@ func TestState_NewerVersionIsReadButNotOverwritten(t *testing.T) {
 func TestSaveState_NoDir(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, saveState("", updaterState{ManifestGeneration: 1}))
+	require.NoError(t, saveState("", &updaterState{ManifestGeneration: 1}))
 }
 
 func TestCachedManifest_RoundTrip(t *testing.T) {
@@ -155,6 +156,21 @@ func TestWriteFileAtomic_ReplacesAndLeavesNoTemps(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "f", entries[0].Name())
+}
+
+func TestWriteFileAtomic_ReportsDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	errSync := errors.New("directory sync failed")
+	err := writeFileAtomicWithSync(dir, markerFileName, []byte("{}"), func(string) error {
+		return errSync
+	})
+	require.ErrorIs(t, err, errSync)
+
+	// Rename may already be visible, but callers must retain rollback files
+	// because durability across reboot was not established.
+	assert.FileExists(t, filepath.Join(dir, markerFileName))
 }
 
 func TestWriteFileAtomic_FilePermissions(t *testing.T) {

@@ -25,6 +25,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -45,6 +46,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog"
@@ -123,6 +125,14 @@ func runDaemon(pl *replayos.Platform, cfg *config.Instance) error {
 
 	svcResult, err := service.Start(pl, cfg)
 	if err != nil {
+		// The previous version is back on disk, but this process is still the
+		// image that failed and nothing here would start the restored one.
+		if errors.Is(err, updater.ErrRolledBack) {
+			// Exec does not return on success: it replaces this process.
+			execErr := restart.Exec()
+			return fmt.Errorf("failed to re-exec after rolling back an update: %w", execErr)
+		}
+
 		log.Error().Err(err).Msg("error starting service")
 		return fmt.Errorf("error starting service: %w", err)
 	}
