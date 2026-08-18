@@ -21,6 +21,7 @@ package updater
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -32,6 +33,39 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReportLastUpdate_ReportsUnusableMarkerOnce(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	dir := stateDirFor(dataDir)
+	require.NoError(t, os.MkdirAll(dir, stateDirPerm))
+	require.NoError(t, os.WriteFile(markerPath(dir), []byte("{"), stateFilePerm))
+	require.NoError(t, RunStartupWatchdog(t.Context(), dataDir, testTargetVersion))
+	assert.FileExists(t, markerPath(dir)+markerBadSuffix)
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
+		return msg.Title == "Update needs manual recovery" &&
+			msg.Severity == inbox.SeverityError &&
+			msg.Category == inbox.CategoryUpdateResult
+	})).Return(&database.InboxMessage{
+		DBID:     1,
+		Title:    "Update needs manual recovery",
+		Category: inbox.CategoryUpdateResult,
+	}, nil).Once()
+
+	ns := make(chan models.Notification, 2)
+	inboxSvc := inbox.NewService(mockUserDB, ns)
+	ReportLastUpdate(dataDir, inboxSvc)
+	assert.Nil(t, peekUpdateResult(dir))
+
+	// The quarantined marker remains install-blocking, but its stable result
+	// identity prevents the same warning being posted on every boot.
+	require.NoError(t, RunStartupWatchdog(t.Context(), dataDir, testTargetVersion))
+	ReportLastUpdate(dataDir, inboxSvc)
+	mockUserDB.AssertExpectations(t)
+}
 
 func TestReportLastUpdate_DescribesRollbackDirection(t *testing.T) {
 	t.Parallel()

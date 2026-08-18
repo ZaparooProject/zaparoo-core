@@ -23,6 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -32,6 +34,56 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/rs/zerolog/log"
 )
+
+const updateAfterWriteFallbackDelay = 5 * time.Second
+
+type updateRestartGuard struct {
+	timer           *time.Timer
+	restart         func()
+	release         func()
+	previousVersion string
+	newVersion      string
+	once            sync.Once
+}
+
+func newUpdateRestartGuard(
+	delay time.Duration,
+	previousVersion, newVersion string,
+	restart, release func(),
+) *updateRestartGuard {
+	guard := &updateRestartGuard{
+		restart:         restart,
+		release:         release,
+		previousVersion: previousVersion,
+		newVersion:      newVersion,
+	}
+	guard.timer = time.AfterFunc(delay, func() {
+		guard.finish(true)
+	})
+	return guard
+}
+
+func (g *updateRestartGuard) afterWrite() {
+	g.timer.Stop()
+	g.finish(false)
+}
+
+func (g *updateRestartGuard) finish(fallback bool) {
+	g.once.Do(func() {
+		defer g.release()
+		event := log.Info()
+		message := "update applied, restarting service"
+		if fallback {
+			event = log.Warn()
+			message = "update response callback did not run, forcing service restart"
+		}
+		event.
+			Str("previous", g.previousVersion).
+			Str("new", g.newVersion).
+			Msg(message)
+		g.restart()
+	})
+}
 
 // updaterOptions describes the device to the updater.
 func updaterOptions(env *requests.RequestEnv) updater.Options {
@@ -116,19 +168,15 @@ func HandleUpdateApply(
 		return nil, fmt.Errorf("update apply failed: %w", err)
 	}
 
+	restartGuard := newUpdateRestartGuard(
+		updateAfterWriteFallbackDelay, previousVersion, newVersion, restartFn, releaseMediaGate,
+	)
 	releaseBeforeRestart = false
 	return models.ResponseWithCallback{
 		Result: models.UpdateApplyResponse{
 			PreviousVersion: previousVersion,
 			NewVersion:      newVersion,
 		},
-		AfterWrite: func() {
-			defer releaseMediaGate()
-			log.Info().
-				Str("previous", previousVersion).
-				Str("new", newVersion).
-				Msg("update applied, restarting service")
-			restartFn()
-		},
+		AfterWrite: restartGuard.afterWrite,
 	}, nil
 }

@@ -80,28 +80,35 @@ func stateDirFor(dataDir string) string {
 	return filepath.Join(dataDir, "updater")
 }
 
-// loadState reads state.json. A missing, unreadable or corrupt file is not an
-// error: it yields a zero state, which accepts any generation. Failing closed
-// here would mean one bad write permanently stops a device updating, which is
-// a worse outcome than the replay the watermark exists to prevent.
+// loadState reads state.json for non-persisting callers. A missing, unreadable
+// or corrupt file yields a zero state so one bad bookkeeping file does not stop
+// update checks. Read-modify-write callers must use loadStateWithError instead.
 func loadState(dir string) updaterState {
-	if dir == "" {
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not load updater state, treating as unseen")
 		return updaterState{}
+	}
+	return st
+}
+
+func loadStateWithError(dir string) (updaterState, error) {
+	if dir == "" {
+		return updaterState{}, nil
 	}
 
 	//nolint:gosec // path is derived from the platform data dir
 	data, err := os.ReadFile(filepath.Join(dir, stateFileName))
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			log.Warn().Err(err).Msg("could not read updater state, treating as unseen")
+		if errors.Is(err, os.ErrNotExist) {
+			return updaterState{}, nil
 		}
-		return updaterState{}
+		return updaterState{}, fmt.Errorf("reading updater state: %w", err)
 	}
 
 	var st updaterState
 	if err := json.Unmarshal(data, &st); err != nil {
-		log.Warn().Err(err).Msg("updater state is corrupt, treating as unseen")
-		return updaterState{}
+		return updaterState{}, fmt.Errorf("decoding updater state: %w", err)
 	}
 
 	// A newer build may have written fields this one does not know about. The
@@ -113,7 +120,7 @@ func loadState(dir string) updaterState {
 			Int("understood", currentStateVersion).
 			Msg("updater state was written by a newer version, not updating it")
 	}
-	return st
+	return st, nil
 }
 
 // saveState replaces state.json atomically.
@@ -234,7 +241,10 @@ func recordUpdateResult(dir string, res *updateResult) error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
-	st := loadState(dir)
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording result: %w", err)
+	}
 	if sameUpdateResult(st.LastResult, res) {
 		return nil
 	}
@@ -269,7 +279,10 @@ func markUpdateResultReported(dir string, res *updateResult) error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
-	st := loadState(dir)
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before marking result reported: %w", err)
+	}
 	if st.LastResult == nil || st.LastResult.Reported || !sameUpdateResult(st.LastResult, res) {
 		return nil
 	}

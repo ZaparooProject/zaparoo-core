@@ -61,6 +61,8 @@ const (
 // survive until something deletes them deliberately.
 type backupKind string
 
+type restoreQuickCheck func(context.Context, afero.Fs, string) (bool, string, error)
+
 const (
 	backupKindAuto   backupKind = "auto"
 	backupKindManual backupKind = "manual"
@@ -314,7 +316,7 @@ func (db *UserDB) BackupForTransfer(
 	}
 
 	transferPath := filepath.Join(transferDir, "user.db")
-	if err = copyFileSyncContext(ctx, full.Path, transferPath, 0o600); err != nil {
+	if err = copyFileSyncContext(ctx, afero.NewOsFs(), full.Path, transferPath, 0o600); err != nil {
 		return fail(fmt.Errorf("failed to copy transfer backup: %w", err))
 	}
 	if err = sanitizeTransferBackup(ctx, transferPath); err != nil {
@@ -437,20 +439,18 @@ func (r *contextReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func copyFileSync(src, dst string, mode os.FileMode) error {
-	return copyFileSyncContext(context.Background(), src, dst, mode)
+func copyFileSync(fs afero.Fs, src, dst string, mode os.FileMode) error {
+	return copyFileSyncContext(context.Background(), fs, src, dst, mode)
 }
 
-func copyFileSyncContext(ctx context.Context, src, dst string, mode os.FileMode) error {
-	//nolint:gosec // src is selected by backup validation/recovery code, not raw user input.
-	in, err := os.Open(src)
+func copyFileSyncContext(ctx context.Context, fs afero.Fs, src, dst string, mode os.FileMode) error {
+	in, err := fs.Open(src)
 	if err != nil {
 		return fmt.Errorf("failed to open source file: %w", err)
 	}
 	defer func() { _ = in.Close() }()
 
-	//nolint:gosec // dst is the known user database path controlled by this package.
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	out, err := fs.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("failed to open destination file: %w", err)
 	}
@@ -512,7 +512,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 	}
 	defer func() { _ = fs.Remove(tmpPath) }()
 
-	if err = copyFileSync(backupPath, tmpPath, 0o600); err != nil {
+	if err = copyFileSync(fs, backupPath, tmpPath, 0o600); err != nil {
 		return fmt.Errorf("failed to stage user database backup: %w", err)
 	}
 
@@ -532,7 +532,7 @@ func replaceDatabaseFromBackup(fs afero.Fs, backupPath, dbPath string) (err erro
 		}
 	}
 
-	database.RemoveSidecars(dbPath)
+	database.RemoveSidecarsFS(fs, dbPath)
 	if err = renameDatabaseFile(fs, tmpPath, dbPath); err != nil {
 		if originalPreserved {
 			rollbackErr := restoreDatabaseRollback(fs, rollbackPath, dbPath)
@@ -667,7 +667,25 @@ func syncAferoDirectory(fs afero.Fs, path string) error {
 // crash partway through is repaired by recoverInterruptedRestore, which Open
 // already runs before anything else touches the file.
 func RestoreFileTo(ctx context.Context, fs afero.Fs, backupPath, dbPath string) error {
-	valid, check, err := quickCheckDBContext(ctx, backupPath)
+	return restoreFileToWithCheck(ctx, fs, backupPath, dbPath, quickCheckRestoreDBContext)
+}
+
+func quickCheckRestoreDBContext(
+	ctx context.Context, fs afero.Fs, path string,
+) (valid bool, result string, err error) {
+	if _, ok := fs.(*afero.OsFs); !ok {
+		return false, "", errors.New("user database quick_check requires an OS filesystem")
+	}
+	return quickCheckDBContext(ctx, path)
+}
+
+func restoreFileToWithCheck(
+	ctx context.Context,
+	fs afero.Fs,
+	backupPath, dbPath string,
+	quickCheck restoreQuickCheck,
+) error {
+	valid, check, err := quickCheck(ctx, fs, backupPath)
 	if err != nil {
 		if database.IsCorruptionError(err) {
 			return fmt.Errorf("%w: quick_check: %w", ErrInvalidBackup, err)
@@ -680,7 +698,7 @@ func RestoreFileTo(ctx context.Context, fs afero.Fs, backupPath, dbPath string) 
 	if err = replaceDatabaseFromBackup(fs, backupPath, dbPath); err != nil {
 		return fmt.Errorf("failed to restore user database backup: %w", err)
 	}
-	if err = database.ClearCorruptMarker(dbPath); err != nil {
+	if err = database.ClearCorruptMarkerFS(fs, dbPath); err != nil {
 		return fmt.Errorf("failed to clear user database corrupt marker after restore: %w", err)
 	}
 	return nil
@@ -791,7 +809,7 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 		if !backup.Valid {
 			continue
 		}
-		if err = copyFileSync(backup.Path, db.GetDBPath(), 0o600); err != nil {
+		if err = copyFileSync(afero.NewOsFs(), backup.Path, db.GetDBPath(), 0o600); err != nil {
 			log.Warn().Err(err).Str("path", backup.Path).Msg("failed to restore user database backup")
 			continue
 		}

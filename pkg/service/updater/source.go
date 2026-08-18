@@ -144,15 +144,7 @@ func (s *verifiedSource) releaseForVersion(version string) (*otameta.Release, er
 		}
 
 		resolved := *rel
-		resolved.Assets = make([]*otameta.Asset, 0, len(rel.Assets))
-		for _, asset := range rel.Assets {
-			if asset == nil {
-				continue
-			}
-			copyAsset := *asset
-			copyAsset.URL = resolveAssetURL(asset.URL, s.manifestBase)
-			resolved.Assets = append(resolved.Assets, &copyAsset)
-		}
+		resolved.Assets = resolvedAssetCopies(rel.Assets, s.manifestBase, nil)
 		return &resolved, nil
 	}
 	return nil, fmt.Errorf("selected release %s is missing from the verified manifest", version)
@@ -180,7 +172,11 @@ func (s *verifiedSource) fetchManifest(ctx context.Context, base string) (*otame
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
-	st := loadState(s.stateDir)
+	st, stateErr := loadStateWithError(s.stateDir)
+	if stateErr != nil {
+		log.Warn().Err(stateErr).Msg("could not load updater state, treating as unseen without overwriting it")
+		st = updaterState{}
+	}
 	cached := loadCachedManifest(s.stateDir)
 
 	// Only conditional when there are bytes on disk for a 304 to refer back to.
@@ -215,7 +211,9 @@ func (s *verifiedSource) fetchManifest(ctx context.Context, base string) (*otame
 			ErrGenerationRollback, manifest.Generation, st.ManifestGeneration)
 	}
 
-	s.persist(&st, manifest.Generation, res)
+	if stateErr == nil {
+		s.persist(&st, manifest.Generation, res)
+	}
 	return manifest, nil
 }
 
@@ -246,6 +244,23 @@ func (s *verifiedSource) persist(st *updaterState, generation int64, res *httpRe
 	}
 }
 
+func resolvedAssetCopies(
+	assets []*otameta.Asset,
+	base string,
+	include func(*otameta.Asset) bool,
+) []*otameta.Asset {
+	resolved := make([]*otameta.Asset, 0, len(assets))
+	for _, asset := range assets {
+		if asset == nil || (include != nil && !include(asset)) {
+			continue
+		}
+		copyAsset := *asset
+		copyAsset.URL = resolveAssetURL(asset.URL, base)
+		resolved = append(resolved, &copyAsset)
+	}
+	return resolved
+}
+
 // releasesFor reduces the manifest to what go-selfupdate should consider: the
 // releases that publish an archive for this device, each carrying that one
 // archive plus the metadata assets the validation chain needs.
@@ -270,22 +285,19 @@ func (s *verifiedSource) releasesFor(manifest *otameta.Manifest, base string) []
 			continue
 		}
 
-		assets := make([]*selfupdate.HttpAsset, 0, len(rel.Assets))
-		for _, a := range rel.Assets {
-			if a == nil {
-				continue
-			}
+		resolvedAssets := resolvedAssetCopies(rel.Assets, base, func(asset *otameta.Asset) bool {
 			// Everything that is not this device's archive is metadata: the
 			// checksums file and its signature. Other platforms' archives are
 			// dropped so nothing downstream can pick one by accident.
-			if a != archive && isReleaseArchive(a.Name) {
-				continue
-			}
+			return asset == archive || !isReleaseArchive(asset.Name)
+		})
+		assets := make([]*selfupdate.HttpAsset, 0, len(resolvedAssets))
+		for _, asset := range resolvedAssets {
 			assets = append(assets, &selfupdate.HttpAsset{
-				ID:   a.ID,
-				Name: a.Name,
-				Size: int(a.Size),
-				URL:  resolveAssetURL(a.URL, base),
+				ID:   asset.ID,
+				Name: asset.Name,
+				Size: int(asset.Size),
+				URL:  asset.URL,
 			})
 		}
 

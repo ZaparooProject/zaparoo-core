@@ -78,8 +78,9 @@ const (
 type updateOutcome string
 
 const (
-	outcomeSucceeded  updateOutcome = "succeeded"
-	outcomeRolledBack updateOutcome = "rolledBack"
+	outcomeSucceeded        updateOutcome = "succeeded"
+	outcomeRolledBack       updateOutcome = "rolledBack"
+	outcomeRecoveryRequired updateOutcome = "recoveryRequired"
 	// outcomeRollbackBlocked means the binary was rolled back but the user
 	// database snapshot could not be restored, or the rollback could not be
 	// completed at all, and the new binary was left installed instead. A device

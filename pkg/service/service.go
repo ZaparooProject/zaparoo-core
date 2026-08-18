@@ -65,6 +65,10 @@ const (
 	backupShutdownHardDeadline  = 2 * time.Minute
 	startupMediaIdleQuietWindow = 5 * time.Second
 	startupMediaIdleMaximumWait = 300 * time.Second
+	// updateConfirmDelay is how long an updated version has to stay up before its
+	// update is committed. Long enough to catch a build that starts and then dies
+	// on its first real work, short enough that recovery files do not fill storage.
+	updateConfirmDelay = 30 * time.Second
 )
 
 // StartResult holds the return values from Start.
@@ -288,12 +292,6 @@ func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
 	}
 	svc.State.SetBackgroundAutoPaused(false)
 }
-
-// updateConfirmDelay is how long an updated version has to stay up before its
-// update is committed. Long enough to catch a build that starts and then dies
-// on its first real work, short enough that the staged copy and the database
-// snapshot are not left sitting on a full SD card.
-const updateConfirmDelay = 30 * time.Second
 
 // Start brings the service up and resolves any update still waiting on this
 // boot to prove itself.

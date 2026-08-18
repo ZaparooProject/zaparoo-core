@@ -20,6 +20,7 @@
 package restart
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -37,6 +38,22 @@ func ExecIfRequested(restartRequested func() bool) error {
 	}
 	log.Info().Msg("restart requested, re-executing binary")
 	return Exec()
+}
+
+// ExecAfterRollback re-execs the restored binary. A successful Exec never
+// returns, so every return preserves the rollback error for diagnosis.
+func ExecAfterRollback(rollbackErr error) error {
+	return execAfterRollbackWith(rollbackErr, Exec)
+}
+
+func execAfterRollbackWith(rollbackErr error, execFn func() error) error {
+	execErr := execFn()
+	if execErr == nil {
+		return fmt.Errorf("failed to re-exec after rolling back an update: restart returned unexpectedly: %w",
+			rollbackErr)
+	}
+	return fmt.Errorf("failed to re-exec after rolling back an update: %w",
+		errors.Join(rollbackErr, execErr))
 }
 
 // BinaryPath returns the path to the binary that should be exec'd on restart.

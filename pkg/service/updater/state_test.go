@@ -100,6 +100,42 @@ func TestState_NewerVersionIsReadButNotOverwritten(t *testing.T) {
 	assert.Equal(t, future, after)
 }
 
+func TestRecordUpdateResult_DoesNotOverwriteCorruptState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, stateFileName)
+	corrupt := []byte("{not json")
+	require.NoError(t, os.WriteFile(path, corrupt, stateFilePerm))
+
+	err := recordUpdateResult(dir, &updateResult{
+		At:      time.Now().UTC(),
+		Outcome: outcomeSucceeded,
+	})
+	require.Error(t, err)
+	after, readErr := os.ReadFile(path) //nolint:gosec // test-owned path
+	require.NoError(t, readErr)
+	assert.Equal(t, corrupt, after)
+}
+
+func TestMarkUpdateResultReported_DoesNotOverwriteCorruptState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, stateFileName)
+	corrupt := []byte("{not json")
+	require.NoError(t, os.WriteFile(path, corrupt, stateFilePerm))
+
+	err := markUpdateResultReported(dir, &updateResult{
+		At:      time.Now().UTC(),
+		Outcome: outcomeSucceeded,
+	})
+	require.Error(t, err)
+	after, readErr := os.ReadFile(path) //nolint:gosec // test-owned path
+	require.NoError(t, readErr)
+	assert.Equal(t, corrupt, after)
+}
+
 func TestSaveState_NoDir(t *testing.T) {
 	t.Parallel()
 

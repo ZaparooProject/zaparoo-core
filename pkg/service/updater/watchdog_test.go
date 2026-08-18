@@ -28,7 +28,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -276,6 +278,9 @@ func TestRunStartupWatchdog_RollsBackWhenConfirmationNeverHappened(t *testing.T)
 
 	err := RunStartupWatchdog(context.Background(), f.dataDir, testTargetVersion)
 	require.ErrorIs(t, err, ErrRolledBack)
+	rollbackTarget, ok := RollbackTargetPath(err)
+	require.True(t, ok)
+	assert.Equal(t, f.targetPath, rollbackTarget)
 
 	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 	assert.NoFileExists(t, f.backupPath)
@@ -613,6 +618,53 @@ func TestRunStartupWatchdog_AbortsInterruptedInstallWithoutRestoringDB(t *testin
 	assert.NoFileExists(t, markerPath(dir))
 	assert.NoFileExists(t, f.snapshotPath)
 	assert.NoDirExists(t, f.stagingDir)
+}
+
+func TestRestoreUserDB_UsesSuppliedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dataDir := filepath.Join("data", "zaparoo")
+	snapshotPath := filepath.Join(dataDir, "backups", "snapshot-update.db")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(snapshotPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, snapshotPath, []byte("snapshot"), 0o600))
+
+	restoreCalled := false
+	fileOps := watchdogFileOps{
+		fs: fs,
+		restoreDatabase: func(_ context.Context, gotFS afero.Fs, backupPath, dbPath string) error {
+			restoreCalled = true
+			assert.Same(t, fs, gotFS)
+			assert.Equal(t, snapshotPath, backupPath)
+			assert.Equal(t, filepath.Join(dataDir, config.UserDbFile), dbPath)
+			return nil
+		},
+	}
+	err := restoreUserDB(t.Context(), dataDir, &pendingMarker{UserDBSnapshotPath: snapshotPath}, fileOps)
+	require.NoError(t, err)
+	assert.True(t, restoreCalled)
+}
+
+func TestSweepUpdateSnapshots_UsesSuppliedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dataDir := filepath.Join("data", "zaparoo")
+	backups := userdb.BackupsDir(dataDir)
+	require.NoError(t, fs.MkdirAll(backups, 0o750))
+	keep := filepath.Join(backups, "backup-20260818-043000-000000001-update.db")
+	stale := filepath.Join(backups, "backup-20260817-043000-000000001-update.db")
+	for _, path := range []string{keep, stale} {
+		require.NoError(t, afero.WriteFile(fs, path, []byte("db"), 0o600))
+	}
+
+	sweepUpdateSnapshotsFS(fs, dataDir, keep)
+	keepExists, err := afero.Exists(fs, keep)
+	require.NoError(t, err)
+	assert.True(t, keepExists)
+	staleExists, err := afero.Exists(fs, stale)
+	require.NoError(t, err)
+	assert.False(t, staleExists)
 }
 
 func TestSweepUpdateSnapshots(t *testing.T) {

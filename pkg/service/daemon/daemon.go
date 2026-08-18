@@ -861,8 +861,13 @@ func (s *Service) startService() {
 		// re-prepares the binary from the source path, which is where the
 		// rollback put it.
 		if errors.Is(err, updater.ErrRolledBack) {
-			execErr := s.restartServiceBinary()
-			log.Error().Err(execErr).Msg("failed to re-exec after rolling back an update")
+			targetPath, ok := updater.RollbackTargetPath(err)
+			if !ok {
+				log.Error().Err(err).Msg("rollback result did not include restored binary path")
+			} else {
+				execErr := s.restartServiceBinary(targetPath)
+				log.Error().Err(execErr).Msg("failed to re-exec after rolling back an update")
+			}
 		}
 
 		os.Exit(1)
@@ -888,7 +893,7 @@ func (s *Service) startService() {
 	}
 
 	if result.RestartRequested != nil && result.RestartRequested() {
-		execErr := s.restartServiceBinary()
+		execErr := s.restartServiceBinary("")
 		log.Error().Err(execErr).Msg("failed to re-exec for restart")
 		os.Exit(1)
 	}
@@ -896,8 +901,8 @@ func (s *Service) startService() {
 	os.Exit(0)
 }
 
-func (s *Service) restartServiceBinary() error {
-	cfg, err := s.restartExecConfig(os.Args, os.Environ())
+func (s *Service) restartServiceBinary(sourcePath string) error {
+	cfg, err := s.restartExecConfig(sourcePath, os.Args, os.Environ())
 	if err != nil {
 		return err
 	}
@@ -914,12 +919,17 @@ func (s *Service) restartServiceBinary() error {
 }
 
 func (s *Service) restartExecConfig(
+	sourcePath string,
 	args []string,
 	env []string,
 ) (restartExecConfig, error) {
-	binPath, err := serviceSourceBinaryPath()
-	if err != nil {
-		return restartExecConfig{}, err
+	binPath := sourcePath
+	if binPath == "" {
+		var err error
+		binPath, err = serviceSourceBinaryPath()
+		if err != nil {
+			return restartExecConfig{}, err
+		}
 	}
 	serviceBin, err := s.prepareBinary(binPath)
 	if err != nil {

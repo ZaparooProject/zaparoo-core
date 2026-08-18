@@ -20,6 +20,7 @@
 package restart
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -27,6 +28,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestExecAfterRollback_PreservesExecFailure(t *testing.T) {
+	t.Parallel()
+
+	rollbackErr := errors.New("startup failed after rollback")
+	execErr := errors.New("exec denied")
+	err := execAfterRollbackWith(rollbackErr, func() error { return execErr })
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, rollbackErr)
+	require.ErrorIs(t, err, execErr)
+}
+
+func TestExecAfterRollback_HandlesUnexpectedNil(t *testing.T) {
+	t.Parallel()
+
+	rollbackErr := errors.New("startup failed after rollback")
+	err := execAfterRollbackWith(rollbackErr, func() error { return nil })
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, rollbackErr)
+	assert.Contains(t, err.Error(), "restart returned unexpectedly")
+}
 
 func TestBinaryPath_WithAppEnv(t *testing.T) {
 	t.Setenv(config.AppEnv, "/usr/bin/zaparoo")

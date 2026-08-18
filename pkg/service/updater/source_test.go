@@ -527,6 +527,23 @@ func TestVerifiedSource_SkipsAmbiguousRelease(t *testing.T) {
 	assert.Equal(t, "v2.15.1", releases[0].GetTagName())
 }
 
+func TestResolvedAssetCopies(t *testing.T) {
+	t.Parallel()
+
+	archive := &otameta.Asset{ID: 1, Name: "zaparoo-linux_amd64-2.2.0.tar.gz", URL: "assets/core.tar.gz"}
+	metadata := &otameta.Asset{ID: 2, Name: "checksums.txt", URL: "assets/checksums.txt"}
+	resolved := resolvedAssetCopies(
+		[]*otameta.Asset{nil, archive, metadata},
+		"https://updates.example/releases",
+		func(asset *otameta.Asset) bool { return asset == archive },
+	)
+
+	require.Len(t, resolved, 1)
+	assert.NotSame(t, archive, resolved[0])
+	assert.Equal(t, "https://updates.example/releases/assets/core.tar.gz", resolved[0].URL)
+	assert.Equal(t, "assets/core.tar.gz", archive.URL, "resolving must not mutate signed manifest assets")
+}
+
 func TestIsReleaseArchive(t *testing.T) {
 	t.Parallel()
 

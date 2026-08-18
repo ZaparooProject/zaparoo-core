@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -190,6 +191,38 @@ func TestHandleUpdateCheck_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "update check failed")
 	assert.Contains(t, err.Error(), "network timeout")
 	assert.Nil(t, result)
+}
+
+func TestUpdateRestartGuard_AfterWriteSupersedesFallback(t *testing.T) {
+	t.Parallel()
+
+	var restartCalls atomic.Int32
+	var releaseCalls atomic.Int32
+	guard := newUpdateRestartGuard(time.Hour, "2.9.0", "2.10.0",
+		func() { restartCalls.Add(1) }, func() { releaseCalls.Add(1) })
+
+	guard.afterWrite()
+	guard.afterWrite()
+
+	assert.Equal(t, int32(1), restartCalls.Load())
+	assert.Equal(t, int32(1), releaseCalls.Load())
+}
+
+func TestUpdateRestartGuard_FallbackSupersedesLateAfterWrite(t *testing.T) {
+	t.Parallel()
+
+	var restartCalls atomic.Int32
+	var releaseCalls atomic.Int32
+	guard := newUpdateRestartGuard(5*time.Millisecond, "2.9.0", "2.10.0",
+		func() { restartCalls.Add(1) }, func() { releaseCalls.Add(1) })
+
+	require.Eventually(t, func() bool {
+		return restartCalls.Load() == 1 && releaseCalls.Load() == 1
+	}, time.Second, 5*time.Millisecond)
+	guard.afterWrite()
+
+	assert.Equal(t, int32(1), restartCalls.Load())
+	assert.Equal(t, int32(1), releaseCalls.Load())
 }
 
 func TestHandleUpdateApply_DevelopmentVersion(t *testing.T) {

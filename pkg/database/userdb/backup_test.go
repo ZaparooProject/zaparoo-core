@@ -1022,6 +1022,40 @@ func TestUserDBBackupForUpdate_QuiescesWritersUntilResume(t *testing.T) {
 	}))
 }
 
+func TestRestoreFileTo_UsesSuppliedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("data", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	backupPath := filepath.Join(dir, "backup.db")
+	dbPath := filepath.Join(dir, "user.db")
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("replacement"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, dbPath, []byte("original"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, dbPath+"-wal", []byte("stale wal"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, database.CorruptMarkerPath(dbPath), []byte("corrupt"), 0o600))
+
+	checked := false
+	err := restoreFileToWithCheck(t.Context(), fs, backupPath, dbPath,
+		func(_ context.Context, gotFS afero.Fs, gotPath string) (bool, string, error) {
+			checked = true
+			assert.Same(t, fs, gotFS)
+			assert.Equal(t, backupPath, gotPath)
+			return true, "ok", nil
+		})
+	require.NoError(t, err)
+	assert.True(t, checked)
+
+	contents, err := afero.ReadFile(fs, dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("replacement"), contents)
+	for _, removed := range []string{dbPath + "-wal", database.CorruptMarkerPath(dbPath)} {
+		exists, existsErr := afero.Exists(fs, removed)
+		require.NoError(t, existsErr)
+		assert.False(t, exists)
+	}
+}
+
 func TestRestoreFileTo_ReplacesTheLiveDatabase(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
