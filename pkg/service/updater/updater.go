@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sync/atomic"
@@ -192,13 +193,17 @@ func Apply(ctx context.Context, opts Options) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolving the binary to update: %w", err)
 	}
+	stagingRoot := stagingRootFor(opts.DataDir)
+	if spaceErr := preflightSpace(&opts, manifestRelease, targetPath, stagingRoot); spaceErr != nil {
+		return "", spaceErr
+	}
 	staged, err := Stage(ctx, &StageOptions{
 		Release:        manifestRelease,
 		PlatformID:     opts.PlatformID,
 		Arch:           runtime.GOARCH,
 		OS:             runtime.GOOS,
 		TargetPath:     targetPath,
-		StagingRoot:    stagingRootFor(opts.DataDir),
+		StagingRoot:    stagingRoot,
 		CurrentVersion: config.AppVersion,
 	})
 	if err != nil {
@@ -219,6 +224,23 @@ func Apply(ctx context.Context, opts Options) (string, error) {
 	}
 
 	return staged.Version, nil
+}
+
+// preflightSpace sizes the update from the verified manifest and refuses one
+// that cannot fit. The asset lookup here is a size lookup only: Stage repeats it
+// along with the version and upgrade-floor checks, so a selection failure is
+// left for Stage to report with its own error rather than reported twice.
+func preflightSpace(opts *Options, release *otameta.Release, targetPath, stagingRoot string) error {
+	asset, err := otameta.SelectAsset(release, opts.PlatformID, runtime.GOARCH)
+	if err != nil {
+		return nil //nolint:nilerr // Stage reports this properly a moment later
+	}
+	return checkFreeSpace(&spaceNeeds{
+		archiveSize: asset.Size,
+		targetPath:  targetPath,
+		stagingRoot: stagingRoot,
+		userDBPath:  filepath.Join(opts.DataDir, config.UserDbFile),
+	})
 }
 
 func ensureNoPendingUpdate(dataDir string) error {

@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -291,6 +292,30 @@ func TestHandleUpdateApply_UpdateInProgress(t *testing.T) {
 	result, err := HandleUpdateApply(env, applyFn, func() {})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "update already in progress")
+	assert.Nil(t, result)
+}
+
+// A full disk is the user's problem to fix, so the directory and the shortfall
+// have to survive into the client error rather than being wrapped away.
+func TestHandleUpdateApply_InsufficientSpace(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+	}
+	applyFn := func(context.Context, updater.Options) (string, error) {
+		return "", fmt.Errorf("%w: /media/fat has 12 MB free, need at least 90 MB",
+			updater.ErrInsufficientSpace)
+	}
+
+	result, err := HandleUpdateApply(env, applyFn, func() {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient disk space for the update")
+	assert.Contains(t, err.Error(), "/media/fat has 12 MB free, need at least 90 MB")
 	assert.Nil(t, result)
 }
 
