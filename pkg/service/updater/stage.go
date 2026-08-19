@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -86,6 +87,17 @@ const (
 	// pipes would block the probe past its timeout, which would strand the whole
 	// update rather than fail it.
 	probeWaitDelay = 2 * time.Second
+
+	// probeBusyAttempts and probeBusyDelay wait out an ETXTBSY instead of
+	// reporting it as a failed probe. This process writes the staged binary and
+	// then executes it, so any child it forks in between inherits the still-open
+	// write descriptor and holds the exec off until that child execs or exits.
+	// Core spawns processes to launch media, so the window is real on a device,
+	// and the kernel is saying the file is busy rather than anything about
+	// whether the release runs. Four retries at a tenth of a second each is far
+	// longer than a fork-to-exec window and far shorter than probeTimeout.
+	probeBusyAttempts = 5
+	probeBusyDelay    = 100 * time.Millisecond
 
 	// probeOutputLimit caps how much of the staged binary's output the probe
 	// keeps. The probe runs a binary that arrived over the network moments ago,
@@ -223,16 +235,33 @@ type stager struct {
 	fetch            assetFetcher
 	release          *otameta.Release
 	chmod            func(string, os.FileMode) error
-	stagingRoot      string
-	goarch           string
-	binaryName       string
+	runProbe         probeFn
 	goos             string
+	binaryName       string
+	goarch           string
 	current          string
 	platformID       string
+	stagingRoot      string
 	maxFileBytes     int64
 	maxInflatedBytes int64
 	stallTimeout     time.Duration
 	probeTimeout     time.Duration
+	probeBusyDelay   time.Duration
+}
+
+// probeFn runs a binary's version flag and reports what it printed.
+type probeFn func(ctx context.Context, binaryPath string) (stdout, stderr string, err error)
+
+// newProbeStager builds the minimal stager the install candidate probe needs.
+// The install probes a second time, on the live install's filesystem rather
+// than staging's, and has no archive or download settings to carry.
+func newProbeStager(platformID string) *stager {
+	return &stager{
+		platformID:     platformID,
+		probeTimeout:   probeTimeout,
+		probeBusyDelay: probeBusyDelay,
+		runProbe:       runVersionProbe,
+	}
 }
 
 // stagingRootFor returns where staged versions live for a data directory.
@@ -307,6 +336,8 @@ func newStager(opts *StageOptions, fetch assetFetcher) (*stager, error) {
 		maxInflatedBytes: maxArchiveInflatedBytes,
 		stallTimeout:     downloadStallTimeout,
 		probeTimeout:     probeTimeout,
+		probeBusyDelay:   probeBusyDelay,
+		runProbe:         runVersionProbe,
 		chmod:            os.Chmod,
 	}
 	if s.goos == "" {
@@ -651,17 +682,27 @@ func (s *stager) probeBinary(ctx context.Context, binaryPath, version string) er
 	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)
 	defer cancel()
 
-	//nolint:gosec // the path is a file this process just created inside its own staging directory
-	cmd := exec.CommandContext(probeCtx, binaryPath, "-"+config.VersionFlagName)
-	var stdout, stderr cappedBuilder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	// Killing the process is not enough to unblock Wait if it left a child
-	// holding these pipes. This runs a binary that was downloaded seconds ago,
-	// so the timeout has to bound the call and not just the process.
-	cmd.WaitDelay = probeWaitDelay
+	var (
+		stdout, stderr string
+		runErr         error
+	)
+attempts:
+	for attempt := range probeBusyAttempts {
+		if attempt > 0 {
+			log.Debug().Str("binary", binaryPath).
+				Msg("staged binary is still held open for writing, retrying its version probe")
+			select {
+			case <-probeCtx.Done():
+				break attempts
+			case <-time.After(s.probeBusyDelay):
+			}
+		}
+		stdout, stderr, runErr = s.runProbe(probeCtx, binaryPath)
+		if !errors.Is(runErr, syscall.ETXTBSY) {
+			break attempts
+		}
+	}
 
-	runErr := cmd.Run()
 	if runErr != nil {
 		switch {
 		case ctx.Err() != nil:
@@ -671,7 +712,7 @@ func (s *stager) probeBinary(ctx context.Context, binaryPath, version string) er
 		case errors.Is(probeCtx.Err(), context.DeadlineExceeded):
 			return fmt.Errorf("%w: no answer within %s", ErrProbeFailed, s.probeTimeout)
 		default:
-			return fmt.Errorf("%w: %w (stderr: %s)", ErrProbeFailed, runErr, clip(stderr.String(), 256))
+			return fmt.Errorf("%w: %w (stderr: %s)", ErrProbeFailed, runErr, clip(stderr, 256))
 		}
 	}
 
@@ -680,13 +721,30 @@ func (s *stager) probeBinary(ctx context.Context, binaryPath, version string) er
 	// shipped, so a future release that prints something extra alongside its
 	// version must not be judged unrunnable for it.
 	want := config.VersionLine(version, s.platformID)
-	if !hasLine(stdout.String(), want) {
+	if !hasLine(stdout, want) {
 		return fmt.Errorf("%w: printed %q, expected a line reading %q",
-			ErrProbeFailed, clip(stdout.String(), 256), want)
+			ErrProbeFailed, clip(stdout, 256), want)
 	}
 
 	log.Debug().Str("binary", binaryPath).Msg("staged binary answered its version probe")
 	return nil
+}
+
+// runVersionProbe executes a binary's version flag and returns what it wrote to
+// each stream, both capped.
+func runVersionProbe(ctx context.Context, binaryPath string) (stdoutText, stderrText string, err error) {
+	//nolint:gosec // the path is a file this process just created inside its own staging directory
+	cmd := exec.CommandContext(ctx, binaryPath, "-"+config.VersionFlagName)
+	var stdout, stderr cappedBuilder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	// Killing the process is not enough to unblock Wait if it left a child
+	// holding these pipes. This runs a binary that was downloaded seconds ago,
+	// so the timeout has to bound the call and not just the process.
+	cmd.WaitDelay = probeWaitDelay
+
+	err = cmd.Run()
+	return stdout.String(), stderr.String(), err
 }
 
 // assetFetcherFor returns a fetcher backed by an HTTP transport.

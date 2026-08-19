@@ -35,6 +35,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1126,6 +1127,70 @@ func TestProbeBinary_CallerCancellationIsNotAProbeFailure(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrProbeFailed)
 	assert.Contains(t, err.Error(), "cancelled")
+}
+
+// TestProbeBinary_WaitsOutABinaryStillHeldOpenForWriting covers the race between
+// writing the staged binary and executing it. Any child this process forks in
+// between inherits the open write descriptor and the exec fails with ETXTBSY,
+// which says nothing about whether the release runs.
+func TestProbeBinary_WaitsOutABinaryStillHeldOpenForWriting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		probeErr  error
+		name      string
+		busyUntil int
+		wantCalls int
+		wantOK    bool
+	}{
+		{
+			name:      "clears while the descriptor is still open",
+			busyUntil: 2,
+			wantCalls: 3,
+			wantOK:    true,
+		},
+		{
+			name:      "gives up on a binary that never clears",
+			busyUntil: probeBusyAttempts,
+			wantCalls: probeBusyAttempts,
+		},
+		{
+			name:      "does not retry a binary that will not run",
+			probeErr:  errors.New("exec format error"),
+			wantCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := testStageOptions(t, testRelease("v"+testStageVersion), "zaparoo")
+			s, err := newStager(opts, unusedFetcher)
+			require.NoError(t, err)
+			s.probeBusyDelay = time.Millisecond
+
+			calls := 0
+			s.runProbe = func(context.Context, string) (string, string, error) {
+				calls++
+				if calls <= tt.busyUntil {
+					return "", "", fmt.Errorf("fork/exec: %w", syscall.ETXTBSY)
+				}
+				if tt.probeErr != nil {
+					return "", "", tt.probeErr
+				}
+				return config.VersionLine(testStageVersion, testStagePlatform), "", nil
+			}
+
+			err = s.probeBinary(context.Background(), "staged-binary", testStageVersion)
+			if tt.wantOK {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrProbeFailed)
+			}
+			assert.Equal(t, tt.wantCalls, calls)
+		})
+	}
 }
 
 // executableCopy puts the fake release binary somewhere named stem, which is how
