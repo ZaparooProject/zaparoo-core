@@ -7,8 +7,10 @@ Methods are used to execute actions and request data back from the API.
 Each method below identifies which clients may call it:
 
 - **All clients:** localhost, paired admin, paired member, and unpaired remote clients accepted by the API transport.
+- **Localhost or any paired client:** localhost and any paired client, member included. Unpaired remote clients are rejected.
 - **`profiles.manage`:** localhost and clients with the `profiles.manage` capability. Paired admins have this capability; paired members do not. Unpaired remote clients retain it for backward compatibility when encryption is disabled.
 - **`settings.write`:** localhost and clients with the `settings.write` capability. Paired admins have this capability; paired members do not. Unpaired remote clients retain it for backward compatibility when encryption is disabled.
+- **`update.apply`:** localhost and clients with the `update.apply` capability. Paired admins have this capability; paired members and unpaired remote clients do not.
 - **Localhost or paired admin:** localhost and authenticated paired admins only. Paired members and unpaired remote clients are rejected.
 - **Localhost only:** requests originating from Core's device. All remote clients are rejected.
 
@@ -2540,6 +2542,9 @@ None.
 | systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 | profilesRequireForLaunch  | boolean                                   | Yes      | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | Yes      | Whether profile switches also swap profile-scoped data (saves, save states) on supported platforms. Defaults to true. |
+| updateChannel             | string                                    | Yes      | Release channel used for update checks: `stable` or `beta`. Defaults to `stable`. |
+| updateCheck               | boolean                                   | Yes      | Whether the service looks for new releases on its own. Defaults to true on every platform, including installs a package manager owns. |
+| updateInstall             | boolean                                   | Yes      | Whether the device downloads and installs updates on its own, rather than only telling the user one exists. Defaults to false, and is always false while `updateCheck` is off. |
 | backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and paired admin clients. |
 | playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and paired admin clients. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and paired admin clients. |
@@ -2628,6 +2633,9 @@ An object containing any of the following optional keys:
 | systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
 | profilesRequireForLaunch  | boolean                                   | No       | Whether media launches are blocked while no personal profile is active. |
 | profilesSwapData          | boolean                                   | No       | Whether profile switches also swap profile-scoped data. Turning it off converges data back to the shared state immediately. |
+| updateChannel             | string                                    | No       | Release channel used for update checks: `stable` or `beta`. |
+| updateCheck               | boolean                                   | No       | Whether the service looks for new releases on its own. |
+| updateInstall             | boolean                                   | No       | Whether the device installs updates on its own. Setting it to true while update checking is off is refused; send `updateCheck: true` in the same call to turn both on. |
 | backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires a localhost or paired admin client. |
 | playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires a localhost or paired admin client. |
 | backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires a localhost or paired admin client. |
@@ -3712,7 +3720,7 @@ A profile's **switch ID is a bearer credential**: presenting it — by scanning 
 
 A swap requested while media is running is deferred until it stops, so the running session keeps the data it launched with. Progress and failures are reported by the [`profiles.data`](notifications.md#profilesdata) notification; the `profilesSwapData` setting turns swapping off. Deleting a profile does not delete its profile-owned platform data.
 
-**Administration and trust model.** The first profile is created as `admin` and must have a PIN; later profiles default `member`. The first paired client is `admin`; later pairings default `member`. Sensitive local UIs call `profiles.verify`, confirm the returned profile has the `admin` role, then send the ordinary management request. This is a client-side nuisance gate for parental and kiosk controls, not cryptographic request authorization; no unlock session is retained. Admin paired clients use their client capability directly. The last admin profile/client cannot be removed or demoted. Profiles remain a household convenience boundary, comparable to TV parental controls — not OS account security. Anyone with OS access still owns the device, and while `service.encryption` is off an unpaired remote client retains legacy admin API capability. Enabling encryption makes paired-client restrictions enforceable.
+**Administration and trust model.** The first profile is created as `admin` and must have a PIN; later profiles default `member`. The first paired client is `admin`; later pairings default `member`. Sensitive local UIs call `profiles.verify`, confirm the returned profile has the `admin` role, then send the ordinary management request. This is a client-side nuisance gate for parental and kiosk controls, not cryptographic request authorization; no unlock session is retained. Admin paired clients use their client capability directly. The last admin profile/client cannot be removed or demoted. Profiles remain a household convenience boundary, comparable to TV parental controls — not OS account security. Anyone with OS access still owns the device, and while `service.encryption` is off an unpaired remote client retains legacy admin API capability, apart from the capabilities that require an authenticated connection — currently `update.apply`. Enabling encryption makes paired-client restrictions enforceable.
 
 ### Profile object
 
@@ -4662,7 +4670,7 @@ None.
 
 Return pairing status, authenticated role, and effective capabilities for the current connection. This method is available to every connection accepted by the API transport.
 
-`role` is `admin` or `member` for paired connections and `null` otherwise. Unpaired plaintext connections retain their legacy effective capabilities. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage` and `settings.write`; the array does not enumerate every callable RPC method.
+`role` is `admin` or `member` for paired connections and `null` otherwise. Unpaired plaintext connections retain their legacy effective capabilities, except those that require an authenticated connection — currently `update.apply`, which such a connection never receives. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage`, `settings.write`, and `update.apply`; the array does not enumerate every callable RPC method.
 
 #### Parameters
 
@@ -4960,9 +4968,13 @@ None.
 
 ### update.check
 
-**Access:** All clients.
+**Access:** Localhost or any paired client.
 
-Check if a newer version of Zaparoo Core is available. Returns version information and release notes. On development builds, always returns `updateAvailable: false`.
+Check if a newer version of Zaparoo Core is available. Returns version information, release notes, and everything a client needs to decide what to offer: whether the device is eligible for updates at all, whether the release has reached this device yet, and what is currently stopping one being installed.
+
+A check makes the device fetch and verify signed release metadata and write the result to its data directory, which is why it is not open to unpaired remote clients.
+
+On development builds, `updateAvailable` is always `false` and `eligibility` is `development`.
 
 #### Parameters
 
@@ -4970,12 +4982,58 @@ None.
 
 #### Result
 
-| Key             | Type    | Required | Description                                        |
-| :-------------- | :------ | :------- | :------------------------------------------------- |
-| currentVersion  | string  | Yes      | The currently running version.                     |
-| latestVersion   | string  | No       | The latest available version (if check succeeded). |
-| updateAvailable | boolean | Yes      | Whether a newer version is available.              |
-| releaseNotes    | string  | No       | Release notes for the latest version.              |
+| Key             | Type    | Required | Description                                                                                                                                                          |
+| :-------------- | :------ | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| currentVersion  | string  | Yes      | The currently running version.                                                                                                                                       |
+| updateAvailable | boolean | Yes      | Whether a newer version is available.                                                                                                                                |
+| autoInstall     | boolean | Yes      | Whether the device installs updates on its own. Mirrors the `updateInstall` setting.                                                                                |
+| latestVersion   | string  | No       | The latest available version (if the check succeeded).                                                                                                               |
+| releaseNotes    | string  | No       | Release notes for the latest version.                                                                                                                                |
+| channel         | string  | No       | The update channel the check used: `stable` or `beta`.                                                                                                               |
+| eligibility     | string  | No       | Whether this install can take OTA updates: `eligible`, `development`, `unsupported` (the platform has no OTA path), or `managed` (a package manager owns the install, so it should do the installing). A platform with no OTA path reports `unsupported` even when a package manager owns it, because that is the one an install is actually refused for. |
+| checkedAt       | string  | No       | RFC3339 timestamp of when the release metadata was last fetched.                                                                                                     |
+| rolloutHeld     | boolean | No       | The release is newer but has not reached this device's share of the fleet yet. Applying it by hand still works; automatic installs wait.                              |
+| blockedBy       | object  | No       | What is stopping an update being applied right now. Absent when nothing is.                                                                                          |
+| deferredReason  | string  | No       | Why an automatic install has been putting this version off. Same values as `blockedBy.reason`.                                                                       |
+| deferredSince   | string  | No       | RFC3339 timestamp of when this version was first put off. After 24 hours an automatic install goes ahead through the signals that expire.                             |
+| lastResult      | object  | No       | How the previous update finished. Present until a newer result replaces it.                                                                                          |
+
+##### blockedBy
+
+| Key       | Type    | Required | Description                                                                                                    |
+| :-------- | :------ | :------- | :------------------------------------------------------------------------------------------------------------- |
+| reason    | string  | Yes      | Machine-readable reason, from the table below.                                                                 |
+| message   | string  | Yes      | Human-readable explanation, suitable for showing as-is.                                                        |
+| forceable | boolean | Yes      | Whether `update.apply` with `force: true` goes ahead anyway. False means the refusal stands whatever is passed. |
+
+Reasons:
+
+| Reason            | Forceable | Meaning                                                          |
+| :---------------- | :-------- | :--------------------------------------------------------------- |
+| mediaIndexing     | No        | The media database is being generated.                            |
+| mediaOptimizing   | No        | The media database is being optimised.                            |
+| mediaScraping     | No        | Media metadata is being scraped.                                  |
+| backupActive      | No        | A backup, restore or upload is running.                           |
+| readerWriting     | No        | A reader is part-way through writing a token.                     |
+| restoreActive     | No        | A restore is holding the databases.                               |
+| activeMedia       | Yes       | Media is playing and a restart would close it.                    |
+| backgroundMedia   | Yes       | Media is playing in the background.                               |
+| activePlaylist    | Yes       | A playlist is running.                                            |
+| powerLow          | No        | The battery is below the level an install needs.                  |
+| powerUnknown      | Yes       | The battery level could not be read.                              |
+| apiBusy           | Yes       | The API has not been idle long enough. Automatic installs only.    |
+
+`blockedBy` is what a client should read before offering an update: hide or disable the button when `forceable` is false, and offer to go ahead when it is true.
+
+##### lastResult
+
+| Key         | Type   | Required | Description                                                                                                                                                                            |
+| :---------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| at          | string | Yes      | RFC3339 timestamp of when the update finished.                                                                                                                                          |
+| outcome     | string | Yes      | `succeeded`, `rolledBack` (the new build would not start and the old one was put back), `rollbackBlocked` (the rollback could not be completed), or `recoveryRequired`.                   |
+| fromVersion | string | No       | The version before the update.                                                                                                                                                          |
+| toVersion   | string | No       | The version the update was to.                                                                                                                                                          |
+| detail      | string | No       | What went wrong, when something did.                                                                                                                                                    |
 
 #### Example
 
@@ -4999,20 +5057,41 @@ None.
     "currentVersion": "2.9.1",
     "latestVersion": "2.10.0",
     "updateAvailable": true,
-    "releaseNotes": "..."
+    "autoInstall": false,
+    "releaseNotes": "...",
+    "channel": "stable",
+    "eligibility": "eligible",
+    "checkedAt": "2026-08-18T09:30:00Z",
+    "blockedBy": {
+      "reason": "activeMedia",
+      "message": "media is playing",
+      "forceable": true
+    }
   }
 }
 ```
 
 ### update.apply
 
-**Access:** All clients.
+**Access:** Requires `update.apply`.
 
-Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs. Returns an error if media indexing is in progress or if running a development build.
+Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs.
+
+Before anything is downloaded the device checks that it is safe to install: nothing writing to the databases, no backup or token write in progress, nothing playing, and enough battery. A refusal comes back as an error whose message is the same text `update.check` reports in `blockedBy.message`. Call `update.check` first to know in advance, and whether `force` would get past it.
+
+The battery is checked twice — once before the download and again immediately before the install begins — because a download long enough to matter is also long enough to outlive a charger being unplugged.
+
+This method has no request timeout: the download and install run to completion or unwind on their own. Applying an update is treated as low priority, so it does not delay reader scans or playback control.
+
+While it runs, the device sends [`update.state`](notifications.md#updatestate) notifications.
 
 #### Parameters
 
-None.
+| Key   | Type    | Required | Description                                                                                                                                                       |
+| :---- | :------ | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| force | boolean | No       | Go ahead through the signals `update.check` reports as `forceable`, such as media playing that the restart will close. It does not get past anything that risks data or a device without the power to finish. Defaults to false. |
+
+Parameters may be omitted entirely, which is the same as `force: false`.
 
 #### Result
 
@@ -5029,7 +5108,10 @@ None.
 {
   "jsonrpc": "2.0",
   "id": "a1b2c3d4-1234-5678-9abc-def012345678",
-  "method": "update.apply"
+  "method": "update.apply",
+  "params": {
+    "force": true
+  }
 }
 ```
 

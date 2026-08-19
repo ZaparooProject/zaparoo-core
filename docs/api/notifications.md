@@ -612,3 +612,57 @@ The `finished` notification is terminal for that operation, whatever its outcome
   }
 }
 ```
+
+## Updates
+
+### update.state
+
+Sent while an update is being applied, so a client can show progress instead of a spinner that outlasts a large download.
+
+The stages that happen after the restart — `confirming`, `succeeded` and `rolledBack` — are not sent here, because no client is connected while they run. Read them from `update.check`'s `lastResult` once the service is back.
+
+Download progress is reported at most a few times a second, and the final byte always produces an event.
+
+#### Parameters
+
+| Key             | Type   | Required | Description                                                                              |
+| :-------------- | :----- | :------- | :---------------------------------------------------------------------------------------- |
+| stage           | string | Yes      | `checking`, `downloading`, `verifying`, `probing`, `installing`, `restarting`, or `failed`. |
+| version         | string | No       | The version being installed.                                                             |
+| trigger         | string | No       | Who asked for it: `manual` or `auto`.                                                    |
+| error           | string | No       | What went wrong. Only present on `failed`.                                               |
+| bytesDownloaded | number | No       | Bytes downloaded so far. Only present during `downloading`.                              |
+| bytesTotal      | number | No       | Total bytes to download, when the server reported a length.                              |
+
+#### Examples
+
+##### Downloading
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "update.state",
+  "params": {
+    "stage": "downloading",
+    "version": "2.10.0",
+    "trigger": "manual",
+    "bytesDownloaded": 4194304,
+    "bytesTotal": 12582912
+  }
+}
+```
+
+##### Failed
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "update.state",
+  "params": {
+    "stage": "failed",
+    "version": "2.10.0",
+    "trigger": "auto",
+    "error": "verifying the download: checksum mismatch"
+  }
+}
+```
