@@ -134,6 +134,31 @@ func buildFakeBinary(dir string) (string, error) {
 	return out, nil
 }
 
+// skipUnlessDirPermsEnforced skips a test whose failure under test is a write
+// into a directory that will not accept one. Root ignores the permission bits,
+// and on Windows os.Chmod only toggles the read-only attribute, which does not
+// stop a file being created inside a directory. On both, the setup silently
+// succeeds and the test asserts against an install that worked.
+func skipUnlessDirPermsEnforced(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no directory permission bit that blocks creating a file")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+}
+
+// makeDirUnwritable stages that failure, and restores the directory afterwards
+// so the test's own cleanup can still remove it.
+func makeDirUnwritable(t *testing.T, dir string) {
+	t.Helper()
+	skipUnlessDirPermsEnforced(t)
+	//nolint:gosec // an unwritable-but-readable directory is the failure under test
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, stateDirPerm) })
+}
+
 // testBinaryName adds the extension Windows needs. Without it exec cannot find
 // the staged file at all, because Windows resolves even an absolute path
 // through PATHEXT.

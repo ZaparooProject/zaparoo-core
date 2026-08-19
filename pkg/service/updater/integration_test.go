@@ -379,9 +379,7 @@ func TestOTA_RollsBackAcrossASchemaMigration(t *testing.T) {
 // and an install that fails after that point owes the running service a working
 // database back.
 func TestOTA_ReopensTheUserDatabaseWhenTheInstallFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are not enforced for root")
-	}
+	skipUnlessDirPermsEnforced(t)
 	t.Parallel()
 
 	h := newOTAHarness(t)
@@ -401,9 +399,7 @@ func TestOTA_ReopensTheUserDatabaseWhenTheInstallFails(t *testing.T) {
 	// unwritable so arming the marker is what fails.
 	stateDir := stateDirFor(h.dataDir)
 	require.NoError(t, os.MkdirAll(stateDir, stateDirPerm))
-	//nolint:gosec // an unwritable-but-readable directory is the failure under test
-	require.NoError(t, os.Chmod(stateDir, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(stateDir, stateDirPerm) })
+	makeDirUnwritable(t, stateDir)
 
 	installErr := installStaged(t.Context(), &installOptions{
 		Staged:             staged,
