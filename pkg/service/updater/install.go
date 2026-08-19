@@ -46,8 +46,14 @@ type UpdateBackupper interface {
 }
 
 type installOptions struct {
-	UserDB             UpdateBackupper
+	UserDB UpdateBackupper
+	// PreQuiesce runs once the candidate binary is in place and before the
+	// user database is closed for its snapshot. That is the last moment an
+	// install can still be called off with nothing to unwind, so it is where
+	// the second power check goes.
+	PreQuiesce         func(context.Context) error
 	Staged             *StagedUpdate
+	progress           *progressReporter
 	TargetPath         string
 	DataDir            string
 	PreviousVersion    string
@@ -111,6 +117,21 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 		return candidateErr
 	}
 
+	// Everything up to here can be abandoned by deleting two files. From the
+	// snapshot on, the device is committed to either finishing or unwinding, so
+	// this is where a caller gets its last say.
+	if opts.PreQuiesce != nil {
+		if err := opts.PreQuiesce(ctx); err != nil {
+			_ = os.Remove(candidatePath)
+			if cleanupErr := removeStagingDir(ctx, opts.Staged.Dir); cleanupErr != nil {
+				log.Warn().Err(cleanupErr).Str("dir", opts.Staged.Dir).
+					Msg("could not remove staging after the update was called off")
+			}
+			return err
+		}
+	}
+
+	opts.progress.stage(ProgressInstalling)
 	snapshot, resumeUserDB, err := opts.UserDB.BackupForUpdate(opts.Staged.Version)
 	if err != nil {
 		_ = os.Remove(candidatePath)

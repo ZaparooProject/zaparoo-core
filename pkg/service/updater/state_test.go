@@ -286,3 +286,106 @@ func TestUpdateResult_NilIsNotRecorded(t *testing.T) {
 	assert.Nil(t, peekUpdateResult(dir))
 	assert.NoFileExists(t, filepath.Join(dir, stateFileName))
 }
+
+func TestRecordDeferral_KeepsSinceAcrossReasons(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+
+	first := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, first)
+	assert.Equal(t, ReasonActiveMedia, first.Reason)
+	assert.False(t, first.Since.IsZero())
+
+	// The clock an automatic install runs down starts at the first deferral of
+	// a version, not at the most recent one, so someone who keeps the device
+	// busy cannot push it back forever.
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonAPIBusy))
+	second := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, second)
+	assert.Equal(t, ReasonAPIBusy, second.Reason)
+	assert.Equal(t, first.Since, second.Since)
+}
+
+func TestRecordDeferral_SameReasonDoesNotRewrite(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+	first := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, first)
+
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+	second := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, second)
+	assert.Equal(t, first.Since, second.Since)
+	assert.Equal(t, first.Reason, second.Reason)
+}
+
+func TestRecordDeferral_NewVersionRestartsTheClock(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+	old := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, old)
+
+	// Backdate the deferral so a fresh timestamp is distinguishable without
+	// waiting for the wall clock to move.
+	stale := old.Since.Add(-48 * time.Hour)
+	st := loadState(dir)
+	st.Deferral.Since = stale
+	require.NoError(t, saveState(dir, &st))
+
+	require.NoError(t, recordDeferral(dir, "v2.6.0", ReasonActiveMedia))
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+	fresh := peekDeferral(dir, "v2.6.0")
+	require.NotNil(t, fresh)
+	assert.True(t, fresh.Since.After(stale), "a different version waits from scratch")
+}
+
+func TestPeekDeferral_OtherVersionOrNothingRecorded(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+	assert.Nil(t, peekDeferral(dir, "v2.6.0"))
+}
+
+func TestClearDeferral(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+	require.NotNil(t, peekDeferral(dir, "v2.5.0"))
+
+	require.NoError(t, clearDeferral(dir))
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+
+	// Clearing again is not an error, because an update that was never held up
+	// still clears the deferral when it installs.
+	require.NoError(t, clearDeferral(dir))
+}
+
+func TestRecordDeferral_KeepsOtherState(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	seen := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
+	require.NoError(t, saveState(dir, &updaterState{
+		ManifestSeenAt:     seen,
+		ManifestETag:       "etag-1",
+		ManifestGeneration: 7,
+	}))
+
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
+	require.NoError(t, clearDeferral(dir))
+
+	st := loadState(dir)
+	assert.Equal(t, "etag-1", st.ManifestETag)
+	assert.Equal(t, int64(7), st.ManifestGeneration)
+	assert.True(t, seen.Equal(st.ManifestSeenAt))
+}

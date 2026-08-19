@@ -165,24 +165,13 @@ var (
 
 // StageOptions describes one staging attempt.
 type StageOptions struct {
-	// Release comes from a manifest whose signature has already been checked.
-	// The archive and the version are re-derived from it here rather than
-	// trusting anything passed alongside it.
-	Release *otameta.Release
-	// PlatformID is the platform half of the archive name.
-	PlatformID string
-	// Arch and OS default to this build's. They are settable so the selection
-	// and the archive member rules can be tested for platforms other than the
-	// one running the test.
-	Arch string
-	OS   string
-	// TargetPath is the binary that will eventually be replaced. Only its base
-	// name is read here: it names the archive member to pull out, and the name
-	// the staged copy is written under.
-	TargetPath string
-	// StagingRoot holds one directory per staged version.
-	StagingRoot string
-	// CurrentVersion is the version running now, which the release has to beat.
+	Release        *otameta.Release
+	progress       *progressReporter
+	PlatformID     string
+	Arch           string
+	OS             string
+	TargetPath     string
+	StagingRoot    string
 	CurrentVersion string
 }
 
@@ -234,6 +223,7 @@ func (b *cappedBuilder) String() string {
 type stager struct {
 	fetch            assetFetcher
 	release          *otameta.Release
+	progress         *progressReporter
 	chmod            func(string, os.FileMode) error
 	runProbe         probeFn
 	goos             string
@@ -326,6 +316,7 @@ func newStager(opts *StageOptions, fetch assetFetcher) (*stager, error) {
 	s := &stager{
 		fetch:            fetch,
 		release:          opts.Release,
+		progress:         opts.progress,
 		platformID:       opts.PlatformID,
 		goos:             opts.OS,
 		goarch:           opts.Arch,
@@ -354,6 +345,7 @@ func (s *stager) run(ctx context.Context) (*StagedUpdate, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.progress.setVersion(version)
 
 	// The version has already been through semver parsing, which admits only
 	// digits, dots, hyphens and alphanumerics, so it cannot name anything but a
@@ -469,6 +461,7 @@ func (s *stager) stageInto(
 	// rather than the one the manifest gives it, so no metadata string reaches
 	// the filesystem even though selection has already constrained it.
 	archivePath := filepath.Join(dir, otameta.ArchiveBaseName(s.platformID, s.goarch, version)+ext)
+	s.progress.stage(ProgressDownloading)
 	if err := s.downloadArchive(ctx, asset, archivePath); err != nil {
 		return nil, err
 	}
@@ -480,6 +473,7 @@ func (s *stager) stageInto(
 	}
 
 	binaryPath := filepath.Join(payloadDir, s.binaryName)
+	s.progress.stage(ProgressVerifying)
 	if err := s.extractBinary(ctx, archivePath, ext, wantDigest, binaryPath); err != nil {
 		return nil, err
 	}
@@ -511,6 +505,7 @@ func (s *stager) stageInto(
 			Msg("could not set the exec bit on the staged binary; leaving it to the probe")
 	}
 
+	s.progress.stage(ProgressProbing)
 	if err := s.probeBinary(ctx, binaryPath, version); err != nil {
 		return nil, err
 	}
@@ -609,7 +604,11 @@ func (s *stager) downloadArchive(ctx context.Context, asset *otameta.Asset, dest
 	// accepted and a longer one is detected rather than silently truncated into
 	// something that would then fail the digest for the wrong reason.
 	digest := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(f, digest), guard.reader(io.LimitReader(body, asset.Size+1)))
+	counter := &progressWriter{report: s.progress, total: asset.Size}
+	written, copyErr := io.Copy(
+		io.MultiWriter(f, digest, counter),
+		guard.reader(io.LimitReader(body, asset.Size+1)),
+	)
 	syncErr := f.Sync()
 	closeErr := f.Close()
 
