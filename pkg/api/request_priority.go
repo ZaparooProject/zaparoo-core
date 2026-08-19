@@ -107,7 +107,8 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodMediaScrapeCancel,
 		models.MethodMediaScrapeResume,
 		models.MethodMediaCleanOrphans,
-		models.MethodSettingsLogsDownload:
+		models.MethodSettingsLogsDownload,
+		models.MethodUpdateApply:
 		return apiPriorityLow
 	default:
 		if strings.HasPrefix(method, "media.scrape") || strings.HasPrefix(method, "media.generate") {

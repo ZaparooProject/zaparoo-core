@@ -161,6 +161,8 @@ type SettingsResponse struct {
 	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  bool               `json:"profilesRequireForLaunch"`
 	ProfilesSwapData          bool               `json:"profilesSwapData"`
+	UpdateCheck               bool               `json:"updateCheck"`
+	UpdateInstall             bool               `json:"updateInstall"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -852,10 +854,51 @@ type BackupStateNotification struct {
 }
 
 type UpdateCheckResponse struct {
-	CurrentVersion  string `json:"currentVersion"`
-	LatestVersion   string `json:"latestVersion,omitempty"`
-	ReleaseNotes    string `json:"releaseNotes,omitempty"`
-	UpdateAvailable bool   `json:"updateAvailable"`
+	DeferredSince   *time.Time        `json:"deferredSince,omitempty"`
+	LastResult      *UpdateLastResult `json:"lastResult,omitempty"`
+	BlockedBy       *UpdateBlockedBy  `json:"blockedBy,omitempty"`
+	CheckedAt       *time.Time        `json:"checkedAt,omitempty"`
+	CurrentVersion  string            `json:"currentVersion"`
+	ReleaseNotes    string            `json:"releaseNotes,omitempty"`
+	Channel         string            `json:"channel,omitempty"`
+	Eligibility     string            `json:"eligibility,omitempty"`
+	DeferredReason  string            `json:"deferredReason,omitempty"`
+	LatestVersion   string            `json:"latestVersion,omitempty"`
+	UpdateAvailable bool              `json:"updateAvailable"`
+	RolloutHeld     bool              `json:"rolloutHeld,omitempty"`
+	AutoInstall     bool              `json:"autoInstall"`
+}
+
+// UpdateBlockedBy is what the device is busy with that stops an update being
+// installed. Forceable means a person may go ahead anyway by passing force to
+// update.apply, which is true for things that only cost them their session and
+// false for anything that risks their data.
+type UpdateBlockedBy struct {
+	Reason    string `json:"reason"`
+	Message   string `json:"message"`
+	Forceable bool   `json:"forceable"`
+}
+
+// UpdateLastResult is how the previous update finished.
+type UpdateLastResult struct {
+	At          time.Time `json:"at"`
+	Outcome     string    `json:"outcome"`
+	FromVersion string    `json:"fromVersion,omitempty"`
+	ToVersion   string    `json:"toVersion,omitempty"`
+	Detail      string    `json:"detail,omitempty"`
+}
+
+// UpdateStateNotification is the payload for the update.state notification,
+// sent while an update is being applied. The stages after the restart —
+// confirming, succeeded and rolledBack — happen before any client is back, so
+// they are reported by update.check's lastResult rather than here.
+type UpdateStateNotification struct {
+	Stage           string `json:"stage"`
+	Version         string `json:"version,omitempty"`
+	Trigger         string `json:"trigger,omitempty"`
+	Error           string `json:"error,omitempty"`
+	BytesDownloaded int64  `json:"bytesDownloaded,omitempty"`
+	BytesTotal      int64  `json:"bytesTotal,omitempty"`
 }
 
 type UpdateApplyResponse struct {

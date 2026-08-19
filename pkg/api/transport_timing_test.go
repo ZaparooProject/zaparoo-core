@@ -20,7 +20,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,7 +70,7 @@ func TestLogWebSocketTransportTimingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 			defer func() { log.Logger = originalLogger }()
@@ -110,7 +109,7 @@ func TestHTTPResponseTransportTimingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler, _, _ := createTestPostHandler(t)
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 			defer func() { log.Logger = originalLogger }()
@@ -172,7 +171,7 @@ func TestWebSocketDispatcherQueueMetadata(t *testing.T) {
 }
 
 func TestWebSocketDispatcherQueueTimingLogs(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logCapture
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 	defer func() { log.Logger = originalLogger }()

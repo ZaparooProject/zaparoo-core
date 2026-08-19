@@ -270,7 +270,7 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 
 	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, testRoot, "127.0.0.1", tcpAddr.Port)
 	require.NoError(t, err)
-	cfg.SetAutoUpdate(false)
+	cfg.SetUpdateCheck(false)
 
 	mockPlatform := testmocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("mock-platform")

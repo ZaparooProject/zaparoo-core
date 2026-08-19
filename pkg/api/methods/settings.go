@@ -60,6 +60,8 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 
 	resp := models.SettingsResponse{
 		UpdateChannel:             env.Config.UpdateChannel(),
+		UpdateCheck:               env.Config.UpdateCheck(),
+		UpdateInstall:             env.Config.UpdateInstall(),
 		RunZapScript:              env.State.RunZapScriptEnabled(),
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
@@ -161,6 +163,21 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	// Installing updates without checking for them is not a state the device
+	// can be in, so the combination is refused rather than stored and quietly
+	// ignored. A client asking for both at once is fine.
+	if params.UpdateInstall != nil && *params.UpdateInstall {
+		checking := env.Config.UpdateCheck()
+		if params.UpdateCheck != nil {
+			checking = *params.UpdateCheck
+		}
+		if !checking {
+			return nil, models.ClientErrf(
+				"installing updates automatically needs automatic update checking turned on",
+			)
+		}
+	}
+
 	// Reload config from disk before applying mutations so that external
 	// edits (e.g. user hand-editing config.toml) are not lost on save.
 	// TODO: Load+Set+Save is not atomic — concurrent handler calls can
@@ -177,6 +194,16 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.UpdateChannel != nil {
 		log.Debug().Str("updateChannel", *params.UpdateChannel).Msg("updating setting")
 		env.Config.SetUpdateChannel(*params.UpdateChannel)
+	}
+
+	if params.UpdateCheck != nil {
+		log.Debug().Bool("updateCheck", *params.UpdateCheck).Msg("updating setting")
+		env.Config.SetUpdateCheck(*params.UpdateCheck)
+	}
+
+	if params.UpdateInstall != nil {
+		log.Debug().Bool("updateInstall", *params.UpdateInstall).Msg("updating setting")
+		env.Config.SetUpdateInstall(*params.UpdateInstall)
 	}
 
 	if params.DebugLogging != nil {

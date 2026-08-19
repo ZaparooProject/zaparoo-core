@@ -22,10 +22,12 @@ package api
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/google/uuid"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
@@ -78,7 +80,7 @@ func TestLogSafeResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture log output
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 
@@ -145,7 +147,7 @@ func TestLogSafeResponse_BatchRedaction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 			defer func() { log.Logger = originalLogger }()
@@ -170,7 +172,7 @@ func TestLogSafeResponse_DefaultOmitsBody(t *testing.T) {
 		Blob   string `json:"blob"`
 	}
 
-	var buf bytes.Buffer
+	var buf logCapture
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 	defer func() { log.Logger = originalLogger }()
@@ -252,7 +254,7 @@ func TestHandleResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 			defer func() { log.Logger = originalLogger }()
@@ -303,7 +305,7 @@ func TestLogSafeRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture log output
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 
@@ -324,7 +326,7 @@ func TestLogSafeRequest(t *testing.T) {
 }
 
 func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logCapture
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 	defer func() { log.Logger = originalLogger }()
@@ -344,7 +346,7 @@ func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
 }
 
 func TestLogSafeResponse_AuthLinkCodesRedacted(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logCapture
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 	defer func() { log.Logger = originalLogger }()
@@ -393,7 +395,7 @@ func TestLogWSWriteError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
+			var buf logCapture
 			originalLogger := log.Logger
 			log.Logger = zerolog.New(&buf)
 
@@ -407,4 +409,28 @@ func TestLogWSWriteError(t *testing.T) {
 			assert.Contains(t, logOutput, "test message")
 		})
 	}
+}
+
+// logCapture collects log output for assertions. Tests that capture the global
+// logger run alongside parallel tests in this package that are still logging
+// into it, so the buffer has to be safe for concurrent writes.
+type logCapture struct {
+	buf bytes.Buffer
+	mu  syncutil.Mutex
+}
+
+func (c *logCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n, err := c.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write log capture: %w", err)
+	}
+	return n, nil
+}
+
+func (c *logCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
 }

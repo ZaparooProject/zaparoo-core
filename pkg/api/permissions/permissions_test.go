@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGrant_EffectiveRole(t *testing.T) {
@@ -66,8 +67,40 @@ func TestGrant_Has(t *testing.T) {
 
 	assert.True(t, admin.Has(CapProfilesManage))
 	assert.True(t, admin.Has(CapSettingsWrite))
+	assert.True(t, admin.Has(CapUpdateApply))
 	assert.False(t, member.Has(CapProfilesManage))
 	assert.False(t, member.Has(CapSettingsWrite))
+	assert.False(t, member.Has(CapUpdateApply))
+}
+
+// An unpaired remote request resolves to admin, so without
+// authenticatedCapabilities it would be able to replace the binary. Its other
+// capabilities are unaffected.
+func TestGrant_UnpairedRemoteCannotApplyUpdates(t *testing.T) {
+	t.Parallel()
+
+	unpaired := Grant{}
+	require.Equal(t, RoleAdmin, unpaired.EffectiveRole())
+	assert.False(t, unpaired.Authenticated())
+	assert.False(t, unpaired.Has(CapUpdateApply))
+	assert.True(t, unpaired.Has(CapProfilesManage))
+	assert.True(t, unpaired.Has(CapSettingsWrite))
+
+	for _, grant := range []Grant{
+		{IsLocal: true},
+		{IsLocal: true, Role: RoleMember},
+		{Role: RoleAdmin},
+	} {
+		assert.True(t, grant.Authenticated())
+	}
+
+	// Being on the device and being paired are each enough on their own.
+	assert.True(t, Grant{IsLocal: true}.Has(CapUpdateApply))
+	assert.True(t, Grant{Role: RoleAdmin}.Has(CapUpdateApply))
+	// The role still has to allow it: a paired member is refused, and a
+	// voluntary session downgrade still wins.
+	assert.False(t, Grant{Role: RoleMember}.Has(CapUpdateApply))
+	assert.False(t, Grant{IsLocal: true, SessionRole: RoleMember}.Has(CapUpdateApply))
 }
 
 func TestGrant_Capabilities(t *testing.T) {
@@ -81,7 +114,7 @@ func TestGrant_Capabilities(t *testing.T) {
 		{
 			name:  "paired admin is sorted",
 			grant: Grant{Role: RoleAdmin},
-			want:  []Capability{CapProfilesManage, CapSettingsWrite},
+			want:  []Capability{CapProfilesManage, CapSettingsWrite, CapUpdateApply},
 		},
 		{
 			name:  "paired member is empty",
@@ -89,14 +122,14 @@ func TestGrant_Capabilities(t *testing.T) {
 			want:  []Capability{},
 		},
 		{
-			name:  "unpaired remote keeps legacy capabilities",
+			name:  "unpaired remote has no update.apply",
 			grant: Grant{},
 			want:  []Capability{CapProfilesManage, CapSettingsWrite},
 		},
 		{
 			name:  "local member gets local capabilities",
 			grant: Grant{Role: RoleMember, IsLocal: true},
-			want:  []Capability{CapProfilesManage, CapSettingsWrite},
+			want:  []Capability{CapProfilesManage, CapSettingsWrite, CapUpdateApply},
 		},
 		{
 			name:  "unknown role degrades to member",

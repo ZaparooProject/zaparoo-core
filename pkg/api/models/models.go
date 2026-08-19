@@ -45,6 +45,7 @@ const (
 	NotificationUIChanged            = "ui.changed"
 	NotificationAuthLinkStatus       = "auth.link.status"
 	NotificationBackupState          = "backup.state"
+	NotificationUpdateState          = "update.state"
 )
 
 // Profile data swap statuses reported by the profiles.data notification.
@@ -188,12 +189,18 @@ const (
 // caller cancellation, shutdown, and per-transfer timeouts instead; both the
 // server request context and the local client wait consult this list so the
 // two cannot disagree.
+//
+// update.apply belongs here for the same reason: it downloads an archive over
+// whatever connection the device has, and the request context cancelling
+// mid-install would abort the one operation that must either finish or unwind
+// cleanly. Its own stall guard and probe timeouts bound the stages instead.
 func MethodHasUnboundedRuntime(method string) bool {
 	switch strings.ToLower(method) {
 	case MethodSettingsBackup,
 		MethodSettingsBackupRestore,
 		MethodSettingsBackupRemoteRun,
-		MethodSettingsBackupRemoteRestore:
+		MethodSettingsBackupRemoteRestore,
+		MethodUpdateApply:
 		return true
 	default:
 		return false

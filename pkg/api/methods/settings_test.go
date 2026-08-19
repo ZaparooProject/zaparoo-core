@@ -203,6 +203,7 @@ func TestHandleSettings_ReaderConnections(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{
@@ -247,10 +248,11 @@ func TestHandleSettings_ReportsEncryptionSetting(t *testing.T) {
 	})
 	require.NoError(t, err)
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
 
-	result, err := HandleSettings(requests.RequestEnv{Config: cfg, State: appState})
+	result, err := HandleSettings(requests.RequestEnv{Platform: mockPlatform, Config: cfg, State: appState})
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)
@@ -264,6 +266,7 @@ func TestHandleSettings_EmptyReaderConnections(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
@@ -386,6 +389,7 @@ func TestHandleSettings_ErrorReportingDefault(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
@@ -418,6 +422,7 @@ func TestHandleSettings_ErrorReportingEnabled(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{
@@ -556,6 +561,69 @@ func TestHandleSettingsUpdate_UpdateChannel(t *testing.T) {
 	assert.Equal(t, config.UpdateChannelBeta, cfg.UpdateChannel())
 }
 
+// Checking is stored as a tri-state so an untouched install can follow the
+// default, but the API has to report a plain answer either way. The default is
+// on everywhere, including where a package manager owns the install, because a
+// check only tells the user a newer release exists.
+func TestHandleSettings_UpdateCheckRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		packaged bool
+	}{
+		{name: "standalone install defaults to on"},
+		{name: "package manager install also defaults to on", packaged: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+			mockPlatform.On("ManagedByPackageManager").Return(tt.packaged).Maybe()
+
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+			require.NoError(t, err)
+
+			appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+			t.Cleanup(func() { drainCh(ns) })
+
+			env := requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+			}
+
+			result, err := HandleSettings(env)
+			require.NoError(t, err)
+			resp, ok := result.(models.SettingsResponse)
+			require.True(t, ok)
+			assert.True(t, resp.UpdateCheck)
+
+			// An explicit choice has to survive, including when it matches the
+			// default it is overriding.
+			for _, want := range []bool{false, true} {
+				paramsJSON, err := json.Marshal(models.UpdateSettingsParams{UpdateCheck: &want})
+				require.NoError(t, err)
+				env.Params = paramsJSON
+
+				_, err = HandleSettingsUpdate(env)
+				require.NoError(t, err)
+				assert.Equal(t, want, cfg.UpdateCheck())
+
+				result, err = HandleSettings(env)
+				require.NoError(t, err)
+				resp, ok = result.(models.SettingsResponse)
+				require.True(t, ok)
+				assert.Equal(t, want, resp.UpdateCheck)
+			}
+		})
+	}
+}
+
 // TestHandleSettingsUpdate_ReaderConnectionsWithIDSource tests that IDSource
 // field is preserved when updating reader connections.
 func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
@@ -661,6 +729,7 @@ func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	f := false
 	tmpDir := t.TempDir()
@@ -749,6 +818,7 @@ func TestHandleSettings_LaunchGuardDefaults(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
@@ -879,6 +949,7 @@ func TestHandleSettings_AudioVolumeDefault(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
@@ -1018,6 +1089,7 @@ func TestHandleSettings_SystemDefaults(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 
 	tmpDir := t.TempDir()
 	cfg, err := config.NewConfig(tmpDir, config.Values{
@@ -1322,10 +1394,12 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
 	require.NoError(t, err)
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { drainCh(ns) })
 
-	result, err := HandleSettings(requests.RequestEnv{Config: cfg, State: appState, IsLocal: true})
+	env := requests.RequestEnv{Platform: mockPlatform, Config: cfg, State: appState, IsLocal: true}
+	result, err := HandleSettings(env)
 	require.NoError(t, err)
 	resp, ok := result.(models.SettingsResponse)
 	require.True(t, ok)
@@ -1334,10 +1408,147 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	require.NotNil(t, resp.PlaytimeSyncEnabled)
 	assert.False(t, *resp.PlaytimeSyncEnabled)
 
-	result, err = HandleSettings(requests.RequestEnv{Config: cfg, State: appState, IsLocal: false})
+	env.IsLocal = false
+	result, err = HandleSettings(env)
 	require.NoError(t, err)
 	resp, ok = result.(models.SettingsResponse)
 	require.True(t, ok)
 	assert.Nil(t, resp.BackupRemoteBaseURL)
 	assert.Nil(t, resp.PlaytimeSyncEnabled)
+}
+
+func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+	}
+
+	// Installing on its own is off until someone asks for it, even on a
+	// platform where checking for updates is on by default.
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.True(t, resp.UpdateCheck)
+	assert.False(t, resp.UpdateInstall)
+
+	enabled := true
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{UpdateInstall: &enabled})
+	require.NoError(t, err)
+	env.Params = paramsJSON
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	result, err = HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.True(t, resp.UpdateInstall)
+
+	disabled := false
+	paramsJSON, err = json.Marshal(models.UpdateSettingsParams{UpdateInstall: &disabled})
+	require.NoError(t, err)
+	env.Params = paramsJSON
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	result, err = HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.SettingsResponse)
+	require.True(t, ok)
+	assert.False(t, resp.UpdateInstall)
+}
+
+func TestHandleSettingsUpdate_UpdateInstallNeedsChecking(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	disabled := false
+
+	tests := []struct {
+		updateCheck    *bool
+		name           string
+		storedChecking bool
+		wantErr        bool
+	}{
+		{
+			name:           "checking already on",
+			storedChecking: true,
+		},
+		{
+			name:        "turned on in the same call",
+			updateCheck: &enabled,
+		},
+		{
+			name:    "checking off and left off",
+			wantErr: true,
+		},
+		{
+			name:        "turned off in the same call",
+			updateCheck: &disabled,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+			mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+			require.NoError(t, err)
+			cfg.SetUpdateCheck(tt.storedChecking)
+			// The handler reloads config from disk before it writes, so a
+			// stored choice has to be on disk to still be there afterwards.
+			require.NoError(t, cfg.Save())
+
+			appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+			t.Cleanup(func() { drainCh(ns) })
+
+			paramsJSON, err := json.Marshal(models.UpdateSettingsParams{
+				UpdateCheck:   tt.updateCheck,
+				UpdateInstall: &enabled,
+			})
+			require.NoError(t, err)
+
+			env := requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+				Params:   paramsJSON,
+			}
+
+			_, err = HandleSettingsUpdate(env)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "automatic update checking")
+				// The refusal comes before anything is written, so the device
+				// is not left installing updates it never checks for.
+				assert.False(t, cfg.UpdateInstall())
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, cfg.UpdateInstall())
+		})
+	}
 }

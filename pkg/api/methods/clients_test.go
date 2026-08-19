@@ -120,6 +120,13 @@ func TestHandleClientsCurrent(t *testing.T) {
 	adminCapabilities := []string{
 		string(permissions.CapProfilesManage),
 		string(permissions.CapSettingsWrite),
+		string(permissions.CapUpdateApply),
+	}
+	// An unpaired remote client gets the admin capabilities apart from
+	// update.apply.
+	unpairedCapabilities := []string{
+		string(permissions.CapProfilesManage),
+		string(permissions.CapSettingsWrite),
 	}
 	tests := []struct {
 		name             string
@@ -144,8 +151,8 @@ func TestHandleClientsCurrent(t *testing.T) {
 			wantPaired:       true,
 		},
 		{
-			name:             "remote unpaired keeps legacy grant",
-			wantCapabilities: adminCapabilities,
+			name:             "remote unpaired has no update.apply",
+			wantCapabilities: unpairedCapabilities,
 		},
 		{
 			name:             "local unpaired gets local grant",
