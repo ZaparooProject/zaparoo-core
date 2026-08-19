@@ -319,6 +319,27 @@ func TestHandleUpdateApply_InsufficientSpace(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestHandleUpdateApply_PlatformUnsupported(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+	}
+	applyFn := func(context.Context, updater.Options) (string, error) {
+		return "", fmt.Errorf("%w: use the Windows installer instead", updater.ErrPlatformUnsupported)
+	}
+
+	result, err := HandleUpdateApply(env, applyFn, func() {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "this platform cannot install updates in place")
+	assert.Contains(t, err.Error(), "use the Windows installer instead")
+	assert.Nil(t, result)
+}
+
 func TestHandleUpdateApply_ActiveMedia(t *testing.T) {
 	t.Parallel()
 

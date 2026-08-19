@@ -169,6 +169,10 @@ func HandleUpdateApply(
 		// part the user can act on.
 		return nil, models.ClientErrf("%s", err.Error())
 	}
+	if errors.Is(err, updater.ErrPlatformUnsupported) {
+		// The error already says what to do instead.
+		return nil, models.ClientErrf("%s", err.Error())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("update apply failed: %w", err)
 	}

@@ -185,6 +185,14 @@ func Apply(ctx context.Context, opts Options) (string, error) {
 		return "", fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion)
 	}
 
+	// Checked here rather than at the top of Apply so that a device already on
+	// the newest version is told that, instead of being told its platform is
+	// unsupported. Everything below this point costs the user something the
+	// install can never spend well.
+	if platformErr := preflightPlatform(runtime.GOOS); platformErr != nil {
+		return "", platformErr
+	}
+
 	manifestRelease, err := s.source.releaseForVersion(release.Version())
 	if err != nil {
 		return "", err
