@@ -102,11 +102,7 @@ func (f *installStagedFixture) blockStateDir(t *testing.T) {
 	t.Helper()
 	dir := stateDirFor(f.dataDir)
 	require.NoError(t, os.MkdirAll(dir, stateDirPerm))
-	//nolint:gosec // an unwritable-but-readable directory is the failure under test
-	require.NoError(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() {
-		_ = os.Chmod(dir, stateDirPerm)
-	})
+	makeDirUnwritable(t, dir)
 }
 
 // assertInstallUndone checks that a failed install left the machine exactly as
@@ -424,9 +420,7 @@ func TestInstallStaged_RefusesWhenTheMarkerIsUnreadable(t *testing.T) {
 // binary is swapped. If it cannot be written the install must undo itself
 // completely instead of running a new binary nothing is watching.
 func TestInstallStaged_UndoesEverythingWhenTheMarkerCannotBeArmed(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are not enforced for root")
-	}
+	skipUnlessDirPermsEnforced(t)
 
 	f := newInstallStagedFixture(t)
 	f.blockStateDir(t)
@@ -446,9 +440,7 @@ func TestInstallStaged_UndoesEverythingWhenTheMarkerCannotBeArmed(t *testing.T) 
 // so that failure has to reach the caller alongside the install failure rather
 // than being lost behind it.
 func TestInstallStaged_ReportsAFailedDatabaseReopen(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are not enforced for root")
-	}
+	skipUnlessDirPermsEnforced(t)
 
 	f := newInstallStagedFixture(t)
 	f.blockStateDir(t)

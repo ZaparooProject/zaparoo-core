@@ -164,6 +164,15 @@ func HandleUpdateApply(
 	if errors.Is(err, updater.ErrUpdateInProgress) {
 		return nil, models.ClientErrf("update already in progress")
 	}
+	if errors.Is(err, updater.ErrInsufficientSpace) {
+		// The error names the directory and the shortfall, which is the only
+		// part the user can act on.
+		return nil, models.ClientErrf("%s", err.Error())
+	}
+	if errors.Is(err, updater.ErrPlatformUnsupported) {
+		// The error already says what to do instead.
+		return nil, models.ClientErrf("%s", err.Error())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("update apply failed: %w", err)
 	}

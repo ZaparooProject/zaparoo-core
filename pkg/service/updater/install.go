@@ -281,7 +281,7 @@ func prepareInstallCandidate(
 
 	// Probe again after copying because staging and the live install can be on
 	// different filesystems with different execution and permission semantics.
-	probe := &stager{platformID: platformID, probeTimeout: probeTimeout}
+	probe := newProbeStager(platformID)
 	if err := probe.probeBinary(ctx, candidatePath, version); err != nil {
 		_ = os.Remove(candidatePath)
 		return fmt.Errorf("probing the install candidate on the target filesystem: %w", err)

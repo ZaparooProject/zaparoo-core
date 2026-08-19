@@ -653,15 +653,11 @@ func TestVerifiedSource_ReleaseForVersionRejectsUnknownVersions(t *testing.T) {
 // media. Bookkeeping the check could not persist must not fail the check.
 func TestVerifiedSource_ReadOnlyStateDirStillChecks(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are not enforced for root")
-	}
+	skipUnlessDirPermsEnforced(t)
 
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	dir := t.TempDir()
-	//nolint:gosec // an unwritable-but-readable directory is the failure under test
-	require.NoError(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(dir, stateDirPerm) })
+	makeDirUnwritable(t, dir)
 	src := ms.source(dir, "linux", "amd64")
 
 	releases, err := src.ListReleases(t.Context(), testRepo())
