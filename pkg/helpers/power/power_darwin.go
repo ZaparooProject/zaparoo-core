@@ -24,9 +24,10 @@ package power
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 )
 
 // pmsetPath is the power management tool macOS ships. It is addressed by
@@ -45,7 +46,11 @@ func Read() (Status, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pmsetTimeout)
 	defer cancel()
 
-	output, err := exec.CommandContext(ctx, pmsetPath, "-g", "batt").Output()
+	return readDarwin(ctx, &command.RealExecutor{})
+}
+
+func readDarwin(ctx context.Context, executor command.Executor) (Status, error) {
+	output, err := executor.Output(ctx, pmsetPath, "-g", "batt")
 	if err != nil {
 		return Status{Source: SourceUnknown}, fmt.Errorf("reading power status from pmset: %w", err)
 	}

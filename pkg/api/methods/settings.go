@@ -151,6 +151,9 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	releaseConfig := env.Config.AcquireUpdateLock()
+	defer releaseConfig()
+
 	// Pre-flight validation of inputs that depend on runtime state. Run before
 	// any mutations are applied so a validation failure here does not leave
 	// the in-memory config partially updated.
@@ -166,8 +169,6 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	// Reload config from disk before applying mutations so that external
 	// edits (e.g. user hand-editing config.toml) are not lost on save or
 	// validated against stale in-memory values.
-	// TODO: Load+Set+Save is not atomic — concurrent handler calls can
-	// interleave. Needs a config-level transaction lock to fix properly.
 	if err := env.Config.Load(); err != nil {
 		log.Warn().Err(err).Msg("failed to reload config before settings update, using in-memory values")
 	}

@@ -180,6 +180,7 @@ type Instance struct {
 	mappingsExternal        []MappingsEntry
 	vals                    Values
 	defaults                Values
+	updateMu                syncutil.Mutex
 	mu                      syncutil.RWMutex
 }
 
@@ -191,6 +192,12 @@ func (c *Instance) getFs() afero.Fs {
 		return c.fs
 	}
 	return afero.NewOsFs()
+}
+
+// AcquireUpdateLock serializes one config load-modify-save transaction.
+func (c *Instance) AcquireUpdateLock() func() {
+	c.updateMu.Lock()
+	return c.updateMu.Unlock
 }
 
 var (
@@ -241,6 +248,7 @@ func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance,
 
 	cfg := Instance{
 		fs:       fs,
+		updateMu: syncutil.Mutex{},
 		mu:       syncutil.RWMutex{},
 		appPath:  os.Getenv(AppEnv),
 		cfgPath:  cfgPath,

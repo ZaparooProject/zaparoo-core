@@ -436,7 +436,7 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 
 	// The version on offer has been taken, so nothing is waiting on it any
 	// more. A failure to say so is not worth failing an installed update over.
-	if err := clearDeferral(stateDirFor(opts.DataDir), ""); err != nil {
+	if err := clearDeferral(stateDirFor(opts.DataDir), staged.Version); err != nil {
 		log.Warn().Err(err).Msg("could not clear the recorded update deferral")
 	}
 
