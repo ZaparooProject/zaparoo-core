@@ -15,6 +15,85 @@ import (
 	syswindows "golang.org/x/sys/windows"
 )
 
+func TestAcquireSingleInstance_Success(t *testing.T) {
+	t.Parallel()
+
+	closeCalls := 0
+	ops := singleInstanceOps{
+		createMutex: func(
+			sa *syswindows.SecurityAttributes,
+			initialOwner bool,
+			name *uint16,
+		) (syswindows.Handle, error) {
+			assert.Nil(t, sa)
+			assert.False(t, initialOwner)
+			assert.Equal(t, "MUTEX: Zaparoo Core", syswindows.UTF16PtrToString(name))
+			return syswindows.Handle(42), nil
+		},
+		closeHandle: func(handle syswindows.Handle) error {
+			closeCalls++
+			assert.Equal(t, syswindows.Handle(42), handle)
+			return nil
+		},
+	}
+
+	instance, running := acquireSingleInstanceWith(ops)
+
+	assert.False(t, running)
+	require.NotNil(t, instance)
+	assert.Equal(t, syswindows.Handle(42), instance.handle)
+	require.NoError(t, instance.release())
+	assert.Equal(t, 1, closeCalls)
+}
+
+func TestAcquireSingleInstance_AlreadyExistsClosesDuplicateHandle(t *testing.T) {
+	t.Parallel()
+
+	closeCalls := 0
+	ops := singleInstanceOps{
+		createMutex: func(
+			*syswindows.SecurityAttributes, bool, *uint16,
+		) (syswindows.Handle, error) {
+			return syswindows.Handle(42), syswindows.ERROR_ALREADY_EXISTS
+		},
+		closeHandle: func(handle syswindows.Handle) error {
+			closeCalls++
+			assert.Equal(t, syswindows.Handle(42), handle)
+			return nil
+		},
+	}
+
+	instance, running := acquireSingleInstanceWith(ops)
+
+	assert.True(t, running)
+	assert.Nil(t, instance)
+	assert.Equal(t, 1, closeCalls)
+}
+
+func TestAcquireSingleInstance_CreationFailureAllowsStartup(t *testing.T) {
+	t.Parallel()
+
+	createErr := errors.New("create failed")
+	closeCalls := 0
+	ops := singleInstanceOps{
+		createMutex: func(
+			*syswindows.SecurityAttributes, bool, *uint16,
+		) (syswindows.Handle, error) {
+			return 0, createErr
+		},
+		closeHandle: func(syswindows.Handle) error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	instance, running := acquireSingleInstanceWith(ops)
+
+	assert.False(t, running)
+	assert.Nil(t, instance)
+	assert.Zero(t, closeCalls)
+}
+
 func TestRestartAfterReleasing_ReleasesSingletonBeforeRestart(t *testing.T) {
 	t.Parallel()
 

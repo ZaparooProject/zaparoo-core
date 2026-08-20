@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +41,7 @@ var errBusy = errors.New("the file is in use by another process")
 // record of which calls were made.
 type swapFixture struct {
 	t          *testing.T
+	fs         afero.Fs
 	dir        string
 	target     string
 	source     string
@@ -50,15 +52,17 @@ type swapFixture struct {
 func newSwapFixture(t *testing.T) *swapFixture {
 	t.Helper()
 	dir := t.TempDir()
+	fs := afero.NewOsFs()
 	f := &swapFixture{
 		t:          t,
+		fs:         fs,
 		dir:        dir,
 		target:     filepath.Join(dir, "zaparoo.exe"),
 		source:     filepath.Join(dir, "zaparoo.zaparoo-update-new.exe"),
 		superseded: filepath.Join(dir, "zaparoo"+installSupersededSuffix+".exe"),
 	}
-	require.NoError(t, os.WriteFile(f.target, []byte("old binary"), 0o600))
-	require.NoError(t, os.WriteFile(f.source, []byte("new binary"), 0o600))
+	require.NoError(t, afero.WriteFile(f.fs, f.target, []byte("old binary"), 0o600))
+	require.NoError(t, afero.WriteFile(f.fs, f.source, []byte("new binary"), 0o600))
 	return f
 }
 
@@ -74,10 +78,12 @@ func (f *swapFixture) ops(vacate bool, fail func(source string) error) swapOps {
 					return err
 				}
 			}
-			return os.Rename(source, target)
+			return f.fs.Rename(source, target)
 		},
-		remove:    os.Remove,
-		exists:    fileExists,
+		remove: f.fs.Remove,
+		exists: func(path string) (bool, error) {
+			return afero.Exists(f.fs, path)
+		},
 		transient: func(err error) bool { return errors.Is(err, errBusy) },
 		sleep:     func(time.Duration) { f.slept++ },
 		vacate:    vacate,

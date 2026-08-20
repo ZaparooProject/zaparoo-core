@@ -100,8 +100,20 @@ func (s *singleInstance) release() error {
 	return nil
 }
 
+type singleInstanceOps struct {
+	createMutex func(*syswindows.SecurityAttributes, bool, *uint16) (syswindows.Handle, error)
+	closeHandle func(syswindows.Handle) error
+}
+
 func acquireSingleInstance() (*singleInstance, bool) {
-	handle, err := syswindows.CreateMutex(
+	return acquireSingleInstanceWith(singleInstanceOps{
+		createMutex: syswindows.CreateMutex,
+		closeHandle: syswindows.CloseHandle,
+	})
+}
+
+func acquireSingleInstanceWith(ops singleInstanceOps) (*singleInstance, bool) {
+	handle, err := ops.createMutex(
 		nil, false,
 		syswindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
 	)
@@ -110,7 +122,7 @@ func acquireSingleInstance() (*singleInstance, bool) {
 	// failure. Treating it as fatal crashed the second launch instead of exiting
 	// cleanly.
 	if errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) {
-		if closeErr := syswindows.CloseHandle(handle); closeErr != nil {
+		if closeErr := ops.closeHandle(handle); closeErr != nil {
 			log.Debug().Err(closeErr).Msg("could not close duplicate single-instance mutex handle")
 		}
 		return nil, true
@@ -121,7 +133,7 @@ func acquireSingleInstance() (*singleInstance, bool) {
 		log.Error().Err(err).Msg("error creating single-instance mutex")
 		return nil, false
 	}
-	return &singleInstance{handle: handle, closeHandle: syswindows.CloseHandle}, false
+	return &singleInstance{handle: handle, closeHandle: ops.closeHandle}, false
 }
 
 func restartAfterReleasing(instance *singleInstance, restartFn func() error) error {
