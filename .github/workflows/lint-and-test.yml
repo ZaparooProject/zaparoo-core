@@ -18,6 +18,10 @@ permissions:
   packages: read
   security-events: write
 
+env:
+  # Pin to avoid current latest's nilness recover panic: dominikh/go-tools#1725.
+  GOLANGCI_LINT_VERSION: v2.12.2
+
 jobs:
   ci:
     name: CI
@@ -106,7 +110,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
       - name: Install govulncheck
@@ -296,8 +300,9 @@ jobs:
             -e CXX="${TARGET_CXX}" \
             -e CGO_CFLAGS="${TARGET_CGO_CFLAGS}" \
             -e CGO_LDFLAGS="${TARGET_CGO_LDFLAGS}" \
+            -e GOLANGCI_LINT_VERSION \
             ${{ env.ZIGCC_IMAGE }} \
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
 
   native-pr-tests:
     name: Native PR Tests
