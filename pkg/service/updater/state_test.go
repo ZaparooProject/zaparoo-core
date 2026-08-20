@@ -297,6 +297,7 @@ func TestRecordDeferral_KeepsSinceAcrossReasons(t *testing.T) {
 	require.NotNil(t, first)
 	assert.Equal(t, ReasonActiveMedia, first.Reason)
 	assert.False(t, first.Since.IsZero())
+	assert.Equal(t, time.UTC, first.Since.Location())
 
 	// The clock an automatic install runs down starts at the first deferral of
 	// a version, not at the most recent one, so someone who keeps the device
@@ -306,6 +307,22 @@ func TestRecordDeferral_KeepsSinceAcrossReasons(t *testing.T) {
 	require.NotNil(t, second)
 	assert.Equal(t, ReasonAPIBusy, second.Reason)
 	assert.Equal(t, first.Since, second.Since)
+}
+
+func TestRecordDeferral_ReusesExistingNonZeroTimestamp(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	prior := time.Date(2026, 8, 1, 12, 30, 0, 0, time.FixedZone("prior", 9*60*60))
+	require.NoError(t, saveState(dir, &updaterState{Deferral: &updateDeferral{
+		Since: prior, Version: "v2.5.0", Reason: ReasonActiveMedia,
+	}}))
+
+	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonAPIBusy))
+	deferral := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, deferral)
+	assert.True(t, prior.Equal(deferral.Since))
+	assert.Equal(t, ReasonAPIBusy, deferral.Reason)
 }
 
 func TestRecordDeferral_SameReasonDoesNotRewrite(t *testing.T) {
@@ -362,12 +379,16 @@ func TestClearDeferral(t *testing.T) {
 	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
 	require.NotNil(t, peekDeferral(dir, "v2.5.0"))
 
-	require.NoError(t, clearDeferral(dir))
+	require.NoError(t, clearDeferral(dir, ""))
 	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
 
 	// Clearing again is not an error, because an update that was never held up
 	// still clears the deferral when it installs.
-	require.NoError(t, clearDeferral(dir))
+	require.NoError(t, clearDeferral(dir, ""))
+
+	require.NoError(t, recordDeferral(dir, "v2.6.0", ReasonActiveMedia))
+	require.NoError(t, clearDeferral(dir, "v2.5.0"))
+	require.NotNil(t, peekDeferral(dir, "v2.6.0"), "stale cleanup must not clear a replacement deferral")
 }
 
 func TestRecordDeferral_KeepsOtherState(t *testing.T) {
@@ -382,7 +403,7 @@ func TestRecordDeferral_KeepsOtherState(t *testing.T) {
 	}))
 
 	require.NoError(t, recordDeferral(dir, "v2.5.0", ReasonActiveMedia))
-	require.NoError(t, clearDeferral(dir))
+	require.NoError(t, clearDeferral(dir, ""))
 
 	st := loadState(dir)
 	assert.Equal(t, "etag-1", st.ManifestETag)

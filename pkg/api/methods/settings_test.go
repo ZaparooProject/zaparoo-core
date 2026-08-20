@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -53,6 +55,22 @@ func drainCh(ch <-chan models.Notification) {
 			return
 		}
 	}
+}
+
+type configOpenTrackingFS struct {
+	afero.Fs
+	opens chan struct{}
+	track atomic.Bool
+}
+
+func (fs *configOpenTrackingFS) Open(name string) (afero.File, error) {
+	if fs.track.Load() {
+		select {
+		case fs.opens <- struct{}{}:
+		default:
+		}
+	}
+	return fs.Fs.Open(name) //nolint:wrapcheck // test wrapper preserves the backing filesystem error
 }
 
 // TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia tests that re-enabling
@@ -1549,6 +1567,176 @@ func TestHandleSettingsUpdate_UpdateInstallNeedsChecking(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.True(t, cfg.UpdateInstall())
+		})
+	}
+}
+
+func TestHandleSettingsUpdate_ConcurrentIndependentChanges(t *testing.T) {
+	t.Parallel()
+
+	fs := &configOpenTrackingFS{
+		Fs:    afero.NewMemMapFs(),
+		opens: make(chan struct{}, 1),
+	}
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.Values{}, fs)
+	require.NoError(t, err)
+
+	volumeEntered := make(chan struct{})
+	releaseVolume := make(chan struct{})
+	player := mocks.NewMockPlayer()
+	player.On("SetVolume", 0.25).Run(func(mock.Arguments) {
+		close(volumeEntered)
+		<-releaseVolume
+	}).Return().Once()
+
+	volume := 25
+	debugLogging := true
+	firstParams, err := json.Marshal(models.UpdateSettingsParams{
+		AudioVolume:  &volume,
+		DebugLogging: &debugLogging,
+	})
+	require.NoError(t, err)
+	errorReporting := true
+	secondParams, err := json.Marshal(models.UpdateSettingsParams{ErrorReporting: &errorReporting})
+	require.NoError(t, err)
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, updateErr := HandleSettingsUpdate(requests.RequestEnv{
+			Context: context.Background(), Config: cfg, Player: player, Params: firstParams, IsLocal: true,
+		})
+		firstResult <- updateErr
+	}()
+
+	select {
+	case <-volumeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first settings update did not reach its runtime side effect")
+	}
+
+	fs.track.Store(true)
+	secondStarted := make(chan struct{})
+	secondResult := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		_, updateErr := HandleSettingsUpdate(requests.RequestEnv{
+			Context: context.Background(), Config: cfg, Params: secondParams, IsLocal: true,
+		})
+		secondResult <- updateErr
+	}()
+	<-secondStarted
+
+	select {
+	case <-fs.opens:
+		close(releaseVolume)
+		t.Fatal("second settings update loaded config before first update completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseVolume)
+
+	select {
+	case updateErr := <-firstResult:
+		require.NoError(t, updateErr)
+	case <-time.After(time.Second):
+		t.Fatal("first settings update did not complete")
+	}
+	select {
+	case updateErr := <-secondResult:
+		require.NoError(t, updateErr)
+	case <-time.After(time.Second):
+		t.Fatal("second settings update did not complete")
+	}
+
+	require.NoError(t, cfg.Load())
+	assert.True(t, cfg.DebugLogging())
+	assert.True(t, cfg.ErrorReporting())
+	assert.Equal(t, volume, cfg.AudioVolume())
+	player.AssertExpectations(t)
+}
+
+func TestHandleSettingsUpdate_UpdateInstallReloadsChecking(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	disabled := false
+	tests := []struct {
+		requestCheck   *bool
+		name           string
+		diskChecking   bool
+		memoryChecking bool
+		wantChecking   bool
+		wantErr        bool
+	}{
+		{
+			name:           "disk enabled overrides stale disabled memory",
+			diskChecking:   true,
+			memoryChecking: false,
+			wantChecking:   true,
+		},
+		{
+			name:           "disk disabled overrides stale enabled memory",
+			diskChecking:   false,
+			memoryChecking: true,
+			wantErr:        true,
+		},
+		{
+			name:           "request enable overrides disabled disk",
+			diskChecking:   false,
+			memoryChecking: true,
+			requestCheck:   &enabled,
+			wantChecking:   true,
+		},
+		{
+			name:           "request disable overrides enabled disk",
+			diskChecking:   true,
+			memoryChecking: false,
+			requestCheck:   &disabled,
+			wantErr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+
+			cfg, err := config.NewConfigWithFs(t.TempDir(), config.Values{}, afero.NewMemMapFs())
+			require.NoError(t, err)
+			cfg.SetUpdateCheck(tt.diskChecking)
+			require.NoError(t, cfg.Save())
+			cfg.SetUpdateCheck(tt.memoryChecking)
+
+			appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+			t.Cleanup(appState.StopService)
+			t.Cleanup(func() { drainCh(ns) })
+
+			paramsJSON, err := json.Marshal(models.UpdateSettingsParams{
+				UpdateCheck:   tt.requestCheck,
+				UpdateInstall: &enabled,
+			})
+			require.NoError(t, err)
+
+			_, err = HandleSettingsUpdate(requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+				Params:   paramsJSON,
+				IsLocal:  true,
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "automatic update checking")
+				assert.False(t, cfg.UpdateInstall())
+				assert.Equal(t, tt.diskChecking, cfg.UpdateCheck())
+				return
+			}
+
+			require.NoError(t, err)
+			assert.True(t, cfg.UpdateInstall())
+			assert.Equal(t, tt.wantChecking, cfg.UpdateCheck())
 		})
 	}
 }

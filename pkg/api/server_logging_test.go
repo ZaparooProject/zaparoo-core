@@ -44,6 +44,30 @@ const (
 	authLinkVerificationURL = "https://online.zaparoo.com/link"
 )
 
+// logCapture collects log output for assertions. Tests that capture the global
+// logger run alongside parallel tests in this package that are still logging
+// into it, so the buffer has to be safe for concurrent writes.
+type logCapture struct {
+	buf bytes.Buffer
+	mu  syncutil.Mutex
+}
+
+func (c *logCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n, err := c.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write log capture: %w", err)
+	}
+	return n, nil
+}
+
+func (c *logCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
 func TestLogSafeResponse(t *testing.T) {
 	tests := []struct {
 		result         any
@@ -409,28 +433,4 @@ func TestLogWSWriteError(t *testing.T) {
 			assert.Contains(t, logOutput, "test message")
 		})
 	}
-}
-
-// logCapture collects log output for assertions. Tests that capture the global
-// logger run alongside parallel tests in this package that are still logging
-// into it, so the buffer has to be safe for concurrent writes.
-type logCapture struct {
-	buf bytes.Buffer
-	mu  syncutil.Mutex
-}
-
-func (c *logCapture) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	n, err := c.buf.Write(p)
-	if err != nil {
-		return n, fmt.Errorf("write log capture: %w", err)
-	}
-	return n, nil
-}
-
-func (c *logCapture) String() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.String()
 }

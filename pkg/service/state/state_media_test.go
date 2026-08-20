@@ -51,7 +51,7 @@ func TestMediaRestoreGateMutualExclusion(t *testing.T) {
 	st, _ := NewState(nil, "test-boot")
 	defer st.StopService()
 
-	releaseLaunch, err := st.AcquireMediaLaunch()
+	launchAccess, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
 	restoreErr := make(chan error, 1)
 	go func() {
@@ -62,24 +62,24 @@ func TestMediaRestoreGateMutualExclusion(t *testing.T) {
 		restoreErr <- beginErr
 	}()
 	require.ErrorIs(t, <-restoreErr, ErrMediaLaunchInProgress)
-	releaseLaunch()
+	launchAccess.Release()
 
 	finishRestore, err := st.BeginRestoreGate()
 	require.NoError(t, err)
 	launchErr := make(chan error, 1)
 	go func() {
-		release, acquireErr := st.AcquireMediaLaunch()
-		if release != nil {
-			release()
+		access, acquireErr := st.AcquireMediaLaunch()
+		if access.Release != nil {
+			access.Release()
 		}
 		launchErr <- acquireErr
 	}()
 	require.ErrorIs(t, <-launchErr, ErrRestoreInProgress)
 	finishRestore(false)
 
-	releaseLaunch, err = st.AcquireMediaLaunch()
+	launchAccess, err = st.AcquireMediaLaunch()
 	require.NoError(t, err)
-	releaseLaunch()
+	launchAccess.Release()
 }
 
 func TestMediaStopGateWaitsForLaunchAndBlocksReplacement(t *testing.T) {
@@ -87,7 +87,7 @@ func TestMediaStopGateWaitsForLaunchAndBlocksReplacement(t *testing.T) {
 	st, _ := NewState(nil, "test-boot")
 	defer st.StopService()
 
-	releaseLaunch, err := st.AcquireMediaLaunch()
+	launchAccess, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
 
 	stopRelease := make(chan func(), 1)
@@ -109,7 +109,7 @@ func TestMediaStopGateWaitsForLaunchAndBlocksReplacement(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	releaseLaunch()
+	launchAccess.Release()
 	var releaseStop func()
 	select {
 	case releaseStop = <-stopRelease:
@@ -124,11 +124,11 @@ func TestMediaStopGateWaitsForLaunchAndBlocksReplacement(t *testing.T) {
 		err     error
 	}, 1)
 	go func() {
-		release, acquireErr := st.AcquireMediaLaunch()
+		access, acquireErr := st.AcquireMediaLaunch()
 		replacementResult <- struct {
 			release func()
 			err     error
-		}{release: release, err: acquireErr}
+		}{release: access.Release, err: acquireErr}
 	}()
 
 	select {
@@ -217,11 +217,11 @@ func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
 	st, _ := NewState(nil, "test-boot")
 	defer st.StopService()
 
-	releaseLaunch, err := st.AcquireMediaLaunch()
+	launchAccess, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
 	defer func() {
-		if releaseLaunch != nil {
-			releaseLaunch()
+		if launchAccess.Release != nil {
+			launchAccess.Release()
 		}
 	}()
 
@@ -236,11 +236,11 @@ func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
 		err     error
 	}, 1)
 	go func() {
-		release, acquireErr := st.AcquireMediaLaunch()
+		access, acquireErr := st.AcquireMediaLaunch()
 		replacementResult <- struct {
 			release func()
 			err     error
-		}{release: release, err: acquireErr}
+		}{release: access.Release, err: acquireErr}
 	}()
 
 	select {
@@ -252,8 +252,8 @@ func TestMediaStopGateHonorsContextCancellation(t *testing.T) {
 		t.Fatal("canceled media stop kept a replacement launch blocked")
 	}
 
-	releaseLaunch()
-	releaseLaunch = nil
+	launchAccess.Release()
+	launchAccess.Release = nil
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
 	defer cleanupCancel()
 	releaseStop, err = st.AcquireMediaStop(cleanupCtx)
@@ -293,6 +293,48 @@ func TestExternalActiveMediaCancelsRestoreBeforeUpdatingState(t *testing.T) {
 	case <-updated:
 	case <-time.After(time.Second):
 		t.Fatal("active media update did not resume after rollback gate released")
+	}
+	assert.NotNil(t, st.ActiveMedia())
+}
+
+func TestReleasedMediaLaunchPublisherUsesExternalRestoreAccess(t *testing.T) {
+	t.Parallel()
+	st, _ := NewState(nil, "test-boot")
+	defer st.StopService()
+
+	launchAccess, err := st.AcquireMediaLaunch()
+	require.NoError(t, err)
+	launchAccess.Release()
+
+	lease, err := st.BackupCoordinator().Begin(
+		context.Background(), backupcoordinator.OperationLocalRestore, backupcoordinator.OperationWrite,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+	finishRestore, err := st.BeginRestoreGate()
+	require.NoError(t, err)
+
+	updated := make(chan struct{})
+	go func() {
+		launchAccess.SetActiveMedia(&models.ActiveMedia{SystemID: "SNES", Path: "game.sfc", Name: "Game"})
+		close(updated)
+	}()
+
+	select {
+	case <-lease.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("released launch publisher did not use external restore handling")
+	}
+	select {
+	case <-updated:
+		t.Fatal("released launch publisher changed media before restore gate released")
+	case <-time.After(50 * time.Millisecond):
+	}
+	finishRestore(false)
+	select {
+	case <-updated:
+	case <-time.After(time.Second):
+		t.Fatal("released launch publisher did not resume after restore gate released")
 	}
 	assert.NotNil(t, st.ActiveMedia())
 }
@@ -340,8 +382,8 @@ func TestAcquireMediaLaunch_RejectsStoppedService(t *testing.T) {
 	st, _ := NewState(nil, "test-boot")
 	st.StopService()
 
-	release, err := st.AcquireMediaLaunch()
-	assert.Nil(t, release)
+	access, err := st.AcquireMediaLaunch()
+	assert.Nil(t, access.Release)
 	require.ErrorIs(t, err, context.Canceled)
 }
 

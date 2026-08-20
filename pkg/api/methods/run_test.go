@@ -46,9 +46,9 @@ func TestHandleStopWaitsForLaunchAndMediaReadiness(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot")
 	defer st.StopService()
 
-	releaseLaunch, err := st.AcquireMediaLaunch()
+	launchAccess, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
-	st.SetActiveMedia(models.NewActiveMedia("snes", "SNES", "game.sfc", "Game", "RASNES"))
+	launchAccess.SetActiveMedia(models.NewActiveMedia("snes", "SNES", "game.sfc", "Game", "RASNES"))
 	readyGen, active := st.ActiveMediaReadyGeneration()
 	require.True(t, active)
 
@@ -72,7 +72,7 @@ func TestHandleStopWaitsForLaunchAndMediaReadiness(t *testing.T) {
 	}
 	mockPlatform.AssertNotCalled(t, "StopActiveLauncher", platforms.StopForMenu)
 
-	releaseLaunch()
+	launchAccess.Release()
 	select {
 	case result := <-resultCh:
 		require.NoError(t, result.err)
@@ -99,9 +99,9 @@ func TestHandleStopCanceledWhileLaunchInFlight(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot")
 	defer st.StopService()
 
-	releaseLaunch, err := st.AcquireMediaLaunch()
+	launchAccess, err := st.AcquireMediaLaunch()
 	require.NoError(t, err)
-	defer releaseLaunch()
+	defer launchAccess.Release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -25,9 +25,9 @@ import (
 	"strings"
 )
 
-// pmsetPercentRe matches the charge pmset prints on a battery line, as in
-// "-InternalBattery-0 (id=4653155)\t62%; discharging; 3:32 remaining present: true".
-var pmsetPercentRe = regexp.MustCompile(`(\d{1,3})%`)
+// pmsetPercentRe matches the complete charge field pmset prints on a battery
+// line, as in "-InternalBattery-0 (id=4653155)\t62%; discharging; 3:32 remaining present: true".
+var pmsetPercentRe = regexp.MustCompile(`(^|[ \t])(\d{1,3})%($|[; \t])`)
 
 // parsePmsetBatt resolves the four states the updater distinguishes from the
 // output of `pmset -g batt`.
@@ -42,10 +42,11 @@ var pmsetPercentRe = regexp.MustCompile(`(\d{1,3})%`)
 // being wrong is a laptop that dies mid-install.
 func parsePmsetBatt(output string) Status {
 	var (
-		sawSource bool
-		external  bool
-		batteries int
-		lowest    = -1
+		sawSource  bool
+		external   bool
+		unreadable bool
+		batteries  int
+		lowest     = -1
 	)
 
 	for line := range strings.SplitSeq(output, "\n") {
@@ -72,6 +73,7 @@ func parsePmsetBatt(output string) Status {
 			}
 			percent, ok := parsePmsetPercent(line)
 			if !ok {
+				unreadable = true
 				continue
 			}
 			if lowest < 0 || percent < lowest {
@@ -91,6 +93,9 @@ func parsePmsetBatt(output string) Status {
 	if external {
 		return Status{Source: SourceExternal}
 	}
+	if unreadable {
+		return Status{Source: SourceUnknown}
+	}
 	if lowest < 0 {
 		return Status{Source: SourceUnknown}
 	}
@@ -103,7 +108,7 @@ func parsePmsetPercent(line string) (int, bool) {
 	if match == nil {
 		return 0, false
 	}
-	percent, err := strconv.Atoi(match[1])
+	percent, err := strconv.Atoi(match[2])
 	if err != nil {
 		return 0, false
 	}

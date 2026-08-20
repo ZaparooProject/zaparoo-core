@@ -31,7 +31,7 @@ import (
 
 // sysfsRoot is where the kernel exposes every power supply it knows about,
 // one directory per supply.
-const sysfsRoot = "/sys/class/power_supply"
+var sysfsRoot = filepath.Join(string(filepath.Separator), "sys", "class", "power_supply")
 
 // Read reports the device's power state from the kernel's power-supply
 // directory.
@@ -61,28 +61,39 @@ func statusFrom(fs afero.Fs, root string) (Status, error) {
 	var (
 		batteries  []string
 		externalOn bool
+		unreadable bool
 	)
 	for _, entry := range entries {
 		name := entry.Name()
 		dir := filepath.Join(root, name)
-		switch readSupplyField(fs, dir, "type") {
+		supplyType, ok := readSupplyField(fs, dir, "type")
+		if !ok || supplyType == "" {
+			unreadable = true
+			continue
+		}
+		switch supplyType {
 		case "Battery":
 			// A wireless mouse or controller is a battery the kernel knows
 			// about and the device does not run on. The kernel marks those
 			// "Device"; a battery the whole machine runs on is "System" or
 			// says nothing at all.
-			if readSupplyField(fs, dir, "scope") == "Device" {
+			scope, _ := readSupplyField(fs, dir, "scope")
+			if scope == "Device" {
 				continue
 			}
 			batteries = append(batteries, dir)
 		case "Mains", "USB", "USB_PD", "USB_PD_DRP", "BrickID", "Wireless":
-			if readSupplyField(fs, dir, "online") == "1" {
+			online, _ := readSupplyField(fs, dir, "online")
+			if online == "1" {
 				externalOn = true
 			}
 		}
 	}
 
 	if len(batteries) == 0 {
+		if unreadable && !externalOn {
+			return Status{Source: SourceUnknown}, nil
+		}
 		return Status{Source: SourceNoBattery}, nil
 	}
 	if externalOn {
@@ -92,7 +103,8 @@ func statusFrom(fs afero.Fs, root string) (Status, error) {
 	// A battery reporting Charging or Full is on external power even when no
 	// mains supply announced itself, which is how some handhelds wire USB-C.
 	for _, dir := range batteries {
-		switch readSupplyField(fs, dir, "status") {
+		status, _ := readSupplyField(fs, dir, "status")
+		switch status {
 		case "Charging", "Full":
 			return Status{Source: SourceExternal}, nil
 		}
@@ -104,11 +116,15 @@ func statusFrom(fs afero.Fs, root string) (Status, error) {
 	for _, dir := range batteries {
 		percent, ok := readCapacity(fs, dir)
 		if !ok {
+			unreadable = true
 			continue
 		}
 		if lowest < 0 || percent < lowest {
 			lowest = percent
 		}
+	}
+	if unreadable {
+		return Status{Source: SourceUnknown}, nil
 	}
 	if lowest < 0 {
 		return Status{Source: SourceUnknown}, nil
@@ -116,17 +132,17 @@ func statusFrom(fs afero.Fs, root string) (Status, error) {
 	return Status{Source: SourceBattery, Percent: lowest}, nil
 }
 
-func readSupplyField(fs afero.Fs, dir, name string) string {
+func readSupplyField(fs afero.Fs, dir, name string) (string, bool) {
 	data, err := afero.ReadFile(fs, filepath.Join(dir, name))
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(string(data)), true
 }
 
 func readCapacity(fs afero.Fs, dir string) (int, bool) {
-	raw := readSupplyField(fs, dir, "capacity")
-	if raw == "" {
+	raw, ok := readSupplyField(fs, dir, "capacity")
+	if !ok || raw == "" {
 		return 0, false
 	}
 	percent, err := strconv.Atoi(raw)

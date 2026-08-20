@@ -91,7 +91,6 @@ type State struct {
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
-	mediaLaunchAccesses   int
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
@@ -623,10 +622,10 @@ func (s *State) AcquireRestoreAccess() (func(), error) {
 	return s.restoreAccessAfterLock()
 }
 
-func (s *State) AcquireMediaLaunch() (func(), error) {
+func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
 	releaseRestore, err := s.TryAcquireRestoreAccess()
 	if err != nil {
-		return nil, err
+		return platforms.MediaLaunchAccess{}, err
 	}
 
 	// Stop operations take the exclusive side of this gate. Holding the read
@@ -636,17 +635,32 @@ func (s *State) AcquireMediaLaunch() (func(), error) {
 	if err := s.ctx.Err(); err != nil {
 		s.mediaLaunchMu.RUnlock()
 		releaseRestore()
-		return nil, err
+		return platforms.MediaLaunchAccess{}, err
 	}
-	s.mu.Lock()
-	s.mediaLaunchAccesses++
-	s.mu.Unlock()
-	return func() {
-		s.mu.Lock()
-		s.mediaLaunchAccesses--
-		s.mu.Unlock()
-		s.mediaLaunchMu.RUnlock()
-		releaseRestore()
+
+	var accessMu syncutil.Mutex
+	held := true
+	return platforms.MediaLaunchAccess{
+		SetActiveMedia: func(media *models.ActiveMedia) {
+			accessMu.Lock()
+			if !held {
+				accessMu.Unlock()
+				s.SetActiveMedia(media)
+				return
+			}
+			s.publishActiveMedia(media, true)
+			accessMu.Unlock()
+		},
+		Release: func() {
+			accessMu.Lock()
+			defer accessMu.Unlock()
+			if !held {
+				return
+			}
+			held = false
+			s.mediaLaunchMu.RUnlock()
+			releaseRestore()
+		},
 	}, nil
 }
 
@@ -793,6 +807,10 @@ func (s *State) MarkActiveMediaReady(gen uint64) {
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
+	s.publishActiveMedia(media, false)
+}
+
+func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld bool) {
 	if media != nil {
 		if err := s.ctx.Err(); err != nil {
 			log.Debug().Err(err).Msg("active media update rejected while service is stopping")
@@ -803,12 +821,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		// one order everywhere — restore, then launch, then publish — and
 		// taking them in any other order closes a cycle between this, a media
 		// launch, and the updater's gate.
-		s.mu.RLock()
-		launchAccessHeld := s.mediaLaunchAccesses > 0
-		s.mu.RUnlock()
-		if !launchAccessHeld {
-			// A launch already holds restore access for the whole launch, so
-			// only a publication from outside one has to take it here.
+		if !restoreAccessHeld {
 			release, err := s.TryAcquireRestoreAccess()
 			if errors.Is(err, ErrRestoreInProgress) {
 				s.backupCoordinator.CancelRestore()

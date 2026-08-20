@@ -329,7 +329,7 @@ func recordDeferral(dir, version, reason string) error {
 		return nil
 	}
 
-	since := time.Now()
+	since := time.Now().UTC()
 	if st.Deferral != nil && st.Deferral.Version == version && !st.Deferral.Since.IsZero() {
 		since = st.Deferral.Since
 	}
@@ -340,9 +340,10 @@ func recordDeferral(dir, version, reason string) error {
 	return nil
 }
 
-// clearDeferral forgets any deferral, for when the update goes ahead or the
-// version it was waiting on is no longer the one on offer.
-func clearDeferral(dir string) error {
+// clearDeferral forgets a deferral when expectedVersion is empty or still
+// matches the stored version. The match prevents stale checks from clearing a
+// newer deferral recorded concurrently.
+func clearDeferral(dir, expectedVersion string) error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
@@ -350,7 +351,7 @@ func clearDeferral(dir string) error {
 	if err != nil {
 		return fmt.Errorf("loading updater state before clearing a deferral: %w", err)
 	}
-	if st.Deferral == nil {
+	if st.Deferral == nil || (expectedVersion != "" && st.Deferral.Version != expectedVersion) {
 		return nil
 	}
 	st.Deferral = nil
@@ -360,16 +361,25 @@ func clearDeferral(dir string) error {
 	return nil
 }
 
-// peekDeferral returns the recorded deferral for version, or nil when the
-// device is not waiting on that version.
-func peekDeferral(dir, version string) *updateDeferral {
+// peekDeferralState returns any recorded deferral without changing it.
+func peekDeferralState(dir string) *updateDeferral {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
 	st := loadState(dir)
-	if st.Deferral == nil || st.Deferral.Version != version {
+	if st.Deferral == nil {
 		return nil
 	}
 	deferral := *st.Deferral
 	return &deferral
+}
+
+// peekDeferral returns the recorded deferral for version, or nil when the
+// device is not waiting on that version.
+func peekDeferral(dir, version string) *updateDeferral {
+	deferral := peekDeferralState(dir)
+	if deferral == nil || deferral.Version != version {
+		return nil
+	}
+	return deferral
 }

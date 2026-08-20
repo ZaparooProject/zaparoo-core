@@ -37,6 +37,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -254,6 +256,78 @@ func TestHandleUpdateCheck_Authorization(t *testing.T) {
 	}
 }
 
+func TestUpdateProgressFn_ForwardsEveryField(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	appState, ns := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(appState.StopService)
+	t.Cleanup(func() { drainCh(ns) })
+
+	progressFn := updateProgressFn(&requests.RequestEnv{State: appState})
+	require.NotNil(t, progressFn)
+	progressFn(updater.Progress{
+		Stage:           updater.ProgressDownloading,
+		Version:         "2.10.0",
+		Trigger:         "manual",
+		Error:           "test detail",
+		BytesDownloaded: 1234,
+		BytesTotal:      5678,
+	})
+
+	select {
+	case notification := <-ns:
+		assert.Equal(t, models.NotificationUpdateState, notification.Method)
+		var payload models.UpdateStateNotification
+		require.NoError(t, json.Unmarshal(notification.Params, &payload))
+		assert.Equal(t, string(updater.ProgressDownloading), payload.Stage)
+		assert.Equal(t, "2.10.0", payload.Version)
+		assert.Equal(t, "manual", payload.Trigger)
+		assert.Equal(t, "test detail", payload.Error)
+		assert.Equal(t, int64(1234), payload.BytesDownloaded)
+		assert.Equal(t, int64(5678), payload.BytesTotal)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update progress notification")
+	}
+}
+
+func TestUpdateGateDeps_ReportsStateSignals(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	appState, ns := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(appState.StopService)
+	t.Cleanup(func() { drainCh(ns) })
+
+	deps := updateGateDeps(&requests.RequestEnv{Platform: mockPlatform, State: appState})
+	require.NotNil(t, deps.BackupActive)
+	require.NotNil(t, deps.BackgroundMedia)
+	require.NotNil(t, deps.ActivePlaylist)
+	assert.False(t, deps.BackupActive())
+	assert.False(t, deps.BackgroundMedia())
+	assert.False(t, deps.ActivePlaylist())
+
+	lease, err := appState.BackupCoordinator().Begin(
+		t.Context(), backupcoordinator.OperationLocalCreate, backupcoordinator.OperationRead,
+	)
+	require.NoError(t, err)
+	appState.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID,
+	))
+	appState.SetActivePlaylist(&playlists.Playlist{ID: "playlist"})
+	assert.True(t, deps.BackupActive())
+	assert.True(t, deps.BackgroundMedia())
+	assert.True(t, deps.ActivePlaylist())
+
+	lease.Release()
+	appState.SetBackgroundMedia(nil)
+	appState.SetActivePlaylist(nil)
+	assert.False(t, deps.BackupActive())
+	assert.False(t, deps.BackgroundMedia())
+	assert.False(t, deps.ActivePlaylist())
+}
+
 func TestUpdateRestartGuard_AfterWriteSupersedesFallback(t *testing.T) {
 	t.Parallel()
 
@@ -396,6 +470,36 @@ func TestHandleUpdateApply_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "update apply failed")
 	assert.Contains(t, err.Error(), "download failed")
 	assert.Nil(t, result)
+}
+
+func TestHandleUpdateApply_ErrorReleasesAcquiredGates(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	appState, ns := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(appState.StopService)
+	t.Cleanup(func() { drainCh(ns) })
+
+	result, err := HandleUpdateApply(requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+		State:    appState,
+		IsLocal:  true,
+	}, func(context.Context, updater.Options) (string, error) {
+		return "", errors.New("download failed")
+	}, func() {})
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	finishRestore, err := appState.BeginRestoreGate()
+	require.NoError(t, err, "failed apply retained restore access")
+	finishRestore(false)
+
+	releaseMedia, err := appState.AcquireUpdateMediaGate(t.Context())
+	require.NoError(t, err, "failed apply retained media gate")
+	releaseMedia()
 }
 
 func TestHandleUpdateApply_UpdateInProgress(t *testing.T) {
@@ -644,9 +748,9 @@ func TestHandleUpdateApply_HoldsMediaGateUntilRestart(t *testing.T) {
 
 	launchErr := make(chan error, 1)
 	go func() {
-		release, acquireErr := st.AcquireMediaLaunch()
-		if release != nil {
-			release()
+		access, acquireErr := st.AcquireMediaLaunch()
+		if access.Release != nil {
+			access.Release()
 		}
 		launchErr <- acquireErr
 	}()
@@ -878,6 +982,7 @@ func TestHandleUpdateCheck_ReadsTheGate(t *testing.T) {
 	mockPlatform.SetupBasicMock()
 
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(appState.StopService)
 	t.Cleanup(func() { drainCh(ns) })
 	appState.SetActiveMedia(&models.ActiveMedia{SystemID: "SNES", Name: "Test Game"})
 
@@ -1002,6 +1107,7 @@ func TestHandleUpdateApply_NoParamsIsNotForced(t *testing.T) {
 	mockPlatform.SetupBasicMock()
 
 	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(appState.StopService)
 	t.Cleanup(func() { drainCh(ns) })
 	appState.SetActiveMedia(&models.ActiveMedia{SystemID: "SNES", Name: "Test Game"})
 

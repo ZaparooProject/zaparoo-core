@@ -1,11 +1,7 @@
 version: "3"
 
-# golangci-lint is installed from a script that takes the latest release when no
-# version is given. 2.13.0 shipped a staticcheck whose nilness analyzer panics on
-# a dependency, which took every lint job down the day it was released, so the
-# version is named here instead. Keep it in step with the one CI's native lint
-# job and contributors run.
 vars:
+  # Pin to avoid current latest's nilness recover panic: dominikh/go-tools#1725.
   GOLANGCI_LINT_VERSION: v2.12.2
 
 tasks:
@@ -30,10 +26,9 @@ tasks:
           CC: "zig cc -w --target=x86_64-windows-gnu"
           CXX: "zig c++ -w --target=x86_64-windows-gnu"
           EXEC: >-
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin {{.GOLANGCI_LINT_VERSION}} 2>&1 | tail -1
             && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
-            -e GOLANGCI_LINT_VERSION={{.GOLANGCI_LINT_VERSION}}
             -e GOOS=windows
             -e GOARCH=amd64
             -e CGO_ENABLED=1
@@ -60,10 +55,9 @@ tasks:
             -L/opt/macosx-sdk/usr/lib
             -F/opt/macosx-sdk/System/Library/Frameworks
           EXEC: >-
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin {{.GOLANGCI_LINT_VERSION}} 2>&1 | tail -1
             && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
-            -e GOLANGCI_LINT_VERSION={{.GOLANGCI_LINT_VERSION}}
             -e GOOS=darwin
             -e GOARCH=amd64
             -e CGO_ENABLED=1

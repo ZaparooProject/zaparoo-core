@@ -20,9 +20,23 @@
 package platforms
 
 import (
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/rs/zerolog/log"
 )
+
+const powerStatusReadTimeout = 2 * time.Second
+
+// powerReadSlot caps an uncooperative synchronous reader at one in-flight
+// goroutine. Later callers still time out instead of starting more blocked
+// reads.
+var powerReadSlot = make(chan struct{}, 1)
+
+type powerReadResult struct {
+	err    error
+	status power.Status
+}
 
 // PowerStatusProvider is optionally implemented by platforms whose power state
 // cannot be read the ordinary way. Handheld hardware with an out-of-tree
@@ -39,12 +53,24 @@ type PowerStatusProvider interface {
 // caller has to interpret: whether the battery is unreadable or the call
 // itself broke, what the caller can do about it is the same.
 func PowerStatus(pl Platform) power.Status {
-	read := power.Read
+	return resolvePowerStatus(pl, power.Read, powerStatusReadTimeout)
+}
+
+func resolvePowerStatus(
+	pl Platform,
+	fallback func() (power.Status, error),
+	timeout time.Duration,
+) power.Status {
+	read := fallback
 	if provider, ok := pl.(PowerStatusProvider); ok {
 		read = provider.PowerStatus
 	}
 
-	status, err := read()
+	status, timedOut, err := readPowerStatus(read, timeout)
+	if timedOut {
+		log.Debug().Dur("timeout", timeout).Msg("timed out reading device power status")
+		return power.Status{Source: power.SourceUnknown}
+	}
 	if err != nil {
 		log.Debug().Err(err).Msg("could not read device power status")
 		return power.Status{Source: power.SourceUnknown}
@@ -53,4 +79,32 @@ func PowerStatus(pl Platform) power.Status {
 		return power.Status{Source: power.SourceUnknown}
 	}
 	return status
+}
+
+func readPowerStatus(
+	read func() (power.Status, error),
+	timeout time.Duration,
+) (power.Status, bool, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case powerReadSlot <- struct{}{}:
+	case <-timer.C:
+		return power.Status{}, true, nil
+	}
+
+	resultCh := make(chan powerReadResult, 1)
+	go func() {
+		status, err := read()
+		<-powerReadSlot
+		resultCh <- powerReadResult{status: status, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.status, false, result.err
+	case <-timer.C:
+		return power.Status{}, true, nil
+	}
 }
