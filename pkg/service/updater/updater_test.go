@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -92,6 +93,24 @@ func TestCheckAndNotify_ManagedInstallStillChecks(t *testing.T) {
 	}, Check, true)
 
 	assert.True(t, waitCalled)
+}
+
+func TestRolloutHeld_UsesSelectedReleaseWhenChannelsShareVersion(t *testing.T) {
+	t.Parallel()
+
+	stable := &otameta.Release{
+		TagName: "v2.10.0",
+		Channel: config.UpdateChannelStable,
+		Rollout: 0,
+	}
+	beta := &otameta.Release{
+		TagName: "v2.10.0",
+		Channel: config.UpdateChannelBeta,
+		Rollout: 100,
+	}
+
+	assert.True(t, rolloutHeld("device-1", stable))
+	assert.False(t, rolloutHeld("device-1", beta))
 }
 
 func TestInstallAdvice(t *testing.T) {

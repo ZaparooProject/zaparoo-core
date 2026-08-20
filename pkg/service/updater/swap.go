@@ -52,14 +52,10 @@ const (
 	// before deciding the update hung.
 	swapAttempts = 20
 
-	// swapUrgentAttempts is the budget for a move made while the target name
-	// holds nothing. Windows starts Core only from the install path, so a
-	// device interrupted during that gap has nothing left to launch and no
-	// watchdog to recover with. A move that runs before the gap opens keeps the
-	// long wait, because nothing is at risk while it waits; the one that runs
-	// inside it gets a second, because waiting there is not free.
-	swapUrgentAttempts = 4
-
+	// The same bounded budget applies inside the target-name gap. The incoming
+	// candidate is the file a scanner is most likely to hold, so shortening that
+	// move's budget makes a harmless transient lock force an undo. Five seconds
+	// still bounds the gap while giving the expected scanner case time to pass.
 	swapDelay = 250 * time.Millisecond
 )
 
@@ -129,13 +125,10 @@ func replaceRunningBinary(source, target string) error {
 	return replaceRunningBinaryWith(source, target, defaultSwapOps())
 }
 
-// Rename retries use the long swapAttempts budget until the target-name gap is
-// opened. Only the incoming rename that runs inside that gap uses
-// swapUrgentAttempts; restoring into an already empty target and undoing a
-// failed swap keep the long budget. On Windows, transientSwapError includes
-// access denied, sharing violations and lock violations. Removes are never
-// retried: a busy superseded slot is skipped, and cleanup is left to a later
-// sweep.
+// Renames use the bounded swapAttempts budget. On Windows,
+// transientSwapError includes access denied, sharing violations and lock
+// violations. Removes are never retried: a busy superseded slot is skipped,
+// and cleanup is left to a later sweep.
 func replaceRunningBinaryWith(source, target string, ops swapOps) error {
 	if !ops.vacate {
 		return retrySwap(ops, swapAttempts, func() error { return ops.replace(source, target) })
@@ -164,8 +157,9 @@ func replaceRunningBinaryWith(source, target string, ops swapOps) error {
 	}
 
 	// The target name holds nothing from here until one of the next two moves
-	// lands, which is why this one does not wait long before giving up on it.
-	if err := retrySwap(ops, swapUrgentAttempts, func() error { return ops.replace(source, target) }); err != nil {
+	// lands. Keep the wait bounded, but allow the full scanner retry budget: the
+	// freshly written source is the file most likely to be held transiently.
+	if err := retrySwap(ops, swapAttempts, func() error { return ops.replace(source, target) }); err != nil {
 		// Putting the outgoing binary back is the difference between an update
 		// that did not happen and a device with no executable to start, and it
 		// is the only thing left that can close the gap. So it keeps the long

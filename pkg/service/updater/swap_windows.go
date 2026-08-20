@@ -63,8 +63,7 @@ func hideFile(path string) error {
 // sharing or lock violation and both let go on their own. Access denied is
 // included because a scanner holding a handle without sharing delete reports it
 // that way too. A permission problem that will never pass is reported that way
-// as well and is waited out for nothing, which is why the move that leaves the
-// target name empty is the one with the short budget.
+// as well and is waited out for the same bounded budget.
 func transientSwapError(err error) bool {
 	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
 		errors.Is(err, windows.ERROR_LOCK_VIOLATION) ||

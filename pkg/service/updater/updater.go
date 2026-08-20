@@ -249,7 +249,7 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 	result.ReleaseNotes = release.ReleaseNotes
 
 	if result.UpdateAvailable {
-		result.RolloutHeld = rolloutHeld(s.source, opts.DeviceID, version)
+		result.RolloutHeld = rolloutHeld(opts.DeviceID, release)
 		noteGate(ctx, &opts, result, stateDir, version)
 		if deferral := peekDeferral(stateDir, version); deferral != nil {
 			result.DeferredReason = deferral.Reason
@@ -349,15 +349,11 @@ func currentBinaryPath() string {
 	return path
 }
 
-// rolloutHeld reports whether a staged rollout has not reached this device yet.
-// A release the manifest cannot be re-read for is treated as reached: the
-// rollout decides when to offer an update automatically, and failing closed
-// there would silently strand devices on a manifest quirk.
-func rolloutHeld(source *verifiedSource, deviceID, version string) bool {
-	release, err := source.releaseForVersion(version)
-	if err != nil {
-		log.Debug().Err(err).Str("version", version).
-			Msg("could not read the rollout for a release")
+// rolloutHeld reports whether the selected release's staged rollout has not
+// reached this device yet. Using the selected release matters when channels
+// contain semver-equal tags with different rollout percentages.
+func rolloutHeld(deviceID string, release *otameta.Release) bool {
+	if release == nil {
 		return false
 	}
 	return !RolloutEligible(deviceID, release.TagName, release.Rollout)

@@ -622,7 +622,15 @@ func TestRunStartupWatchdog_AbortsInterruptedInstallWithoutRestoringDB(t *testin
 
 	f := newInstallFixture(t)
 	dir := stateDirFor(f.dataDir)
-	require.NoError(t, saveMarker(dir, f.marker(markerInstalling)))
+	// The swap never took the target name: the outgoing binary is still in
+	// place, so abort must not replace it from the backup.
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(f.targetPath, []byte("old binary"), 0o755))
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(f.backupPath, []byte("backup binary"), 0o755))
+	m := f.marker(markerInstalling)
+	m.BinaryReplaced = false
+	require.NoError(t, saveMarker(dir, m))
 
 	require.NoError(t, RunStartupWatchdog(t.Context(), f.dataDir, testPrevVersion))
 

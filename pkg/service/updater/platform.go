@@ -36,16 +36,28 @@ var ErrPlatformUnsupported = errors.New("this platform cannot install updates in
 //
 // Windows will not let a running executable be overwritten, so the swap moves
 // the outgoing binary to a sibling name and gives the incoming one the name it
-// vacated. Both halves are renames in the directory holding the executable, so
-// the install needs write access to that directory rather than to the file. An
-// installation under Program Files does not have it unless Core was started
-// elevated, and Core refuses to run elevated.
+// vacated. The install needs permission both to create siblings in the install
+// directory and to rename the target itself. A target-specific ACL can deny the
+// latter even when the directory probe succeeds.
 //
-// The check is a probe rather than a permission calculation because on Windows
-// the effective permission is the only true one, and it runs here rather than
-// at the swap so a user learns their install has to go through the installer
-// before a release has been downloaded and their database snapshotted.
+// The checks are probes rather than permission calculations because on Windows
+// the effective permissions are the only true answer, and they run here rather
+// than at the swap so a user learns their install has to go through the
+// installer before a release has been downloaded and their database snapshotted.
 func preflightPlatform(fs afero.Fs, goos, targetPath string) error {
+	checkTarget := func(string) error { return nil }
+	if _, ok := fs.(*afero.OsFs); ok {
+		checkTarget = checkTargetRenameAllowed
+	}
+	return preflightPlatformWith(fs, goos, targetPath, checkTarget)
+}
+
+func preflightPlatformWith(
+	fs afero.Fs,
+	goos string,
+	targetPath string,
+	checkTargetRename func(string) error,
+) error {
 	// Everywhere else replaces the running binary with a single rename, which
 	// needs nothing the install did not already need.
 	if goos != "windows" || targetPath == "" {
@@ -60,13 +72,20 @@ func preflightPlatform(fs afero.Fs, goos, targetPath string) error {
 			ErrPlatformUnsupported, dir,
 		)
 	}
+	if err := checkTargetRename(targetPath); err != nil {
+		log.Warn().Err(err).Str("target", targetPath).
+			Msg("cannot update in place because the executable cannot be renamed")
+		return fmt.Errorf(
+			"%w: Zaparoo cannot rename %s, so install this release with the Windows installer instead",
+			ErrPlatformUnsupported, targetPath,
+		)
+	}
 	return nil
 }
 
-// checkInstallDirWritable reports whether this process can put a new file in
-// dir. Creating one is the only honest answer: the permission that decides the
-// swap is the effective one, which no amount of reading the directory's own
-// mode describes.
+// checkInstallDirWritable reports whether this process can create and remove a
+// sibling in dir. Probing the effective permission is more reliable than
+// interpreting directory mode bits; target rename access is checked separately.
 func checkInstallDirWritable(fs afero.Fs, dir string) error {
 	probe, err := afero.TempFile(fs, dir, ".zaparoo-update-probe-*")
 	if err != nil {

@@ -78,6 +78,25 @@ func TestPreflightPlatform_AllowsAWritableWindowsInstall(t *testing.T) {
 	assert.NoError(t, preflightPlatform(fs, "windows", target))
 }
 
+func TestPreflightPlatform_RefusesWindowsTargetWithoutRenameAccess(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("apps", "zaparoo")
+	require.NoError(t, fs.MkdirAll(dir, 0o755))
+	target := filepath.Join(dir, "Zaparoo.exe")
+	renameErr := errors.New("target ACL denies delete")
+
+	err := preflightPlatformWith(fs, "windows", target, func(got string) error {
+		assert.Equal(t, target, got)
+		return renameErr
+	})
+
+	require.ErrorIs(t, err, ErrPlatformUnsupported)
+	assert.Contains(t, err.Error(), target)
+	assert.Contains(t, err.Error(), "Windows installer")
+}
+
 // Apply resolves the binary itself and reports that failure with its own
 // message. Refusing here would tell the user their platform is unsupported when
 // the real problem is that this build could not find its own executable.

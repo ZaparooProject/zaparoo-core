@@ -252,15 +252,21 @@ func TestReplaceRunningBinary_ReportsBothFailuresWhenTheOutgoingBinaryCannotGoBa
 	assert.Equal(t, f.superseded, concealed, "the recovery sidecar must not look like a second executable")
 }
 
-// A scanner holding a binary for a moment is not a failed update.
+// A scanner holding the freshly written candidate for more than the old
+// one-second gap budget is not a failed update.
 func TestReplaceRunningBinary_WaitsOutAFileAnotherProcessIsHolding(t *testing.T) {
 	t.Parallel()
 
 	f := newSwapFixture(t)
-	require.NoError(t, replaceRunningBinaryWith(f.source, f.target, f.ops(true, failing(f.source, errBusy, 3))))
+	heldAttempts := 6
+	require.NoError(t, replaceRunningBinaryWith(
+		f.source,
+		f.target,
+		f.ops(true, failing(f.source, errBusy, heldAttempts)),
+	))
 
 	assert.Equal(t, "new binary", f.contents(f.target))
-	assert.Equal(t, 3, f.slept, "each retry has to wait before trying again")
+	assert.Equal(t, heldAttempts, f.slept, "each retry has to wait before trying again")
 }
 
 func TestReplaceRunningBinary_GivesUpOnAFileThatIsNeverReleased(t *testing.T) {
@@ -354,17 +360,15 @@ func TestReplaceRunningBinary_ReportsWhenNoNameIsFreeToMoveTheOutgoingBinaryTo(t
 	assert.Equal(t, "new binary", f.contents(f.source))
 }
 
-// The gap where the target name holds nothing is the one place a device can be
-// interrupted and have nothing left to start, so waiting there is not free.
-func TestReplaceRunningBinary_WaitsLessWhileTheTargetNameIsEmpty(t *testing.T) {
+// The target-name gap is bounded even though it uses the full scanner budget.
+func TestReplaceRunningBinary_BoundsRetriesWhileTheTargetNameIsEmpty(t *testing.T) {
 	t.Parallel()
 
 	f := newSwapFixture(t)
 	err := replaceRunningBinaryWith(f.source, f.target, f.ops(true, failing(f.source, errBusy, -1)))
 
 	require.ErrorIs(t, err, errBusy)
-	assert.Equal(t, swapUrgentAttempts-1, f.slept,
-		"the move that opens the gap must not spend the long budget inside it")
+	assert.Equal(t, swapAttempts-1, f.slept)
 	assert.Equal(t, "old binary", f.contents(f.target))
 }
 
@@ -374,7 +378,7 @@ func TestReplaceRunningBinary_WaitsOutAHeldFileToPutTheOutgoingBinaryBack(t *tes
 	t.Parallel()
 
 	f := newSwapFixture(t)
-	undoHeld := swapUrgentAttempts + 2
+	undoHeld := 6
 	err := replaceRunningBinaryWith(f.source, f.target, f.ops(true, func(source string) error {
 		switch source {
 		case f.source:
