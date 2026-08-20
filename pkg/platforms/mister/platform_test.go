@@ -461,6 +461,23 @@ func TestReturnToMenu_StopsTrackedConsoleProcess(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "tracked console process survived ReturnToMenu")
 }
 
+func processExited(pid int) bool {
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return true
+	}
+
+	const procRoot = "/proc"
+	stat, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat")) //nolint:gosec // Test-owned PID.
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	stateAt := strings.LastIndex(string(stat), ") ")
+	return stateAt >= 0 && len(stat) > stateAt+2 && stat[stateAt+2] == 'Z'
+}
+
 func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
 	pidPath := filepath.Join(t.TempDir(), "child.pid")
 	cmd := exec.CommandContext( //nolint:gosec // Fixed test shell; only temp path is variable.
@@ -496,8 +513,11 @@ func TestStopActiveLauncher_KillsProcessGroupBeforeCleanup(t *testing.T) {
 		t.Fatal("console cleanup did not complete before stop returned")
 	}
 
+	// A killed orphan may remain as a zombie until this environment's PID 1
+	// reaps it. Zombies cannot execute; requiring ESRCH alone makes cleanup
+	// correctness depend on the host's reaper.
 	require.Eventually(t, func() bool {
-		return errors.Is(syscall.Kill(childPID, 0), syscall.ESRCH)
+		return processExited(childPID)
 	}, time.Second, 10*time.Millisecond, "descendant process survived console cleanup")
 }
 
