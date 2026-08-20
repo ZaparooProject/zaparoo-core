@@ -566,6 +566,24 @@ func TestAddPayloadToArchives_DuplicateArchivePathFails(t *testing.T) {
 	}
 }
 
+func TestAddPayloadToArchives_InvalidDefinitionFails(t *testing.T) {
+	t.Parallel()
+
+	files := []updatepayload.File{{
+		ArchivePath: "scripts/helper.sh", InstallPath: "/outside/helper.sh", Mode: 0o755,
+	}}
+	var zipBuf bytes.Buffer
+	if err := addPayloadToZip(zip.NewWriter(&zipBuf), files); err == nil ||
+		!strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("addPayloadToZip invalid definition error = %v", err)
+	}
+	var tarBuf bytes.Buffer
+	if err := addPayloadToTar(tar.NewWriter(&tarBuf), files); err == nil ||
+		!strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("addPayloadToTar invalid definition error = %v", err)
+	}
+}
+
 func TestCopyFile(t *testing.T) {
 	t.Parallel()
 

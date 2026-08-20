@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	backupcoordinator "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/backup/coordinator"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -46,6 +47,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type updatePayloadPlatform struct {
+	platforms.Platform
+	payload []updatepayload.File
+}
+
+func (p updatePayloadPlatform) UpdatePayload() []updatepayload.File {
+	return p.payload
+}
 
 func TestHandleUpdateCheck_DevelopmentVersion(t *testing.T) {
 	devVersions := []string{"DEVELOPMENT", "abc1234-dev"}
@@ -125,12 +135,16 @@ func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 
 	cfg := &config.Instance{}
 	cfg.SetUpdateChannel(config.UpdateChannelBeta)
+	payload := []updatepayload.File{{ArchivePath: "scripts/helper.sh"}}
 
 	env := requests.RequestEnv{
-		Context:  t.Context(),
-		Platform: mockPlatform,
-		Config:   cfg,
-		IsLocal:  true,
+		Context: t.Context(),
+		Platform: updatePayloadPlatform{
+			Platform: mockPlatform,
+			payload:  payload,
+		},
+		Config:  cfg,
+		IsLocal: true,
 	}
 
 	var received updater.Options
@@ -149,6 +163,7 @@ func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 	// An empty PlatformID selects no archive at all, so it has to arrive too.
 	assert.Equal(t, "mock-platform", received.PlatformID)
 	assert.Equal(t, dataDir, received.DataDir)
+	assert.Equal(t, payload, received.Payload)
 }
 
 func TestHandleUpdateCheck_NoUpdateAvailable(t *testing.T) {

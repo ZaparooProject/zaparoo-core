@@ -335,6 +335,30 @@ func TestRunStartupWatchdog_ResumesInterruptedRollback(t *testing.T) {
 	assert.NoFileExists(t, markerPath(dir))
 }
 
+func TestRunStartupWatchdog_ResumesInterruptedPayloadRestore(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	assetDir := t.TempDir()
+	assetPath := filepath.Join(assetDir, "menu.png")
+	assetBackup := filepath.Join(assetDir, ".menu.png.zap-old")
+	require.NoError(t, os.WriteFile(assetPath, []byte("new asset"), 0o600))
+	require.NoError(t, os.WriteFile(assetBackup, []byte("old asset"), 0o600))
+
+	m := f.marker(markerRollingBack)
+	m.RestoringPath = assetPath
+	m.PayloadBackups = []payloadBackup{{TargetPath: assetPath, BackupPath: assetBackup}}
+	require.NoError(t, saveMarker(dir, m))
+	require.NoError(t, replaceFile(assetBackup, assetPath))
+
+	err := RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion)
+	require.ErrorIs(t, err, ErrRolledBack)
+	assert.Equal(t, "old asset", readFileString(t, assetPath))
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, markerPath(dir))
+}
+
 // The same missing backup on a rollback that has not started yet is a real
 // failure: reporting success would strand the device on the broken version.
 func TestRunStartupWatchdog_MissingBinaryBackupBlocksRollback(t *testing.T) {

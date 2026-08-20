@@ -268,6 +268,8 @@ jobs:
         with:
           sparse-checkout: |
             scripts/
+            pkg/platforms/batocera/payload.go
+            pkg/platforms/updatepayload/
             go.mod
           sparse-checkout-cone-mode: false
       - name: Set up Go

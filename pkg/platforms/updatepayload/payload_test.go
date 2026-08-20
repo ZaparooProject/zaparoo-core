@@ -75,6 +75,45 @@ func TestMatchArchiveFile(t *testing.T) {
 	assert.False(t, InvalidArchiveMember(files, "scripts/unconfigured.sh"))
 }
 
+func TestMatchArchiveFileRejectsInvalidDefinition(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		file File
+	}{
+		{
+			name: "archive path",
+			file: File{ArchivePath: "scripts/../helper.sh", InstallPath: "helper.sh", Mode: 0o755},
+		},
+		{
+			name: "install path",
+			file: File{ArchivePath: "scripts/helper.sh", InstallPath: "/helper.sh", Mode: 0o755},
+		},
+		{
+			name: "mode",
+			file: File{ArchivePath: "scripts/helper.sh", InstallPath: "helper.sh", Mode: 0o600},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, ok := MatchArchiveFile([]File{tt.file}, tt.file.ArchivePath)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestInvalidArchiveMemberChecksEveryConfiguredRoot(t *testing.T) {
+	t.Parallel()
+
+	files := []File{
+		{ArchivePath: "scripts/helper.sh"},
+		{ArchivePath: "assets/menu.png"},
+	}
+	assert.True(t, InvalidArchiveMember(files, "assets/../menu.png"))
+	assert.False(t, InvalidArchiveMember(files, "docs/../readme.md"))
+}
+
 func TestResolveInstallPath(t *testing.T) {
 	t.Parallel()
 

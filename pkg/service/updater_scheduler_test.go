@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	stateservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -34,6 +35,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type schedulerPayloadPlatform struct {
+	platforms.Platform
+	payload []updatepayload.File
+}
+
+func (p schedulerPayloadPlatform) UpdatePayload() []updatepayload.File {
+	return p.payload
+}
 
 func TestUpdaterIntervalJitter(t *testing.T) {
 	t.Parallel()
@@ -65,6 +75,24 @@ func TestIntervalStateBackoffAndReset(t *testing.T) {
 	assert.False(t, state.due(now.Add(time.Hour), updaterCheckInterval))
 	assert.True(t, state.due(now.Add(updaterCheckInterval), updaterCheckInterval))
 	assert.Equal(t, updaterFailureInitialBackoff, state.backoff)
+}
+
+func TestServiceUpdaterOptionsIncludesPlatformPayload(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg, err := config.NewConfig(root, config.BaseDefaults)
+	require.NoError(t, err)
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: root})
+	mockPlatform.On("ManagedByPackageManager").Return(false)
+	payload := []updatepayload.File{{ArchivePath: "scripts/helper.sh"}}
+	pl := schedulerPayloadPlatform{Platform: mockPlatform, payload: payload}
+
+	opts := serviceUpdaterOptions(cfg, pl, nil, updater.ModeAuto)
+	assert.Equal(t, payload, opts.Payload)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestUpdaterSchedulerEagerCheckHonorsSuccessInterval(t *testing.T) {
@@ -116,6 +144,51 @@ func TestUpdaterSchedulerEagerCheckHonorsSuccessInterval(t *testing.T) {
 	pl.AssertExpectations(t)
 }
 
+func TestUpdaterSchedulerTryInstallSchedulesEligibleUpdate(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.NewConfig(root, config.BaseDefaults)
+	require.NoError(t, err)
+	cfg.SetUpdateCheck(true)
+	cfg.SetUpdateInstall(true)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("mock-platform")
+	pl.On("Settings").Return(platforms.Settings{DataDir: root})
+	pl.On("ManagedByPackageManager").Return(false)
+	st, _ := stateservice.NewState(pl, "test-boot")
+	t.Cleanup(st.StopService)
+	clock := clockwork.NewFakeClockAt(time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC))
+	idleSched := idle.NewWithClock(clock)
+	scheduler := newUpdaterScheduler(cfg, pl, nil, st, idleSched)
+	scheduler.clock = clock
+	fresh := &updater.Result{
+		CurrentVersion: "2.9.0", LatestVersion: "2.10.0",
+		UpdateAvailable: true, Eligibility: updater.EligibilityEligible,
+	}
+	scheduler.pending.Store(fresh)
+	scheduler.check = func(context.Context, updater.Options) (*updater.Result, error) {
+		return fresh, nil
+	}
+	applied := make(chan struct{}, 1)
+	scheduler.apply = func(context.Context, updater.Options) (string, error) {
+		applied <- struct{}{}
+		return "2.10.0", nil
+	}
+
+	scheduler.tryInstall(t.Context())
+	require.NoError(t, clock.BlockUntilContext(t.Context(), 1))
+	clock.Advance(updaterInstallIdleQuietWindow)
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatal("eligible automatic update was not installed")
+	}
+	require.Eventually(t, func() bool { return !scheduler.installScheduled.Load() }, time.Second, time.Millisecond)
+	assert.True(t, st.RestartRequested())
+	idleSched.Wait()
+	pl.AssertExpectations(t)
+}
+
 func TestUpdaterSchedulerRunInstallRechecksAndRestarts(t *testing.T) {
 	root := t.TempDir()
 	cfg, err := config.NewConfig(root, config.BaseDefaults)
@@ -152,6 +225,44 @@ func TestUpdaterSchedulerRunInstallRechecksAndRestarts(t *testing.T) {
 
 	assert.True(t, applied)
 	assert.True(t, st.RestartRequested())
+	pl.AssertExpectations(t)
+}
+
+func TestUpdaterSchedulerRunInstallStopsWhenRecheckIsNoLongerEligible(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.NewConfig(root, config.BaseDefaults)
+	require.NoError(t, err)
+	cfg.SetUpdateCheck(true)
+	cfg.SetUpdateInstall(true)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("ID").Return("mock-platform")
+	pl.On("Settings").Return(platforms.Settings{DataDir: root})
+	pl.On("ManagedByPackageManager").Return(false)
+	st, _ := stateservice.NewState(pl, "test-boot")
+	t.Cleanup(st.StopService)
+	scheduler := newUpdaterScheduler(cfg, pl, nil, st, idle.New())
+	stale := &updater.Result{
+		CurrentVersion: "2.9.0", LatestVersion: "2.10.0",
+		UpdateAvailable: true, Eligibility: updater.EligibilityEligible,
+	}
+	fresh := &updater.Result{
+		CurrentVersion: "2.10.0", LatestVersion: "2.10.0",
+		Eligibility: updater.EligibilityEligible,
+	}
+	scheduler.pending.Store(stale)
+	scheduler.check = func(context.Context, updater.Options) (*updater.Result, error) {
+		return fresh, nil
+	}
+	scheduler.apply = func(context.Context, updater.Options) (string, error) {
+		t.Fatal("update was applied after recheck reported no update")
+		return "", nil
+	}
+
+	scheduler.runInstall(t.Context())
+
+	assert.Same(t, fresh, scheduler.pending.Load())
+	assert.False(t, st.RestartRequested())
 	pl.AssertExpectations(t)
 }
 
