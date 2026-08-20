@@ -358,3 +358,32 @@ func TestUIChanged_Payload(t *testing.T) {
 	require.Len(t, received.Events, 1)
 	assert.Equal(t, "event-1", received.Events[0].ID)
 }
+
+func TestUpdateState_Payload(t *testing.T) {
+	t.Parallel()
+
+	ns := make(chan models.Notification, 1)
+
+	UpdateState(ns, models.UpdateStateNotification{
+		Stage:           "downloading",
+		Version:         "2.10.0",
+		Trigger:         "manual",
+		BytesDownloaded: 1024,
+		BytesTotal:      8192,
+	})
+
+	notification := <-ns
+	assert.Equal(t, models.NotificationUpdateState, notification.Method)
+	require.NotNil(t, notification.Params)
+
+	var payload models.UpdateStateNotification
+	require.NoError(t, json.Unmarshal(notification.Params, &payload))
+	assert.Equal(t, "downloading", payload.Stage)
+	assert.Equal(t, "2.10.0", payload.Version)
+	assert.Equal(t, "manual", payload.Trigger)
+	assert.Equal(t, int64(1024), payload.BytesDownloaded)
+	assert.Equal(t, int64(8192), payload.BytesTotal)
+	// An update that is going fine must not carry an empty error field a
+	// client could read as a failure.
+	assert.NotContains(t, string(notification.Params), `"error"`)
+}

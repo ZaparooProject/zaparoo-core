@@ -18,7 +18,29 @@ permissions:
   packages: read
   security-events: write
 
+env:
+  # Pin to avoid current latest's nilness recover panic: dominikh/go-tools#1725.
+  GOLANGCI_LINT_VERSION: v2.12.2
+
 jobs:
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
   ci:
     name: CI
     timeout-minutes: 15
@@ -106,7 +128,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
       - name: Install govulncheck
@@ -296,8 +318,9 @@ jobs:
             -e CXX="${TARGET_CXX}" \
             -e CGO_CFLAGS="${TARGET_CGO_CFLAGS}" \
             -e CGO_LDFLAGS="${TARGET_CGO_LDFLAGS}" \
+            -e GOLANGCI_LINT_VERSION \
             ${{ env.ZIGCC_IMAGE }} \
-            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin "$GOLANGCI_LINT_VERSION" 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
 
   native-pr-tests:
     name: Native PR Tests
@@ -417,11 +440,15 @@ jobs:
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [ci, cross-lint, native-pr-tests]
+    needs: [actionlint, ci, cross-lint, native-pr-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
         run: |
+          if [ "${{ needs.actionlint.result }}" != "success" ]; then
+            echo "CI failed: actionlint=${{ needs.actionlint.result }}"
+            exit 1
+          fi
           if [ "${{ needs.ci.result }}" != "success" ]; then
             echo "CI failed: ci=${{ needs.ci.result }}"
             exit 1

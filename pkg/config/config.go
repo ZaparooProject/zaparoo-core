@@ -92,8 +92,7 @@ func PreserveRestoreOverrides(data []byte, deviceID string, encryption bool) ([]
 type Values struct {
 	Groovy         Groovy    `toml:"groovy,omitempty"`
 	Input          Input     `toml:"input,omitempty"`
-	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
-	UpdateChannel  *string   `toml:"update_channel,omitempty"`
+	Updates        Updates   `toml:"updates,omitempty"`
 	Audio          Audio     `toml:"audio"`
 	Backup         Backup    `toml:"backup,omitempty"`
 	Service        Service   `toml:"service,omitempty"`
@@ -109,6 +108,14 @@ type Values struct {
 	ConfigSchema   int       `toml:"config_schema"`
 	DebugLogging   bool      `toml:"debug_logging"`
 	ErrorReporting bool      `toml:"error_reporting"`
+}
+
+// Updates controls how the device handles new releases. Every field is a
+// pointer so an unset key keeps its default rather than reading as false.
+type Updates struct {
+	Channel *string `toml:"channel,omitempty"`
+	Check   *bool   `toml:"check,omitempty"`
+	Install *bool   `toml:"install,omitempty"`
 }
 
 type Audio struct {
@@ -173,6 +180,7 @@ type Instance struct {
 	mappingsExternal        []MappingsEntry
 	vals                    Values
 	defaults                Values
+	updateMu                syncutil.Mutex
 	mu                      syncutil.RWMutex
 }
 
@@ -184,6 +192,12 @@ func (c *Instance) getFs() afero.Fs {
 		return c.fs
 	}
 	return afero.NewOsFs()
+}
+
+// AcquireUpdateLock serializes one config load-modify-save transaction.
+func (c *Instance) AcquireUpdateLock() func() {
+	c.updateMu.Lock()
+	return c.updateMu.Unlock
 }
 
 var (
@@ -234,6 +248,7 @@ func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance,
 
 	cfg := Instance{
 		fs:       fs,
+		updateMu: syncutil.Mutex{},
 		mu:       syncutil.RWMutex{},
 		appPath:  os.Getenv(AppEnv),
 		cfgPath:  cfgPath,
@@ -971,24 +986,42 @@ func (c *Instance) SetErrorReporting(enabled bool) {
 	c.vals.ErrorReporting = enabled
 }
 
-// AutoUpdate returns whether automatic update checking is enabled.
-// The defaultEnabled parameter allows platforms to specify their own default
-// (e.g. package-managed installs default to false).
-// An explicit user setting always takes precedence.
-func (c *Instance) AutoUpdate(defaultEnabled bool) bool {
+// UpdateCheck returns whether the device looks for new releases.
+//
+// It is on unless it has been turned off, on every platform. A check reads a
+// signed metadata file and sends nothing that identifies the device, so there
+// is no reason for a package-managed install to skip it: knowing a newer
+// release exists is useful even when the package manager is the thing that
+// installs it.
+func (c *Instance) UpdateCheck() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.AutoUpdate == nil {
-		return defaultEnabled
-	}
-	return *c.vals.AutoUpdate
+	return c.vals.Updates.Check == nil || *c.vals.Updates.Check
 }
 
-// SetAutoUpdate sets whether automatic update checking is enabled.
-func (c *Instance) SetAutoUpdate(enabled bool) {
+// SetUpdateCheck sets whether the device looks for new releases.
+func (c *Instance) SetUpdateCheck(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.AutoUpdate = &enabled
+	c.vals.Updates.Check = &enabled
+}
+
+// UpdateInstall returns whether the device may download and install updates on
+// its own. It is off unless it has been turned on, and it is off whenever
+// checking is off: a device that is not allowed to look for updates cannot be
+// installing them.
+func (c *Instance) UpdateInstall() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	checking := c.vals.Updates.Check == nil || *c.vals.Updates.Check
+	return checking && c.vals.Updates.Install != nil && *c.vals.Updates.Install
+}
+
+// SetUpdateInstall sets whether the device may install updates on its own.
+func (c *Instance) SetUpdateInstall(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Updates.Install = &enabled
 }
 
 // UpdateChannel returns the configured update channel.
@@ -996,15 +1029,15 @@ func (c *Instance) SetAutoUpdate(enabled bool) {
 func (c *Instance) UpdateChannel() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.UpdateChannel == nil {
+	if c.vals.Updates.Channel == nil {
 		return UpdateChannelStable
 	}
-	return *c.vals.UpdateChannel
+	return *c.vals.Updates.Channel
 }
 
 // SetUpdateChannel sets the update channel. Valid values are "stable" and "beta".
 func (c *Instance) SetUpdateChannel(channel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.UpdateChannel = &channel
+	c.vals.Updates.Channel = &channel
 }

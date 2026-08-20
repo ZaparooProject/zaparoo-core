@@ -123,6 +123,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	if params.Options == nil {
 		params.Options = &LaunchOptions{}
 	}
+	publishActiveMedia := params.SetActiveMedia
+	if params.Options.ActiveMediaPublisher != nil {
+		publishActiveMedia = params.Options.ActiveMediaPublisher
+	}
 	if params.Options.Action == "" {
 		params.Options.Action = action
 	}
@@ -269,7 +273,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		activeMedia.SystemID, activeMedia.SystemName, activeMedia.Path, activeMedia.Name, activeMedia.LauncherID,
 	)
 
-	params.SetActiveMedia(activeMedia)
+	publishActiveMedia(activeMedia)
 
 	return nil
 }

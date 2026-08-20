@@ -167,3 +167,10 @@ func AuthLinkStatus(ns chan<- models.Notification, payload *models.AuthLinkStatu
 func BackupState(ns chan<- models.Notification, payload models.BackupStateNotification) {
 	sendNotification(ns, models.NotificationBackupState, payload)
 }
+
+// UpdateState reports how far an update being applied has got.
+//
+//nolint:gocritic // notification payload is copied before async send
+func UpdateState(ns chan<- models.Notification, payload models.UpdateStateNotification) {
+	sendNotification(ns, models.NotificationUpdateState, payload)
+}

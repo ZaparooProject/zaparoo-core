@@ -149,6 +149,29 @@ func TestReaderWriteActiveTracksOverlappingWrites(t *testing.T) {
 	assert.False(t, state.ReaderWriteActive("reader-1"))
 }
 
+// The updater asks whether the device is mid-write at all, and writes are
+// recorded against the reader doing them, so an answer that only covers one
+// reader ID is no answer.
+func TestAnyReaderWriteActiveCoversEveryReader(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	assert.False(t, state.AnyReaderWriteActive())
+
+	state.SetReaderWriteActive(true, "reader-1")
+	assert.True(t, state.AnyReaderWriteActive())
+	// The empty ID is the bucket no production writer records under.
+	assert.False(t, state.ReaderWriteActive())
+
+	state.SetReaderWriteActive(true, "reader-2")
+	state.SetReaderWriteActive(false, "reader-1")
+	assert.True(t, state.AnyReaderWriteActive())
+
+	state.SetReaderWriteActive(false, "reader-2")
+	assert.False(t, state.AnyReaderWriteActive())
+}
+
 func TestWrittenTagRemovalDuringWriteClearsCompletedToken(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
@@ -408,4 +431,47 @@ func TestBackupCoordinatorReleasePublishesFinishedNotification(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected backup.state finished notification")
 	}
+}
+
+// TestLockOrder_RestoreThenLaunchThenPublish walks every path that takes more
+// than one of the three media gates. Built with -tags=deadlock, go-deadlock
+// records the order each path takes them in and panics on the first path that
+// disagrees, so exercising them once each is enough to catch an inversion.
+func TestLockOrder_RestoreThenLaunchThenPublish(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, ns := NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(state.StopService)
+	// Publishing media notifies, and nothing here reads those.
+	t.Cleanup(func() {
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+
+	// A launch takes restore access and then the launch gate, and its
+	// publication capability takes the publish gate under those holds.
+	launchAccess, err := state.AcquireMediaLaunch()
+	require.NoError(t, err)
+	launchAccess.SetActiveMedia(&models.ActiveMedia{SystemID: "test", Name: "launch"})
+	launchAccess.Release()
+	state.SetActiveMedia(nil)
+
+	// A publication from outside a launch takes restore access and then the
+	// publish gate.
+	state.SetActiveMedia(&models.ActiveMedia{SystemID: "test", Name: "test"})
+	state.SetActiveMedia(nil)
+
+	// The updater takes the launch gate and then the publish gate, under the
+	// restore access its caller is already holding.
+	releaseRestore, err := state.TryAcquireRestoreAccess()
+	require.NoError(t, err)
+	releaseGate, err := state.AcquireUpdateMediaGate(t.Context())
+	require.NoError(t, err)
+	releaseGate()
+	releaseRestore()
 }

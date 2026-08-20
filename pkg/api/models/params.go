@@ -184,6 +184,8 @@ type UpdateSettingsParams struct {
 	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
 	ProfilesRequireForLaunch  *bool               `json:"profilesRequireForLaunch"`
 	ProfilesSwapData          *bool               `json:"profilesSwapData"`
+	UpdateCheck               *bool               `json:"updateCheck"`
+	UpdateInstall             *bool               `json:"updateInstall"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -379,4 +381,11 @@ type InputGamepadParams struct {
 type MediaTitleParseParams struct {
 	SystemID string `json:"systemId" validate:"required,min=1"`
 	Path     string `json:"path" validate:"required,min=1"`
+}
+
+// UpdateApplyParams are the optional arguments to update.apply. Force lets a
+// person go ahead while something is playing that a restart will close; it does
+// not get past anything that would risk their data.
+type UpdateApplyParams struct {
+	Force bool `json:"force"`
 }

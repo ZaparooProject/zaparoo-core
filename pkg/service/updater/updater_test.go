@@ -25,12 +25,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -78,25 +83,56 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 
 func alwaysOnline(_ context.Context, _ int) bool { return true }
 
-func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
+// A package manager owning the install is a reason not to install, not a
+// reason not to look. Someone whose package manager is lagging behind has no
+// other way to find out.
+func TestCheckAndNotify_ManagedInstallStillChecks(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{} // AutoUpdate is nil
+	cfg := &config.Instance{} // Updates.Check is nil
 
 	waitCalled := false
 	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
-		return true
+		return false
 	}, Check, true)
 
-	assert.False(t, waitCalled)
+	assert.True(t, waitCalled)
+}
+
+func TestInstallAdvice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		platformID string
+		want       string
+		managed    bool
+	}{
+		{platformID: platformids.Mister, managed: false, want: "Use the App or TUI to update."},
+		{platformID: platformids.Mister, managed: true, want: "Run update_all to install it."},
+		{
+			platformID: platformids.Batocera, managed: true,
+			want: "Install it through the Batocera package manager.",
+		},
+		{
+			platformID: platformids.Linux, managed: true,
+			want: "Your package manager installs updates on this device.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.platformID+"/"+strconv.FormatBool(tt.managed), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, installAdvice(tt.platformID, tt.managed))
+		})
+	}
 }
 
 func TestCheckAndNotify_DisabledConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(false)
+	cfg.SetUpdateCheck(false)
 
 	waitCalled := false
 	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
@@ -113,7 +149,7 @@ func TestCheckAndNotify_DevelopmentVersion(t *testing.T) {
 	t.Cleanup(func() { config.AppVersion = original })
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
 	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, alwaysOnline, Check, false)
 }
@@ -122,7 +158,7 @@ func TestCheckAndNotify_NoInternet(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
 	CheckAndNotify(t.Context(), cfg, linuxOptions(), nil, func(_ context.Context, _ int) bool {
 		return false
@@ -133,7 +169,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
 	mockUserDB := helpers.NewMockUserDBI()
 	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
@@ -158,11 +194,41 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+// A package-managed device still gets told a release exists, so the message has
+// to point at the thing that actually installs it there.
+func TestCheckAndNotify_ManagedInstallBodyNamesThePackageManager(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetUpdateCheck(true)
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
+		return strings.Contains(msg.Body, "Run update_all to install it.")
+	})).Return(&database.InboxMessage{DBID: 1}, nil)
+
+	ns := make(chan models.Notification, 10)
+	inboxSvc := inbox.NewService(mockUserDB, ns)
+
+	checkFn := func(_ context.Context, _ Options) (*Result, error) {
+		return &Result{
+			CurrentVersion:  "2.9.0",
+			LatestVersion:   "2.10.0",
+			UpdateAvailable: true,
+		}, nil
+	}
+
+	opts := Options{PlatformID: platformids.Mister, Channel: config.UpdateChannelStable}
+	CheckAndNotify(t.Context(), cfg, opts, inboxSvc, alwaysOnline, checkFn, true)
+
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestCheckAndNotify_BetaChannel(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 	cfg.SetUpdateChannel(config.UpdateChannelBeta)
 
 	var receivedChannel string
@@ -186,7 +252,7 @@ func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
 	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return &Result{
@@ -204,7 +270,7 @@ func TestCheckAndNotify_CheckError(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateCheck(true)
 
 	checkFn := func(_ context.Context, _ Options) (*Result, error) {
 		return nil, errors.New("network timeout")
@@ -470,4 +536,134 @@ func testValidationChainRelease(serverURL string) *selfupdate.Release {
 			},
 		},
 	}
+}
+
+func TestClearDeferralForRelease(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		recordedVersion string
+		releaseVersion  string
+		wantDeferral    bool
+	}{
+		{
+			name:            "matching release keeps deferral",
+			recordedVersion: "v2.5.0",
+			releaseVersion:  "v2.5.0",
+			wantDeferral:    true,
+		},
+		{
+			name:            "different release clears deferral",
+			recordedVersion: "v2.5.0",
+			releaseVersion:  "v2.6.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := filepath.Join(t.TempDir(), "updater")
+			require.NoError(t, recordDeferral(dir, tt.recordedVersion, ReasonActiveMedia))
+			before := peekDeferralState(dir)
+			require.NotNil(t, before)
+
+			require.NoError(t, clearDeferralForRelease(dir, tt.releaseVersion))
+			after := peekDeferralState(dir)
+			if !tt.wantDeferral {
+				assert.Nil(t, after)
+				return
+			}
+			require.NotNil(t, after)
+			assert.Equal(t, before.Version, after.Version)
+			assert.Equal(t, before.Reason, after.Reason)
+			assert.Equal(t, before.Since, after.Since)
+		})
+	}
+}
+
+func TestNoteGate_NoGateConfigured(t *testing.T) {
+	t.Parallel()
+
+	result := &Result{}
+	noteGate(t.Context(), &Options{}, result, filepath.Join(t.TempDir(), "updater"), "v2.5.0")
+
+	assert.Empty(t, result.BlockedReason)
+	assert.Empty(t, result.BlockedMessage)
+}
+
+func TestNoteGate_NothingInTheWay(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	result := &Result{}
+	opts := &Options{Gate: &GateDeps{Power: externalPower}}
+	noteGate(t.Context(), opts, result, dir, "v2.5.0")
+
+	assert.Empty(t, result.BlockedReason)
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+}
+
+func TestNoteGate_SoftSignalStartsTheClock(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	result := &Result{}
+	opts := &Options{Gate: &GateDeps{
+		Power:       externalPower,
+		ActiveMedia: alwaysTrue,
+	}}
+	noteGate(t.Context(), opts, result, dir, "v2.5.0")
+
+	assert.Equal(t, ReasonActiveMedia, result.BlockedReason)
+	assert.NotEmpty(t, result.BlockedMessage)
+	assert.True(t, result.BlockedForceable, "a person may go ahead through their own game")
+
+	// Something that will pass on its own is what the automatic install's
+	// patience is measured against, so the check writes it down.
+	deferral := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, deferral)
+	assert.Equal(t, ReasonActiveMedia, deferral.Reason)
+}
+
+func TestNoteGate_HardSignalIsReportedButNotDeferred(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	result := &Result{}
+	opts := &Options{Gate: &GateDeps{
+		Power:          externalPower,
+		IndexingStatus: statusFn(mediadb.IndexingStatusRunning),
+	}}
+	noteGate(t.Context(), opts, result, dir, "v2.5.0")
+
+	assert.Equal(t, ReasonMediaIndexing, result.BlockedReason)
+	assert.False(t, result.BlockedForceable)
+	// Indexing never times out into being safe, so there is no clock to start.
+	assert.Nil(t, peekDeferral(dir, "v2.5.0"))
+}
+
+func TestNoteGate_ReportsWithoutTakingAnyGate(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	restoreTaken, mediaTaken := false, false
+	opts := &Options{Gate: &GateDeps{
+		Power: externalPower,
+		AcquireRestore: func() (func(), error) {
+			restoreTaken = true
+			return func() {}, nil
+		},
+		AcquireMediaGate: func(context.Context) (func(), error) {
+			mediaTaken = true
+			return func() {}, nil
+		},
+	}}
+	noteGate(t.Context(), opts, &Result{}, dir, "v2.5.0")
+
+	// A check only reports. Taking either gate would block backups and
+	// launches every time a client asked whether an update was available.
+	assert.False(t, restoreTaken)
+	assert.False(t, mediaTaken)
 }

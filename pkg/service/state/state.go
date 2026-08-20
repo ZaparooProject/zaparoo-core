@@ -91,7 +91,6 @@ type State struct {
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
-	mediaLaunchAccesses   int
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
@@ -435,6 +434,25 @@ func (s *State) ReaderWriteActive(readerIDs ...string) bool {
 	return writeState != nil && writeState.activeWrites > 0
 }
 
+// AnyReaderWriteActive reports whether any reader is part-way through writing
+// a token.
+//
+// ReaderWriteActive answers for one reader and defaults to the empty ID, which
+// no production caller records under: writes are tracked per reader by
+// Reader.ID(). A caller that wants to know whether the device is mid-write at
+// all — the updater, before it restarts the service — has to ask about every
+// reader, not about a reader that does not exist.
+func (s *State) AnyReaderWriteActive() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, writeState := range s.readerWrites {
+		if writeState != nil && writeState.activeWrites > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *State) MarkWrittenTagRemoved(readerIDs ...string) {
 	readerID := ""
 	if len(readerIDs) > 0 {
@@ -604,10 +622,10 @@ func (s *State) AcquireRestoreAccess() (func(), error) {
 	return s.restoreAccessAfterLock()
 }
 
-func (s *State) AcquireMediaLaunch() (func(), error) {
+func (s *State) AcquireMediaLaunch() (platforms.MediaLaunchAccess, error) {
 	releaseRestore, err := s.TryAcquireRestoreAccess()
 	if err != nil {
-		return nil, err
+		return platforms.MediaLaunchAccess{}, err
 	}
 
 	// Stop operations take the exclusive side of this gate. Holding the read
@@ -617,17 +635,32 @@ func (s *State) AcquireMediaLaunch() (func(), error) {
 	if err := s.ctx.Err(); err != nil {
 		s.mediaLaunchMu.RUnlock()
 		releaseRestore()
-		return nil, err
+		return platforms.MediaLaunchAccess{}, err
 	}
-	s.mu.Lock()
-	s.mediaLaunchAccesses++
-	s.mu.Unlock()
-	return func() {
-		s.mu.Lock()
-		s.mediaLaunchAccesses--
-		s.mu.Unlock()
-		s.mediaLaunchMu.RUnlock()
-		releaseRestore()
+
+	var accessMu syncutil.Mutex
+	held := true
+	return platforms.MediaLaunchAccess{
+		SetActiveMedia: func(media *models.ActiveMedia) {
+			accessMu.Lock()
+			if !held {
+				accessMu.Unlock()
+				s.SetActiveMedia(media)
+				return
+			}
+			s.publishActiveMedia(media, true)
+			accessMu.Unlock()
+		},
+		Release: func() {
+			accessMu.Lock()
+			defer accessMu.Unlock()
+			if !held {
+				return
+			}
+			held = false
+			s.mediaLaunchMu.RUnlock()
+			releaseRestore()
+		},
 	}, nil
 }
 
@@ -774,7 +807,33 @@ func (s *State) MarkActiveMediaReady(gen uint64) {
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
+	s.publishActiveMedia(media, false)
+}
+
+func (s *State) publishActiveMedia(media *models.ActiveMedia, restoreAccessHeld bool) {
 	if media != nil {
+		if err := s.ctx.Err(); err != nil {
+			log.Debug().Err(err).Msg("active media update rejected while service is stopping")
+			return
+		}
+
+		// Restore access comes first. The service takes these three locks in
+		// one order everywhere — restore, then launch, then publish — and
+		// taking them in any other order closes a cycle between this, a media
+		// launch, and the updater's gate.
+		if !restoreAccessHeld {
+			release, err := s.TryAcquireRestoreAccess()
+			if errors.Is(err, ErrRestoreInProgress) {
+				s.backupCoordinator.CancelRestore()
+				release, err = s.AcquireRestoreAccess()
+			}
+			if err != nil {
+				log.Warn().Err(err).Msg("active media update rejected during backup restore")
+				return
+			}
+			defer release()
+		}
+
 		// This gate is separate from mediaLaunchMu because normal launch code
 		// already holds that lock when it publishes ActiveMedia. External
 		// lifecycle trackers do not, so every publication takes this read side.
@@ -784,24 +843,6 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			log.Debug().Err(err).Msg("active media update rejected while service is stopping")
 			return
 		}
-
-		s.mu.RLock()
-		launchAccessHeld := s.mediaLaunchAccesses > 0
-		s.mu.RUnlock()
-		if launchAccessHeld {
-			s.updateActiveMediaState(media)
-			return
-		}
-		release, err := s.TryAcquireRestoreAccess()
-		if errors.Is(err, ErrRestoreInProgress) {
-			s.backupCoordinator.CancelRestore()
-			release, err = s.AcquireRestoreAccess()
-		}
-		if err != nil {
-			log.Warn().Err(err).Msg("active media update rejected during backup restore")
-			return
-		}
-		defer release()
 	}
 
 	s.updateActiveMediaState(media)

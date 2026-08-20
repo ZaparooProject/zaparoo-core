@@ -788,14 +788,20 @@ func getLaunchClosure(
 			return errors.New("file not allowed: " + target.path)
 		}
 
-		releaseLaunch := func() {}
+		launchAccess := platforms.MediaLaunchAccess{Release: func() {}}
 		if env.AcquireMediaLaunch != nil {
-			releaseLaunch, err = env.AcquireMediaLaunch()
+			launchAccess, err = env.AcquireMediaLaunch()
 			if err != nil {
 				return fmt.Errorf("acquiring media launch gate: %w", err)
 			}
 		}
-		defer releaseLaunch()
+		defer launchAccess.Release()
+		if launchAccess.SetActiveMedia != nil {
+			if opts == nil {
+				opts = &platforms.LaunchOptions{}
+			}
+			opts.ActiveMediaPublisher = launchAccess.SetActiveMedia
+		}
 		return pl.LaunchMedia(env.Cfg, target.path, launcher, env.Database, opts)
 	}
 }

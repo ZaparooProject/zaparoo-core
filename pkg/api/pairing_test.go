@@ -657,7 +657,7 @@ func TestHTTPHandlers_FullFlow(t *testing.T) {
 //
 // Not t.Parallel — mutates the global zerolog logger to capture output.
 func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logCapture
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
 	t.Cleanup(func() { log.Logger = originalLogger })
@@ -735,7 +735,7 @@ func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
 //
 // Not t.Parallel — mutates the global zerolog logger.
 func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logCapture
 	originalLogger := log.Logger
 	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
 	t.Cleanup(func() { log.Logger = originalLogger })

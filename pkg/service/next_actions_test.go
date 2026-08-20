@@ -160,7 +160,9 @@ func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
 			return l != nil && l.ID == "3do-dualram"
 		}),
 		svc.DB,
-		(*platforms.LaunchOptions)(nil)).Return(nil).Once()
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		})).Return(nil).Once()
 
 	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
 		LauncherID: "3do-dualram",
@@ -186,7 +188,9 @@ func TestRunTokenZapScript_PlaylistDoesNotConsumePendingOverride(t *testing.T) {
 	mockPlatform.On("LaunchMedia", cfg, path,
 		(*platforms.Launcher)(nil),
 		svc.DB,
-		(*platforms.LaunchOptions)(nil)).Return(nil).Once()
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		})).Return(nil).Once()
 	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
 		LauncherID: "3do-dualram",
 		Source:     tokens.Token{UID: "source"},

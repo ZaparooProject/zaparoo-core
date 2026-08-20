@@ -48,6 +48,17 @@ func requireCapability(env *requests.RequestEnv, capability permissions.Capabili
 	return nil
 }
 
+// requireAuthenticated returns a client error unless the request came from
+// the device itself or from a paired client. Any paired client passes,
+// member included. Use it for methods anyone in the household may call but
+// a stranger on the network may not.
+func requireAuthenticated(env *requests.RequestEnv) error {
+	if !requestGrant(env).Authenticated() {
+		return models.ClientErrf("%w", ErrForbidden)
+	}
+	return nil
+}
+
 // requireProfileManagement permits trusted local UI requests and requires
 // the profile-management capability from remote clients. Local profile PIN
 // prompts are a UI nuisance barrier, not API authorization.

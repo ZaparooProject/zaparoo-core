@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -38,11 +39,32 @@ import (
 // MockPlatform is a mock implementation of the Platform interface using testify/mock
 type MockPlatform struct {
 	mock.Mock
+	powerStatus     *power.Status
 	launchedMedia   []string
 	launchedSystems []string
 	keyboardPresses []string
 	gamepadPresses  []string
 	mu              syncutil.Mutex
+}
+
+// PowerStatus reports the device's power state. It is deliberately not a
+// testify expectation: every test that reaches the updater would otherwise
+// have to declare one, and the answer a test does not care about should not
+// depend on whether the machine running it has a wireless mouse.
+func (m *MockPlatform) PowerStatus() (power.Status, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.powerStatus == nil {
+		return power.Status{Source: power.SourceNoBattery}, nil
+	}
+	return *m.powerStatus, nil
+}
+
+// SetPowerStatus fixes what PowerStatus reports.
+func (m *MockPlatform) SetPowerStatus(status power.Status) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.powerStatus = &status
 }
 
 // ID returns the unique ID of this platform

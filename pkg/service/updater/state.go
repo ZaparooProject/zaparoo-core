@@ -53,12 +53,23 @@ var stateMu syncutil.Mutex
 // would roll backwards whenever an old backup was restored, which is a
 // self-inflicted downgrade window.
 type updaterState struct {
-	ManifestSeenAt       time.Time     `json:"manifestSeenAt"`
-	LastResult           *updateResult `json:"lastResult,omitempty"`
-	ManifestETag         string        `json:"manifestETag"`
-	ManifestLastModified string        `json:"manifestLastModified"`
-	ManifestGeneration   int64         `json:"manifestGeneration"`
-	StateVersion         int           `json:"stateVersion"`
+	ManifestSeenAt       time.Time       `json:"manifestSeenAt"`
+	LastResult           *updateResult   `json:"lastResult,omitempty"`
+	Deferral             *updateDeferral `json:"deferral,omitempty"`
+	ManifestETag         string          `json:"manifestETag"`
+	ManifestLastModified string          `json:"manifestLastModified"`
+	ManifestGeneration   int64           `json:"manifestGeneration"`
+	StateVersion         int             `json:"stateVersion"`
+}
+
+// updateDeferral records that an automatic install has been putting a version
+// off, and since when. It is what lets a check say the device is waiting for a
+// quiet moment instead of leaving it looking stalled, and it is what the
+// 24-hour deadline is measured from.
+type updateDeferral struct {
+	Since   time.Time `json:"since"`
+	Version string    `json:"version"`
+	Reason  string    `json:"reason"`
 }
 
 // updateResult records the terminal outcome of an update for the boot that
@@ -300,4 +311,75 @@ func sameUpdateResult(a, b *updateResult) bool {
 		a.FromVersion == b.FromVersion &&
 		a.ToVersion == b.ToVersion &&
 		a.Detail == b.Detail
+}
+
+// recordDeferral notes that an automatic install of version was put off for
+// reason. The start time survives repeated deferrals of the same version, since
+// that is what the deadline is measured from; a different version starts the
+// clock again.
+func recordDeferral(dir, version, reason string) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording a deferral: %w", err)
+	}
+	if st.Deferral != nil && st.Deferral.Version == version && st.Deferral.Reason == reason {
+		return nil
+	}
+
+	since := time.Now().UTC()
+	if st.Deferral != nil && st.Deferral.Version == version && !st.Deferral.Since.IsZero() {
+		since = st.Deferral.Since
+	}
+	st.Deferral = &updateDeferral{Since: since, Version: version, Reason: reason}
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording the update deferral: %w", err)
+	}
+	return nil
+}
+
+// clearDeferral forgets a deferral when expectedVersion is empty or still
+// matches the stored version. The match prevents stale checks from clearing a
+// newer deferral recorded concurrently.
+func clearDeferral(dir, expectedVersion string) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before clearing a deferral: %w", err)
+	}
+	if st.Deferral == nil || (expectedVersion != "" && st.Deferral.Version != expectedVersion) {
+		return nil
+	}
+	st.Deferral = nil
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("clearing the update deferral: %w", err)
+	}
+	return nil
+}
+
+// peekDeferralState returns any recorded deferral without changing it.
+func peekDeferralState(dir string) *updateDeferral {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st := loadState(dir)
+	if st.Deferral == nil {
+		return nil
+	}
+	deferral := *st.Deferral
+	return &deferral
+}
+
+// peekDeferral returns the recorded deferral for version, or nil when the
+// device is not waiting on that version.
+func peekDeferral(dir, version string) *updateDeferral {
+	deferral := peekDeferralState(dir)
+	if deferral == nil || deferral.Version != version {
+		return nil
+	}
+	return deferral
 }

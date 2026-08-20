@@ -213,9 +213,9 @@ This access is also allowed when a connection is made over a WebSocket Secure (w
 Core evaluates permissions for each request from connection locality and paired-client role:
 
 - **Localhost** requests originate from Core's device and have full access.
-- Paired **admin** clients have the `profiles.manage` and `settings.write` capabilities.
-- Paired **member** clients can use day-to-day methods, but cannot manage profiles or change protected settings.
-- **Unpaired remote** clients are possible only when encryption is disabled. For backward compatibility they receive admin capabilities, but methods explicitly restricted to localhost or to a paired admin still reject them.
+- Paired **admin** clients have the `profiles.manage`, `settings.write`, and `update.apply` capabilities.
+- Paired **member** clients can use day-to-day methods, but cannot manage profiles, change protected settings, or apply updates.
+- **Unpaired remote** clients are possible only when encryption is disabled. For backward compatibility they receive admin capabilities, but methods explicitly restricted to localhost or to a paired admin still reject them. They do not get the `update.apply` capability, and `update.check` is closed to them too.
 
 Call [`clients.current`](./methods.md#clientscurrent) to inspect current connection's role and capabilities. Every method in [API Methods](./methods) states its access requirements. Some read methods return additional sensitive fields to privileged clients; those fields are identified in their result contracts.
 
@@ -339,8 +339,8 @@ Methods execute actions and return data from Core. This catalog documents **88 n
 | settings.auth.link              | Start online account link.                                                            | Local/admin |
 | settings.auth.link.status       | Return online account link flow status.                                               | Tiered |
 | settings.auth.link.cancel       | Cancel online account link flow.                                                      | Local/admin |
-| update.check                    | Check for newer Core version.                                                         | All clients |
-| update.apply                    | Apply latest update and restart gracefully.                                           | All clients |
+| update.check                    | Check for newer Core version.                                                         | Localhost or any paired client |
+| update.apply                    | Apply latest update and restart gracefully.                                           | `update.apply` |
 
 ## Notifications
 
@@ -362,3 +362,4 @@ Notifications let a server or client know an event has occurred. See the [API No
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
 | playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |
 | inbox.added            | A new inbox message was added to the server.                                      |
+| update.state           | Progress of an update being applied.                                              |
