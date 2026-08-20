@@ -129,11 +129,17 @@ mode = "unrestricted"`))
 		mock.Anything,
 	).Return(nil).Run(func(args mock.Arguments) {
 		path := args.String(1)
-		st.SetActiveMedia(&models.ActiveMedia{
+		media := &models.ActiveMedia{
 			SystemID: "mock",
 			Path:     path,
 			Name:     path,
-		})
+		}
+		opts, ok := args.Get(4).(*platforms.LaunchOptions)
+		if ok && opts != nil && opts.ActiveMediaPublisher != nil {
+			opts.ActiveMediaPublisher(media)
+		} else {
+			st.SetActiveMedia(media)
+		}
 		launchCh <- path
 	}).Maybe()
 

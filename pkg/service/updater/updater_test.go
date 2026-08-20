@@ -538,6 +538,51 @@ func testValidationChainRelease(serverURL string) *selfupdate.Release {
 	}
 }
 
+func TestClearDeferralForRelease(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		recordedVersion string
+		releaseVersion  string
+		wantDeferral    bool
+	}{
+		{
+			name:            "matching release keeps deferral",
+			recordedVersion: "v2.5.0",
+			releaseVersion:  "v2.5.0",
+			wantDeferral:    true,
+		},
+		{
+			name:            "different release clears deferral",
+			recordedVersion: "v2.5.0",
+			releaseVersion:  "v2.6.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := filepath.Join(t.TempDir(), "updater")
+			require.NoError(t, recordDeferral(dir, tt.recordedVersion, ReasonActiveMedia))
+			before := peekDeferralState(dir)
+			require.NotNil(t, before)
+
+			require.NoError(t, clearDeferralForRelease(dir, tt.releaseVersion))
+			after := peekDeferralState(dir)
+			if !tt.wantDeferral {
+				assert.Nil(t, after)
+				return
+			}
+			require.NotNil(t, after)
+			assert.Equal(t, before.Version, after.Version)
+			assert.Equal(t, before.Reason, after.Reason)
+			assert.Equal(t, before.Since, after.Since)
+		})
+	}
+}
+
 func TestNoteGate_NoGateConfigured(t *testing.T) {
 	t.Parallel()
 

@@ -147,6 +147,18 @@ type GateDecision struct {
 	OK bool
 }
 
+// GateError is a refusal from the gate, as an error, so a check made deep
+// inside an install can be recognised again by the caller that started it.
+type GateError struct {
+	Reason    string
+	Message   string
+	Forceable bool
+}
+
+func (e *GateError) Error() string {
+	return e.Message
+}
+
 // blocked builds a refusal that has not taken the restore gate.
 func blocked(reason, message string, forceable, expires bool) GateDecision {
 	return GateDecision{
@@ -378,18 +390,6 @@ func statusBusy(read func() (string, error)) bool {
 		return false
 	}
 	return status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending
-}
-
-// GateError is a refusal from the gate, as an error, so a check made deep
-// inside an install can be recognised again by the caller that started it.
-type GateError struct {
-	Reason    string
-	Message   string
-	Forceable bool
-}
-
-func (e *GateError) Error() string {
-	return e.Message
 }
 
 // Err turns a refusal into an error. It returns nil for a decision that is OK.

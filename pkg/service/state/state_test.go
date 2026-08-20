@@ -453,10 +453,13 @@ func TestLockOrder_RestoreThenLaunchThenPublish(t *testing.T) {
 		}
 	})
 
-	// A launch takes restore access and then the launch gate.
-	releaseLaunch, err := state.AcquireMediaLaunch()
+	// A launch takes restore access and then the launch gate, and its
+	// publication capability takes the publish gate under those holds.
+	launchAccess, err := state.AcquireMediaLaunch()
 	require.NoError(t, err)
-	releaseLaunch()
+	launchAccess.SetActiveMedia(&models.ActiveMedia{SystemID: "test", Name: "launch"})
+	launchAccess.Release()
+	state.SetActiveMedia(nil)
 
 	// A publication from outside a launch takes restore access and then the
 	// publish gate.

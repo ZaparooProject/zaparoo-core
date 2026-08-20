@@ -1003,12 +1003,10 @@ func (c *Instance) SetUpdateCheck(enabled bool) {
 // checking is off: a device that is not allowed to look for updates cannot be
 // installing them.
 func (c *Instance) UpdateInstall() bool {
-	if !c.UpdateCheck() {
-		return false
-	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Updates.Install != nil && *c.vals.Updates.Install
+	checking := c.vals.Updates.Check == nil || *c.vals.Updates.Check
+	return checking && c.vals.Updates.Install != nil && *c.vals.Updates.Install
 }
 
 // SetUpdateInstall sets whether the device may install updates on its own.

@@ -85,6 +85,13 @@ func TestParsePmsetBatt(t *testing.T) {
 			want: Status{Source: SourceUnknown},
 		},
 		{
+			name: "one unreadable present battery makes the combined reading unknown",
+			output: "Now drawing from 'Battery Power'\n" +
+				" -InternalBattery-0 (id=4653155)\t62%; discharging; 3:32 remaining present: true\n" +
+				" -InternalBattery-1 (id=4653156)\t(no estimate); discharging; present: true\n",
+			want: Status{Source: SourceUnknown},
+		},
+		{
 			name:   "empty output is unknown, not a green light",
 			output: "",
 			want:   Status{Source: SourceUnknown},
@@ -98,6 +105,18 @@ func TestParsePmsetBatt(t *testing.T) {
 			name: "a nonsense charge does not read as a full battery",
 			output: "Now drawing from 'Battery Power'\n" +
 				" -InternalBattery-0 (id=4653155)\t999%; discharging; 3:32 remaining present: true\n",
+			want: Status{Source: SourceUnknown},
+		},
+		{
+			name: "a signed charge is not partially parsed",
+			output: "Now drawing from 'Battery Power'\n" +
+				" -InternalBattery-0 (id=4653155)\t-1%; discharging; 3:32 remaining present: true\n",
+			want: Status{Source: SourceUnknown},
+		},
+		{
+			name: "a four-digit charge is not partially parsed",
+			output: "Now drawing from 'Battery Power'\n" +
+				" -InternalBattery-0 (id=4653155)\t1000%; discharging; 3:32 remaining present: true\n",
 			want: Status{Source: SourceUnknown},
 		},
 	}

@@ -1552,3 +1552,90 @@ func TestHandleSettingsUpdate_UpdateInstallNeedsChecking(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleSettingsUpdate_UpdateInstallReloadsChecking(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	disabled := false
+	tests := []struct {
+		requestCheck   *bool
+		name           string
+		diskChecking   bool
+		memoryChecking bool
+		wantChecking   bool
+		wantErr        bool
+	}{
+		{
+			name:           "disk enabled overrides stale disabled memory",
+			diskChecking:   true,
+			memoryChecking: false,
+			wantChecking:   true,
+		},
+		{
+			name:           "disk disabled overrides stale enabled memory",
+			diskChecking:   false,
+			memoryChecking: true,
+			wantErr:        true,
+		},
+		{
+			name:           "request enable overrides disabled disk",
+			diskChecking:   false,
+			memoryChecking: true,
+			requestCheck:   &enabled,
+			wantChecking:   true,
+		},
+		{
+			name:           "request disable overrides enabled disk",
+			diskChecking:   true,
+			memoryChecking: false,
+			requestCheck:   &disabled,
+			wantErr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+			require.NoError(t, err)
+			cfg.SetUpdateCheck(tt.diskChecking)
+			require.NoError(t, cfg.Save())
+			cfg.SetUpdateCheck(tt.memoryChecking)
+
+			appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+			t.Cleanup(appState.StopService)
+			t.Cleanup(func() { drainCh(ns) })
+
+			paramsJSON, err := json.Marshal(models.UpdateSettingsParams{
+				UpdateCheck:   tt.requestCheck,
+				UpdateInstall: &enabled,
+			})
+			require.NoError(t, err)
+
+			_, err = HandleSettingsUpdate(requests.RequestEnv{
+				Context:  context.Background(),
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+				Params:   paramsJSON,
+				IsLocal:  true,
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "automatic update checking")
+				assert.False(t, cfg.UpdateInstall())
+				assert.Equal(t, tt.diskChecking, cfg.UpdateCheck())
+				return
+			}
+
+			require.NoError(t, err)
+			assert.True(t, cfg.UpdateInstall())
+			assert.Equal(t, tt.wantChecking, cfg.UpdateCheck())
+		})
+	}
+}

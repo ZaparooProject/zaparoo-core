@@ -163,6 +163,15 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	// Reload config from disk before applying mutations so that external
+	// edits (e.g. user hand-editing config.toml) are not lost on save or
+	// validated against stale in-memory values.
+	// TODO: Load+Set+Save is not atomic — concurrent handler calls can
+	// interleave. Needs a config-level transaction lock to fix properly.
+	if err := env.Config.Load(); err != nil {
+		log.Warn().Err(err).Msg("failed to reload config before settings update, using in-memory values")
+	}
+
 	// Installing updates without checking for them is not a state the device
 	// can be in, so the combination is refused rather than stored and quietly
 	// ignored. A client asking for both at once is fine.
@@ -176,14 +185,6 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 				"installing updates automatically needs automatic update checking turned on",
 			)
 		}
-	}
-
-	// Reload config from disk before applying mutations so that external
-	// edits (e.g. user hand-editing config.toml) are not lost on save.
-	// TODO: Load+Set+Save is not atomic — concurrent handler calls can
-	// interleave. Needs a config-level transaction lock to fix properly.
-	if err := env.Config.Load(); err != nil {
-		log.Warn().Err(err).Msg("failed to reload config before settings update, using in-memory values")
 	}
 
 	if params.RunZapScript != nil {

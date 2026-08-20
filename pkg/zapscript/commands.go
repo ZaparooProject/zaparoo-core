@@ -50,7 +50,7 @@ import (
 // RunCommandOptions groups optional services used by specific command types.
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
-	AcquireMediaLaunch func() (func(), error)
+	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	LauncherManager    *state.LauncherManager

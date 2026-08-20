@@ -53,7 +53,7 @@ func writeSupplies(t *testing.T, root string, supplies []supply) afero.Fs {
 func TestStatusFrom(t *testing.T) {
 	t.Parallel()
 
-	const root = "/sys/class/power_supply"
+	root := filepath.Join(string(filepath.Separator), "sys", "class", "power_supply")
 
 	tests := []struct {
 		name     string
@@ -130,6 +130,18 @@ func TestStatusFrom(t *testing.T) {
 			want: Status{Source: SourceBattery, Percent: 22},
 		},
 		{
+			name: "one unreadable system battery makes the combined reading unknown",
+			supplies: []supply{
+				{name: "BAT0", fields: map[string]string{
+					"type": "Battery", "status": "Discharging", "capacity": "80",
+				}},
+				{name: "BAT1", fields: map[string]string{
+					"type": "Battery", "status": "Discharging",
+				}},
+			},
+			want: Status{Source: SourceUnknown},
+		},
+		{
 			name: "a system battery ranks above a peripheral one",
 			supplies: []supply{
 				{name: "BAT0", fields: map[string]string{
@@ -145,6 +157,13 @@ func TestStatusFrom(t *testing.T) {
 			name: "a battery with no readable charge is unknown, not full",
 			supplies: []supply{
 				{name: "BAT0", fields: map[string]string{"type": "Battery", "status": "Discharging"}},
+			},
+			want: Status{Source: SourceUnknown},
+		},
+		{
+			name: "a listed supply with no readable type is unknown",
+			supplies: []supply{
+				{name: "mystery", fields: map[string]string{}},
 			},
 			want: Status{Source: SourceUnknown},
 		},
@@ -176,7 +195,8 @@ func TestStatusFrom(t *testing.T) {
 func TestStatusFromMissingClass(t *testing.T) {
 	t.Parallel()
 
-	got, err := statusFrom(afero.NewMemMapFs(), "/sys/class/power_supply")
+	root := filepath.Join(string(filepath.Separator), "sys", "class", "power_supply")
+	got, err := statusFrom(afero.NewMemMapFs(), root)
 	require.NoError(t, err)
 	assert.Equal(t, Status{Source: SourceNoBattery}, got)
 }

@@ -205,6 +205,9 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 
 	if found {
 		result.LatestVersion = release.Version()
+		if err := clearDeferralForRelease(stateDir, result.LatestVersion); err != nil {
+			log.Warn().Err(err).Msg("could not clear deferral for a superseded update")
+		}
 		result.UpdateAvailable = release.GreaterThan(config.AppVersion)
 		result.ReleaseNotes = release.ReleaseNotes
 	}
@@ -218,6 +221,14 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 	}
 
 	return result, nil
+}
+
+func clearDeferralForRelease(stateDir, version string) error {
+	deferral := peekDeferralState(stateDir)
+	if deferral == nil || deferral.Version == version {
+		return nil
+	}
+	return clearDeferral(stateDir, deferral.Version)
 }
 
 // noteGate records what is currently in the way of installing a version. A
@@ -425,7 +436,7 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 
 	// The version on offer has been taken, so nothing is waiting on it any
 	// more. A failure to say so is not worth failing an installed update over.
-	if err := clearDeferral(stateDirFor(opts.DataDir)); err != nil {
+	if err := clearDeferral(stateDirFor(opts.DataDir), ""); err != nil {
 		log.Warn().Err(err).Msg("could not clear the recorded update deferral")
 	}
 

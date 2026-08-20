@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -676,23 +677,33 @@ func TestLaunchClosureHoldsMediaLaunchGate(t *testing.T) {
 	path := filepath.Join("games", "game.sfc")
 	mockPlatform := mocks.NewMockPlatform()
 	gateHeld := false
+	published := false
 	mockPlatform.On(
 		"LaunchMedia", cfg, path, (*platforms.Launcher)(nil),
-		(*database.Database)(nil), (*platforms.LaunchOptions)(nil),
-	).Run(func(mock.Arguments) {
+		(*database.Database)(nil), mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		}),
+	).Run(func(args mock.Arguments) {
 		assert.True(t, gateHeld)
+		opts, ok := args.Get(4).(*platforms.LaunchOptions)
+		require.True(t, ok)
+		opts.ActiveMediaPublisher(&models.ActiveMedia{SystemID: "SNES", Name: "Game"})
 	}).Return(nil).Once()
 	env := platforms.CmdEnv{
 		Cfg: cfg,
 		Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)},
-		AcquireMediaLaunch: func() (func(), error) {
+		AcquireMediaLaunch: func() (platforms.MediaLaunchAccess, error) {
 			gateHeld = true
-			return func() { gateHeld = false }, nil
+			return platforms.MediaLaunchAccess{
+				SetActiveMedia: func(*models.ActiveMedia) { published = true },
+				Release:        func() { gateHeld = false },
+			}, nil
 		},
 	}
 
 	launch := getLaunchClosure(mockPlatform, &env, true)
 	require.NoError(t, launch(launchTarget{path: path, systemID: "SNES"}))
+	assert.True(t, published)
 	assert.False(t, gateHeld)
 	mockPlatform.AssertExpectations(t)
 }

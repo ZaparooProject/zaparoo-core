@@ -160,6 +160,13 @@ type Control struct {
 	Script string      // ZapScript string executed via RunControlScript
 }
 
+// MediaLaunchAccess is the state publication capability held for one launch.
+// Release must be called after LaunchMedia returns.
+type MediaLaunchAccess struct {
+	SetActiveMedia func(*models.ActiveMedia)
+	Release        func()
+}
+
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
@@ -169,7 +176,7 @@ type CmdEnv struct {
 	// for work tied to service lifetime rather than the current launcher lifetime.
 	ServiceCtx         context.Context
 	WaitForMediaReady  func(context.Context) error
-	AcquireMediaLaunch func() (func(), error)
+	AcquireMediaLaunch func() (MediaLaunchAccess, error)
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	Playlist           playlists.PlaylistController
@@ -240,6 +247,9 @@ type ScanResult struct {
 
 // LaunchOptions contains optional parameters that can be passed to launchers.
 type LaunchOptions struct {
+	// ActiveMediaPublisher is the launch-scoped publication callback supplied
+	// by Core. Launchers must not retain or invoke it directly.
+	ActiveMediaPublisher func(*models.ActiveMedia)
 	// RenderScale is the preferred internal rendering size as a percentage of
 	// available output dimensions. It does not change physical display mode.
 	RenderScale *int

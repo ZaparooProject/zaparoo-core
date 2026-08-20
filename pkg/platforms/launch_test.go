@@ -441,6 +441,41 @@ func TestDoLaunch_ExternalLifecycleDefersActiveMedia(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_UsesLaunchScopedActiveMediaPublisher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "SNES",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			var noProcess *os.Process
+			return noProcess, nil
+		},
+	}
+
+	var published *models.ActiveMedia
+	externalCalled := false
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) { externalCalled = true },
+		Launcher:       launcher,
+		Path:           "game.sfc",
+		Options: &platforms.LaunchOptions{
+			ActiveMediaPublisher: func(media *models.ActiveMedia) { published = media },
+		},
+	}
+
+	require.NoError(t, platforms.DoLaunch(params, func(_ string) string { return "Game" }))
+	require.NotNil(t, published)
+	assert.Equal(t, "SNES", published.SystemID)
+	assert.False(t, externalCalled)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 	t.Parallel()
 

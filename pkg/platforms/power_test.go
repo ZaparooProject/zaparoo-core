@@ -22,6 +22,7 @@ package platforms
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/power"
 	"github.com/stretchr/testify/assert"
@@ -35,17 +36,19 @@ type plainPlatform struct {
 
 type poweredPlatform struct {
 	Platform
+	read   func() (power.Status, error)
 	err    error
 	status power.Status
 }
 
 func (p *poweredPlatform) PowerStatus() (power.Status, error) {
+	if p.read != nil {
+		return p.read()
+	}
 	return p.status, p.err
 }
 
 func TestPowerStatus_PlatformReadingWins(t *testing.T) {
-	t.Parallel()
-
 	pl := &poweredPlatform{status: power.Status{Source: power.SourceBattery, Percent: 42}}
 	status := PowerStatus(pl)
 
@@ -54,8 +57,6 @@ func TestPowerStatus_PlatformReadingWins(t *testing.T) {
 }
 
 func TestPowerStatus_PlatformErrorReadsAsUnknown(t *testing.T) {
-	t.Parallel()
-
 	pl := &poweredPlatform{
 		status: power.Status{Source: power.SourceBattery, Percent: 90},
 		err:    errors.New("battery driver not responding"),
@@ -69,20 +70,68 @@ func TestPowerStatus_PlatformErrorReadsAsUnknown(t *testing.T) {
 }
 
 func TestPowerStatus_UnsetSourceReadsAsUnknown(t *testing.T) {
-	t.Parallel()
-
 	status := PowerStatus(&poweredPlatform{})
 
 	assert.Equal(t, power.SourceUnknown, status.Source)
 }
 
 func TestPowerStatus_FallsBackToTheOSReading(t *testing.T) {
-	t.Parallel()
+	called := false
+	status := resolvePowerStatus(&plainPlatform{}, func() (power.Status, error) {
+		called = true
+		return power.Status{Source: power.SourceExternal}, nil
+	}, time.Second)
 
-	// What the machine running this reports is its own business; what matters
-	// is that a platform with no reading of its own still gets an answer the
-	// gate can act on rather than an empty one.
-	status := PowerStatus(&plainPlatform{})
+	assert.True(t, called)
+	assert.Equal(t, power.SourceExternal, status.Source)
+}
 
-	assert.NotEmpty(t, status.Source)
+func TestPowerStatus_TimesOutEveryReaderPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider bool
+	}{
+		{name: "OS fallback"},
+		{name: "platform provider", provider: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			started := make(chan struct{})
+			unblock := make(chan struct{})
+			finished := make(chan struct{})
+			read := func() (power.Status, error) {
+				close(started)
+				<-unblock
+				close(finished)
+				return power.Status{Source: power.SourceExternal}, nil
+			}
+
+			var pl Platform = &plainPlatform{}
+			fallback := read
+			fallbackCalled := false
+			if tt.provider {
+				pl = &poweredPlatform{read: read}
+				fallback = func() (power.Status, error) {
+					fallbackCalled = true
+					return power.Status{Source: power.SourceExternal}, nil
+				}
+			}
+
+			status := resolvePowerStatus(pl, fallback, 20*time.Millisecond)
+			assert.Equal(t, power.SourceUnknown, status.Source)
+			assert.False(t, fallbackCalled)
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("power reader did not start")
+			}
+			close(unblock)
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Fatal("power reader did not finish after release")
+			}
+		})
+	}
 }

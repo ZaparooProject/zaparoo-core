@@ -25,13 +25,14 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
 // pmsetPath is the power management tool macOS ships. It is addressed by
 // absolute path so the reading does not depend on the PATH the service
 // inherited.
-const pmsetPath = "/usr/bin/pmset"
+var pmsetPath = filepath.Join(string(filepath.Separator), "usr", "bin", "pmset")
 
 // pmsetTimeout bounds the reading. pmset answers immediately in normal
 // operation, and the caller is the update gate, on the path of an install the
