@@ -305,8 +305,16 @@ func (s *verifiedSource) installableVersion(rel *otameta.Release, channel string
 		return nil, false
 	}
 	// A beta device is offered stable releases too, because the beta channel is
-	// what a device accepts rather than all it accepts.
-	if rel.Channel == otameta.ChannelBeta && channel != otameta.ChannelBeta {
+	// what a device accepts rather than all it accepts. Unknown manifest values
+	// are never treated as stable by default.
+	switch rel.Channel {
+	case otameta.ChannelStable:
+		// Stable releases are accepted by both channels.
+	case otameta.ChannelBeta:
+		if channel != otameta.ChannelBeta {
+			return nil, false
+		}
+	default:
 		return nil, false
 	}
 	version, err := semver.NewVersion(otameta.VersionFromTag(rel.TagName))

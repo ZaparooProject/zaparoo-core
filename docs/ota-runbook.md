@@ -108,26 +108,29 @@ Both renames are retried, and a failed second rename puts the first one back, so
 this needs the install path to be locked by something for the whole sequence. It
 is rare and it is not self-healing.
 
-The recovery is a rename. In the install directory, alongside `zaparoo.exe`:
+The recovery is a rename. Use the exact `target` and `superseded` paths from
+the service log; the executable may not be named `zaparoo.exe`:
+
+```text
+ERR binary swap left the install path empty; rename the superseded binary back
+to the target path to recover target=... superseded=...
+```
+
+Sidecar names are derived from that target in the same directory. For a target
+named `zaparoo.exe`:
 
 - `zaparoo.zaparoo-update-old.exe` (or `-old-1`, `-old-2`, up to `-old-7`) is the
-  binary the update moved aside. These files are hidden. The service log names
-  the exact one at the point it gave up:
-
-  ```
-  ERR binary swap left the install path empty; rename the superseded binary back
-  to the target path to recover target=... superseded=...
-  ```
-
+  binary the update moved aside. These files are hidden.
 - `zaparoo.zaparoo-update-new.exe` is the verified staged binary, and
   `zaparoo.zaparoo-update-backup.exe` is a copy of the outgoing one.
 
-Rename the superseded binary named in the log back to `zaparoo.exe` and start
-the service. That restores the version the device was already running; the
+Rename the exact `superseded` path from the log to the exact `target` path, then
+start the service. That restores the version the device was already running; the
 pending update is unwound on the next start. Only if no `-old` file exists is
 the backup the next choice — it is a copy of the same binary. Never rename the
-`-new` file into place by hand: it skips the marker the watchdog needs to roll
-the update back if the new version cannot start.
+`-new` file into place by hand: the marker is already durable and still records
+an interrupted install, so the watchdog will roll that candidate back on its
+next start. Recovery should restore the known-good outgoing binary instead.
 
 ## Setup
 

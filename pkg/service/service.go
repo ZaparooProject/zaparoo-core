@@ -316,7 +316,8 @@ func Start(
 	if watchdogErr := updater.RunStartupWatchdog(
 		context.Background(), dataDir, config.AppVersion,
 	); watchdogErr != nil {
-		if errors.Is(watchdogErr, updater.ErrRolledBack) {
+		if errors.Is(watchdogErr, updater.ErrRolledBack) ||
+			errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
 			return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
 		}
 		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")

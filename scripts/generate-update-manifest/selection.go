@@ -122,10 +122,11 @@ func verifySelectionMatrix(fs afero.Fs, path string) (*result, error) {
 func newestPerChannel(m *otameta.Manifest) map[string]bool {
 	byChannel := make(map[string]*otameta.Release, 2)
 	for _, rel := range m.Releases {
-		// Drafts and unparseable tags are skipped by every client, so a device
-		// is never offered them and their matrix does not matter. Grouping by
-		// channel is what covers prereleases: the channel a release is on is
-		// what decides which devices are offered it.
+		// Drafts and unparseable tags are skipped by every client, so missing
+		// archives do not matter for them. verifySelectionMatrix still rejects
+		// ambiguous archives they do contain. Grouping by channel is what covers
+		// prereleases: the channel a release is on decides which devices are
+		// offered it.
 		if rel == nil || rel.Draft {
 			continue
 		}

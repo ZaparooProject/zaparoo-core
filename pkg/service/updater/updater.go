@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -52,7 +53,29 @@ var (
 	ErrUpdateInProgress   = errors.New("update already in progress")
 	applyMu               syncutil.Mutex
 	applyInProgress       atomic.Bool
+	eligibilityPreflight  platformPreflightCache
 )
+
+type platformPreflightCache struct {
+	results map[string]error
+	mu      syncutil.Mutex
+}
+
+func (c *platformPreflightCache) check(fs afero.Fs, goos, targetPath string) error {
+	key := goos + "\x00" + targetPath
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if result, ok := c.results[key]; ok {
+		return result
+	}
+	result := preflightPlatform(fs, goos, targetPath)
+	if c.results == nil {
+		c.results = make(map[string]error)
+	}
+	c.results[key] = result
+	return result
+}
 
 // Eligibility says whether this device can take an OTA update at all, ahead of
 // any question about whether one is available.
@@ -303,7 +326,7 @@ func eligibilityFor(opts *Options) string {
 	switch {
 	case config.IsDevelopmentVersion():
 		return EligibilityDevelopment
-	case preflightPlatform(runtime.GOOS, currentBinaryPath()) != nil:
+	case eligibilityPreflight.check(afero.NewOsFs(), runtime.GOOS, currentBinaryPath()) != nil:
 		// Checked before Managed because this one is a refusal Apply enforces,
 		// while Managed only says the package manager should be doing it.
 		return EligibilityUnsupported
@@ -427,7 +450,7 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 	// the newest version is told that, instead of being told its platform is
 	// unsupported. Everything below this point costs the user something the
 	// install can never spend well.
-	if platformErr := preflightPlatform(runtime.GOOS, targetPath); platformErr != nil {
+	if platformErr := preflightPlatform(afero.NewOsFs(), runtime.GOOS, targetPath); platformErr != nil {
 		return fail(platformErr)
 	}
 	stagingRoot := stagingRootFor(opts.DataDir)

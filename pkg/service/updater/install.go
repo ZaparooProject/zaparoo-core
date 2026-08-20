@@ -384,6 +384,10 @@ func restoreBinaryAfterFailedInstall(m *pendingMarker, binary installBinaryOps) 
 		if !installed {
 			return fmt.Errorf("failed install has neither current binary nor backup: %w", targetErr)
 		}
+		log.Warn().
+			Str("target", m.TargetPath).
+			Str("backup", m.BackupPath).
+			Msg("failed install backup is missing; leaving the installed binary in place")
 	} else {
 		return fmt.Errorf("checking the current binary backup after a failed install: %w", backupErr)
 	}

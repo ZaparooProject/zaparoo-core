@@ -230,19 +230,26 @@ func TestReplaceRunningBinary_ReportsBothFailuresWhenTheOutgoingBinaryCannotGoBa
 
 	f := newSwapFixture(t)
 	fatal := errors.New("permission denied")
-	err := replaceRunningBinaryWith(f.source, f.target, f.ops(true, func(source string) error {
+	ops := f.ops(true, func(source string) error {
 		// The outgoing binary gets out of its own name; nothing gets back into it.
 		if source == f.target {
 			return nil
 		}
 		return fatal
-	}))
+	})
+	var concealed string
+	ops.conceal = func(path string) error {
+		concealed = path
+		return nil
+	}
+	err := replaceRunningBinaryWith(f.source, f.target, ops)
 
 	require.ErrorIs(t, err, fatal)
 	assert.Contains(t, err.Error(), f.target,
 		"the error has to name the binary that is no longer there")
 	assert.NoFileExists(t, f.target)
 	assert.FileExists(t, f.superseded, "the outgoing binary is still recoverable by hand")
+	assert.Equal(t, f.superseded, concealed, "the recovery sidecar must not look like a second executable")
 }
 
 // A scanner holding a binary for a moment is not a failed update.

@@ -69,8 +69,9 @@ const (
 )
 
 type watchdogFileOps struct {
-	fs      afero.Fs
-	replace func(string, string) error
+	fs         afero.Fs
+	replace    func(string, string) error
+	saveMarker func(string, *pendingMarker) error
 	// binary puts back a file that may be the image this process is running
 	// from, which not every platform will let a plain replacement touch, and
 	// clears whatever an earlier swap had to leave behind to do it.
@@ -85,8 +86,13 @@ type watchdogFileOps struct {
 // of Start has to re-exec rather than exit: on the platforms this matters for
 // there is no supervisor to start anything again.
 var (
-	ErrRolledBack           = errors.New("update rolled back, restart into the restored version")
-	errRollbackPrerequisite = errors.New("rollback prerequisite is unavailable")
+	ErrRolledBack = errors.New("update rolled back, restart into the restored version")
+	// ErrRollbackStateUncertain means the user database was restored but that
+	// fact could not be made durable. Startup must stop before anything can write
+	// the database; the next boot can then repeat the restore without losing
+	// intervening user data.
+	ErrRollbackStateUncertain = errors.New("restored user database was not recorded durably")
+	errRollbackPrerequisite   = errors.New("rollback prerequisite is unavailable")
 )
 
 type rolledBackError struct {
@@ -112,6 +118,7 @@ func defaultWatchdogFileOps() watchdogFileOps {
 	return watchdogFileOps{
 		fs:              afero.NewOsFs(),
 		replace:         replaceFile,
+		saveMarker:      saveMarker,
 		binary:          defaultInstallBinaryOps(),
 		syncDirectory:   syncDir,
 		removeStaging:   removeStagingDir,
@@ -202,9 +209,10 @@ func decideWatchdogAction(m *pendingMarker, currentVersion string) watchdogActio
 // because the failure it exists to catch is a binary that cannot get that far.
 //
 // It returns ErrRolledBack when the previous version has been put back and the
-// caller must re-exec into it. Every other error is advisory: startup continues,
-// because refusing to boot over a bookkeeping problem is the outcome this whole
-// mechanism exists to avoid.
+// caller must re-exec into it. ErrRollbackStateUncertain must also stop startup
+// so the restored database cannot be changed before recovery retries. Every
+// other error is advisory: startup continues, because refusing to boot over a
+// bookkeeping problem is the outcome this whole mechanism exists to avoid.
 func RunStartupWatchdog(ctx context.Context, dataDir, currentVersion string) error {
 	return runStartupWatchdogWithOps(ctx, dataDir, currentVersion, defaultWatchdogFileOps())
 }
@@ -301,6 +309,12 @@ func rollBackFailedStartWithOps(
 		return nil //nolint:nilerr // a marker this build cannot own is not ours to act on
 	}
 	if m.Outcome != "" || m.TargetVersion != currentVersion {
+		return nil
+	}
+	// A rollingBack marker means the startup watchdog already charged and tried
+	// this boot's rollback. If startup then fails too, its deferred hook must not
+	// turn that one boot into a second attempt and exhaust the retry budget early.
+	if m.State == markerRollingBack {
 		return nil
 	}
 	log.Error().
@@ -458,7 +472,7 @@ func rollBack(
 	dir := stateDirFor(dataDir)
 	m.State = markerRollingBack
 	m.RollbackAttempts++
-	if err := saveMarker(dir, m); err != nil {
+	if err := fileOps.saveMarker(dir, m); err != nil {
 		// Nothing has been moved yet, and without this on disk an interrupted
 		// rollback would not know to resume, nor how many times it already has.
 		// Stop here rather than start a swap that cannot be finished.
@@ -474,9 +488,13 @@ func rollBack(
 		// use in between. Writing the snapshot again then would throw those
 		// writes away.
 		m.UserDBRestored = true
-		if err := saveMarker(dir, m); err != nil {
-			return handleRollbackFailure(dir, m,
+		if err := fileOps.saveMarker(dir, m); err != nil {
+			failureErr := handleRollbackFailure(dir, m,
 				fmt.Errorf("recording the restored user database: %w", err))
+			if failureErr == nil {
+				return nil
+			}
+			return fmt.Errorf("%w: %w", ErrRollbackStateUncertain, failureErr)
 		}
 	}
 	if err := restoreReplacedFiles(dir, m, fileOps); err != nil {

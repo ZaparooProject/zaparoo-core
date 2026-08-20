@@ -129,6 +129,13 @@ func replaceRunningBinary(source, target string) error {
 	return replaceRunningBinaryWith(source, target, defaultSwapOps())
 }
 
+// Rename retries use the long swapAttempts budget until the target-name gap is
+// opened. Only the incoming rename that runs inside that gap uses
+// swapUrgentAttempts; restoring into an already empty target and undoing a
+// failed swap keep the long budget. On Windows, transientSwapError includes
+// access denied, sharing violations and lock violations. Removes are never
+// retried: a busy superseded slot is skipped, and cleanup is left to a later
+// sweep.
 func replaceRunningBinaryWith(source, target string, ops swapOps) error {
 	if !ops.vacate {
 		return retrySwap(ops, swapAttempts, func() error { return ops.replace(source, target) })
@@ -166,10 +173,18 @@ func replaceRunningBinaryWith(source, target string, ops swapOps) error {
 		undoErr := retrySwap(ops, swapAttempts, func() error { return ops.replace(superseded, target) })
 		if undoErr != nil {
 			// Both renames failed, so the install path holds no executable and
-			// nothing left in this process can put one there. Whoever reads
-			// these logs has to move the outgoing binary back by hand, so name
-			// both paths rather than leaving it to an error string that the
-			// caller may only record as a failed update.
+			// nothing left in this process can put one there. The outgoing image
+			// remains recoverable by hand, but it should still look like the
+			// internal sidecar it is rather than a second executable.
+			if ops.conceal != nil {
+				if concealErr := ops.conceal(superseded); concealErr != nil {
+					log.Debug().Err(concealErr).Str("path", superseded).
+						Msg("could not hide the superseded binary after the swap failed")
+				}
+			}
+			// Whoever reads these logs has to move the outgoing binary back by
+			// hand, so name both paths rather than leaving it to an error string
+			// that the caller may only record as a failed update.
 			log.Error().Err(errors.Join(err, undoErr)).
 				Str("target", target).
 				Str("superseded", superseded).

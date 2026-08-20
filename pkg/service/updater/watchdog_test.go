@@ -984,6 +984,78 @@ func TestRunStartupWatchdog_ResumedRollbackKeepsTheRestoredDatabase(t *testing.T
 	assert.Equal(t, "written after the rollback started", readTestDBNote(t, f.dbPath))
 }
 
+// Once the snapshot has replaced the live database, failing to record that fact
+// must stop startup. Otherwise this boot can write new data that the next retry
+// destroys when it restores the snapshot again.
+func TestRunStartupWatchdog_StopsStartupWhenRestoredDatabaseCannotBeRecorded(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	saveErr := errors.New("marker storage unavailable")
+	ops := defaultWatchdogFileOps()
+	realSaveMarker := ops.saveMarker
+	saveCalls := 0
+	ops.saveMarker = func(gotDir string, m *pendingMarker) error {
+		saveCalls++
+		if saveCalls == 2 {
+			return saveErr
+		}
+		return realSaveMarker(gotDir, m)
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, ErrRollbackStateUncertain)
+	require.ErrorIs(t, err, saveErr)
+	assert.Equal(t, "before the update", readTestDBNote(t, f.dbPath))
+	assert.Equal(t, "new binary", readFileString(t, f.targetPath))
+
+	onDisk, loadErr := loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, onDisk)
+	assert.False(t, onDisk.UserDBRestored)
+	assert.Equal(t, markerRollingBack, onDisk.State)
+}
+
+// The failed-start hook runs after the startup watchdog in the same Start call.
+// If the watchdog already tried a pending rollback, the hook must not charge a
+// second attempt to that same boot.
+func TestRollBackFailedStart_DoesNotRetryAStartupWatchdogRollback(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	restoreErr := errors.New("the old binary will not go back")
+	replaceCalls := 0
+	ops := defaultWatchdogFileOps()
+	ops.binary.replaceRunning = func(string, string) error {
+		replaceCalls++
+		return restoreErr
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, restoreErr)
+	require.NoError(t, rollBackFailedStartWithOps(t.Context(), f.dataDir, testTargetVersion, ops))
+
+	pending, loadErr := loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, pending)
+	assert.Equal(t, 1, pending.RollbackAttempts)
+	assert.Equal(t, 1, replaceCalls)
+
+	err = runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, restoreErr)
+	pending, loadErr = loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, pending)
+	assert.Equal(t, 2, pending.RollbackAttempts, "the next boot gets the next attempt")
+	assert.Equal(t, 2, replaceCalls)
+}
+
 // A rollback that fails on something time might fix keeps its marker so the next
 // boot resumes it. Without a bound that is a device rebooting into a version
 // that already failed, forever, so it gives up and records why.

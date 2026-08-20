@@ -30,11 +30,12 @@ func defaultSwapOps() swapOps {
 	}
 }
 
-// hideFile marks a file hidden. The binary an update superseded cannot be
-// deleted until the process running from it exits, so it sits in the install
-// directory until a later sweep clears it: the boot that confirms the update,
-// or, where the swap moved this process's own image aside to roll back, the
-// next install. Hiding it keeps a user from finding a second executable beside
+// hideFile marks a file hidden and clears read-only. The binary an update
+// superseded cannot be deleted until the process running from it exits, so it
+// sits in the install directory until a later sweep clears it: the boot that
+// confirms the update, or, where the swap moved this process's own image aside
+// to roll back, the next install. Clearing read-only ensures that later sweep
+// can delete it; hiding it keeps a user from finding a second executable beside
 // the one they launch.
 func hideFile(path string) error {
 	name, err := windows.UTF16PtrFromString(path)
@@ -48,7 +49,8 @@ func hideFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("reading the attributes of %q: %w", path, err)
 	}
-	if err := windows.SetFileAttributes(name, attrs|windows.FILE_ATTRIBUTE_HIDDEN); err != nil {
+	attrs = attrs&^windows.FILE_ATTRIBUTE_READONLY | windows.FILE_ATTRIBUTE_HIDDEN
+	if err := windows.SetFileAttributes(name, attrs); err != nil {
 		return fmt.Errorf("hiding %q: %w", path, err)
 	}
 	return nil

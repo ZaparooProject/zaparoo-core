@@ -285,6 +285,20 @@ func TestVerifiedSource_ChannelDrivesSelection(t *testing.T) {
 	assert.Equal(t, "v2.16.1", beta.TagName)
 }
 
+func TestVerifiedSource_RejectsUnknownReleaseChannels(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Replace(twoReleaseManifest(412), "channel: stable", "channel: preview", 1)
+	ms := newManifestServer(t, body)
+	src := ms.loaded(t, t.TempDir(), "linux", "amd64")
+
+	for _, channel := range []string{otameta.ChannelStable, otameta.ChannelBeta} {
+		rel := offered(t, src, channel)
+		require.NotNil(t, rel)
+		assert.Equal(t, "v2.15.1", rel.TagName, channel)
+	}
+}
+
 // Relative metadata URLs resolve against the repository base; absolute archive
 // URLs pass through.
 func TestVerifiedSource_ResolvesRelativeAssetURLs(t *testing.T) {

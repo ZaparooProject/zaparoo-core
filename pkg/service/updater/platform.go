@@ -22,10 +22,10 @@ package updater
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // ErrPlatformUnsupported is returned when this build cannot finish an install
@@ -45,14 +45,14 @@ var ErrPlatformUnsupported = errors.New("this platform cannot install updates in
 // the effective permission is the only true one, and it runs here rather than
 // at the swap so a user learns their install has to go through the installer
 // before a release has been downloaded and their database snapshotted.
-func preflightPlatform(goos, targetPath string) error {
+func preflightPlatform(fs afero.Fs, goos, targetPath string) error {
 	// Everywhere else replaces the running binary with a single rename, which
 	// needs nothing the install did not already need.
 	if goos != "windows" || targetPath == "" {
 		return nil
 	}
 	dir := filepath.Dir(targetPath)
-	if err := checkInstallDirWritable(dir); err != nil {
+	if err := checkInstallDirWritable(fs, dir); err != nil {
 		log.Warn().Err(err).Str("dir", dir).
 			Msg("cannot update in place because the install directory is not writable")
 		return fmt.Errorf(
@@ -67,19 +67,20 @@ func preflightPlatform(goos, targetPath string) error {
 // dir. Creating one is the only honest answer: the permission that decides the
 // swap is the effective one, which no amount of reading the directory's own
 // mode describes.
-func checkInstallDirWritable(dir string) error {
-	probe, err := os.CreateTemp(dir, ".zaparoo-update-probe-*")
+func checkInstallDirWritable(fs afero.Fs, dir string) error {
+	probe, err := afero.TempFile(fs, dir, ".zaparoo-update-probe-*")
 	if err != nil {
 		return fmt.Errorf("creating a write probe in %q: %w", dir, err)
 	}
 	name := probe.Name()
 	closeErr := probe.Close()
-	if removeErr := os.Remove(name); removeErr != nil {
-		log.Warn().Err(removeErr).Str("path", name).
-			Msg("could not remove the update write probe")
-	}
+	removeErr := fs.Remove(name)
+	var probeErr error
 	if closeErr != nil {
-		return fmt.Errorf("closing a write probe in %q: %w", dir, closeErr)
+		probeErr = errors.Join(probeErr, fmt.Errorf("closing a write probe in %q: %w", dir, closeErr))
 	}
-	return nil
+	if removeErr != nil {
+		probeErr = errors.Join(probeErr, fmt.Errorf("removing write probe %q: %w", name, removeErr))
+	}
+	return probeErr
 }
