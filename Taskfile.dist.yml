@@ -148,6 +148,7 @@ tasks:
           "FuzzGetPathDir ./pkg/helpers"
           "FuzzSplitCommand ./pkg/helpers"
           "FuzzParseVirtualPathStr ./pkg/helpers/virtualpath"
+          "FuzzPayloadMemberPath ./pkg/platforms/updatepayload"
           "FuzzFindPath ./pkg/database/mediascanner"
           "FuzzProcessRequestObject ./pkg/api"
           "FuzzEstablishSession ./pkg/api/middleware"

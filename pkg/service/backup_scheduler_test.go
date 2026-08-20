@@ -157,20 +157,20 @@ func TestOnlineFailureRequiresWarning(t *testing.T) {
 func TestRemoteHeartbeatStateBacksOffFailuresAndRecordsOnlySuccess(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	state := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
-	assert.True(t, state.due(now))
+	state := intervalState{backoff: remoteHeartbeatInitialBackoff}
+	assert.True(t, state.due(now, remoteHeartbeatInterval))
 
-	state.recordFailure(now)
+	state.recordFailure(now, remoteHeartbeatInitialBackoff, remoteHeartbeatMaxBackoff)
 	assert.True(t, state.lastSuccess.IsZero(), "failure must not advance heartbeat success time")
-	assert.False(t, state.due(now.Add(30*time.Second)))
-	assert.True(t, state.due(now.Add(remoteHeartbeatInitialBackoff)))
+	assert.False(t, state.due(now.Add(30*time.Second), remoteHeartbeatInterval))
+	assert.True(t, state.due(now.Add(remoteHeartbeatInitialBackoff), remoteHeartbeatInterval))
 	assert.Equal(t, 2*remoteHeartbeatInitialBackoff, state.backoff)
 
 	succeededAt := now.Add(remoteHeartbeatInitialBackoff)
-	state.recordSuccess(succeededAt)
+	state.recordSuccess(succeededAt, remoteHeartbeatInitialBackoff)
 	assert.Equal(t, succeededAt, state.lastSuccess)
-	assert.False(t, state.due(succeededAt.Add(time.Hour)))
-	assert.True(t, state.due(succeededAt.Add(remoteHeartbeatInterval)))
+	assert.False(t, state.due(succeededAt.Add(time.Hour), remoteHeartbeatInterval))
+	assert.True(t, state.due(succeededAt.Add(remoteHeartbeatInterval), remoteHeartbeatInterval))
 	assert.Equal(t, remoteHeartbeatInitialBackoff, state.backoff)
 }
 
@@ -178,7 +178,7 @@ func TestPlaySyncDuePendingBypassesIntervalButHonorsBackoff(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	s := remoteHeartbeatState{lastSuccess: now.Add(-time.Minute)}
+	s := intervalState{lastSuccess: now.Add(-time.Minute)}
 
 	assert.False(t, playSyncDue(&s, now, false), "periodic sync must honor the success interval")
 	assert.True(t, playSyncDue(&s, now, true), "completed session must request an immediate sync")
@@ -215,7 +215,7 @@ func TestRecordPlaySyncError_DoesNotBackoffExpectedInactivity(t *testing.T) {
 		{name: "unlinked", err: unlinkedErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			state := remoteHeartbeatState{
+			state := intervalState{
 				nextAttempt: now.Add(time.Hour),
 				backoff:     remoteHeartbeatMaxBackoff,
 			}
@@ -227,7 +227,7 @@ func TestRecordPlaySyncError_DoesNotBackoffExpectedInactivity(t *testing.T) {
 		})
 	}
 
-	state := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
+	state := intervalState{backoff: remoteHeartbeatInitialBackoff}
 	networkErr := errors.New("network unavailable")
 	assert.False(t, recordPlaySyncError(&state, now, networkErr))
 	assert.False(t, state.idle)

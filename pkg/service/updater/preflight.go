@@ -39,11 +39,12 @@ const bytesPerMB = 1024 * 1024
 type spaceNeeds struct {
 	// free defaults to helpers.FreeDiskSpace. Injected so the check can be
 	// tested without filling a disk.
-	free        func(string) (uint64, error)
-	targetPath  string
-	stagingRoot string
-	userDBPath  string
-	archiveSize int64
+	free          func(string) (uint64, error)
+	targetPath    string
+	stagingRoot   string
+	userDBPath    string
+	archiveSize   int64
+	payloadCopies bool
 }
 
 // required totals every byte the install adds while the old binary and the old
@@ -59,7 +60,15 @@ type spaceNeeds struct {
 // snapshot, which VACUUM INTO can only make smaller than its source.
 func (n *spaceNeeds) required() int64 {
 	binarySize := fileSizeOrZero(n.targetPath)
-	return 2*n.archiveSize + 2*binarySize + fileSizeOrZero(n.userDBPath)
+	required := 2*n.archiveSize + 2*binarySize + fileSizeOrZero(n.userDBPath)
+	if n.payloadCopies {
+		// Payload files need a target-filesystem candidate and, where replacing
+		// existing files, a rollback copy. The signed manifest has no expanded
+		// payload size, so two archive-sized allowances conservatively bound the
+		// small Batocera scripts payload before download.
+		required += 2 * n.archiveSize
+	}
+	return required
 }
 
 // checkFreeSpace charges the whole requirement to every directory the install

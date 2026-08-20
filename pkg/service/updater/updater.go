@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
@@ -49,11 +50,12 @@ const (
 )
 
 var (
-	ErrDevelopmentVersion = errors.New("update check skipped for development version")
-	ErrUpdateInProgress   = errors.New("update already in progress")
-	applyMu               syncutil.Mutex
-	applyInProgress       atomic.Bool
-	eligibilityPreflight  platformPreflightCache
+	ErrDevelopmentVersion    = errors.New("update check skipped for development version")
+	ErrUpdateInProgress      = errors.New("update already in progress")
+	errAutoInstallIneligible = errors.New("automatic update install is not eligible")
+	applyMu                  syncutil.Mutex
+	applyInProgress          atomic.Bool
+	eligibilityPreflight     platformPreflightCache
 )
 
 type platformPreflightCache struct {
@@ -352,6 +354,19 @@ func currentBinaryPath() string {
 // rolloutHeld reports whether the selected release's staged rollout has not
 // reached this device yet. Using the selected release matters when channels
 // contain semver-equal tags with different rollout percentages.
+func autoInstallReleaseAllowed(opts *Options, release *otameta.Release) error {
+	if opts == nil || opts.Mode != ModeAuto {
+		return nil
+	}
+	if opts.Managed {
+		return fmt.Errorf("%w: install is managed by a package manager", errAutoInstallIneligible)
+	}
+	if rolloutHeld(opts.DeviceID, release) {
+		return fmt.Errorf("%w: release is not rolled out to this device", errAutoInstallIneligible)
+	}
+	return nil
+}
+
 func rolloutHeld(deviceID string, release *otameta.Release) bool {
 	if release == nil {
 		return false
@@ -436,6 +451,9 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 	if !upgrade {
 		return fail(fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion))
 	}
+	if eligibilityErr := autoInstallReleaseAllowed(&opts, manifestRelease); eligibilityErr != nil {
+		return fail(eligibilityErr)
+	}
 	report.setVersion(version)
 
 	targetPath, err := restart.BinaryPath()
@@ -453,7 +471,7 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 	if spaceErr := preflightSpace(&opts, manifestRelease, targetPath, stagingRoot); spaceErr != nil {
 		return fail(spaceErr)
 	}
-	staged, err := Stage(ctx, &StageOptions{
+	stageOpts := &StageOptions{
 		Release:        manifestRelease,
 		PlatformID:     opts.PlatformID,
 		Arch:           runtime.GOARCH,
@@ -462,7 +480,9 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 		StagingRoot:    stagingRoot,
 		CurrentVersion: config.AppVersion,
 		progress:       report,
-	})
+	}
+	stageOpts.payloadRoots = updatePayloadRoots(&opts)
+	staged, err := Stage(ctx, stageOpts)
 	if err != nil {
 		return fail(fmt.Errorf("staging update: %w", err))
 	}
@@ -496,16 +516,24 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 // that cannot fit. The asset lookup here is a size lookup only: Stage repeats it
 // along with the version and upgrade-floor checks, so a selection failure is
 // left for Stage to report with its own error rather than reported twice.
+func updatePayloadRoots(opts *Options) []updatepayload.Root {
+	if opts == nil || opts.Managed {
+		return nil
+	}
+	return updatepayload.Roots(opts.PlatformID)
+}
+
 func preflightSpace(opts *Options, release *otameta.Release, targetPath, stagingRoot string) error {
 	asset, err := otameta.SelectAsset(release, opts.PlatformID, runtime.GOARCH)
 	if err != nil {
 		return nil //nolint:nilerr // Stage reports this properly a moment later
 	}
 	return checkFreeSpace(&spaceNeeds{
-		archiveSize: asset.Size,
-		targetPath:  targetPath,
-		stagingRoot: stagingRoot,
-		userDBPath:  filepath.Join(opts.DataDir, config.UserDbFile),
+		archiveSize:   asset.Size,
+		targetPath:    targetPath,
+		stagingRoot:   stagingRoot,
+		userDBPath:    filepath.Join(opts.DataDir, config.UserDbFile),
+		payloadCopies: len(updatePayloadRoots(opts)) > 0,
 	})
 }
 
@@ -526,8 +554,8 @@ func ensureNoPendingUpdate(dataDir string) error {
 // CheckFn is the signature for a function that checks for updates.
 type CheckFn func(ctx context.Context, opts Options) (*Result, error)
 
-// CheckAndNotify checks for updates and posts an inbox message if one is
-// available. Intended to be called as a fire-and-forget goroutine on startup.
+// CheckAndNotify checks for updates and posts a version-deduplicated inbox
+// message when one is available. The service scheduler calls it periodically.
 func CheckAndNotify(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -544,6 +572,9 @@ func CheckAndNotify(
 
 	if !waitFn(ctx, 30) {
 		log.Warn().Msg("no internet connectivity, skipping update check")
+		if err := recordScheduledCheck(stateDirFor(opts.DataDir), false); err != nil {
+			log.Warn().Err(err).Msg("could not record failed scheduled update check")
+		}
 		return
 	}
 	if ctx.Err() != nil {
@@ -560,7 +591,13 @@ func CheckAndNotify(
 	}
 	if err != nil {
 		log.Warn().Err(err).Msg("update check failed")
+		if stateErr := recordScheduledCheck(stateDirFor(opts.DataDir), false); stateErr != nil {
+			log.Warn().Err(stateErr).Msg("could not record failed scheduled update check")
+		}
 		return
+	}
+	if stateErr := recordScheduledCheck(stateDirFor(opts.DataDir), true); stateErr != nil {
+		log.Warn().Err(stateErr).Msg("could not record successful scheduled update check")
 	}
 
 	if !result.UpdateAvailable {
@@ -589,6 +626,10 @@ func CheckAndNotify(
 		Str("latest", result.LatestVersion).
 		Msg("update available")
 
+	stateDir := stateDirFor(opts.DataDir)
+	if lastOfferedVersion(stateDir) == result.LatestVersion {
+		return
+	}
 	title := fmt.Sprintf("Zaparoo %s is available", result.LatestVersion)
 	body := fmt.Sprintf(
 		"Currently on %s. %s",
@@ -603,5 +644,9 @@ func CheckAndNotify(
 		inbox.WithSeverity(inbox.SeverityInfo),
 	); err != nil {
 		log.Error().Err(err).Msg("failed to add update inbox message")
+		return
+	}
+	if err := recordOfferedVersion(stateDir, result.LatestVersion); err != nil {
+		log.Warn().Err(err).Msg("could not record offered update version")
 	}
 }

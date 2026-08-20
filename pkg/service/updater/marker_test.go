@@ -46,9 +46,12 @@ func TestMarker_RoundTrip(t *testing.T) {
 		TargetVersion:      "2.2.0",
 		PlatformID:         "mister",
 		UserDBSnapshotPath: filepath.Join("data", "backups", "backup-x-update.db"),
-		PayloadBackups: []payloadBackup{
-			{TargetPath: filepath.Join("opt", "extra"), BackupPath: filepath.Join("opt", ".extra.old")},
-		},
+		PayloadBackups: []payloadBackup{{
+			TargetPath:      filepath.Join("opt", "extra"),
+			BackupPath:      filepath.Join("opt", ".extra.old"),
+			CandidatePath:   filepath.Join("opt", ".extra.new"),
+			OriginalMissing: true,
+		}},
 		ManifestGeneration: 42,
 		Attempts:           1,
 	}))
@@ -67,6 +70,8 @@ func TestMarker_RoundTrip(t *testing.T) {
 	assert.Equal(t, currentMarkerVersion, got.MarkerVersion)
 	require.Len(t, got.PayloadBackups, 1)
 	assert.Equal(t, filepath.Join("opt", "extra"), got.PayloadBackups[0].TargetPath)
+	assert.Equal(t, filepath.Join("opt", ".extra.new"), got.PayloadBackups[0].CandidatePath)
+	assert.True(t, got.PayloadBackups[0].OriginalMissing)
 }
 
 func TestLoadMarker_AbsentIsNotAnError(t *testing.T) {

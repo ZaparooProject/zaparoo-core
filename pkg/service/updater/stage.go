@@ -40,6 +40,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/rs/zerolog/log"
 )
@@ -65,6 +66,11 @@ const (
 	// caps the file that is kept; this caps what getting to it can be made to
 	// cost.
 	maxArchiveInflatedBytes = 384 << 20
+
+	// maxStagedPayloadBytes limits retained platform extras independently of the
+	// binary. Zip can seek past ignored members, so the archive-wide inflated
+	// limit alone cannot bound the sum of files selected from it.
+	maxStagedPayloadBytes = 256 << 20
 
 	// downloadStallTimeout is how long a transfer may make no progress at all
 	// before it is abandoned. It deliberately bounds silence rather than total
@@ -164,9 +170,12 @@ var (
 )
 
 // StageOptions describes one staging attempt.
+//
+//nolint:govet // Public option order groups related release and target fields.
 type StageOptions struct {
 	Release        *otameta.Release
 	progress       *progressReporter
+	payloadRoots   []updatepayload.Root
 	PlatformID     string
 	Arch           string
 	OS             string
@@ -178,6 +187,13 @@ type StageOptions struct {
 // StagedUpdate is a verified release unpacked into files this process named,
 // ready for the install stage to move into place. Nothing outside Dir has been
 // touched to produce it.
+type stagedPayloadFile struct {
+	Path         string
+	RelativePath string
+	Mode         os.FileMode
+	Size         int64
+}
+
 type StagedUpdate struct {
 	// Dir is the staging directory holding the archive and the payload.
 	// Removing it undoes the whole staging attempt.
@@ -190,7 +206,8 @@ type StagedUpdate struct {
 	// what it installed from.
 	ArchivePath string
 	// Version is the release version, without the tag's leading v.
-	Version string
+	Version      string
+	payloadFiles []stagedPayloadFile
 }
 
 // assetFetcher retrieves an asset URL. Production hands back the CDN response
@@ -232,6 +249,7 @@ type stager struct {
 	current          string
 	platformID       string
 	stagingRoot      string
+	payloadRoots     []updatepayload.Root
 	maxFileBytes     int64
 	maxInflatedBytes int64
 	stallTimeout     time.Duration
@@ -323,6 +341,7 @@ func newStager(opts *StageOptions, fetch assetFetcher) (*stager, error) {
 		binaryName:       binaryName,
 		stagingRoot:      opts.StagingRoot,
 		current:          opts.CurrentVersion,
+		payloadRoots:     append([]updatepayload.Root(nil), opts.payloadRoots...),
 		maxFileBytes:     maxStagedFileBytes,
 		maxInflatedBytes: maxArchiveInflatedBytes,
 		stallTimeout:     downloadStallTimeout,
@@ -452,9 +471,9 @@ func (s *stager) stageInto(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrArchiveRejected, err)
 	}
-	wantDigest, err := assetDigest(asset)
-	if err != nil {
-		return nil, err
+	wantDigest, digestErr := assetDigest(asset)
+	if digestErr != nil {
+		return nil, digestErr
 	}
 
 	// The archive is written under a name built from the version and extension
@@ -474,8 +493,9 @@ func (s *stager) stageInto(
 
 	binaryPath := filepath.Join(payloadDir, s.binaryName)
 	s.progress.stage(ProgressVerifying)
-	if err := s.extractBinary(ctx, archivePath, ext, wantDigest, binaryPath); err != nil {
-		return nil, err
+	payloadFiles, extractErr := s.extractRelease(ctx, archivePath, ext, wantDigest, binaryPath, payloadDir)
+	if extractErr != nil {
+		return nil, extractErr
 	}
 
 	// Extraction is a long uninterruptible stretch on a slow device, so the probe
@@ -511,10 +531,11 @@ func (s *stager) stageInto(
 	}
 
 	return &StagedUpdate{
-		Dir:         dir,
-		BinaryPath:  binaryPath,
-		ArchivePath: archivePath,
-		Version:     version,
+		Dir:          dir,
+		BinaryPath:   binaryPath,
+		ArchivePath:  archivePath,
+		Version:      version,
+		payloadFiles: payloadFiles,
 	}, nil
 }
 

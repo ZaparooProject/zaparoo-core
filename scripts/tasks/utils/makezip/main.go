@@ -28,10 +28,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	archivepath "path"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 )
 
 const baseURL = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
@@ -69,10 +72,6 @@ var platformURLs = map[string]string{
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
 	// Interim packaging fallback until dedicated ZapOS docs are published.
 	"zapos": "https://zaparoo.org/docs/platforms/linux/",
-}
-
-var extraItems = map[string][]string{
-	"batocera": {"cmd/batocera/scripts"},
 }
 
 func stripFrontmatter(content string) string {
@@ -114,21 +113,21 @@ func expandRelativeLinks(content, _ string) string {
 
 		// Count and strip leading ../ sequences
 		upLevels := 0
-		path := fullPath
-		for strings.HasPrefix(path, "../") {
+		linkPath := fullPath
+		for strings.HasPrefix(linkPath, "../") {
 			upLevels++
-			path = strings.TrimPrefix(path, "../")
+			linkPath = strings.TrimPrefix(linkPath, "../")
 		}
 		// Also handle ./ prefix (same directory)
-		path = strings.TrimPrefix(path, "./")
+		linkPath = strings.TrimPrefix(linkPath, "./")
 
 		// Remove .md or .mdx extension
-		path = strings.TrimSuffix(path, ".mdx")
-		path = strings.TrimSuffix(path, ".md")
+		linkPath = strings.TrimSuffix(linkPath, ".mdx")
+		linkPath = strings.TrimSuffix(linkPath, ".md")
 
 		// Remove trailing /index since zaparoo.org doesn't need it in URLs
-		path = strings.TrimSuffix(path, "/index")
-		path = strings.TrimSuffix(path, "index")
+		linkPath = strings.TrimSuffix(linkPath, "/index")
+		linkPath = strings.TrimSuffix(linkPath, "index")
 
 		// Build the absolute URL based on how many levels up we go
 		// Source docs are at docs/platforms/{platform}/, so:
@@ -138,10 +137,10 @@ func expandRelativeLinks(content, _ string) string {
 		var absURL string
 		if upLevels == 0 {
 			// Same directory or subdirectory - relative to platforms
-			absURL = baseDocsURL + "platforms/" + path
+			absURL = baseDocsURL + "platforms/" + linkPath
 		} else {
 			// Going up from platforms directory - resolve to docs base
-			absURL = baseDocsURL + path
+			absURL = baseDocsURL + linkPath
 		}
 
 		// Ensure URL ends with / and clean up any double slashes
@@ -310,7 +309,7 @@ func main() {
 	}
 }
 
-func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir string) error {
+func createZipFile(zipPath, appPath, licensePath, readmePath, platform, _ string) error {
 	//nolint:gosec // Safe: creates zip files in build script with controlled paths
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -343,25 +342,22 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir
 		}
 	}
 
-	if items, ok := extraItems[platform]; ok {
-		for _, item := range items {
-			if info, err := os.Stat(item); err == nil {
-				if info.IsDir() {
-					err = addDirToZip(zipWriter, item, buildDir)
-				} else {
-					destPath := filepath.Join(buildDir, filepath.Base(item))
-					if copyErr := copyFile(item, destPath); copyErr != nil {
-						return fmt.Errorf("error copying extra file: %w", copyErr)
-					}
-					err = addFileToZip(zipWriter, destPath, filepath.Base(item))
-				}
-				if err != nil {
-					return fmt.Errorf("error adding extra item to zip: %w", err)
-				}
-			}
+	return addPayloadToZip(zipWriter, updatepayload.Roots(platform))
+}
+
+func addPayloadToZip(zipWriter *zip.Writer, roots []updatepayload.Root) error {
+	for _, root := range roots {
+		info, err := os.Stat(root.SourceDir)
+		if err != nil {
+			return fmt.Errorf("reading payload source %q: %w", root.SourceDir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("payload source %q is not a directory", root.SourceDir)
+		}
+		if err := addDirToZip(zipWriter, root.SourceDir, root.ArchiveRoot); err != nil {
+			return fmt.Errorf("adding payload source %q to zip: %w", root.SourceDir, err)
 		}
 	}
-
 	return nil
 }
 
@@ -399,31 +395,23 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 	return nil
 }
 
-func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
-	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+func addDirToZip(zipWriter *zip.Writer, dirPath, archiveRoot string) error {
+	if err := filepath.Walk(dirPath, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-
-		if !info.IsDir() {
-			relPath, err := filepath.Rel(dirPath, path)
-			if err != nil {
-				return fmt.Errorf("failed to get relative path: %w", err)
-			}
-
-			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
-			//nolint:gosec // G703: paths from internal walk, not user input
-			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
-				return fmt.Errorf("failed to create directory: %w", err)
-			}
-
-			if err := copyFile(path, destPath); err != nil {
-				return err
-			}
-
-			return addFileToZip(zipWriter, destPath, filepath.Join(filepath.Base(dirPath), relPath))
+		if !info.Mode().IsRegular() {
+			return nil
 		}
-		return nil
+
+		relPath, err := filepath.Rel(dirPath, filePath)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %w", err)
+		}
+		if !updatepayload.IncludeSource(relPath) {
+			return nil
+		}
+		return addFileToZip(zipWriter, filePath, archivepath.Join(archiveRoot, filepath.ToSlash(relPath)))
 	}); err != nil {
 		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
 	}
@@ -442,7 +430,7 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, buildDir string) error {
+func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, _ string) error {
 	//nolint:gosec // Safe: creates tar.gz files in build script with controlled paths
 	tarGzFile, err := os.Create(tarGzPath)
 	if err != nil {
@@ -482,25 +470,22 @@ func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, buil
 		}
 	}
 
-	if items, ok := extraItems[platform]; ok {
-		for _, item := range items {
-			if info, err := os.Stat(item); err == nil {
-				if info.IsDir() {
-					err = addDirToTar(tarWriter, item, buildDir)
-				} else {
-					destPath := filepath.Join(buildDir, filepath.Base(item))
-					if copyErr := copyFile(item, destPath); copyErr != nil {
-						return fmt.Errorf("error copying extra file: %w", copyErr)
-					}
-					err = addFileToTar(tarWriter, destPath, filepath.Base(item))
-				}
-				if err != nil {
-					return fmt.Errorf("error adding extra item to tar: %w", err)
-				}
-			}
+	return addPayloadToTar(tarWriter, updatepayload.Roots(platform))
+}
+
+func addPayloadToTar(tarWriter *tar.Writer, roots []updatepayload.Root) error {
+	for _, root := range roots {
+		info, err := os.Stat(root.SourceDir)
+		if err != nil {
+			return fmt.Errorf("reading payload source %q: %w", root.SourceDir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("payload source %q is not a directory", root.SourceDir)
+		}
+		if err := addDirToTar(tarWriter, root.SourceDir, root.ArchiveRoot); err != nil {
+			return fmt.Errorf("adding payload source %q to tar: %w", root.SourceDir, err)
 		}
 	}
-
 	return nil
 }
 
@@ -537,31 +522,23 @@ func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
 	return nil
 }
 
-func addDirToTar(tarWriter *tar.Writer, dirPath, buildDir string) error {
-	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+func addDirToTar(tarWriter *tar.Writer, dirPath, archiveRoot string) error {
+	if err := filepath.Walk(dirPath, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-
-		if !info.IsDir() {
-			relPath, err := filepath.Rel(dirPath, path)
-			if err != nil {
-				return fmt.Errorf("failed to get relative path: %w", err)
-			}
-
-			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
-			//nolint:gosec // G703: paths from internal walk, not user input
-			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
-				return fmt.Errorf("failed to create directory: %w", err)
-			}
-
-			if err := copyFile(path, destPath); err != nil {
-				return err
-			}
-
-			return addFileToTar(tarWriter, destPath, filepath.Join(filepath.Base(dirPath), relPath))
+		if !info.Mode().IsRegular() {
+			return nil
 		}
-		return nil
+
+		relPath, err := filepath.Rel(dirPath, filePath)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %w", err)
+		}
+		if !updatepayload.IncludeSource(relPath) {
+			return nil
+		}
+		return addFileToTar(tarWriter, filePath, archivepath.Join(archiveRoot, filepath.ToSlash(relPath)))
 	}); err != nil {
 		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
 	}

@@ -36,6 +36,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -489,13 +490,15 @@ func TestExtractWalk_StopsOnCancellation(t *testing.T) {
 		{
 			ext: otameta.ArchiveExtTarGz,
 			walk: func(h *extractHarness, ctx context.Context, f *os.File, _ int64) error {
-				return h.stager.extractFromTarGz(ctx, f, h.destPath)
+				_, err := h.stager.extractFromTarGz(ctx, f, h.destPath, h.payloadDir)
+				return err
 			},
 		},
 		{
 			ext: otameta.ArchiveExtZip,
 			walk: func(h *extractHarness, ctx context.Context, f *os.File, size int64) error {
-				return h.stager.extractFromZip(ctx, f, size, h.destPath)
+				_, err := h.stager.extractFromZip(ctx, f, size, h.destPath, h.payloadDir)
+				return err
 			},
 		},
 	}
@@ -580,6 +583,82 @@ func writeArchive(t *testing.T, path, ext, memberName string, binary []byte) {
 		writeZip(t, path, []zipMember{{name: memberName, body: binary, mode: 0o755}})
 	default:
 		t.Fatalf("unsupported archive extension %q", ext)
+	}
+}
+
+func TestExtractRelease_IncludesConfiguredPayload(t *testing.T) {
+	t.Parallel()
+
+	for _, ext := range []string{otameta.ArchiveExtTarGz, otameta.ArchiveExtZip} {
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+			h := newExtractHarness(t, ext)
+			h.stager.payloadRoots = []updatepayload.Root{{ArchiveRoot: "scripts"}}
+			h.stager.chmod = os.Chmod
+			switch ext {
+			case otameta.ArchiveExtTarGz:
+				writeTarGz(t, h.archivePath, []tarMember{
+					{name: "zaparoo", body: []byte("binary"), mode: 0o755},
+					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o755},
+					{name: "scripts/configs/settings.conf", body: []byte("config"), mode: 0o600},
+					{name: "scripts/.DS_Store", body: []byte("metadata")},
+				})
+			case otameta.ArchiveExtZip:
+				writeZip(t, h.archivePath, []zipMember{
+					{name: "zaparoo", body: []byte("binary"), mode: 0o755},
+					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o755},
+					{name: "scripts/configs/settings.conf", body: []byte("config"), mode: 0o600},
+					{name: "scripts/.DS_Store", body: []byte("metadata")},
+				})
+			}
+
+			payloads, err := h.stager.extractRelease(
+				context.Background(), h.archivePath, ext, archiveDigest(t, h.archivePath), h.destPath, h.payloadDir,
+			)
+			require.NoError(t, err)
+			require.Len(t, payloads, 2)
+			assert.Equal(t, "scripts/services/zaparoo_service", payloads[0].RelativePath)
+			assert.Equal(t, os.FileMode(0o755), payloads[0].Mode)
+			assert.Equal(t, "scripts/configs/settings.conf", payloads[1].RelativePath)
+			assert.Equal(t, os.FileMode(0o644), payloads[1].Mode)
+			assert.FileExists(t, filepath.Join(h.payloadDir, "scripts", "services", "zaparoo_service"))
+			assert.NoFileExists(t, filepath.Join(h.payloadDir, "scripts", ".DS_Store"))
+		})
+	}
+}
+
+func TestExtractRelease_RejectsDuplicateOrInvalidPayload(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		member string
+		dupe   bool
+	}{
+		{name: "duplicate", member: "scripts/file", dupe: true},
+		{name: "parent traversal", member: "scripts/../file"},
+		{name: "backslash traversal", member: `scripts\..\file`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newExtractHarness(t, otameta.ArchiveExtZip)
+			h.stager.payloadRoots = []updatepayload.Root{{ArchiveRoot: "scripts"}}
+			h.stager.chmod = os.Chmod
+			members := []zipMember{
+				{name: "zaparoo", body: []byte("binary"), mode: 0o755},
+				{name: tt.member, body: []byte("payload")},
+			}
+			if tt.dupe {
+				members = append(members, zipMember{name: tt.member, body: []byte("other")})
+			}
+			writeZip(t, h.archivePath, members)
+
+			_, err := h.stager.extractRelease(
+				context.Background(), h.archivePath, otameta.ArchiveExtZip,
+				archiveDigest(t, h.archivePath), h.destPath, h.payloadDir,
+			)
+			require.ErrorIs(t, err, ErrArchiveRejected)
+		})
 	}
 }
 

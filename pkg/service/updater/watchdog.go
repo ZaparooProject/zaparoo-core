@@ -114,6 +114,13 @@ func (e *rolledBackError) Unwrap() []error {
 	return []error{ErrRolledBack, e.cause}
 }
 
+func (o watchdogFileOps) save(dir string, marker *pendingMarker) error {
+	if o.saveMarker == nil {
+		return saveMarker(dir, marker)
+	}
+	return o.saveMarker(dir, marker)
+}
+
 func defaultWatchdogFileOps() watchdogFileOps {
 	return watchdogFileOps{
 		fs:              afero.NewOsFs(),
@@ -276,8 +283,15 @@ func runStartupWatchdogWithOps(
 		return nil
 
 	case actionAbortInstall:
-		return abortInstall(ctx, dataDir, m,
-			installSidecarPath(m.TargetPath, installCandidateSuffix), fileOps.binary)
+		return abortInstallWithOps(ctx, dataDir, m,
+			installSidecarPath(m.TargetPath, installCandidateSuffix), fileOps.binary,
+			payloadInstallOps{
+				fs:            fileOps.fs,
+				replace:       fileOps.replace,
+				remove:        fileOps.fs.Remove,
+				stat:          fileOps.fs.Stat,
+				syncDirectory: fileOps.syncDirectory,
+			})
 
 	case actionFinalize:
 		return finalizeTerminalUpdate(ctx, dataDir, m, fileOps)
@@ -582,14 +596,48 @@ func restoreUserDB(
 	return nil
 }
 
+func restorePayloadFiles(dir string, m *pendingMarker, fileOps watchdogFileOps) error {
+	for _, payload := range m.PayloadBackups {
+		if !payload.OriginalMissing {
+			if err := restoreReplacedFile(dir, m, payload.BackupPath, payload.TargetPath, fileOps); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, statErr := fileOps.fs.Stat(payload.TargetPath)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return fmt.Errorf("reading newly installed payload %q: %w", payload.TargetPath, statErr)
+		}
+		if m.RestoringPath != payload.TargetPath {
+			m.RestoringPath = payload.TargetPath
+			if err := fileOps.save(dir, m); err != nil {
+				return fmt.Errorf("recording the payload being removed: %w", err)
+			}
+		}
+		if err := fileOps.fs.Remove(payload.TargetPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing newly installed payload %q: %w", payload.TargetPath, err)
+		}
+		if err := fileOps.syncDirectory(filepath.Dir(payload.TargetPath)); err != nil {
+			return fmt.Errorf("flushing removed payload %q: %w", payload.TargetPath, err)
+		}
+		m.RestoringPath = ""
+		if err := fileOps.save(dir, m); err != nil {
+			return fmt.Errorf("recording the removed payload: %w", err)
+		}
+	}
+	return nil
+}
+
 // restoreReplacedFiles renames what the install displaced back over what it
 // installed. The binary goes last so that a failure part way through leaves the
 // new one in place, which is the state blockRollback is willing to run in.
 func restoreReplacedFiles(dir string, m *pendingMarker, fileOps watchdogFileOps) error {
-	for _, p := range m.PayloadBackups {
-		if err := restoreReplacedFile(dir, m, p.BackupPath, p.TargetPath, fileOps); err != nil {
-			return err
-		}
+	if err := restorePayloadFiles(dir, m, fileOps); err != nil {
+		return err
 	}
 	// The binary is the one file the rollback may have to put back underneath a
 	// process that is running from it, so it does not go through the plain
@@ -617,7 +665,7 @@ func restoreReplacedFile(
 				return fmt.Errorf("restored backup and target are both unavailable for %q: %w", targetPath, targetErr)
 			}
 			m.RestoringPath = ""
-			if saveErr := saveMarker(dir, m); saveErr != nil {
+			if saveErr := fileOps.save(dir, m); saveErr != nil {
 				return fmt.Errorf("recording the completed file restore: %w", saveErr)
 			}
 			return nil
@@ -630,7 +678,7 @@ func restoreReplacedFile(
 
 	if m.RestoringPath != targetPath {
 		m.RestoringPath = targetPath
-		if err := saveMarker(dir, m); err != nil {
+		if err := fileOps.save(dir, m); err != nil {
 			return fmt.Errorf("recording the file being restored: %w", err)
 		}
 	}
@@ -642,7 +690,7 @@ func restoreReplacedFile(
 		return fmt.Errorf("flushing restored file %q: %w", targetPath, err)
 	}
 	m.RestoringPath = ""
-	if err := saveMarker(dir, m); err != nil {
+	if err := fileOps.save(dir, m); err != nil {
 		return fmt.Errorf("recording the completed file restore: %w", err)
 	}
 	return nil

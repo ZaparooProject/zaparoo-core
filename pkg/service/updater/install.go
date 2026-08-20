@@ -32,6 +32,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -43,6 +44,44 @@ const (
 // an update replaces the running binary.
 type UpdateBackupper interface {
 	BackupForUpdate(targetVersion string) (database.BackupInfo, func() error, error)
+}
+
+type payloadInstallOps struct {
+	fs            afero.Fs
+	replace       func(string, string) error
+	remove        func(string) error
+	stat          func(string) (os.FileInfo, error)
+	syncDirectory func(string) error
+}
+
+func defaultPayloadInstallOps() payloadInstallOps {
+	return payloadInstallOps{
+		fs:            afero.NewOsFs(),
+		replace:       replaceFile,
+		remove:        os.Remove,
+		stat:          os.Lstat,
+		syncDirectory: syncDir,
+	}
+}
+
+func (o payloadInstallOps) withDefaults() payloadInstallOps {
+	defaults := defaultPayloadInstallOps()
+	if o.fs == nil {
+		o.fs = defaults.fs
+	}
+	if o.replace == nil {
+		o.replace = defaults.replace
+	}
+	if o.remove == nil {
+		o.remove = defaults.remove
+	}
+	if o.stat == nil {
+		o.stat = defaults.stat
+	}
+	if o.syncDirectory == nil {
+		o.syncDirectory = defaults.syncDirectory
+	}
+	return o
 }
 
 type installOptions struct {
@@ -57,6 +96,7 @@ type installOptions struct {
 	// binary is how the install and its unwind move the executable around. The
 	// zero value does the real thing.
 	binary             installBinaryOps
+	payload            payloadInstallOps
 	TargetPath         string
 	DataDir            string
 	PreviousVersion    string
@@ -83,6 +123,7 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 	markerMu.Lock()
 	defer markerMu.Unlock()
 
+	payloadOps := opts.payload.withDefaults()
 	dir := stateDirFor(opts.DataDir)
 	pending, loadErr := loadMarker(dir)
 	if loadErr != nil {
@@ -124,12 +165,24 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 		return candidateErr
 	}
 
-	// Everything up to here can be abandoned by deleting two files. From the
+	payloadBackups, payloadErr := preparePayloadCandidates(opts.Staged, filepath.Dir(opts.TargetPath), payloadOps)
+	if payloadErr != nil {
+		_ = os.Remove(candidatePath)
+		removePreparedPayload(payloadBackups, payloadOps)
+		if cleanupErr := removeStagingDir(ctx, opts.Staged.Dir); cleanupErr != nil {
+			log.Warn().Err(cleanupErr).Str("dir", opts.Staged.Dir).
+				Msg("could not remove staging after payload preparation failed")
+		}
+		return payloadErr
+	}
+
+	// Everything up to here can be abandoned by deleting candidates and backups. From the
 	// snapshot on, the device is committed to either finishing or unwinding, so
 	// this is where a caller gets its last say.
 	if opts.PreQuiesce != nil {
 		if err := opts.PreQuiesce(ctx); err != nil {
 			_ = os.Remove(candidatePath)
+			removePreparedPayload(payloadBackups, payloadOps)
 			if cleanupErr := removeStagingDir(ctx, opts.Staged.Dir); cleanupErr != nil {
 				log.Warn().Err(cleanupErr).Str("dir", opts.Staged.Dir).
 					Msg("could not remove staging after the update was called off")
@@ -142,6 +195,7 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 	snapshot, resumeUserDB, err := opts.UserDB.BackupForUpdate(opts.Staged.Version)
 	if err != nil {
 		_ = os.Remove(candidatePath)
+		removePreparedPayload(payloadBackups, payloadOps)
 		if cleanupErr := removeStagingDir(ctx, opts.Staged.Dir); cleanupErr != nil {
 			log.Warn().Err(cleanupErr).Str("dir", opts.Staged.Dir).
 				Msg("could not remove staging after the update snapshot failed")
@@ -170,14 +224,26 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 		PlatformID:         opts.PlatformID,
 		UserDBSnapshotPath: snapshot.Path,
 		ManifestGeneration: opts.ManifestGeneration,
+		PayloadBackups:     payloadBackups,
 	}
 	if err := preserveCurrentBinary(opts.TargetPath, backupPath); err != nil {
-		removeInstallArtifacts(ctx, m, candidatePath, opts.binary)
+		removeInstallArtifacts(ctx, m, candidatePath, opts.binary, payloadOps)
 		return fmt.Errorf("preserving the current binary: %w", err)
 	}
 	if err := saveMarker(dir, m); err != nil {
-		removeInstallArtifacts(ctx, m, candidatePath, opts.binary)
+		removeInstallArtifacts(ctx, m, candidatePath, opts.binary, payloadOps)
 		return fmt.Errorf("recording the start of the update install: %w", err)
+	}
+
+	for _, payload := range m.PayloadBackups {
+		if err := payloadOps.replace(payload.CandidatePath, payload.TargetPath); err != nil {
+			return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
+				fmt.Errorf("installing payload file %q: %w", payload.TargetPath, err))
+		}
+		if err := payloadOps.syncDirectory(filepath.Dir(payload.TargetPath)); err != nil {
+			return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
+				fmt.Errorf("flushing installed payload file %q: %w", payload.TargetPath, err))
+		}
 	}
 
 	// Target holds the old executable until this swap and the verified new one
@@ -186,7 +252,7 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 	// to be vacated first the target name is briefly empty instead, and the
 	// marker written above is what tells the next boot to put the backup back.
 	if err := opts.binary.replace(candidatePath, opts.TargetPath); err != nil {
-		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath, opts.binary,
+		return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
 			fmt.Errorf("installing the staged binary: %w", err))
 	}
 	// From here the target name means the new binary, so an unwind has real work
@@ -194,13 +260,13 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 	// the unwind has to leave it alone.
 	m.BinaryReplaced = true
 	if err := syncDir(filepath.Dir(opts.TargetPath)); err != nil {
-		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath, opts.binary,
+		return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
 			fmt.Errorf("flushing the installed binary: %w", err))
 	}
 
 	m.State = markerInstalled
 	if err := saveMarker(dir, m); err != nil {
-		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath, opts.binary,
+		return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
 			fmt.Errorf("recording the completed update install: %w", err))
 	}
 
@@ -323,24 +389,174 @@ func prepareInstallCandidate(
 	return nil
 }
 
+func preparePayloadCandidates(
+	staged *StagedUpdate,
+	installRoot string,
+	ops payloadInstallOps,
+) ([]payloadBackup, error) {
+	if staged == nil || len(staged.payloadFiles) == 0 {
+		return nil, nil
+	}
+	ops = ops.withDefaults()
+	root := filepath.Clean(installRoot)
+	prepared := make([]payloadBackup, 0, len(staged.payloadFiles))
+	for _, file := range staged.payloadFiles {
+		relative := filepath.FromSlash(file.RelativePath)
+		targetPath := filepath.Join(root, relative)
+		relToRoot, err := filepath.Rel(root, targetPath)
+		if err != nil || relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
+			return prepared, fmt.Errorf("payload target %q escapes install root", file.RelativePath)
+		}
+		entry := payloadBackup{
+			TargetPath:    targetPath,
+			BackupPath:    installSidecarPath(targetPath, installBackupSuffix),
+			CandidatePath: installSidecarPath(targetPath, installCandidateSuffix),
+		}
+		prepared = append(prepared, entry)
+		entryAt := &prepared[len(prepared)-1]
+
+		//nolint:gosec // target path is constrained beneath the resolved install root
+		if err := os.MkdirAll(filepath.Dir(targetPath), stateDirPerm); err != nil {
+			return prepared, fmt.Errorf("creating payload target directory: %w", err)
+		}
+		if err := ops.remove(entry.CandidatePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return prepared, fmt.Errorf("removing stale payload candidate %q: %w", entry.CandidatePath, err)
+		}
+
+		targetInfo, statErr := ops.stat(targetPath)
+		switch {
+		case errors.Is(statErr, os.ErrNotExist):
+			entryAt.OriginalMissing = true
+			entryAt.BackupPath = ""
+		case statErr != nil:
+			return prepared, fmt.Errorf("reading payload target %q: %w", targetPath, statErr)
+		case !targetInfo.Mode().IsRegular():
+			return prepared, fmt.Errorf("payload target %q is not a regular file", targetPath)
+		}
+
+		if err := copyPayloadFile(file.Path, entry.CandidatePath, file.Mode); err != nil {
+			return prepared, fmt.Errorf("preparing payload candidate %q: %w", targetPath, err)
+		}
+		if err := ops.syncDirectory(filepath.Dir(targetPath)); err != nil {
+			return prepared, fmt.Errorf("flushing payload candidate %q: %w", targetPath, err)
+		}
+		if entryAt.OriginalMissing {
+			continue
+		}
+		if _, backupErr := ops.stat(entry.BackupPath); backupErr == nil {
+			if err := ops.remove(entry.BackupPath); err != nil {
+				return prepared, fmt.Errorf("removing orphaned payload backup %q: %w", entry.BackupPath, err)
+			}
+		} else if !errors.Is(backupErr, os.ErrNotExist) {
+			return prepared, fmt.Errorf("checking payload backup %q: %w", entry.BackupPath, backupErr)
+		}
+		if err := copyPayloadFile(targetPath, entry.BackupPath, targetInfo.Mode().Perm()); err != nil {
+			return prepared, fmt.Errorf("preserving payload target %q: %w", targetPath, err)
+		}
+		if err := ops.syncDirectory(filepath.Dir(targetPath)); err != nil {
+			return prepared, fmt.Errorf("flushing payload backup %q: %w", targetPath, err)
+		}
+	}
+	return prepared, nil
+}
+
+func copyPayloadFile(source, target string, mode os.FileMode) error {
+	//nolint:gosec // source and target are derived from verified staging and a controlled install root
+	src, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("opening payload source: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	//nolint:gosec // payload modes are normalized during staging
+	dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode.Perm())
+	if err != nil {
+		return fmt.Errorf("creating payload sidecar: %w", err)
+	}
+	_, copyErr := io.Copy(dst, src)
+	chmodErr := dst.Chmod(mode.Perm())
+	syncErr := dst.Sync()
+	closeErr := dst.Close()
+	if copyErr != nil {
+		_ = os.Remove(target)
+		return fmt.Errorf("copying payload sidecar: %w", copyErr)
+	}
+	if chmodErr != nil {
+		_ = os.Remove(target)
+		return fmt.Errorf("setting payload sidecar permissions: %w", chmodErr)
+	}
+	if syncErr != nil {
+		_ = os.Remove(target)
+		return fmt.Errorf("flushing payload sidecar: %w", syncErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(target)
+		return fmt.Errorf("closing payload sidecar: %w", closeErr)
+	}
+	return nil
+}
+
+func removePreparedPayload(payloads []payloadBackup, ops payloadInstallOps) {
+	ops = ops.withDefaults()
+	for _, payload := range payloads {
+		for _, path := range []string{payload.CandidatePath, payload.BackupPath} {
+			if path == "" {
+				continue
+			}
+			if err := ops.remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.Warn().Err(err).Str("path", path).Msg("could not remove unused payload sidecar")
+			}
+		}
+	}
+}
+
 func abortInstallAfterError(
 	ctx context.Context, dataDir string, m *pendingMarker, candidatePath string,
 	binary installBinaryOps, installErr error,
 ) error {
-	if abortErr := abortInstall(ctx, dataDir, m, candidatePath, binary); abortErr != nil {
+	return abortInstallAfterErrorWithOps(
+		ctx, dataDir, m, candidatePath, binary, defaultPayloadInstallOps(), installErr,
+	)
+}
+
+func abortInstallAfterErrorWithOps(
+	ctx context.Context, dataDir string, m *pendingMarker, candidatePath string,
+	binary installBinaryOps, payloadOps payloadInstallOps, installErr error,
+) error {
+	if abortErr := abortInstallWithOps(ctx, dataDir, m, candidatePath, binary, payloadOps); abortErr != nil {
 		return fmt.Errorf("%w; aborting the partial install also failed: %w", installErr, abortErr)
 	}
 	return installErr
 }
 
-// abortInstall restores only the binary. The new version has not run yet, so
-// restoring the UserDB snapshot would discard writes made while Apply was live.
-// Callers hold markerMu.
+// abortInstall restores payload files and the binary without restoring UserDB.
+// The incoming version has not run yet, so restoring its snapshot would discard
+// writes made while Apply was live. Callers hold markerMu.
 func abortInstall(
 	ctx context.Context, dataDir string, m *pendingMarker, candidatePath string, binary installBinaryOps,
 ) error {
+	return abortInstallWithOps(ctx, dataDir, m, candidatePath, binary, defaultPayloadInstallOps())
+}
+
+func abortInstallWithOps(
+	ctx context.Context,
+	dataDir string,
+	m *pendingMarker,
+	candidatePath string,
+	binary installBinaryOps,
+	payloadOps payloadInstallOps,
+) error {
 	if m == nil {
 		return nil
+	}
+	payloadOps = payloadOps.withDefaults()
+	fileOps := defaultWatchdogFileOps()
+	fileOps.fs = payloadOps.fs
+	fileOps.binary = binary
+	fileOps.replace = payloadOps.replace
+	fileOps.syncDirectory = payloadOps.syncDirectory
+	if err := restorePayloadFiles(stateDirFor(dataDir), m, fileOps); err != nil {
+		return err
 	}
 	if err := restoreBinaryAfterFailedInstall(m, binary); err != nil {
 		return err
@@ -349,7 +565,7 @@ func abortInstall(
 	if err := clearMarker(stateDirFor(dataDir)); err != nil {
 		return err
 	}
-	removeInstallArtifacts(ctx, m, candidatePath, binary)
+	removeInstallArtifacts(ctx, m, candidatePath, binary, payloadOps)
 	return nil
 }
 
@@ -395,8 +611,16 @@ func restoreBinaryAfterFailedInstall(m *pendingMarker, binary installBinaryOps) 
 }
 
 func removeInstallArtifacts(
-	ctx context.Context, m *pendingMarker, candidatePath string, binary installBinaryOps,
+	ctx context.Context,
+	m *pendingMarker,
+	candidatePath string,
+	binary installBinaryOps,
+	payloadOptions ...payloadInstallOps,
 ) {
+	payloadOps := defaultPayloadInstallOps()
+	if len(payloadOptions) > 0 {
+		payloadOps = payloadOptions[0].withDefaults()
+	}
 	if m != nil {
 		binary.sweep(m.TargetPath)
 	}
@@ -409,6 +633,9 @@ func removeInstallArtifacts(
 		if err := os.Remove(candidatePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn().Err(err).Str("path", candidatePath).Msg("could not remove update install candidate")
 		}
+	}
+	if m != nil {
+		removePreparedPayload(m.PayloadBackups, payloadOps)
 	}
 	if m != nil && m.UserDBSnapshotPath != "" {
 		if err := os.Remove(m.UserDBSnapshotPath); err != nil && !errors.Is(err, os.ErrNotExist) {

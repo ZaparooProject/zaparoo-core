@@ -34,12 +34,39 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+//nolint:govet // Test helper groups embedded clock before recorded state.
+type recordingClock struct {
+	clockwork.Clock
+	mu             syncutil.Mutex
+	afterDurations []time.Duration
+}
+
+func (c *recordingClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	c.afterDurations = append(c.afterDurations, d)
+	c.mu.Unlock()
+	return c.Clock.After(d)
+}
+
+func (c *recordingClock) afterCount(d time.Duration) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, recorded := range c.afterDurations {
+		if recorded == d {
+			count++
+		}
+	}
+	return count
+}
 
 // mockLauncherManager implements platforms.LauncherContextManager for testing.
 type mockLauncherManager struct {
@@ -355,16 +382,20 @@ func TestStopActiveLauncher(t *testing.T) {
 		require.NoError(t, cmd.Start())
 
 		base := NewBase("test")
+		clock := &recordingClock{Clock: clockwork.NewRealClock()}
+		base.SetClock(clock)
 		base.SetTrackedProcess(cmd.Process)
 		base.setActiveMedia = func(_ *models.ActiveMedia) {}
 		base.lastLauncher = platforms.Launcher{
 			Kill: func(_ *config.Instance) error { return assert.AnError },
 		}
 
-		start := time.Now()
 		require.NoError(t, base.StopActiveLauncher(platforms.StopForMenu))
 
-		assert.Less(t, time.Since(start), CustomKillTimeout)
+		// SIGKILLTimeout has the same duration and always creates the final
+		// cleanup timer. A second timer would mean the failed custom kill also
+		// waited out CustomKillTimeout instead of falling back immediately.
+		assert.Equal(t, 1, clock.afterCount(CustomKillTimeout))
 		assert.Nil(t, base.trackedProcess)
 	})
 

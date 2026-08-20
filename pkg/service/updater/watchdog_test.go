@@ -895,8 +895,7 @@ func TestRunStartupWatchdog_MarkerWithoutASnapshotBlocksRollback(t *testing.T) {
 	assert.Equal(t, outcomeRollbackBlocked, blocked.Outcome)
 }
 
-// Payload extras have no producer yet, but the rollback already restores them,
-// and the binary has to go last: a failure part way through then leaves the new
+// Payload extras restore before the binary: a failure part way through leaves the new
 // binary in place, which is the state a blocked rollback can live with.
 func TestRunStartupWatchdog_RestoresPayloadFilesBeforeTheBinary(t *testing.T) {
 	t.Parallel()
@@ -933,6 +932,24 @@ func TestRunStartupWatchdog_RestoresPayloadFilesBeforeTheBinary(t *testing.T) {
 	assert.Equal(t, "old asset", readFileString(t, assetPath))
 	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 	assert.NoFileExists(t, assetBackup, "a restored backup is not left behind")
+}
+
+func TestRunStartupWatchdog_RemovesNewPayloadFileBeforeTheBinary(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	assetPath := filepath.Join(t.TempDir(), "new-helper.sh")
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(assetPath, []byte("new asset"), 0o755))
+	m := f.marker(markerConfirming)
+	m.PayloadBackups = []payloadBackup{{TargetPath: assetPath, OriginalMissing: true}}
+	require.NoError(t, saveMarker(dir, m))
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, defaultWatchdogFileOps())
+	require.ErrorIs(t, err, ErrRolledBack)
+	assert.NoFileExists(t, assetPath)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 }
 
 // A payload entry with no backup recorded cannot be restored, and guessing is

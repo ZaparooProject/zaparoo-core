@@ -52,14 +52,20 @@ var stateMu syncutil.Mutex
 // purpose: the database is included in backups, so a watermark stored there
 // would roll backwards whenever an old backup was restored, which is a
 // self-inflicted downgrade window.
+//
+//nolint:govet // Field order keeps persisted state grouped by manifest, check, and outcome.
 type updaterState struct {
 	ManifestSeenAt       time.Time       `json:"manifestSeenAt"`
+	LastCheckAt          time.Time       `json:"lastCheckAt,omitempty"`
 	LastResult           *updateResult   `json:"lastResult,omitempty"`
 	Deferral             *updateDeferral `json:"deferral,omitempty"`
 	ManifestETag         string          `json:"manifestETag"`
 	ManifestLastModified string          `json:"manifestLastModified"`
+	LastOfferedVersion   string          `json:"lastOfferedVersion,omitempty"`
 	ManifestGeneration   int64           `json:"manifestGeneration"`
+	CheckFailures        int             `json:"checkFailures,omitempty"`
 	StateVersion         int             `json:"stateVersion"`
+	LastCheckOK          *bool           `json:"lastCheckOK,omitempty"` //nolint:tagliatelle // Established initialism.
 }
 
 // updateDeferral records that an automatic install has been putting a version
@@ -234,6 +240,57 @@ func writeFileAtomicWithSync(
 	}
 	if err := syncDirectory(dir); err != nil {
 		return fmt.Errorf("flushing updater state file %q: %w", name, err)
+	}
+	return nil
+}
+
+func recordScheduledCheck(dir string, succeeded bool) error {
+	if dir == "" {
+		return nil
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording scheduled check: %w", err)
+	}
+	st.LastCheckAt = time.Now().UTC()
+	st.LastCheckOK = &succeeded
+	if succeeded {
+		st.CheckFailures = 0
+	} else {
+		st.CheckFailures++
+	}
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording scheduled update check: %w", err)
+	}
+	return nil
+}
+
+func lastOfferedVersion(dir string) string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return loadState(dir).LastOfferedVersion
+}
+
+func recordOfferedVersion(dir, version string) error {
+	if dir == "" || version == "" {
+		return nil
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording offered version: %w", err)
+	}
+	if st.LastOfferedVersion == version {
+		return nil
+	}
+	st.LastOfferedVersion = version
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording offered update version: %w", err)
 	}
 	return nil
 }

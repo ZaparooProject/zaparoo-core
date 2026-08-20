@@ -76,6 +76,14 @@ func writeSizedFile(t *testing.T, path string, size int64) string {
 	return path
 }
 
+func TestSpaceNeeds_IncludesPayloadCandidateAndBackupAllowance(t *testing.T) {
+	t.Parallel()
+
+	f := newSpaceFixture(t)
+	f.needs.payloadCopies = true
+	assert.Equal(t, int64(testRequiredSpace+2*testArchiveSize), f.needs.required())
+}
+
 func TestCheckFreeSpace_AcceptsExactlyEnough(t *testing.T) {
 	t.Parallel()
 

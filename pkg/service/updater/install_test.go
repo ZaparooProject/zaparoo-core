@@ -158,6 +158,48 @@ func TestInstallStaged_ArmsWatchdogBeforeRestart(t *testing.T) {
 	assert.Equal(t, int64(412), m.ManifestGeneration)
 }
 
+func TestInstallStaged_RestoresPayloadWhenIncomingVersionNeverRan(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	installRoot := filepath.Dir(f.targetPath)
+
+	existingStaged := filepath.Join(f.stagingDir, "scripts", "services", "zaparoo_service")
+	newStaged := filepath.Join(f.stagingDir, "scripts", "new-helper.sh")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingStaged), 0o750))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(existingStaged, []byte("new service"), 0o755))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(newStaged, []byte("new helper"), 0o755))
+	existingTarget := filepath.Join(installRoot, "scripts", "services", "zaparoo_service")
+	newTarget := filepath.Join(installRoot, "scripts", "new-helper.sh")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingTarget), 0o750))
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(existingTarget, []byte("old service"), 0o700))
+	opts.Staged.payloadFiles = []stagedPayloadFile{
+		{Path: existingStaged, RelativePath: "scripts/services/zaparoo_service", Mode: 0o755},
+		{Path: newStaged, RelativePath: "scripts/new-helper.sh", Mode: 0o755},
+	}
+
+	require.NoError(t, installStaged(t.Context(), opts))
+	assert.Equal(t, "new service", readFileString(t, existingTarget))
+	assert.Equal(t, "new helper", readFileString(t, newTarget))
+	m, err := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, err)
+	require.Len(t, m.PayloadBackups, 2)
+	assert.False(t, m.PayloadBackups[0].OriginalMissing)
+	assert.True(t, m.PayloadBackups[1].OriginalMissing)
+
+	// Seeing the outgoing version means the incoming binary never ran. Abort
+	// payload and binary changes without restoring UserDB.
+	require.NoError(t, runStartupWatchdogWithOps(
+		t.Context(), f.dataDir, testCurrentVersion, defaultWatchdogFileOps(),
+	))
+	assert.Equal(t, "old service", readFileString(t, existingTarget))
+	assert.NoFileExists(t, newTarget)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+}
+
 func TestPreserveCurrentBinary_LeavesBootTargetPresent(t *testing.T) {
 	t.Parallel()
 
