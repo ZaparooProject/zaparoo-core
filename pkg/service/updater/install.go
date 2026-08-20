@@ -51,9 +51,12 @@ type installOptions struct {
 	// user database is closed for its snapshot. That is the last moment an
 	// install can still be called off with nothing to unwind, so it is where
 	// the second power check goes.
-	PreQuiesce         func(context.Context) error
-	Staged             *StagedUpdate
-	progress           *progressReporter
+	PreQuiesce func(context.Context) error
+	Staged     *StagedUpdate
+	progress   *progressReporter
+	// binary is how the install and its unwind move the executable around. The
+	// zero value does the real thing.
+	binary             installBinaryOps
 	TargetPath         string
 	DataDir            string
 	PreviousVersion    string
@@ -107,6 +110,10 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 	if removeErr := os.Remove(candidatePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return fmt.Errorf("removing a stale install candidate: %w", removeErr)
 	}
+	// Where a swap moves the outgoing binary aside instead of overwriting it,
+	// the process running from it cannot delete it before exiting. This is the
+	// first moment that file is reliably gone.
+	opts.binary.sweep(opts.TargetPath)
 
 	if candidateErr := prepareInstallCandidate(ctx, opts.Staged.BinaryPath, candidatePath,
 		opts.Staged.Version, opts.PlatformID); candidateErr != nil {
@@ -165,29 +172,35 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 		ManifestGeneration: opts.ManifestGeneration,
 	}
 	if err := preserveCurrentBinary(opts.TargetPath, backupPath); err != nil {
-		removeInstallArtifacts(ctx, m, candidatePath)
+		removeInstallArtifacts(ctx, m, candidatePath, opts.binary)
 		return fmt.Errorf("preserving the current binary: %w", err)
 	}
 	if err := saveMarker(dir, m); err != nil {
-		removeInstallArtifacts(ctx, m, candidatePath)
+		removeInstallArtifacts(ctx, m, candidatePath, opts.binary)
 		return fmt.Errorf("recording the start of the update install: %w", err)
 	}
 
-	// Target remains the old executable until this single atomic replacement.
-	// A power cut before it leaves the old target intact; one after it leaves the
-	// verified target plus the durable old-binary copy and marker.
-	if err := replaceFile(candidatePath, opts.TargetPath); err != nil {
-		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath,
+	// Target holds the old executable until this swap and the verified new one
+	// after it. Where the platform lets a running binary be overwritten that is
+	// one rename, so a power cut lands on one side or the other. Where it has
+	// to be vacated first the target name is briefly empty instead, and the
+	// marker written above is what tells the next boot to put the backup back.
+	if err := opts.binary.replace(candidatePath, opts.TargetPath); err != nil {
+		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath, opts.binary,
 			fmt.Errorf("installing the staged binary: %w", err))
 	}
+	// From here the target name means the new binary, so an unwind has real work
+	// to do. Before it, a failed swap left the old one exactly where it was and
+	// the unwind has to leave it alone.
+	m.BinaryReplaced = true
 	if err := syncDir(filepath.Dir(opts.TargetPath)); err != nil {
-		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath,
+		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath, opts.binary,
 			fmt.Errorf("flushing the installed binary: %w", err))
 	}
 
 	m.State = markerInstalled
 	if err := saveMarker(dir, m); err != nil {
-		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath,
+		return abortInstallAfterError(ctx, opts.DataDir, m, candidatePath, opts.binary,
 			fmt.Errorf("recording the completed update install: %w", err))
 	}
 
@@ -311,9 +324,10 @@ func prepareInstallCandidate(
 }
 
 func abortInstallAfterError(
-	ctx context.Context, dataDir string, m *pendingMarker, candidatePath string, installErr error,
+	ctx context.Context, dataDir string, m *pendingMarker, candidatePath string,
+	binary installBinaryOps, installErr error,
 ) error {
-	if abortErr := abortInstall(ctx, dataDir, m, candidatePath); abortErr != nil {
+	if abortErr := abortInstall(ctx, dataDir, m, candidatePath, binary); abortErr != nil {
 		return fmt.Errorf("%w; aborting the partial install also failed: %w", installErr, abortErr)
 	}
 	return installErr
@@ -322,33 +336,66 @@ func abortInstallAfterError(
 // abortInstall restores only the binary. The new version has not run yet, so
 // restoring the UserDB snapshot would discard writes made while Apply was live.
 // Callers hold markerMu.
-func abortInstall(ctx context.Context, dataDir string, m *pendingMarker, candidatePath string) error {
+func abortInstall(
+	ctx context.Context, dataDir string, m *pendingMarker, candidatePath string, binary installBinaryOps,
+) error {
 	if m == nil {
 		return nil
 	}
+	if err := restoreBinaryAfterFailedInstall(m, binary); err != nil {
+		return err
+	}
+
+	if err := clearMarker(stateDirFor(dataDir)); err != nil {
+		return err
+	}
+	removeInstallArtifacts(ctx, m, candidatePath, binary)
+	return nil
+}
+
+// restoreBinaryAfterFailedInstall puts the outgoing binary back, but only where
+// something actually took its place.
+//
+// Every way the install swap can fail leaves the target holding the binary it
+// started with, or holding nothing at all. Where it still holds the old binary
+// there is nothing to restore, and restoring anyway would not be harmless: on a
+// platform that has to vacate the name before writing it, it moves the image
+// this process is running from into a hidden name and opens a second window
+// where the device has no executable — to install a copy of what is already
+// there.
+func restoreBinaryAfterFailedInstall(m *pendingMarker, binary installBinaryOps) error {
+	_, targetErr := os.Stat(m.TargetPath)
+	if targetErr != nil && !errors.Is(targetErr, os.ErrNotExist) {
+		return fmt.Errorf("checking the binary after a failed install: %w", targetErr)
+	}
+	installed := targetErr == nil
+	if installed && !m.BinaryReplaced {
+		return nil
+	}
+
 	if _, backupErr := os.Stat(m.BackupPath); backupErr == nil {
-		if restoreErr := replaceFile(m.BackupPath, m.TargetPath); restoreErr != nil {
+		if restoreErr := binary.replace(m.BackupPath, m.TargetPath); restoreErr != nil {
 			return fmt.Errorf("restoring the current binary after a failed install: %w", restoreErr)
 		}
 		if syncErr := syncDir(filepath.Dir(m.TargetPath)); syncErr != nil {
 			return fmt.Errorf("flushing the restored current binary: %w", syncErr)
 		}
 	} else if errors.Is(backupErr, os.ErrNotExist) {
-		if _, targetErr := os.Stat(m.TargetPath); targetErr != nil {
+		if !installed {
 			return fmt.Errorf("failed install has neither current binary nor backup: %w", targetErr)
 		}
 	} else {
 		return fmt.Errorf("checking the current binary backup after a failed install: %w", backupErr)
 	}
-
-	if err := clearMarker(stateDirFor(dataDir)); err != nil {
-		return err
-	}
-	removeInstallArtifacts(ctx, m, candidatePath)
 	return nil
 }
 
-func removeInstallArtifacts(ctx context.Context, m *pendingMarker, candidatePath string) {
+func removeInstallArtifacts(
+	ctx context.Context, m *pendingMarker, candidatePath string, binary installBinaryOps,
+) {
+	if m != nil {
+		binary.sweep(m.TargetPath)
+	}
 	if m != nil && m.BackupPath != "" {
 		if err := os.Remove(m.BackupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn().Err(err).Str("path", m.BackupPath).Msg("could not remove unused binary backup")

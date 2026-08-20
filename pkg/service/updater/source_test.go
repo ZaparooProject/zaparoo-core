@@ -31,7 +31,6 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -132,7 +131,6 @@ func (ms *manifestServer) source(stateDir, platformID, goarch string) *verifiedS
 		stateDir:   stateDir,
 		platformID: platformID,
 		goarch:     goarch,
-		key:        &keyRef{},
 		verify: func(data, sig []byte) (*otameta.Manifest, error) {
 			if !ed25519.Verify(ms.pub, data, sig) {
 				return nil, otameta.ErrBadSignature
@@ -142,8 +140,34 @@ func (ms *manifestServer) source(stateDir, platformID, goarch string) *verifiedS
 	}
 }
 
-func testRepo() selfupdate.Repository {
-	return selfupdate.NewRepositorySlug("ZaparooProject", "zaparoo-core")
+// loaded returns a source that has already fetched and verified the manifest,
+// which is the state every selection question is asked in.
+func (ms *manifestServer) loaded(t *testing.T, stateDir, platformID, goarch string) *verifiedSource {
+	t.Helper()
+
+	src := ms.source(stateDir, platformID, goarch)
+	require.NoError(t, src.load(t.Context(), updateOwner, updateRepo))
+	return src
+}
+
+// assertOffersNewest checks a loaded manifest still selects normally, which is
+// what makes a cached copy usable rather than merely present.
+func assertOffersNewest(t *testing.T, src *verifiedSource) {
+	t.Helper()
+
+	rel := offered(t, src, otameta.ChannelStable)
+	require.NotNil(t, rel)
+	assert.Equal(t, "v2.16.1", rel.TagName)
+}
+
+// offered is the release a device following channel is given, or nil when the
+// manifest holds nothing for it.
+func offered(t *testing.T, src *verifiedSource, channel string) *otameta.Release {
+	t.Helper()
+
+	rel, err := src.selectRelease(channel)
+	require.NoError(t, err)
+	return rel
 }
 
 // twoReleaseManifest carries a full-matrix release and an older one that
@@ -196,45 +220,24 @@ releases:
 `, generation, dl)
 }
 
-func TestVerifiedSource_ListReleases(t *testing.T) {
+// Selection is by version rather than by publish order, so the manifest listing
+// the newest release first is not what makes it the one offered.
+func TestVerifiedSource_SelectsTheNewestRelease(t *testing.T) {
 	t.Parallel()
 
 	ms := newManifestServer(t, twoReleaseManifest(412))
-	src := ms.source(t.TempDir(), "linux", "amd64")
+	rel := offered(t, ms.loaded(t, t.TempDir(), "linux", "amd64"), otameta.ChannelStable)
 
-	releases, err := src.ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 2)
-
-	// Each release keeps only this device's archive plus the metadata assets.
-	newest := releases[0]
-	assert.Equal(t, "v2.16.1", newest.GetTagName())
+	require.NotNil(t, rel)
+	assert.Equal(t, "v2.16.1", rel.TagName)
+	// The release is offered whole. Picking this device's archive out of it is
+	// the install's job, and it does that against the same signed manifest.
 	assert.Equal(t, []string{
 		"zaparoo-linux_amd64-2.16.1.tar.gz",
-		"checksums.txt",
-		"checksums.txt.sig",
-	}, assetNames(newest))
-
-	// The key the manifest named is what the checksums validator must use.
-	assert.Equal(t, "test1", src.key.get())
-}
-
-// Another platform's archive must never reach go-selfupdate, so nothing
-// downstream can pick one by accident.
-func TestVerifiedSource_DropsOtherPlatformArchives(t *testing.T) {
-	t.Parallel()
-
-	ms := newManifestServer(t, twoReleaseManifest(412))
-
-	releases, err := ms.source(t.TempDir(), "zapos", "arm64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.NotEmpty(t, releases)
-
-	assert.Equal(t, []string{
 		"zaparoo-zapos_arm64-2.16.1.tar.gz",
 		"checksums.txt",
 		"checksums.txt.sig",
-	}, assetNames(releases[0]))
+	}, assetNames(rel))
 }
 
 // A release predating a platform is skipped rather than failing the whole
@@ -242,47 +245,61 @@ func TestVerifiedSource_DropsOtherPlatformArchives(t *testing.T) {
 func TestVerifiedSource_SkipsReleasesWithoutAnAsset(t *testing.T) {
 	t.Parallel()
 
+	// Only the newer release carries a zapos archive.
 	ms := newManifestServer(t, twoReleaseManifest(412))
+	rel := offered(t, ms.loaded(t, t.TempDir(), "zapos", "arm64"), otameta.ChannelStable)
 
-	releases, err := ms.source(t.TempDir(), "zapos", "arm64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 1)
-	assert.Equal(t, "v2.16.1", releases[0].GetTagName())
+	require.NotNil(t, rel)
+	assert.Equal(t, "v2.16.1", rel.TagName)
 }
 
-// The manifest's explicit channel decides prerelease, not GitHub's flag, so
-// moving a release between channels is a publish decision.
-func TestVerifiedSource_ChannelDrivesPrerelease(t *testing.T) {
+// A device no release was built for is offered nothing, which is an answer
+// rather than a failure.
+func TestVerifiedSource_OffersNothingWithoutAMatchingRelease(t *testing.T) {
 	t.Parallel()
 
-	body := strings.Replace(twoReleaseManifest(412), "channel: stable", "channel: beta", 1)
-	ms := newManifestServer(t, body)
+	ms := newManifestServer(t, twoReleaseManifest(412))
+	rel := offered(t, ms.loaded(t, t.TempDir(), "mister", "arm"), otameta.ChannelStable)
 
-	releases, err := ms.source(t.TempDir(), "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 2)
-	assert.True(t, releases[0].GetPrerelease())
-	assert.False(t, releases[1].GetPrerelease())
+	assert.Nil(t, rel)
 }
 
-// Relative metadata URLs resolve against the repository base, matching how
-// go-selfupdate's own source handles them; absolute archive URLs pass through.
+// The manifest's channel decides who is offered a release, so moving one
+// between channels is a publish decision rather than a client one.
+func TestVerifiedSource_ChannelDrivesSelection(t *testing.T) {
+	t.Parallel()
+
+	// Only the newest release moves to beta; the manifest lists it first.
+	body := strings.Replace(twoReleaseManifest(412), "channel: stable", "channel: beta", 1)
+	ms := newManifestServer(t, body)
+	src := ms.loaded(t, t.TempDir(), "linux", "amd64")
+
+	stable := offered(t, src, otameta.ChannelStable)
+	require.NotNil(t, stable)
+	assert.Equal(t, "v2.15.1", stable.TagName, "a stable device must not be offered a beta")
+
+	// Beta is what a device accepts rather than all it accepts, so a beta
+	// device is offered the newest release on either channel.
+	beta := offered(t, src, otameta.ChannelBeta)
+	require.NotNil(t, beta)
+	assert.Equal(t, "v2.16.1", beta.TagName)
+}
+
+// Relative metadata URLs resolve against the repository base; absolute archive
+// URLs pass through.
 func TestVerifiedSource_ResolvesRelativeAssetURLs(t *testing.T) {
 	t.Parallel()
 
 	ms := newManifestServer(t, twoReleaseManifest(412))
+	rel := offered(t, ms.loaded(t, t.TempDir(), "linux", "amd64"), otameta.ChannelStable)
 
-	releases, err := ms.source(t.TempDir(), "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.NotEmpty(t, releases)
-
-	assets := releases[0].GetAssets()
-	require.Len(t, assets, 3)
+	require.NotNil(t, rel)
+	require.Len(t, rel.Assets, 4)
 	assert.Equal(t,
 		"https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.16.1/"+
 			"zaparoo-linux_amd64-2.16.1.tar.gz",
-		assets[0].GetBrowserDownloadURL())
-	assert.Equal(t, ms.URL+testRepoPath+"/checksums.txt", assets[1].GetBrowserDownloadURL())
+		rel.Assets[0].URL)
+	assert.Equal(t, ms.URL+testRepoPath+"/checksums.txt", rel.Assets[2].URL)
 }
 
 func TestVerifiedSource_RejectsBadSignature(t *testing.T) {
@@ -301,7 +318,7 @@ func TestVerifiedSource_RejectsBadSignature(t *testing.T) {
 		return otameta.Parse(data)
 	}
 
-	_, err = src.ListReleases(t.Context(), testRepo())
+	err = src.load(t.Context(), updateOwner, updateRepo)
 	require.ErrorIs(t, err, otameta.ErrBadSignature)
 }
 
@@ -311,7 +328,7 @@ func TestVerifiedSource_AdvancesWatermark(t *testing.T) {
 	dir := t.TempDir()
 	ms := newManifestServer(t, twoReleaseManifest(412))
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	st := loadState(dir)
@@ -330,12 +347,12 @@ func TestVerifiedSource_RejectsGenerationRollback(t *testing.T) {
 	dir := t.TempDir()
 	ms := newManifestServer(t, twoReleaseManifest(412))
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	ms.setBody(twoReleaseManifest(411), `"v0"`)
 
-	_, err = ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err = ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.ErrorIs(t, err, ErrGenerationRollback)
 
 	// A rejected fetch must not move the watermark backwards.
@@ -349,14 +366,12 @@ func TestVerifiedSource_AcceptsSameGeneration(t *testing.T) {
 	dir := t.TempDir()
 	ms := newManifestServer(t, twoReleaseManifest(412))
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	ms.setBody(twoReleaseManifest(412), `"v1-again"`)
 
-	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	assert.Len(t, releases, 2)
+	assertOffersNewest(t, ms.loaded(t, dir, "linux", "amd64"))
 }
 
 // The second check should send If-None-Match and fall back to the cached bytes
@@ -367,12 +382,10 @@ func TestVerifiedSource_ConditionalGETUsesCache(t *testing.T) {
 	dir := t.TempDir()
 	ms := newManifestServer(t, twoReleaseManifest(412))
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
-	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 2)
+	assertOffersNewest(t, ms.loaded(t, dir, "linux", "amd64"))
 
 	assert.Equal(t, int64(2), ms.manifestGets.Load())
 	assert.Equal(t, int64(1), ms.manifest304s.Load(),
@@ -390,16 +403,14 @@ func TestVerifiedSource_ConditionalGETWithoutETag(t *testing.T) {
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	ms.setBody(twoReleaseManifest(412), "")
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	st := loadState(dir)
 	require.Empty(t, st.ManifestETag)
 	require.Equal(t, testLastModified, st.ManifestLastModified)
 
-	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	assert.Len(t, releases, 2)
+	assertOffersNewest(t, ms.loaded(t, dir, "linux", "amd64"))
 	assert.Equal(t, int64(1), ms.manifest304s.Load(),
 		"the second check should have been answered from cache via If-Modified-Since")
 	assert.Equal(t, int64(2), ms.sigGets.Load(), "the signature must be fetched fresh every check")
@@ -416,14 +427,14 @@ func TestVerifiedSource_RejectsCachedManifestAgainstNewerSignature(t *testing.T)
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	ms.setBody(twoReleaseManifest(412), "")
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	// The body moves on, but Last-Modified does not, so the manifest is still
 	// answered 304 while the signature is re-fetched over the new bytes.
 	ms.setBody(twoReleaseManifest(413), "")
 
-	_, err = ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err = ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.ErrorIs(t, err, otameta.ErrBadSignature)
 	require.Equal(t, int64(1), ms.manifest304s.Load())
 
@@ -441,15 +452,13 @@ func TestVerifiedSource_NewLastModifiedRefetches(t *testing.T) {
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	ms.setBody(twoReleaseManifest(412), "")
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	ms.setBody(twoReleaseManifest(413), "")
 	ms.setLastModified("Tue, 18 Aug 2026 09:00:00 GMT")
 
-	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	assert.Len(t, releases, 2)
+	assertOffersNewest(t, ms.loaded(t, dir, "linux", "amd64"))
 
 	st := loadState(dir)
 	assert.Equal(t, int64(413), st.ManifestGeneration, "the newer manifest must have been read")
@@ -465,13 +474,11 @@ func TestVerifiedSource_MissingCacheRefetches(t *testing.T) {
 	dir := t.TempDir()
 	ms := newManifestServer(t, twoReleaseManifest(412))
 
-	_, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(dir, "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(filepath.Join(dir, manifestCacheName)))
 
-	releases, err := ms.source(dir, "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	assert.Len(t, releases, 2)
+	assertOffersNewest(t, ms.loaded(t, dir, "linux", "amd64"))
 	assert.Equal(t, []byte(twoReleaseManifest(412)), loadCachedManifest(dir),
 		"the cache should be rewritten from the served bytes")
 }
@@ -482,7 +489,7 @@ func TestVerifiedSource_RejectsOversizedManifest(t *testing.T) {
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	ms.setBody(strings.Repeat("#", maxManifestBytes+1), `"big"`)
 
-	_, err := ms.source(t.TempDir(), "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(t.TempDir(), "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "larger than")
 }
@@ -493,7 +500,7 @@ func TestVerifiedSource_SignatureFetchFailure(t *testing.T) {
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	ms.sigStatus.Store(http.StatusNotFound)
 
-	_, err := ms.source(t.TempDir(), "linux", "amd64").ListReleases(t.Context(), testRepo())
+	err := ms.source(t.TempDir(), "linux", "amd64").load(t.Context(), updateOwner, updateRepo)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fetching manifest signature")
 	assert.Equal(t, int64(0), ms.manifestGets.Load(), "no manifest is fetched without a signature")
@@ -506,9 +513,7 @@ func TestVerifiedSource_NoStateDir(t *testing.T) {
 
 	ms := newManifestServer(t, twoReleaseManifest(412))
 
-	releases, err := ms.source("", "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	assert.Len(t, releases, 2)
+	assertOffersNewest(t, ms.loaded(t, "", "linux", "amd64"))
 }
 
 // An ambiguous release is skipped rather than guessed at, and the next best
@@ -521,10 +526,9 @@ func TestVerifiedSource_SkipsAmbiguousRelease(t *testing.T) {
 		"name: zaparoo-linux_amd64-2.16.1.zip", 1)
 	ms := newManifestServer(t, body)
 
-	releases, err := ms.source(t.TempDir(), "linux", "amd64").ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 1)
-	assert.Equal(t, "v2.15.1", releases[0].GetTagName())
+	rel := offered(t, ms.loaded(t, t.TempDir(), "linux", "amd64"), otameta.ChannelStable)
+	require.NotNil(t, rel)
+	assert.Equal(t, "v2.15.1", rel.TagName)
 }
 
 func TestResolvedAssetCopies(t *testing.T) {
@@ -535,25 +539,13 @@ func TestResolvedAssetCopies(t *testing.T) {
 	resolved := resolvedAssetCopies(
 		[]*otameta.Asset{nil, archive, metadata},
 		"https://updates.example/releases",
-		func(asset *otameta.Asset) bool { return asset == archive },
 	)
 
-	require.Len(t, resolved, 1)
+	require.Len(t, resolved, 2)
 	assert.NotSame(t, archive, resolved[0])
 	assert.Equal(t, "https://updates.example/releases/assets/core.tar.gz", resolved[0].URL)
+	assert.Equal(t, "https://updates.example/releases/assets/checksums.txt", resolved[1].URL)
 	assert.Equal(t, "assets/core.tar.gz", archive.URL, "resolving must not mutate signed manifest assets")
-}
-
-func TestIsReleaseArchive(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, isReleaseArchive("zaparoo-linux_amd64-2.16.1.tar.gz"))
-	assert.True(t, isReleaseArchive("zaparoo-mister_arm-2.16.1.zip"))
-	assert.False(t, isReleaseArchive("checksums.txt"))
-	assert.False(t, isReleaseArchive("checksums.txt.sig"))
-	assert.False(t, isReleaseArchive("zaparoo-linux_amd64-2.16.1.tar.gz.sig"))
-	assert.False(t, isReleaseArchive("zaparoo-"))
-	assert.False(t, isReleaseArchive(""))
 }
 
 func TestResolveAssetURL(t *testing.T) {
@@ -565,11 +557,10 @@ func TestResolveAssetURL(t *testing.T) {
 	assert.Empty(t, resolveAssetURL("", base))
 }
 
-func assetNames(rel selfupdate.SourceRelease) []string {
-	assets := rel.GetAssets()
-	names := make([]string, 0, len(assets))
-	for _, a := range assets {
-		names = append(names, a.GetName())
+func assetNames(rel *otameta.Release) []string {
+	names := make([]string, 0, len(rel.Assets))
+	for _, a := range rel.Assets {
+		names = append(names, a.Name)
 	}
 	return names
 }
@@ -585,15 +576,15 @@ func TestVerifiedSource_ReleaseForVersionNeedsALoadedManifest(t *testing.T) {
 	assert.Equal(t, int64(0), src.manifestGeneration())
 }
 
-// TestVerifiedSource_ReleaseForVersion covers the second lookup an install does:
-// go-selfupdate picked a version, and the install has to re-find that release in
-// the manifest this process verified rather than trusting the detection result.
+// TestVerifiedSource_ReleaseForVersion covers the lookup selection and the
+// rollout check both go through: a version names a release, and the release has
+// to come back out of the manifest this process verified.
 func TestVerifiedSource_ReleaseForVersion(t *testing.T) {
 	t.Parallel()
 
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	src := ms.source(t.TempDir(), "linux", "amd64")
-	_, err := src.ListReleases(t.Context(), testRepo())
+	err := src.load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 	assert.Equal(t, int64(412), src.manifestGeneration())
 
@@ -601,8 +592,8 @@ func TestVerifiedSource_ReleaseForVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v2.16.1", rel.TagName)
 
-	// Unlike ListReleases this keeps every asset: the caller selects by name and
-	// still needs the checksum files alongside its own archive.
+	// Every asset comes back: the caller picks its own archive by name and still
+	// needs the checksum files alongside it.
 	names := make([]string, 0, len(rel.Assets))
 	for _, asset := range rel.Assets {
 		names = append(names, asset.Name)
@@ -632,7 +623,7 @@ func TestVerifiedSource_ReleaseForVersionRejectsUnknownVersions(t *testing.T) {
 
 	ms := newManifestServer(t, twoReleaseManifest(412))
 	src := ms.source(t.TempDir(), "linux", "amd64")
-	_, err := src.ListReleases(t.Context(), testRepo())
+	err := src.load(t.Context(), updateOwner, updateRepo)
 	require.NoError(t, err)
 
 	for name, version := range map[string]string{
@@ -660,15 +651,13 @@ func TestVerifiedSource_ReadOnlyStateDirStillChecks(t *testing.T) {
 	makeDirUnwritable(t, dir)
 	src := ms.source(dir, "linux", "amd64")
 
-	releases, err := src.ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 2)
+	require.NoError(t, src.load(t.Context(), updateOwner, updateRepo))
+	assertOffersNewest(t, src)
 
 	// Nothing was stored, so the next check has to fetch the manifest in full
 	// rather than send validators it cannot pair with a cached body.
-	releases, err = src.ListReleases(t.Context(), testRepo())
-	require.NoError(t, err)
-	require.Len(t, releases, 2)
+	require.NoError(t, src.load(t.Context(), updateOwner, updateRepo))
+	assertOffersNewest(t, src)
 	assert.Equal(t, int64(2), ms.manifestGets.Load())
 
 	entries, err := os.ReadDir(dir)

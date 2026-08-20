@@ -122,10 +122,10 @@ func verifySelectionMatrix(fs afero.Fs, path string) (*result, error) {
 func newestPerChannel(m *otameta.Manifest) map[string]bool {
 	byChannel := make(map[string]*otameta.Release, 2)
 	for _, rel := range m.Releases {
-		// Drafts and unparseable tags are skipped by go-selfupdate, so a device
-		// is never offered them and their matrix does not matter. The channel
-		// grouping covers prereleases: releasesFor derives go-selfupdate's
-		// prerelease flag from the channel, not from the manifest's own field.
+		// Drafts and unparseable tags are skipped by every client, so a device
+		// is never offered them and their matrix does not matter. Grouping by
+		// channel is what covers prereleases: the channel a release is on is
+		// what decides which devices are offered it.
 		if rel == nil || rel.Draft {
 			continue
 		}

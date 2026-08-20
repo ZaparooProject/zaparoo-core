@@ -27,12 +27,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/rs/zerolog/log"
 )
 
@@ -61,13 +59,16 @@ const (
 // it is refused rather than used.
 var ErrGenerationRollback = errors.New("update manifest is older than one already seen")
 
-// verifiedSource is the go-selfupdate source for Zaparoo's CDN. It fetches and
-// verifies the manifest itself rather than letting go-selfupdate parse an
-// unverified document, and hands back only the releases this device may
-// install, each reduced to the single archive that belongs to it.
+// errManifestNotLoaded means a release was asked for before the manifest behind
+// it was fetched. It is a programming error rather than a device condition.
+var errManifestNotLoaded = errors.New("update manifest has not been loaded")
+
+// verifiedSource is Zaparoo's CDN as an update source. It fetches the manifest
+// and its detached signature, refuses anything that does not verify or that
+// replays an older generation, and answers which release this device should be
+// offered.
 type verifiedSource struct {
 	transport    *http.Transport
-	key          *keyRef
 	verify       func(data, sig []byte) (*otameta.Manifest, error)
 	manifest     *otameta.Manifest
 	baseURL      string
@@ -94,40 +95,30 @@ type httpResult struct {
 	notModified  bool
 }
 
-func (s *verifiedSource) ListReleases(
-	ctx context.Context,
-	repository selfupdate.Repository,
-) ([]selfupdate.SourceRelease, error) {
-	owner, repo, err := repository.GetSlug()
-	if err != nil {
-		return nil, fmt.Errorf("reading repository slug: %w", err)
-	}
-
+// load fetches and verifies the manifest this device selects from. It is
+// separate from selection because a check and the install that follows it both
+// read the same fetched copy.
+func (s *verifiedSource) load(ctx context.Context, owner, repo string) error {
 	base, err := url.JoinPath(s.baseURL, owner, repo)
 	if err != nil {
-		return nil, fmt.Errorf("building metadata URL: %w", err)
+		return fmt.Errorf("building metadata URL: %w", err)
 	}
 
 	manifest, err := s.fetchManifest(ctx, base)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	// The checksum validator runs later in the same update and has to use the
-	// key the publisher actually signed with, not a build-time default.
-	s.key.set(manifest.KeyID)
 	s.manifest = manifest
 	s.manifestBase = base
-
-	return s.releasesFor(manifest, base), nil
+	return nil
 }
 
-// releaseForVersion returns the signed manifest release chosen by
-// go-selfupdate's channel/latest-version selection. Asset URLs are resolved the
-// same way releasesFor resolves them for go-selfupdate.
+// releaseForVersion returns one release from the verified manifest with its
+// asset URLs resolved to absolute ones.
 func (s *verifiedSource) releaseForVersion(version string) (*otameta.Release, error) {
 	if s.manifest == nil {
-		return nil, errors.New("update manifest has not been loaded")
+		return nil, errManifestNotLoaded
 	}
 	want, err := semver.NewVersion(version)
 	if err != nil {
@@ -142,12 +133,17 @@ func (s *verifiedSource) releaseForVersion(version string) (*otameta.Release, er
 		if parseErr != nil || !candidate.Equal(want) {
 			continue
 		}
-
-		resolved := *rel
-		resolved.Assets = resolvedAssetCopies(rel.Assets, s.manifestBase, nil)
-		return &resolved, nil
+		return s.resolvedRelease(rel), nil
 	}
 	return nil, fmt.Errorf("selected release %s is missing from the verified manifest", version)
+}
+
+// resolvedRelease copies a release out of the verified manifest with its asset
+// URLs made absolute, leaving the manifest's own copy untouched.
+func (s *verifiedSource) resolvedRelease(rel *otameta.Release) *otameta.Release {
+	resolved := *rel
+	resolved.Assets = resolvedAssetCopies(rel.Assets, s.manifestBase)
+	return &resolved
 }
 
 func (s *verifiedSource) manifestGeneration() int64 {
@@ -244,14 +240,10 @@ func (s *verifiedSource) persist(st *updaterState, generation int64, res *httpRe
 	}
 }
 
-func resolvedAssetCopies(
-	assets []*otameta.Asset,
-	base string,
-	include func(*otameta.Asset) bool,
-) []*otameta.Asset {
+func resolvedAssetCopies(assets []*otameta.Asset, base string) []*otameta.Asset {
 	resolved := make([]*otameta.Asset, 0, len(assets))
 	for _, asset := range assets {
-		if asset == nil || (include != nil && !include(asset)) {
+		if asset == nil {
 			continue
 		}
 		copyAsset := *asset
@@ -261,125 +253,79 @@ func resolvedAssetCopies(
 	return resolved
 }
 
-// releasesFor reduces the manifest to what go-selfupdate should consider: the
-// releases that publish an archive for this device, each carrying that one
-// archive plus the metadata assets the validation chain needs.
-func (s *verifiedSource) releasesFor(manifest *otameta.Manifest, base string) []selfupdate.SourceRelease {
-	releases := make([]selfupdate.SourceRelease, 0, len(manifest.Releases))
+// selectRelease returns the release this device should be offered: the highest
+// version that is published, installable here, and on a channel this device
+// follows. Nothing is offered when no release qualifies.
+//
+// Selection is by version and not by publish date, so a hotfix cut on an older
+// line after a newer release cannot displace the newer one. A release with no
+// archive for this device is skipped rather than treated as newest, which is
+// what lets a platform added later coexist with releases predating it.
+func (s *verifiedSource) selectRelease(channel string) (*otameta.Release, error) {
+	if s.manifest == nil {
+		return nil, errManifestNotLoaded
+	}
 
-	for _, rel := range manifest.Releases {
-		if rel == nil {
+	var (
+		best    *otameta.Release
+		bestVer *semver.Version
+	)
+	for _, rel := range s.manifest.Releases {
+		version, ok := s.installableVersion(rel, channel)
+		if !ok {
 			continue
 		}
-
-		archive, err := otameta.SelectAsset(rel, s.platformID, s.goarch)
-		if err != nil {
-			// Routine for a release predating this platform, and a deliberate
-			// dead end for anything ambiguous: the release is skipped rather
-			// than guessed at, and the next best one is offered instead.
-			level := log.Debug()
-			if errors.Is(err, otameta.ErrAmbiguousAsset) {
-				level = log.Error()
-			}
-			level.Err(err).Str("release", rel.TagName).Msg("skipping release")
-			continue
+		if best == nil || version.GreaterThan(bestVer) {
+			best, bestVer = rel, version
 		}
-
-		resolvedAssets := resolvedAssetCopies(rel.Assets, base, func(asset *otameta.Asset) bool {
-			// Everything that is not this device's archive is metadata: the
-			// checksums file and its signature. Other platforms' archives are
-			// dropped so nothing downstream can pick one by accident.
-			return asset == archive || !isReleaseArchive(asset.Name)
-		})
-		assets := make([]*selfupdate.HttpAsset, 0, len(resolvedAssets))
-		for _, asset := range resolvedAssets {
-			assets = append(assets, &selfupdate.HttpAsset{
-				ID:   asset.ID,
-				Name: asset.Name,
-				Size: int(asset.Size),
-				URL:  asset.URL,
-			})
-		}
-
-		releases = append(releases, &selfupdate.HttpRelease{
-			ID:      rel.ID,
-			Name:    rel.Name,
-			TagName: rel.TagName,
-			URL:     resolveAssetURL(rel.URL, base),
-			Draft:   rel.Draft,
-			// The manifest's explicit channel decides this, not GitHub's
-			// prerelease flag, so moving a release between channels is a
-			// publish decision rather than a property of the git tag.
-			Prerelease:   rel.Channel == otameta.ChannelBeta,
-			PublishedAt:  rel.PublishedAt,
-			ReleaseNotes: rel.ReleaseNotes,
-			Assets:       assets,
-		})
 	}
 
 	log.Debug().
-		Int("releases", len(releases)).
-		Int64("generation", manifest.Generation).
+		Int("releases", len(s.manifest.Releases)).
+		Int64("generation", s.manifest.Generation).
 		Str("platform", s.platformID).
 		Str("arch", s.goarch).
+		Str("channel", channel).
 		Msg("verified update manifest")
 
-	return releases
+	if best == nil {
+		return nil, nil //nolint:nilnil // no release for this device is an answer, not a failure
+	}
+	// The release itself, not another lookup by its version: two entries can
+	// carry versions that compare equal while sitting on different channels,
+	// and a second pass by version would hand back whichever came first rather
+	// than the one this device is allowed to install.
+	return s.resolvedRelease(best), nil
 }
 
-// DownloadReleaseAsset fetches the archive or any link in its validation chain.
-// go-selfupdate only tracks the first validation asset by URL, so the chain
-// entries are looked up here.
-func (s *verifiedSource) DownloadReleaseAsset(
-	ctx context.Context,
-	rel *selfupdate.Release,
-	assetID int64,
-) (io.ReadCloser, error) {
-	if rel == nil {
-		return nil, selfupdate.ErrInvalidRelease
+// installableVersion reports the version of a release this device could install,
+// or false when the release is not a candidate at all.
+func (s *verifiedSource) installableVersion(rel *otameta.Release, channel string) (*semver.Version, bool) {
+	if rel == nil || rel.Draft {
+		return nil, false
 	}
-
-	downloadURL := ""
-	switch {
-	case rel.AssetID == assetID:
-		downloadURL = rel.AssetURL
-	case rel.ValidationAssetID == assetID:
-		downloadURL = rel.ValidationAssetURL
-	default:
-		for _, link := range rel.ValidationChain {
-			if link.ValidationAssetID == assetID {
-				downloadURL = link.ValidationAssetURL
-				break
-			}
-		}
+	// A beta device is offered stable releases too, because the beta channel is
+	// what a device accepts rather than all it accepts.
+	if rel.Channel == otameta.ChannelBeta && channel != otameta.ChannelBeta {
+		return nil, false
 	}
-
-	if downloadURL == "" {
-		return nil, fmt.Errorf("asset ID %d: %w", assetID, selfupdate.ErrAssetNotFound)
-	}
-
-	// No client deadline: the archive is the one response whose size is not
-	// bounded by a small constant, so total duration is the caller's context to
-	// bound. The transport's response-header timeout still catches a dead server.
-	client := &http.Client{Transport: s.transport}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
+	version, err := semver.NewVersion(otameta.VersionFromTag(rel.TagName))
 	if err != nil {
-		return nil, fmt.Errorf("creating asset request: %w", err)
+		log.Debug().Str("release", rel.TagName).Msg("skipping release with an unreadable version")
+		return nil, false
 	}
-
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("downloading asset: %w", err)
-	}
-	if res.StatusCode != http.StatusOK {
-		if closeErr := res.Body.Close(); closeErr != nil {
-			return nil, fmt.Errorf("asset request failed with status %d, and closing the body failed: %w",
-				res.StatusCode, closeErr)
+	if _, err := otameta.SelectAsset(rel, s.platformID, s.goarch); err != nil {
+		// Routine for a release predating this platform, and a deliberate dead
+		// end for anything ambiguous: the release is skipped rather than guessed
+		// at, and the next best one is offered instead.
+		level := log.Debug()
+		if errors.Is(err, otameta.ErrAmbiguousAsset) {
+			level = log.Error()
 		}
-		return nil, fmt.Errorf("asset request failed with status %d", res.StatusCode)
+		level.Err(err).Str("release", rel.TagName).Msg("skipping release")
+		return nil, false
 	}
-
-	return res.Body, nil
+	return version, true
 }
 
 // get reads at most limit bytes from a URL. Accept-Encoding is deliberately
@@ -440,8 +386,8 @@ func (s *verifiedSource) get(
 }
 
 // resolveAssetURL turns the manifest's relative metadata URLs into absolute
-// ones, matching how go-selfupdate's own HTTP source resolves them. Release
-// archives are already absolute GitHub URLs and pass through untouched.
+// ones. Release archives are already absolute GitHub URLs and pass through
+// untouched.
 func resolveAssetURL(raw, base string) string {
 	if raw == "" {
 		return ""
@@ -455,19 +401,3 @@ func resolveAssetURL(raw, base string) string {
 	}
 	return joined
 }
-
-// isReleaseArchive reports whether a name looks like an installable archive
-// for any platform, as opposed to a metadata file published alongside them.
-func isReleaseArchive(name string) bool {
-	if !strings.HasPrefix(name, "zaparoo-") {
-		return false
-	}
-	for _, ext := range []string{".tar.gz", ".zip"} {
-		if strings.HasSuffix(name, ext) {
-			return true
-		}
-	}
-	return false
-}
-
-var _ selfupdate.Source = (*verifiedSource)(nil)

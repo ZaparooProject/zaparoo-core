@@ -136,7 +136,21 @@ type pendingMarker struct {
 	PayloadBackups     []payloadBackup `json:"payloadBackups,omitempty"`
 	ManifestGeneration int64           `json:"manifestGeneration"`
 	Attempts           int             `json:"attempts"`
-	MarkerVersion      int             `json:"markerVersion"`
+	// RollbackAttempts counts the boots that have tried to roll this update
+	// back. A rollback that keeps failing leaves its marker in place so the
+	// next boot resumes it, and without a count that resumption never ends.
+	RollbackAttempts int `json:"rollbackAttempts,omitempty"`
+	MarkerVersion    int `json:"markerVersion"`
+	// BinaryReplaced records that the install swap took the target's name. A
+	// swap that failed leaves the binary it started with there, and the unwind
+	// has to know the difference: putting the backup back over a name that is
+	// already correct is not free on a platform that has to vacate it first.
+	BinaryReplaced bool `json:"binaryReplaced,omitempty"`
+	// UserDBRestored records that a rollback has already written the snapshot
+	// over the live database. A rollback that fails afterwards resumes on the
+	// next boot, and repeating this step would discard everything written in
+	// between.
+	UserDBRestored bool `json:"userDbRestored,omitempty"`
 }
 
 // markerPath returns the marker file inside the updater's state directory.

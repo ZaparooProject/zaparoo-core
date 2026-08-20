@@ -20,27 +20,65 @@
 package updater
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Windows fails at the replacement, which is after the download and after the
-// database snapshot, so the guard has to answer before any of that is spent.
-func TestPreflightPlatform_RefusesWindows(t *testing.T) {
+// A Windows install under Program Files cannot be swapped by a process that
+// refuses to run elevated. The swap is the last step of an install, long after
+// the download and the database snapshot, so the guard has to answer before any
+// of that is spent.
+func TestPreflightPlatform_RefusesAnUnwritableWindowsInstall(t *testing.T) {
 	t.Parallel()
 
-	err := preflightPlatform("windows")
+	missing := filepath.Join(t.TempDir(), "no-such-dir", "Zaparoo.exe")
+	err := preflightPlatform("windows", missing)
+
 	require.ErrorIs(t, err, ErrPlatformUnsupported)
 	assert.Contains(t, err.Error(), "Windows installer",
 		"the message has to say what to do instead")
+	assert.Contains(t, err.Error(), filepath.Dir(missing),
+		"the message has to name the directory that could not be written to")
+}
+
+func TestPreflightPlatform_AllowsAWritableWindowsInstall(t *testing.T) {
+	t.Parallel()
+
+	target := filepath.Join(t.TempDir(), "Zaparoo.exe")
+	assert.NoError(t, preflightPlatform("windows", target))
+}
+
+// Apply resolves the binary itself and reports that failure with its own
+// message. Refusing here would tell the user their platform is unsupported when
+// the real problem is that this build could not find its own executable.
+func TestPreflightPlatform_DefersAnUnresolvableBinaryToApply(t *testing.T) {
+	t.Parallel()
+
+	assert.NoError(t, preflightPlatform("windows", ""))
 }
 
 func TestPreflightPlatform_AllowsPlatformsThatReplaceTheirOwnBinary(t *testing.T) {
 	t.Parallel()
 
+	// The path is never looked at off Windows: a single rename over the running
+	// binary needs nothing the rest of the install did not already need.
+	missing := filepath.Join(t.TempDir(), "no-such-dir", "zaparoo")
 	for _, goos := range []string{"linux", "darwin", "freebsd"} {
-		assert.NoError(t, preflightPlatform(goos), goos)
+		assert.NoError(t, preflightPlatform(goos, missing), goos)
 	}
+}
+
+func TestCheckInstallDirWritable_LeavesNothingBehind(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, checkInstallDirWritable(dir))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the probe file has to be cleaned up")
 }

@@ -206,6 +206,9 @@ func (f *installFixture) marker(state markerState) *pendingMarker {
 		TargetVersion:      testTargetVersion,
 		PlatformID:         "mister",
 		UserDBSnapshotPath: f.snapshotPath,
+		// The fixture puts the new binary at the target, which is only true
+		// once the swap has taken the name.
+		BinaryReplaced: true,
 	}
 }
 
@@ -590,6 +593,11 @@ func TestRunStartupWatchdog_FinalizesDurableSuccess(t *testing.T) {
 	m.Outcome = outcomeSucceeded
 	m.OutcomeAt = time.Date(2026, 8, 18, 5, 0, 0, 0, time.UTC)
 	require.NoError(t, saveMarker(dir, m))
+	// What a swap that had to vacate the target's name left behind, in the slot
+	// an earlier unwind pushed it into rather than the first one.
+	superseded := supersededPathFor(f.targetPath, 2)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(superseded, []byte("old binary"), 0o755))
 
 	require.NoError(t, RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion))
 
@@ -597,6 +605,8 @@ func TestRunStartupWatchdog_FinalizesDurableSuccess(t *testing.T) {
 	assert.NoFileExists(t, f.backupPath)
 	assert.NoFileExists(t, f.snapshotPath)
 	assert.NoDirExists(t, f.stagingDir)
+	assert.NoFileExists(t, superseded,
+		"the process running from the superseded binary has exited, so finalizing clears it")
 	assert.Equal(t, "new binary", readFileString(t, f.targetPath))
 	assert.Equal(t, "after the update", readTestDBNote(t, f.dbPath))
 
@@ -896,12 +906,17 @@ func TestRunStartupWatchdog_RestoresPayloadFilesBeforeTheBinary(t *testing.T) {
 	require.NoError(t, saveMarker(dir, m))
 
 	ops := defaultWatchdogFileOps()
-	replace := ops.replace
 	var restored []string
-	ops.replace = func(src, dst string) error {
-		restored = append(restored, dst)
-		return replace(src, dst)
+	// The binary and the payload extras are put back by different calls, so
+	// both are recorded to see the order they actually run in.
+	record := func(next func(string, string) error) func(string, string) error {
+		return func(src, dst string) error {
+			restored = append(restored, dst)
+			return next(src, dst)
+		}
 	}
+	ops.replace = record(ops.replace)
+	ops.binary.replaceRunning = record(ops.binary.replaceRunning)
 
 	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
 	require.ErrorIs(t, err, ErrRolledBack)
@@ -936,4 +951,149 @@ func TestRunStartupWatchdog_PayloadWithoutABackupBlocksRollback(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, blocked)
 	assert.Equal(t, outcomeRollbackBlocked, blocked.Outcome)
+}
+
+// A rollback that fails after the snapshot went back resumes on the next boot,
+// with the device having run and been written to in between. Writing the
+// snapshot again then would throw those writes away, so it happens once per
+// update rather than once per attempt.
+func TestRunStartupWatchdog_ResumedRollbackKeepsTheRestoredDatabase(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	m := f.marker(markerRollingBack)
+	m.UserDBRestored = true
+	m.RollbackAttempts = 1
+	require.NoError(t, saveMarker(dir, m))
+	// What the device wrote while it ran between the failed attempt and this
+	// boot, standing in for anything a resumed rollback would discard.
+	require.NoError(t, os.Remove(f.dbPath))
+	writeTestDB(t, f.dbPath, "written after the rollback started")
+
+	ops := defaultWatchdogFileOps()
+	ops.restoreDatabase = func(context.Context, afero.Fs, string, string) error {
+		t.Error("a resumed rollback must not write the snapshot a second time")
+		return nil
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, ErrRolledBack)
+
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "written after the rollback started", readTestDBNote(t, f.dbPath))
+}
+
+// A rollback that fails on something time might fix keeps its marker so the next
+// boot resumes it. Without a bound that is a device rebooting into a version
+// that already failed, forever, so it gives up and records why.
+func TestRunStartupWatchdog_StopsRetryingARollbackThatKeepsFailing(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	restoreErr := errors.New("the old binary will not go back")
+	ops := defaultWatchdogFileOps()
+	ops.binary.replaceRunning = func(string, string) error { return restoreErr }
+
+	for attempt := 1; attempt < rollbackAttemptLimit; attempt++ {
+		err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+		require.ErrorIs(t, err, restoreErr)
+
+		pending, loadErr := loadMarker(dir)
+		require.NoError(t, loadErr)
+		require.NotNil(t, pending)
+		assert.Equal(t, markerRollingBack, pending.State)
+		assert.Empty(t, pending.Outcome, "a rollback with attempts left stays pending")
+		assert.Equal(t, attempt, pending.RollbackAttempts)
+	}
+
+	require.NoError(t, runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops))
+
+	blocked, err := loadMarker(dir)
+	require.NoError(t, err)
+	require.NotNil(t, blocked)
+	assert.Equal(t, outcomeRollbackBlocked, blocked.Outcome)
+	assert.Equal(t, rollbackAttemptLimit, blocked.RollbackAttempts)
+	assert.Contains(t, blocked.OutcomeDetail, restoreErr.Error())
+	assert.Equal(t, "new binary", readFileString(t, f.targetPath),
+		"a rollback that gave up leaves the failed version in place rather than nothing")
+	assert.FileExists(t, f.snapshotPath, "the snapshot stays for a manual restore")
+}
+
+// A rollback puts the old binary back underneath the process that is running
+// from it, which is the same problem the install swap has and the payload
+// extras do not. Routing the binary through the plain replacement would leave
+// Windows rollbacks failing where installs succeeded.
+func TestRestoreReplacedFiles_RestoresTheBinaryThroughTheRunningImageSwap(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fs := afero.NewOsFs()
+	m := &pendingMarker{
+		TargetPath: filepath.Join(dir, "zaparoo.exe"),
+		BackupPath: filepath.Join(dir, "zaparoo.backup.exe"),
+		PayloadBackups: []payloadBackup{{
+			TargetPath: filepath.Join(dir, "extra.dll"),
+			BackupPath: filepath.Join(dir, "extra.backup.dll"),
+		}},
+	}
+	for _, path := range []string{m.BackupPath, m.PayloadBackups[0].BackupPath} {
+		require.NoError(t, afero.WriteFile(fs, path, []byte("old"), 0o600))
+	}
+
+	var plain, running []string
+	fileOps := watchdogFileOps{
+		fs:      fs,
+		replace: func(_, target string) error { plain = append(plain, target); return nil },
+		binary: installBinaryOps{
+			replaceRunning: func(_, target string) error { running = append(running, target); return nil },
+		},
+		syncDirectory: func(string) error { return nil },
+	}
+
+	require.NoError(t, restoreReplacedFiles(dir, m, fileOps))
+	assert.Equal(t, []string{m.PayloadBackups[0].TargetPath}, plain)
+	assert.Equal(t, []string{m.TargetPath}, running)
+}
+
+// A boot-time rollback puts the old binary back underneath the process running
+// from the new one, which on Windows means the same two-rename swap the install
+// used, on top of whatever that install had to leave behind. Driving it here
+// checks the rollback against the state a Windows install actually leaves.
+func TestRunStartupWatchdog_RollsBackThroughAVacatingSwap(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+	// What the install swap left: a copy of the binary it replaced, under the
+	// name the process it belonged to was running from until this boot.
+	stale := supersededPathFor(f.targetPath, 0)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(stale, []byte("older binary"), 0o755))
+
+	ops := defaultWatchdogFileOps()
+	ops.binary = vacatingBinaryOps(mappedImageOps(f.targetPath))
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, ErrRolledBack)
+
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, f.backupPath)
+	// The rollback cleared the slot to move into, then filled it with the image
+	// this process is running from, which is the one file it cannot delete.
+	assert.Equal(t, "new binary", readFileString(t, stale),
+		"the rolled-back binary stays put while the process running from it is alive")
+	assert.NoFileExists(t, supersededPathFor(f.targetPath, 1),
+		"a rollback reuses the slot it freed rather than taking another")
+	assert.Equal(t, "before the update", readTestDBNote(t, f.dbPath))
+	assert.NoFileExists(t, markerPath(dir))
+
+	// Nothing holds it once that process exits, which is what the sweep at the
+	// front of the next install is for.
+	sweepSupersededBinaryWith(f.targetPath, realVacatingOps())
+	assert.NoFileExists(t, stale, "the next install clears what the rollback had to leave")
 }

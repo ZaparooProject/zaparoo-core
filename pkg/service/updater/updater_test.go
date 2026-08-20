@@ -22,11 +22,7 @@ package updater
 import (
 	"context"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,9 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -368,174 +362,6 @@ func TestApply_RefusesWhileAnUpdateIsUnresolved(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "2.2.0")
 	assert.Empty(t, version)
-}
-
-func TestAssetFilter_RejectsWiderArchOnSamePlatform(t *testing.T) {
-	t.Parallel()
-
-	// Regression guard: the filter used to be ^zaparoo-<plat>_<arch> with no
-	// trailing separator, so an arm device prefix-matched arm64 archives.
-	confusables := []struct{ platform, goarch string }{
-		{platform: "mister", goarch: "arm"},
-		{platform: "batocera", goarch: "arm"},
-		{platform: "libreelec", goarch: "arm"},
-	}
-
-	for _, c := range confusables {
-		t.Run(c.platform, func(t *testing.T) {
-			t.Parallel()
-
-			re := regexp.MustCompile(assetFilter(c.platform, c.goarch))
-			assert.True(t, re.MatchString(
-				otameta.ArchiveBaseName(c.platform, c.goarch, "2.16.1")+".zip"))
-			assert.False(t, re.MatchString(
-				otameta.ArchiveBaseName(c.platform, c.goarch+"64", "2.16.1")+".zip"))
-		})
-	}
-}
-
-func TestVerifiedSource_DownloadsNestedValidationAsset(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/checksums.txt.sig", r.URL.Path)
-		_, _ = w.Write([]byte("signature"))
-	}))
-	t.Cleanup(server.Close)
-
-	source := testSource()
-	release := testValidationChainRelease(server.URL)
-
-	reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, reader.Close())
-	}()
-
-	data, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Equal(t, []byte("signature"), data)
-}
-
-func TestVerifiedSource_DownloadReleaseAssetBranches(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil release returns error", func(t *testing.T) {
-		t.Parallel()
-
-		reader, err := testSource().DownloadReleaseAsset(t.Context(), nil, 1)
-		require.ErrorIs(t, err, selfupdate.ErrInvalidRelease)
-		assert.Nil(t, reader)
-	})
-
-	t.Run("downloads primary asset", func(t *testing.T) {
-		t.Parallel()
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "/archive.zip", r.URL.Path)
-			_, _ = w.Write([]byte("primary"))
-		}))
-		t.Cleanup(server.Close)
-
-		release := testValidationChainRelease(server.URL)
-		release.AssetURL = server.URL + "/archive.zip"
-
-		reader, err := testSource().DownloadReleaseAsset(t.Context(), release, 1)
-		require.NoError(t, err)
-		defer func() {
-			require.NoError(t, reader.Close())
-		}()
-
-		data, err := io.ReadAll(reader)
-		require.NoError(t, err)
-		assert.Equal(t, "primary", string(data))
-	})
-
-	t.Run("downloads first validation asset", func(t *testing.T) {
-		t.Parallel()
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "/checksums.txt", r.URL.Path)
-			_, _ = w.Write([]byte("checksums"))
-		}))
-		t.Cleanup(server.Close)
-
-		release := testValidationChainRelease(server.URL)
-		release.ValidationAssetURL = server.URL + "/checksums.txt"
-
-		reader, err := testSource().DownloadReleaseAsset(t.Context(), release, 2)
-		require.NoError(t, err)
-		defer func() {
-			require.NoError(t, reader.Close())
-		}()
-
-		data, err := io.ReadAll(reader)
-		require.NoError(t, err)
-		assert.Equal(t, "checksums", string(data))
-	})
-
-	t.Run("unknown asset returns error", func(t *testing.T) {
-		t.Parallel()
-
-		reader, err := testSource().DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 99)
-		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
-		assert.Nil(t, reader)
-	})
-
-	t.Run("empty nested validation URL returns error", func(t *testing.T) {
-		t.Parallel()
-
-		release := testValidationChainRelease("")
-		release.ValidationChain[1].ValidationAssetURL = ""
-		reader, err := testSource().DownloadReleaseAsset(t.Context(), release, 3)
-		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
-		assert.Nil(t, reader)
-	})
-
-	t.Run("non-OK nested validation response returns error", func(t *testing.T) {
-		t.Parallel()
-
-		server := httptest.NewServer(http.NotFoundHandler())
-		t.Cleanup(server.Close)
-
-		reader, err := testSource().DownloadReleaseAsset(t.Context(), testValidationChainRelease(server.URL), 3)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "status 404")
-		assert.Nil(t, reader)
-	})
-}
-
-func testSource() *verifiedSource {
-	return &verifiedSource{
-		baseURL:    updateURL,
-		transport:  http.DefaultTransport.(*http.Transport).Clone(),
-		platformID: "linux",
-		goarch:     "amd64",
-		key:        &keyRef{},
-	}
-}
-
-func testValidationChainRelease(serverURL string) *selfupdate.Release {
-	return &selfupdate.Release{
-		AssetID:           1,
-		ValidationAssetID: 2,
-		//nolint:govet // Field order is fixed by go-selfupdate's exported Release type.
-		ValidationChain: []struct {
-			ValidationAssetID                       int64
-			ValidationAssetName, ValidationAssetURL string
-		}{
-			{
-				ValidationAssetID:   2,
-				ValidationAssetName: "checksums.txt",
-				ValidationAssetURL:  serverURL + "/checksums.txt",
-			},
-			{
-				ValidationAssetID:   3,
-				ValidationAssetName: "checksums.txt.sig",
-				ValidationAssetURL:  serverURL + "/checksums.txt.sig",
-			},
-		},
-	}
 }
 
 func TestNoteGate_NoGateConfigured(t *testing.T) {

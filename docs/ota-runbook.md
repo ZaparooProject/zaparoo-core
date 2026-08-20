@@ -96,6 +96,39 @@ Escalate in this order. Each rung is faster and less disruptive than the next.
 Withdrawing does not roll anything back. Devices that already updated stay on
 that version; only the fix in step 3 moves them.
 
+### A Windows device has no executable to start
+
+Windows cannot overwrite a running binary, so installing over one is two
+renames: the outgoing binary moves to a sibling name, then the new one takes the
+name it left. Between them the install path holds nothing, and Windows starts
+Core only from that path — so a device interrupted in that window has nothing
+left to launch and never reaches the startup watchdog that would recover it.
+
+Both renames are retried, and a failed second rename puts the first one back, so
+this needs the install path to be locked by something for the whole sequence. It
+is rare and it is not self-healing.
+
+The recovery is a rename. In the install directory, alongside `zaparoo.exe`:
+
+- `zaparoo.zaparoo-update-old.exe` (or `-old-1`, `-old-2`, up to `-old-7`) is the
+  binary the update moved aside. These files are hidden. The service log names
+  the exact one at the point it gave up:
+
+  ```
+  ERR binary swap left the install path empty; rename the superseded binary back
+  to the target path to recover target=... superseded=...
+  ```
+
+- `zaparoo.zaparoo-update-new.exe` is the verified staged binary, and
+  `zaparoo.zaparoo-update-backup.exe` is a copy of the outgoing one.
+
+Rename the superseded binary named in the log back to `zaparoo.exe` and start
+the service. That restores the version the device was already running; the
+pending update is unwound on the next start. Only if no `-old` file exists is
+the backup the next choice — it is a copy of the same binary. Never rename the
+`-new` file into place by hand: it skips the marker the watchdog needs to roll
+the update back if the new version cannot start.
+
 ## Setup
 
 ### Secrets and environments
