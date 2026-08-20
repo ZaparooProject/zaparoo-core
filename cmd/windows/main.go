@@ -84,8 +84,36 @@ func isElevated() (bool, error) {
 	return token.IsElevated(), nil
 }
 
-func isRunning() bool {
-	_, err := syswindows.CreateMutex(
+type singleInstance struct {
+	closeHandle func(syswindows.Handle) error
+	handle      syswindows.Handle
+}
+
+func (s *singleInstance) release() error {
+	if s == nil || s.handle == 0 {
+		return nil
+	}
+	if err := s.closeHandle(s.handle); err != nil {
+		return err
+	}
+	s.handle = 0
+	return nil
+}
+
+type singleInstanceOps struct {
+	createMutex func(*syswindows.SecurityAttributes, bool, *uint16) (syswindows.Handle, error)
+	closeHandle func(syswindows.Handle) error
+}
+
+func acquireSingleInstance() (*singleInstance, bool) {
+	return acquireSingleInstanceWith(singleInstanceOps{
+		createMutex: syswindows.CreateMutex,
+		closeHandle: syswindows.CloseHandle,
+	})
+}
+
+func acquireSingleInstanceWith(ops singleInstanceOps) (*singleInstance, bool) {
+	handle, err := ops.createMutex(
 		nil, false,
 		syswindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
 	)
@@ -94,15 +122,25 @@ func isRunning() bool {
 	// failure. Treating it as fatal crashed the second launch instead of exiting
 	// cleanly.
 	if errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) {
-		return true
+		if closeErr := ops.closeHandle(handle); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("could not close duplicate single-instance mutex handle")
+		}
+		return nil, true
 	}
 	if err != nil {
 		// A genuine mutex-creation failure shouldn't prevent startup; log it and
 		// assume no other instance is running.
 		log.Error().Err(err).Msg("error creating single-instance mutex")
-		return false
+		return nil, false
 	}
-	return false
+	return &singleInstance{handle: handle, closeHandle: ops.closeHandle}, false
+}
+
+func restartAfterReleasing(instance *singleInstance, restartFn func() error) error {
+	if err := instance.release(); err != nil {
+		return fmt.Errorf("releasing single-instance mutex before restart: %w", err)
+	}
+	return restartFn()
 }
 
 func main() {
@@ -160,16 +198,26 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	if isRunning() {
+	instance, running := acquireSingleInstance()
+	if running {
 		log.Error().Msg("core is already running")
 		return errors.New("zaparoo is already running")
 	}
+	defer func() {
+		if releaseErr := instance.release(); releaseErr != nil {
+			log.Error().Err(releaseErr).Msg("could not release single-instance mutex")
+		}
+	}()
 
 	svcResult, err := service.Start(pl, cfg)
 	if err != nil {
 		// The previous version is back on disk, but this process is still the
 		// image that failed and nothing here would start the restored one.
 		if errors.Is(err, updater.ErrRolledBack) {
+			if releaseErr := instance.release(); releaseErr != nil {
+				return fmt.Errorf("releasing single-instance mutex before rollback restart: %w",
+					errors.Join(err, releaseErr))
+			}
 			return fmt.Errorf("restarting after update rollback: %w", restart.ExecAfterRollback(err))
 		}
 
@@ -206,8 +254,10 @@ func run() error {
 		}
 	case <-svcResult.Done:
 		log.Info().Msg("service shut down internally")
-		if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
-			return fmt.Errorf("failed to re-exec for restart: %w", err)
+		if svcResult.RestartRequested != nil && svcResult.RestartRequested() {
+			if err := restartAfterReleasing(instance, restart.Exec); err != nil {
+				return fmt.Errorf("failed to re-exec for restart: %w", err)
+			}
 		}
 	}
 

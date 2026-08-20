@@ -365,16 +365,67 @@ func TestAbortInstall_RestoresTheCurrentBinary(t *testing.T) {
 		UserDBSnapshotPath: snapshotPath,
 		PreviousVersion:    testCurrentVersion,
 		TargetVersion:      testStageVersion,
+		BinaryReplaced:     true,
 	}
 	require.NoError(t, saveMarker(stateDirFor(dataDir), m))
 
-	require.NoError(t, abortInstall(t.Context(), dataDir, m, candidatePath))
+	require.NoError(t, abortInstall(t.Context(), dataDir, m, candidatePath, installBinaryOps{}))
 
 	assert.Equal(t, "old binary", readFileString(t, targetPath))
 	assert.NoFileExists(t, backupPath)
 	assert.NoFileExists(t, candidatePath)
 	assert.NoFileExists(t, snapshotPath)
 	assert.NoDirExists(t, stagingDir)
+	assert.NoFileExists(t, markerPath(stateDirFor(dataDir)))
+}
+
+// A swap that failed left the outgoing binary at the target under its own name,
+// and putting the backup over it is not the no-op it looks like. On a platform
+// that has to vacate the name first it moves the image this process is running
+// from into a hidden name and reopens the window where the device has nothing to
+// start, to install a copy of what is already there.
+func TestAbortInstall_LeavesABinaryTheSwapNeverMoved(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	binDir := t.TempDir()
+	targetPath := filepath.Join(binDir, testBinaryName("zaparoo"))
+	backupPath := installSidecarPath(targetPath, installBackupSuffix)
+	candidatePath := installSidecarPath(targetPath, installCandidateSuffix)
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(targetPath, []byte("current binary"), 0o755))
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(backupPath, []byte("current binary"), 0o755))
+	//nolint:gosec // executable stand-ins owned by this test
+	require.NoError(t, os.WriteFile(candidatePath, []byte("candidate"), 0o755))
+
+	// No BinaryReplaced: the swap never took the name, which is what every way
+	// it can fail leaves behind.
+	m := &pendingMarker{
+		State:           markerInstalling,
+		TargetPath:      targetPath,
+		BackupPath:      backupPath,
+		PreviousVersion: testCurrentVersion,
+		TargetVersion:   testStageVersion,
+	}
+	require.NoError(t, saveMarker(stateDirFor(dataDir), m))
+
+	binary := vacatingBinaryOps(mappedImageOps(targetPath))
+	swap := binary.replaceRunning
+	swaps := 0
+	binary.replaceRunning = func(source, target string) error {
+		swaps++
+		return swap(source, target)
+	}
+
+	require.NoError(t, abortInstall(t.Context(), dataDir, m, candidatePath, binary))
+
+	assert.Zero(t, swaps, "nothing took the target's name, so nothing has to be put back")
+	assert.Equal(t, "current binary", readFileString(t, targetPath))
+	assert.NoFileExists(t, supersededPathFor(targetPath, 0),
+		"the running image was never moved aside, so no slot was taken")
+	assert.NoFileExists(t, backupPath)
+	assert.NoFileExists(t, candidatePath)
 	assert.NoFileExists(t, markerPath(stateDirFor(dataDir)))
 }
 
@@ -389,7 +440,7 @@ func TestAbortInstall_FailsWhenNeitherBinaryNorBackupExists(t *testing.T) {
 		State:      markerInstalling,
 		TargetPath: targetPath,
 		BackupPath: installSidecarPath(targetPath, installBackupSuffix),
-	}, "")
+	}, "", installBinaryOps{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "neither current binary nor backup")
 }
@@ -397,7 +448,7 @@ func TestAbortInstall_FailsWhenNeitherBinaryNorBackupExists(t *testing.T) {
 func TestAbortInstall_WithoutAMarkerDoesNothing(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, abortInstall(t.Context(), t.TempDir(), nil, ""))
+	require.NoError(t, abortInstall(t.Context(), t.TempDir(), nil, "", installBinaryOps{}))
 }
 
 // A marker left unreadable by an earlier crash means an update may still be
@@ -469,10 +520,71 @@ func TestAbortInstallAfterError_ReportsBothFailures(t *testing.T) {
 	}
 	installErr := errors.New("installing the staged binary")
 
-	err := abortInstallAfterError(t.Context(), f.dataDir, m, "", installErr)
+	err := abortInstallAfterError(t.Context(), f.dataDir, m, "", installBinaryOps{}, installErr)
 
 	require.ErrorIs(t, err, installErr)
 	require.ErrorContains(t, err, "aborting the partial install also failed")
 	require.ErrorContains(t, err, "restoring the current binary after a failed install")
 	assert.FileExists(t, backupPath, "a backup that could not be restored must be kept")
+}
+
+// Windows has to move the running binary aside before the new one can take its
+// name, and what it moved aside stays mapped until the process exits. Unwinding
+// after that point cannot delete it or rename over it, so the old binary has to
+// go back through a name of its own. This drives the whole sequence on the host
+// running the tests rather than leaving it to the one platform that reaches it.
+func TestInstallStaged_UnwindsAVacatingSwapWithoutTouchingTheRunningImage(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	mapped := supersededPathFor(f.targetPath, 0)
+	opts := f.options()
+	opts.binary = vacatingBinaryOps(mappedImageOps(mapped))
+
+	require.NoError(t, installStaged(t.Context(), opts))
+
+	// The swap could not clear what it moved aside, because from here the
+	// process is running out of it.
+	assert.Equal(t, "old binary", readFileString(t, mapped))
+	assert.NotEqual(t, "old binary", readFileString(t, f.targetPath))
+
+	m, err := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, err)
+	require.NotNil(t, m)
+
+	require.NoError(t, abortInstall(t.Context(), f.dataDir, m,
+		installSidecarPath(f.targetPath, installCandidateSuffix), opts.binary))
+
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "old binary", readFileString(t, mapped),
+		"the image the process is running from must survive the unwind")
+	assert.NoFileExists(t, supersededPathFor(f.targetPath, 1),
+		"the name the unwind had to fall back to is cleared once it is done with it")
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installBackupSuffix))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.NoFileExists(t, f.snapshotPath)
+	assert.NoDirExists(t, f.stagingDir)
+}
+
+// A retry after that unwind starts with a copy of the old binary still sitting
+// under the superseded name. The process holding it has exited by then, so the
+// sweep at the top of the install is what keeps it from accumulating. It has to
+// reach every slot, not just the first: an unwind that fell back to a later one
+// is exactly the case that leaves a binary behind, and a sweep that stopped at
+// the first free name would never clear it.
+func TestInstallStaged_ClearsAnImageAnEarlierSwapCouldNotRemove(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	mapped := supersededPathFor(f.targetPath, 0)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(mapped, []byte("older binary"), 0o755))
+	stranded := supersededPathFor(f.targetPath, 2)
+	//nolint:gosec // executable stand-in owned by this test
+	require.NoError(t, os.WriteFile(stranded, []byte("binary from an older unwind"), 0o755))
+
+	opts := f.options()
+	opts.binary = vacatingBinaryOps(realVacatingOps())
+	require.NoError(t, installStaged(t.Context(), opts))
+
+	assert.NoFileExists(t, mapped, "a name no process is holding any more is reused, not added to")
+	assert.NoFileExists(t, stranded, "the sweep covers every slot an unwind could have fallen back to")
+	assert.NoFileExists(t, supersededPathFor(f.targetPath, 1))
+	assert.Equal(t, "old binary", readFileString(t, installSidecarPath(f.targetPath, installBackupSuffix)))
 }

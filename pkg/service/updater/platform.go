@@ -22,6 +22,10 @@ package updater
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // ErrPlatformUnsupported is returned when this build cannot finish an install
@@ -30,19 +34,72 @@ var ErrPlatformUnsupported = errors.New("this platform cannot install updates in
 
 // preflightPlatform refuses an install this build cannot complete.
 //
-// Windows locks the running image, so MoveFileEx cannot replace the executable
-// from inside the process being replaced. Without the exit-time helper the
-// install runs all the way to the replacement and fails there, which is after
-// the archive has been downloaded and after the user database has been
-// snapshotted and quiesced. The failure unwinds safely, but it costs the user
-// a download and a restart-shaped scare to learn something knowable up front.
-func preflightPlatform(goos string) error {
-	if goos == "windows" {
+// Windows will not let a running executable be overwritten, so the swap moves
+// the outgoing binary to a sibling name and gives the incoming one the name it
+// vacated. The install needs permission both to create siblings in the install
+// directory and to rename the target itself. A target-specific ACL can deny the
+// latter even when the directory probe succeeds.
+//
+// The checks are probes rather than permission calculations because on Windows
+// the effective permissions are the only true answer, and they run here rather
+// than at the swap so a user learns their install has to go through the
+// installer before a release has been downloaded and their database snapshotted.
+func preflightPlatform(fs afero.Fs, goos, targetPath string) error {
+	checkTarget := func(string) error { return nil }
+	if _, ok := fs.(*afero.OsFs); ok {
+		checkTarget = checkTargetRenameAllowed
+	}
+	return preflightPlatformWith(fs, goos, targetPath, checkTarget)
+}
+
+func preflightPlatformWith(
+	fs afero.Fs,
+	goos string,
+	targetPath string,
+	checkTargetRename func(string) error,
+) error {
+	// Everywhere else replaces the running binary with a single rename, which
+	// needs nothing the install did not already need.
+	if goos != "windows" || targetPath == "" {
+		return nil
+	}
+	dir := filepath.Dir(targetPath)
+	if err := checkInstallDirWritable(fs, dir); err != nil {
+		log.Warn().Err(err).Str("dir", dir).
+			Msg("cannot update in place because the install directory is not writable")
 		return fmt.Errorf(
-			"%w: replacing a running Windows executable needs a helper Core does not ship yet, "+
-				"so install this release with the Windows installer instead",
-			ErrPlatformUnsupported,
+			"%w: Zaparoo cannot write to %s, so install this release with the Windows installer instead",
+			ErrPlatformUnsupported, dir,
+		)
+	}
+	if err := checkTargetRename(targetPath); err != nil {
+		log.Warn().Err(err).Str("target", targetPath).
+			Msg("cannot update in place because the executable cannot be renamed")
+		return fmt.Errorf(
+			"%w: Zaparoo cannot rename %s, so install this release with the Windows installer instead",
+			ErrPlatformUnsupported, targetPath,
 		)
 	}
 	return nil
+}
+
+// checkInstallDirWritable reports whether this process can create and remove a
+// sibling in dir. Probing the effective permission is more reliable than
+// interpreting directory mode bits; target rename access is checked separately.
+func checkInstallDirWritable(fs afero.Fs, dir string) error {
+	probe, err := afero.TempFile(fs, dir, ".zaparoo-update-probe-*")
+	if err != nil {
+		return fmt.Errorf("creating a write probe in %q: %w", dir, err)
+	}
+	name := probe.Name()
+	closeErr := probe.Close()
+	removeErr := fs.Remove(name)
+	var probeErr error
+	if closeErr != nil {
+		probeErr = errors.Join(probeErr, fmt.Errorf("closing a write probe in %q: %w", dir, closeErr))
+	}
+	if removeErr != nil {
+		probeErr = errors.Join(probeErr, fmt.Errorf("removing write probe %q: %w", name, removeErr))
+	}
+	return probeErr
 }

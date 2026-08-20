@@ -32,7 +32,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,28 +136,19 @@ releases:
 `, generation, testStageVersion, archive.Name, archive.Size, archive.SHA256, archive.URL)
 }
 
-// detect runs the same detection Apply runs: list the signed manifest through
-// go-selfupdate, then take the release back out of the manifest rather than
-// trusting what go-selfupdate handed back.
+// detect runs the same detection Apply runs: fetch and verify the manifest,
+// then take the release this device is offered out of it.
 func (h *otaHarness) detect(t *testing.T) (*verifiedSource, *otameta.Release) {
 	t.Helper()
 
 	src := h.ms.source(stateDirFor(h.dataDir), testStagePlatform, testStageArch)
-	up, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:    src,
-		Validator: newSignedChecksumValidator(src.key),
-		Filters:   []string{assetFilter(testStagePlatform, testStageArch)},
-	})
-	require.NoError(t, err)
+	require.NoError(t, src.load(t.Context(), updateOwner, updateRepo))
 
-	release, found, err := up.DetectLatest(t.Context(), testRepo())
+	release, err := src.selectRelease(otameta.ChannelStable)
 	require.NoError(t, err)
-	require.True(t, found, "the manifest offers a release for this platform")
-	require.Equal(t, testStageVersion, release.Version())
-
-	manifestRelease, err := src.releaseForVersion(release.Version())
-	require.NoError(t, err)
-	return src, manifestRelease
+	require.NotNil(t, release, "the manifest offers a release for this platform")
+	require.Equal(t, testStageVersion, otameta.VersionFromTag(release.TagName))
+	return src, release
 }
 
 // install runs detection, staging and the install, leaving the watchdog armed

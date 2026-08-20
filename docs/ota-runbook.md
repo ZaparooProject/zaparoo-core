@@ -96,6 +96,50 @@ Escalate in this order. Each rung is faster and less disruptive than the next.
 Withdrawing does not roll anything back. Devices that already updated stay on
 that version; only the fix in step 3 moves them.
 
+### A Windows device has no executable to start
+
+Windows cannot overwrite a running binary, so installing over one is two
+renames: the outgoing binary moves to a sibling name, then the new one takes the
+name it left. Between them the install path holds nothing, and Windows starts
+Core only from that path — so a device interrupted in that window has nothing
+left to launch and never reaches the startup watchdog that would recover it.
+
+Both renames are retried. If the new-file move fails, the updater retries
+restoring the outgoing binary. Manual recovery is needed only if both moves
+fail, or if power loss or process termination interrupts the gap between them.
+External locks are ordinary transient rename failures; the updater does not
+lock the install directory.
+
+Before changing any sidecar, stop Core and its service. After a logged double
+failure, Core may still be running from the mapped `superseded` file even though
+the normal install path is empty.
+
+When the error was logged, use its exact `target` and `superseded` paths; the
+executable may not be named `zaparoo.exe`:
+
+```text
+ERR binary swap left the install path empty; rename the superseded binary back
+to the target path to recover target=... superseded=...
+```
+
+A power loss in the gap cannot write that log entry. Sidecar names are derived
+from the target in the same directory, so inspect hidden files there. For a
+target named `zaparoo.exe`:
+
+- `zaparoo.zaparoo-update-old.exe` (or `-old-1`, `-old-2`, up to `-old-7`) is an
+  outgoing binary moved aside by a swap. Use the newest slot belonging to the
+  interrupted attempt when that can be identified.
+- `zaparoo.zaparoo-update-backup.exe` is the durable copy of the outgoing binary.
+  If no unambiguous `-old` slot exists, copy this backup to the empty target.
+- `zaparoo.zaparoo-update-new.exe` is the verified candidate, not the recovery
+  source.
+
+With Core stopped, rename the logged or identified `-old` file to the target,
+or copy the backup there, then start the service. That restores the version the
+device was already running; the pending update is unwound on the next start.
+Never put the `-new` file in place by hand: the durable marker still records an
+interrupted install, so recovery must restore the known-good outgoing binary.
+
 ## Setup
 
 ### Secrets and environments

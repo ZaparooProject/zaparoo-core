@@ -306,6 +306,20 @@ func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (res *StartResult, err error) {
+	return startWith(
+		pl,
+		cfg,
+		updater.RunStartupWatchdog,
+		startService,
+	)
+}
+
+func startWith(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	runWatchdog func(context.Context, string, string) error,
+	initialize func(platforms.Platform, *config.Instance) (*StartResult, error),
+) (res *StartResult, err error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	dataDir := helpers.DataDir(pl)
@@ -313,10 +327,9 @@ func Start(
 	// Deliberately before config, databases and network are touched: the
 	// failure this exists to catch is a binary that cannot reach any of them.
 	// It has its own context because st.GetContext does not exist yet.
-	if watchdogErr := updater.RunStartupWatchdog(
-		context.Background(), dataDir, config.AppVersion,
-	); watchdogErr != nil {
-		if errors.Is(watchdogErr, updater.ErrRolledBack) {
+	if watchdogErr := runWatchdog(context.Background(), dataDir, config.AppVersion); watchdogErr != nil {
+		if errors.Is(watchdogErr, updater.ErrRolledBack) ||
+			errors.Is(watchdogErr, updater.ErrRollbackStateUncertain) {
 			return nil, fmt.Errorf("resolving a pending update: %w", watchdogErr)
 		}
 		log.Error().Err(watchdogErr).Msg("could not resolve a pending update, continuing startup")
@@ -334,7 +347,7 @@ func Start(
 		}
 	}()
 
-	return startService(pl, cfg)
+	return initialize(pl, cfg)
 }
 
 func startService(

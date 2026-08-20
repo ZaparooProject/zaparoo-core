@@ -34,6 +34,16 @@ import (
 	"github.com/spf13/afero"
 )
 
+// rollbackAttemptLimit is how many boots may try to roll one update back.
+//
+// A rollback that fails on something time might fix keeps its marker so the next
+// boot resumes it, and startup carries on in between. That is worth doing a few
+// times and no more: past this the device is not recovering on its own, and each
+// further attempt is another boot spent running a version that already failed.
+// Giving up is not the worse outcome — it records why, tells the user, and
+// leaves the snapshot on disk to restore by hand.
+const rollbackAttemptLimit = 3
+
 // watchdogAction is what the boot after an update has to do about it.
 type watchdogAction int
 
@@ -59,8 +69,13 @@ const (
 )
 
 type watchdogFileOps struct {
-	fs              afero.Fs
-	replace         func(string, string) error
+	fs         afero.Fs
+	replace    func(string, string) error
+	saveMarker func(string, *pendingMarker) error
+	// binary puts back a file that may be the image this process is running
+	// from, which not every platform will let a plain replacement touch, and
+	// clears whatever an earlier swap had to leave behind to do it.
+	binary          installBinaryOps
 	syncDirectory   func(string) error
 	removeStaging   func(context.Context, string) error
 	restoreDatabase func(context.Context, afero.Fs, string, string) error
@@ -71,8 +86,13 @@ type watchdogFileOps struct {
 // of Start has to re-exec rather than exit: on the platforms this matters for
 // there is no supervisor to start anything again.
 var (
-	ErrRolledBack           = errors.New("update rolled back, restart into the restored version")
-	errRollbackPrerequisite = errors.New("rollback prerequisite is unavailable")
+	ErrRolledBack = errors.New("update rolled back, restart into the restored version")
+	// ErrRollbackStateUncertain means the user database was restored but that
+	// fact could not be made durable. Startup must stop before anything can write
+	// the database; the next boot can then repeat the restore without losing
+	// intervening user data.
+	ErrRollbackStateUncertain = errors.New("restored user database was not recorded durably")
+	errRollbackPrerequisite   = errors.New("rollback prerequisite is unavailable")
 )
 
 type rolledBackError struct {
@@ -98,6 +118,8 @@ func defaultWatchdogFileOps() watchdogFileOps {
 	return watchdogFileOps{
 		fs:              afero.NewOsFs(),
 		replace:         replaceFile,
+		saveMarker:      saveMarker,
+		binary:          defaultInstallBinaryOps(),
 		syncDirectory:   syncDir,
 		removeStaging:   removeStagingDir,
 		restoreDatabase: userdb.RestoreFileTo,
@@ -187,9 +209,10 @@ func decideWatchdogAction(m *pendingMarker, currentVersion string) watchdogActio
 // because the failure it exists to catch is a binary that cannot get that far.
 //
 // It returns ErrRolledBack when the previous version has been put back and the
-// caller must re-exec into it. Every other error is advisory: startup continues,
-// because refusing to boot over a bookkeeping problem is the outcome this whole
-// mechanism exists to avoid.
+// caller must re-exec into it. ErrRollbackStateUncertain must also stop startup
+// so the restored database cannot be changed before recovery retries. Every
+// other error is advisory: startup continues, because refusing to boot over a
+// bookkeeping problem is the outcome this whole mechanism exists to avoid.
 func RunStartupWatchdog(ctx context.Context, dataDir, currentVersion string) error {
 	return runStartupWatchdogWithOps(ctx, dataDir, currentVersion, defaultWatchdogFileOps())
 }
@@ -253,7 +276,8 @@ func runStartupWatchdogWithOps(
 		return nil
 
 	case actionAbortInstall:
-		return abortInstall(ctx, dataDir, m, installSidecarPath(m.TargetPath, installCandidateSuffix))
+		return abortInstall(ctx, dataDir, m,
+			installSidecarPath(m.TargetPath, installCandidateSuffix), fileOps.binary)
 
 	case actionFinalize:
 		return finalizeTerminalUpdate(ctx, dataDir, m, fileOps)
@@ -285,6 +309,12 @@ func rollBackFailedStartWithOps(
 		return nil //nolint:nilerr // a marker this build cannot own is not ours to act on
 	}
 	if m.Outcome != "" || m.TargetVersion != currentVersion {
+		return nil
+	}
+	// A rollingBack marker means the startup watchdog already charged and tried
+	// this boot's rollback. If startup then fails too, its deferred hook must not
+	// turn that one boot into a second attempt and exhaust the retry budget early.
+	if m.State == markerRollingBack {
 		return nil
 	}
 	log.Error().
@@ -440,18 +470,32 @@ func rollBack(
 	ctx context.Context, dataDir string, m *pendingMarker, fileOps watchdogFileOps,
 ) error {
 	dir := stateDirFor(dataDir)
-	if m.State != markerRollingBack {
-		m.State = markerRollingBack
-		if err := saveMarker(dir, m); err != nil {
-			// Nothing has been moved yet, and without this on disk an
-			// interrupted rollback would not know to resume. Stop here rather
-			// than start a swap that cannot be finished.
-			return fmt.Errorf("recording the start of the rollback: %w", err)
-		}
+	m.State = markerRollingBack
+	m.RollbackAttempts++
+	if err := fileOps.saveMarker(dir, m); err != nil {
+		// Nothing has been moved yet, and without this on disk an interrupted
+		// rollback would not know to resume, nor how many times it already has.
+		// Stop here rather than start a swap that cannot be finished.
+		return fmt.Errorf("recording the start of the rollback: %w", err)
 	}
 
-	if err := restoreUserDB(ctx, dataDir, m, fileOps); err != nil {
-		return handleRollbackFailure(dir, m, err)
+	if !m.UserDBRestored {
+		if err := restoreUserDB(ctx, dataDir, m, fileOps); err != nil {
+			return handleRollbackFailure(dir, m, err)
+		}
+		// Recorded before the binary moves, because a rollback that fails after
+		// this point resumes on the next boot with the device having been in
+		// use in between. Writing the snapshot again then would throw those
+		// writes away.
+		m.UserDBRestored = true
+		if err := fileOps.saveMarker(dir, m); err != nil {
+			failureErr := handleRollbackFailure(dir, m,
+				fmt.Errorf("recording the restored user database: %w", err))
+			if failureErr == nil {
+				return nil
+			}
+			return fmt.Errorf("%w: %w", ErrRollbackStateUncertain, failureErr)
+		}
 	}
 	if err := restoreReplacedFiles(dir, m, fileOps); err != nil {
 		return handleRollbackFailure(dir, m, err)
@@ -479,9 +523,14 @@ func handleRollbackFailure(dir string, m *pendingMarker, cause error) error {
 	if errors.Is(cause, errRollbackPrerequisite) {
 		return blockRollback(dir, m, cause)
 	}
+	if m.RollbackAttempts >= rollbackAttemptLimit {
+		return blockRollback(dir, m, fmt.Errorf(
+			"rollback failed on %d attempts: %w", m.RollbackAttempts, cause))
+	}
 	log.Error().Err(cause).
 		Str("failed", m.TargetVersion).
 		Str("wanted", m.PreviousVersion).
+		Int("attempts", m.RollbackAttempts).
 		Msg("rollback hit a retryable error; leaving it pending")
 	return fmt.Errorf("rollback remains pending after a retryable error: %w", cause)
 }
@@ -507,9 +556,10 @@ func blockRollback(dir string, m *pendingMarker, cause error) error {
 }
 
 // restoreUserDB puts the snapshot taken before the install back over the live
-// database. It runs on every rollback, including one that resumes: the snapshot
-// is still on disk, and writing it again costs a copy where guessing whether the
-// previous attempt got this far costs correctness.
+// database. It runs once per update, not once per rollback attempt: a rollback
+// that fails afterwards leaves the device running and in use until the next boot
+// resumes it, and writing the snapshot a second time would discard everything
+// done in between. Callers check m.UserDBRestored.
 func restoreUserDB(
 	ctx context.Context, dataDir string, m *pendingMarker, fileOps watchdogFileOps,
 ) error {
@@ -541,7 +591,12 @@ func restoreReplacedFiles(dir string, m *pendingMarker, fileOps watchdogFileOps)
 			return err
 		}
 	}
-	return restoreReplacedFile(dir, m, m.BackupPath, m.TargetPath, fileOps)
+	// The binary is the one file the rollback may have to put back underneath a
+	// process that is running from it, so it does not go through the plain
+	// replacement the payload extras use.
+	binaryOps := fileOps
+	binaryOps.replace = fileOps.binary.replace
+	return restoreReplacedFile(dir, m, m.BackupPath, m.TargetPath, binaryOps)
 }
 
 // restoreReplacedFile records the path about to move before renaming it. If a
@@ -615,6 +670,13 @@ func finalizeTerminalUpdate(
 				Msg("could not remove the staging directory of a completed update")
 		}
 	}
+	// After a confirmed update the process running from the superseded binary
+	// has long exited, so this is where a swap that had to move it aside gets to
+	// delete it. After a rollback it has not: the swap that just ran moved this
+	// process's own image aside, and clearing that name is what the next
+	// install's sweep is for. Both are why failing here is only worth a debug
+	// line.
+	fileOps.binary.sweep(m.TargetPath)
 	sweepUpdateSnapshotsFS(fileOps.fs, dataDir, "")
 	if err := clearMarker(dir); err != nil {
 		return fmt.Errorf("clearing the completed update marker: %w", err)

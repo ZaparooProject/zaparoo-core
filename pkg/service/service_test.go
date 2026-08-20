@@ -44,6 +44,7 @@ import (
 	inboxservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
@@ -185,6 +186,56 @@ func TestWaitForBackupShutdownReturnsAtHardDeadline(t *testing.T) {
 	}
 	_, _, active := coordinator.Active()
 	assert.True(t, active, "timed-out lease remains active until its owner releases it")
+}
+
+func TestStart_RollbackStateUncertainStopsInitialization(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	cfg := &config.Instance{}
+	initialized := false
+
+	result, err := startWith(
+		mockPlatform,
+		cfg,
+		func(context.Context, string, string) error {
+			return updater.ErrRollbackStateUncertain
+		},
+		func(platforms.Platform, *config.Instance) (*StartResult, error) {
+			initialized = true
+			return &StartResult{}, nil
+		},
+	)
+
+	require.ErrorIs(t, err, updater.ErrRollbackStateUncertain)
+	assert.Nil(t, result)
+	assert.False(t, initialized, "service initialization must not run with uncertain rollback state")
+}
+
+func TestStart_NonRecoveryWatchdogErrorContinuesInitialization(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()})
+	cfg := &config.Instance{}
+	want := &StartResult{}
+
+	result, err := startWith(
+		mockPlatform,
+		cfg,
+		func(context.Context, string, string) error {
+			return errors.New("unreadable updater state")
+		},
+		func(gotPlatform platforms.Platform, gotCfg *config.Instance) (*StartResult, error) {
+			assert.Same(t, mockPlatform, gotPlatform)
+			assert.Same(t, cfg, gotCfg)
+			return want, nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Same(t, want, result)
 }
 
 func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {

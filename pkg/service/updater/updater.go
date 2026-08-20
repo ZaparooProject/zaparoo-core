@@ -24,11 +24,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sync/atomic"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
@@ -36,18 +36,46 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
-	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
-const updateURL = "https://updates.zaparoo.org/"
+const (
+	updateURL = "https://updates.zaparoo.org/"
+
+	// updateOwner and updateRepo name the path the manifest is published under.
+	updateOwner = "ZaparooProject"
+	updateRepo  = "zaparoo-core"
+)
 
 var (
 	ErrDevelopmentVersion = errors.New("update check skipped for development version")
 	ErrUpdateInProgress   = errors.New("update already in progress")
 	applyMu               syncutil.Mutex
 	applyInProgress       atomic.Bool
+	eligibilityPreflight  platformPreflightCache
 )
+
+type platformPreflightCache struct {
+	results map[string]error
+	mu      syncutil.Mutex
+}
+
+func (c *platformPreflightCache) check(fs afero.Fs, goos, targetPath string) error {
+	key := goos + "\x00" + targetPath
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if result, ok := c.results[key]; ok {
+		return result
+	}
+	result := preflightPlatform(fs, goos, targetPath)
+	if c.results == nil {
+		c.results = make(map[string]error)
+	}
+	c.results[key] = result
+	return result
+}
 
 // Eligibility says whether this device can take an OTA update at all, ahead of
 // any question about whether one is available.
@@ -60,8 +88,9 @@ const (
 	// EligibilityManaged means a package manager owns this install and should
 	// be the one updating it.
 	EligibilityManaged = "managed"
-	// EligibilityUnsupported means OTA updates are not available on this
-	// operating system yet.
+	// EligibilityUnsupported means this install cannot replace its own binary,
+	// so the update has to come from wherever it was installed from. On Windows
+	// that is an install directory this process cannot write to.
 	EligibilityUnsupported = "unsupported"
 )
 
@@ -121,16 +150,14 @@ type Result struct {
 	BlockedForceable bool
 }
 
-// session is one update operation's updater and the transport backing it.
+// session is one update operation's source and the transport backing it.
 type session struct {
-	updater *selfupdate.Updater
-	source  *verifiedSource
+	source *verifiedSource
 	// close releases the transport's pooled connections. Callers must defer it:
 	// each operation builds a fresh transport, so without it the keep-alive
 	// connections and their goroutines outlive the operation until the idle
 	// timeout expires.
 	close func()
-	repo  selfupdate.Repository
 }
 
 func makeUpdater(opts Options) (*session, error) { //nolint:gocritic // hugeParam
@@ -138,44 +165,46 @@ func makeUpdater(opts Options) (*session, error) { //nolint:gocritic // hugePara
 	// header timeout here does not affect anything else in the process.
 	transport := tlsroots.Transport(nil)
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
-	key := &keyRef{}
-
-	source := &verifiedSource{
-		baseURL:    updateURL,
-		transport:  transport,
-		stateDir:   stateDirFor(opts.DataDir),
-		platformID: opts.PlatformID,
-		goarch:     runtime.GOARCH,
-		key:        key,
-		verify:     otameta.Verify,
-	}
-
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:     source,
-		Validator:  newSignedChecksumValidator(key),
-		Filters:    []string{assetFilter(opts.PlatformID, runtime.GOARCH)},
-		Prerelease: opts.Channel == config.UpdateChannelBeta,
-	})
-	if err != nil {
-		transport.CloseIdleConnections()
-		return nil, fmt.Errorf("creating updater: %w", err)
-	}
 
 	return &session{
-		updater: updater,
-		source:  source,
-		repo:    selfupdate.NewRepositorySlug("ZaparooProject", "zaparoo-core"),
-		close:   transport.CloseIdleConnections,
+		source: &verifiedSource{
+			baseURL:    updateURL,
+			transport:  transport,
+			stateDir:   stateDirFor(opts.DataDir),
+			platformID: opts.PlatformID,
+			goarch:     runtime.GOARCH,
+			verify:     otameta.Verify,
+		},
+		close: transport.CloseIdleConnections,
 	}, nil
 }
 
-// assetFilter is the pattern go-selfupdate matches asset names against. The
-// source has already reduced each release to the one archive that belongs to
-// this device, so this is a backstop rather than the selection. The trailing
-// separator is what it adds: without it "linux_arm" prefix-matches an
-// "linux_arm64" archive.
-func assetFilter(platformID, goarch string) string {
-	return fmt.Sprintf("^zaparoo-%s_%s-", regexp.QuoteMeta(platformID), regexp.QuoteMeta(goarch))
+// latestRelease fetches the verified manifest and returns the release this
+// device should be offered, or nil when there is none.
+func (s *session) latestRelease(ctx context.Context, channel string) (*otameta.Release, error) {
+	if err := s.source.load(ctx, updateOwner, updateRepo); err != nil {
+		return nil, fmt.Errorf("reading update metadata: %w", err)
+	}
+	release, err := s.source.selectRelease(channel)
+	if err != nil {
+		return nil, fmt.Errorf("selecting the latest release: %w", err)
+	}
+	return release, nil
+}
+
+// newerThanCurrent reports whether version is an upgrade from the running
+// build. A version neither side can read is not an upgrade: the decision that
+// replaces the binary is not one to make on a guess.
+func newerThanCurrent(version string) (bool, error) {
+	candidate, err := semver.NewVersion(version)
+	if err != nil {
+		return false, fmt.Errorf("reading the offered version %q: %w", version, err)
+	}
+	current, err := semver.NewVersion(config.AppVersion)
+	if err != nil {
+		return false, fmt.Errorf("reading the running version %q: %w", config.AppVersion, err)
+	}
+	return candidate.GreaterThan(current), nil
 }
 
 func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocritic // hugeParam
@@ -189,9 +218,9 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 	}
 	defer s.close()
 
-	release, found, err := s.updater.DetectLatest(ctx, s.repo)
+	release, err := s.latestRelease(ctx, opts.Channel)
 	if err != nil {
-		return nil, fmt.Errorf("detecting latest release: %w", err)
+		return nil, err
 	}
 
 	stateDir := stateDirFor(opts.DataDir)
@@ -203,18 +232,26 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 		LastResult:     lastOutcome(stateDir),
 	}
 
-	if found {
-		result.LatestVersion = release.Version()
-		if err := clearDeferralForRelease(stateDir, result.LatestVersion); err != nil {
-			log.Warn().Err(err).Msg("could not clear deferral for a superseded update")
-		}
-		result.UpdateAvailable = release.GreaterThan(config.AppVersion)
-		result.ReleaseNotes = release.ReleaseNotes
+	if release == nil {
+		return result, nil
 	}
+
+	version := otameta.VersionFromTag(release.TagName)
+	upgrade, err := newerThanCurrent(version)
+	if err != nil {
+		return nil, err
+	}
+	result.LatestVersion = version
+	if err := clearDeferralForRelease(stateDir, result.LatestVersion); err != nil {
+		log.Warn().Err(err).Msg("could not clear deferral for a superseded update")
+	}
+	result.UpdateAvailable = upgrade
+	result.ReleaseNotes = release.ReleaseNotes
+
 	if result.UpdateAvailable {
-		result.RolloutHeld = rolloutHeld(s.source, opts.DeviceID, release.Version())
-		noteGate(ctx, &opts, result, stateDir, release.Version())
-		if deferral := peekDeferral(stateDir, release.Version()); deferral != nil {
+		result.RolloutHeld = rolloutHeld(opts.DeviceID, release)
+		noteGate(ctx, &opts, result, stateDir, version)
+		if deferral := peekDeferral(stateDir, version); deferral != nil {
 			result.DeferredReason = deferral.Reason
 			result.DeferredSince = deferral.Since
 		}
@@ -289,7 +326,7 @@ func eligibilityFor(opts *Options) string {
 	switch {
 	case config.IsDevelopmentVersion():
 		return EligibilityDevelopment
-	case preflightPlatform(runtime.GOOS) != nil:
+	case eligibilityPreflight.check(afero.NewOsFs(), runtime.GOOS, currentBinaryPath()) != nil:
 		// Checked before Managed because this one is a refusal Apply enforces,
 		// while Managed only says the package manager should be doing it.
 		return EligibilityUnsupported
@@ -300,15 +337,23 @@ func eligibilityFor(opts *Options) string {
 	}
 }
 
-// rolloutHeld reports whether a staged rollout has not reached this device yet.
-// A release the manifest cannot be re-read for is treated as reached: the
-// rollout decides when to offer an update automatically, and failing closed
-// there would silently strand devices on a manifest quirk.
-func rolloutHeld(source *verifiedSource, deviceID, version string) bool {
-	release, err := source.releaseForVersion(version)
+// currentBinaryPath resolves the executable an update would replace, or an
+// empty string when it cannot be resolved. Eligibility is only advice, so a
+// path this build cannot work out is left for Apply to report properly.
+func currentBinaryPath() string {
+	path, err := restart.BinaryPath()
 	if err != nil {
-		log.Debug().Err(err).Str("version", version).
-			Msg("could not read the rollout for a release")
+		log.Debug().Err(err).Msg("could not resolve the binary an update would replace")
+		return ""
+	}
+	return path
+}
+
+// rolloutHeld reports whether the selected release's staged rollout has not
+// reached this device yet. Using the selected release matters when channels
+// contain semver-equal tags with different rollout percentages.
+func rolloutHeld(deviceID string, release *otameta.Release) bool {
+	if release == nil {
 		return false
 	}
 	return !RolloutEligible(deviceID, release.TagName, release.Rollout)
@@ -376,30 +421,33 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 	defer s.close()
 
 	report.stage(ProgressChecking)
-	release, found, err := s.updater.DetectLatest(ctx, s.repo)
+	manifestRelease, err := s.latestRelease(ctx, opts.Channel)
 	if err != nil {
-		return fail(fmt.Errorf("detecting the release to apply: %w", err))
+		return fail(err)
 	}
-	if !found || !release.GreaterThan(config.AppVersion) {
+	if manifestRelease == nil {
 		return fail(fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion))
 	}
-	report.setVersion(release.Version())
+	version := otameta.VersionFromTag(manifestRelease.TagName)
+	upgrade, err := newerThanCurrent(version)
+	if err != nil {
+		return fail(err)
+	}
+	if !upgrade {
+		return fail(fmt.Errorf("%w: running %s", ErrNotAnUpgrade, config.AppVersion))
+	}
+	report.setVersion(version)
 
+	targetPath, err := restart.BinaryPath()
+	if err != nil {
+		return fail(fmt.Errorf("resolving the binary to update: %w", err))
+	}
 	// Checked here rather than at the top of Apply so that a device already on
 	// the newest version is told that, instead of being told its platform is
 	// unsupported. Everything below this point costs the user something the
 	// install can never spend well.
-	if platformErr := preflightPlatform(runtime.GOOS); platformErr != nil {
+	if platformErr := preflightPlatform(afero.NewOsFs(), runtime.GOOS, targetPath); platformErr != nil {
 		return fail(platformErr)
-	}
-
-	manifestRelease, err := s.source.releaseForVersion(release.Version())
-	if err != nil {
-		return fail(err)
-	}
-	targetPath, err := restart.BinaryPath()
-	if err != nil {
-		return fail(fmt.Errorf("resolving the binary to update: %w", err))
 	}
 	stagingRoot := stagingRootFor(opts.DataDir)
 	if spaceErr := preflightSpace(&opts, manifestRelease, targetPath, stagingRoot); spaceErr != nil {
