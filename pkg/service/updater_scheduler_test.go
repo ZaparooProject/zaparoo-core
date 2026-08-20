@@ -85,7 +85,10 @@ func TestUpdaterSchedulerEagerCheckHonorsSuccessInterval(t *testing.T) {
 	scheduler.clock = clock
 	scheduler.waitInternet = func(context.Context, int) bool { return true }
 	checked := make(chan struct{}, 2)
-	scheduler.check = func(context.Context, updater.Options) (*updater.Result, error) {
+	scheduler.check = func(_ context.Context, opts updater.Options) (*updater.Result, error) {
+		require.NotNil(t, opts.Gate)
+		require.NotNil(t, opts.Gate.Now)
+		assert.Equal(t, clock.Now(), opts.Gate.Now())
 		checked <- struct{}{}
 		return &updater.Result{
 			CurrentVersion: "2.9.0", LatestVersion: "2.9.0",
@@ -133,6 +136,7 @@ func TestUpdaterSchedulerRunInstallRechecksAndRestarts(t *testing.T) {
 	}
 	scheduler.check = func(_ context.Context, opts updater.Options) (*updater.Result, error) {
 		assert.Equal(t, updater.ModeAuto, opts.Mode)
+		require.NotNil(t, opts.Gate)
 		return fresh, nil
 	}
 	applied := false
@@ -149,6 +153,30 @@ func TestUpdaterSchedulerRunInstallRechecksAndRestarts(t *testing.T) {
 	assert.True(t, applied)
 	assert.True(t, st.RestartRequested())
 	pl.AssertExpectations(t)
+}
+
+func TestUpdaterSchedulerGateExpiresPersistedSoftDeferral(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	clock := clockwork.NewFakeClockAt(now)
+	scheduler := &updaterScheduler{clock: clock}
+	result := &updater.Result{DeferredSince: now.Add(-24*time.Hour + time.Minute)}
+	deps := scheduler.gateDeps(result)
+	deps.Power = nil
+	deps.ActiveMedia = func() bool { return true }
+
+	decision, err := updater.CanApplyUpdate(t.Context(), deps, updater.ModeAuto, false)
+	require.NoError(t, err)
+	assert.False(t, decision.OK)
+	assert.Equal(t, updater.ReasonActiveMedia, decision.Reason)
+	decision.Release()
+
+	clock.Advance(time.Minute)
+	decision, err = updater.CanApplyUpdate(t.Context(), deps, updater.ModeAuto, false)
+	require.NoError(t, err)
+	assert.True(t, decision.OK)
+	decision.Release()
 }
 
 func TestAutoInstallable(t *testing.T) {

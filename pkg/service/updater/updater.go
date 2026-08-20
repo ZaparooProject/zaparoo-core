@@ -97,6 +97,8 @@ const (
 )
 
 // Options describes the device an update is being resolved for.
+//
+//nolint:govet // Field order groups updater dependencies and device settings.
 type Options struct {
 	UserDB UpdateBackupper
 	// Progress is called as the update moves through its stages, when the
@@ -108,6 +110,7 @@ type Options struct {
 	// Gate is what the device is busy with. A check uses it to report what
 	// would stop an update going ahead right now; nil reports nothing.
 	Gate       *GateDeps
+	Payload    []updatepayload.File
 	PlatformID string
 	Channel    string
 	DataDir    string
@@ -299,7 +302,11 @@ func noteGate(ctx context.Context, opts *Options, result *Result, stateDir, vers
 	if !decision.Expires {
 		return
 	}
-	if err := recordDeferral(stateDir, version, decision.Reason); err != nil {
+	now := time.Now().UTC()
+	if reporting.Now != nil {
+		now = reporting.Now().UTC()
+	}
+	if err := recordDeferralAt(stateDir, version, decision.Reason, now); err != nil {
 		log.Warn().Err(err).Msg("could not record why an update is waiting")
 	}
 }
@@ -481,7 +488,7 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 		CurrentVersion: config.AppVersion,
 		progress:       report,
 	}
-	stageOpts.payloadRoots = updatePayloadRoots(&opts)
+	stageOpts.payload = updatePayloadFiles(&opts)
 	staged, err := Stage(ctx, stageOpts)
 	if err != nil {
 		return fail(fmt.Errorf("staging update: %w", err))
@@ -516,11 +523,11 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 // that cannot fit. The asset lookup here is a size lookup only: Stage repeats it
 // along with the version and upgrade-floor checks, so a selection failure is
 // left for Stage to report with its own error rather than reported twice.
-func updatePayloadRoots(opts *Options) []updatepayload.Root {
+func updatePayloadFiles(opts *Options) []updatepayload.File {
 	if opts == nil || opts.Managed {
 		return nil
 	}
-	return updatepayload.Roots(opts.PlatformID)
+	return append([]updatepayload.File(nil), opts.Payload...)
 }
 
 func preflightSpace(opts *Options, release *otameta.Release, targetPath, stagingRoot string) error {
@@ -528,12 +535,16 @@ func preflightSpace(opts *Options, release *otameta.Release, targetPath, staging
 	if err != nil {
 		return nil //nolint:nilerr // Stage reports this properly a moment later
 	}
+	payloadSize := int64(0)
+	if len(updatePayloadFiles(opts)) > 0 {
+		payloadSize = maxStagedPayloadBytes
+	}
 	return checkFreeSpace(&spaceNeeds{
-		archiveSize:   asset.Size,
-		targetPath:    targetPath,
-		stagingRoot:   stagingRoot,
-		userDBPath:    filepath.Join(opts.DataDir, config.UserDbFile),
-		payloadCopies: len(updatePayloadRoots(opts)) > 0,
+		archiveSize: asset.Size,
+		payloadSize: payloadSize,
+		targetPath:  targetPath,
+		stagingRoot: stagingRoot,
+		userDBPath:  filepath.Join(opts.DataDir, config.UserDbFile),
 	})
 }
 

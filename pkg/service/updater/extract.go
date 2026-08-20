@@ -38,7 +38,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -178,51 +177,71 @@ type archiveMemberTarget struct {
 	destPath     string
 	relativePath string
 	binary       bool
+	mode         os.FileMode
 }
 
 func (s *stager) memberTarget(name, binaryPath, payloadDir string) (archiveMemberTarget, bool) {
 	if s.wantsMember(name) {
 		return archiveMemberTarget{destPath: binaryPath, binary: true}, true
 	}
-	for _, root := range s.payloadRoots {
-		relative, ok := updatepayload.RelativeMember(root, name)
-		if !ok || !updatepayload.IncludeSource(relative) {
-			continue
-		}
-		archivePath := path.Join(root.ArchiveRoot, relative)
-		destPath := filepath.Join(payloadDir, filepath.FromSlash(archivePath))
-		nativeRelative, err := filepath.Rel(payloadDir, destPath)
-		if err != nil || nativeRelative == ".." || strings.HasPrefix(nativeRelative, ".."+string(filepath.Separator)) {
-			return archiveMemberTarget{}, false
-		}
-		return archiveMemberTarget{destPath: destPath, relativePath: archivePath}, true
+	file, ok := updatepayload.MatchArchiveFile(s.payload, name)
+	if !ok {
+		return archiveMemberTarget{}, false
 	}
-	return archiveMemberTarget{}, false
+	destPath := filepath.Join(payloadDir, filepath.FromSlash(file.ArchivePath))
+	nativeRelative, err := filepath.Rel(payloadDir, destPath)
+	if err != nil || nativeRelative == ".." || strings.HasPrefix(nativeRelative, ".."+string(filepath.Separator)) {
+		return archiveMemberTarget{}, false
+	}
+	return archiveMemberTarget{
+		destPath: destPath, relativePath: file.InstallPath, mode: file.Mode,
+	}, true
 }
 
 func (s *stager) invalidPayloadMember(name string) bool {
-	for _, root := range s.payloadRoots {
-		if strings.HasPrefix(name, root.ArchiveRoot+"/") ||
-			strings.HasPrefix(name, root.ArchiveRoot+`\`) {
-			_, ok := updatepayload.RelativeMember(root, name)
-			return !ok
-		}
-	}
-	return false
+	return updatepayload.InvalidArchiveMember(s.payload, name)
 }
 
-func safePayloadMode(mode os.FileMode) os.FileMode {
-	if mode.Perm()&0o111 != 0 {
-		return 0o755
+type payloadBudget struct {
+	seen  map[string]struct{}
+	bytes int64
+}
+
+func newPayloadBudget() *payloadBudget {
+	return &payloadBudget{seen: make(map[string]struct{})}
+}
+
+func (b *payloadBudget) admit(target archiveMemberTarget, declared int64) error {
+	if target.binary {
+		return nil
 	}
-	return 0o644
+	if _, duplicate := b.seen[target.relativePath]; duplicate {
+		return fmt.Errorf("%w: duplicate payload member %q", ErrArchiveRejected, target.relativePath)
+	}
+	if declared > maxStagedPayloadBytes-b.bytes {
+		return fmt.Errorf("%w: payload files exceed the %d byte limit",
+			ErrArchiveRejected, maxStagedPayloadBytes)
+	}
+	return nil
+}
+
+func (b *payloadBudget) record(target archiveMemberTarget, payload stagedPayloadFile) error {
+	if target.binary {
+		return nil
+	}
+	b.seen[target.relativePath] = struct{}{}
+	b.bytes += payload.Size
+	if b.bytes > maxStagedPayloadBytes {
+		return fmt.Errorf("%w: payload files exceed the %d byte limit",
+			ErrArchiveRejected, maxStagedPayloadBytes)
+	}
+	return nil
 }
 
 func (s *stager) copyArchiveMember(
 	ctx context.Context,
 	src io.Reader,
 	target archiveMemberTarget,
-	mode os.FileMode,
 ) (stagedPayloadFile, error) {
 	if !target.binary {
 		//nolint:gosec // target is derived from a validated configured payload root
@@ -236,7 +255,7 @@ func (s *stager) copyArchiveMember(
 	if target.binary {
 		return stagedPayloadFile{}, nil
 	}
-	mode = safePayloadMode(mode)
+	mode := target.mode.Perm()
 	if err := s.chmod(target.destPath, mode); err != nil {
 		return stagedPayloadFile{}, fmt.Errorf(
 			"setting staged payload permissions for %q: %w", target.relativePath, err)
@@ -271,9 +290,8 @@ func (s *stager) extractFromTarGz(
 	overBudget := func() bool { return inflated.N <= 0 }
 	tr := tar.NewReader(inflated)
 	foundBinary := false
-	seenPayload := make(map[string]struct{})
+	budget := newPayloadBudget()
 	var payloads []stagedPayloadFile
-	var payloadBytes int64
 	members := 0
 	for {
 		header, nextErr := tr.Next()
@@ -307,20 +325,14 @@ func (s *stager) extractFromTarGz(
 		if target.binary && foundBinary {
 			return nil, fmt.Errorf("%w: more than one %s", ErrArchiveRejected, s.binaryName)
 		}
-		if !target.binary {
-			if _, duplicate := seenPayload[target.relativePath]; duplicate {
-				return nil, fmt.Errorf("%w: duplicate payload member %q", ErrArchiveRejected, target.relativePath)
-			}
-			if header.Size > maxStagedPayloadBytes-payloadBytes {
-				return nil, fmt.Errorf("%w: payload files exceed the %d byte limit",
-					ErrArchiveRejected, maxStagedPayloadBytes)
-			}
+		if err := budget.admit(target, header.Size); err != nil {
+			return nil, err
 		}
 		if header.Size > s.maxFileBytes {
 			return nil, fmt.Errorf("%w: %s declares %d bytes, over the %d byte limit",
 				ErrArchiveRejected, header.Name, header.Size, s.maxFileBytes)
 		}
-		payload, copyErr := s.copyArchiveMember(ctx, tr, target, header.FileInfo().Mode())
+		payload, copyErr := s.copyArchiveMember(ctx, tr, target)
 		if copyErr != nil {
 			if ctx.Err() == nil && overBudget() {
 				return nil, fmt.Errorf("%w: more than %d bytes of content in it",
@@ -332,11 +344,8 @@ func (s *stager) extractFromTarGz(
 			foundBinary = true
 			continue
 		}
-		seenPayload[target.relativePath] = struct{}{}
-		payloadBytes += payload.Size
-		if payloadBytes > maxStagedPayloadBytes {
-			return nil, fmt.Errorf("%w: payload files exceed the %d byte limit",
-				ErrArchiveRejected, maxStagedPayloadBytes)
+		if err := budget.record(target, payload); err != nil {
+			return nil, err
 		}
 		payloads = append(payloads, payload)
 	}
@@ -361,9 +370,8 @@ func (s *stager) extractFromZip(
 	}
 
 	foundBinary := false
-	seenPayload := make(map[string]struct{})
+	budget := newPayloadBudget()
 	var payloads []stagedPayloadFile
-	var payloadBytes int64
 	for _, member := range r.File {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("reading the update archive: %w", ctxErr)
@@ -381,14 +389,8 @@ func (s *stager) extractFromZip(
 		if target.binary && foundBinary {
 			return nil, fmt.Errorf("%w: more than one %s", ErrArchiveRejected, s.binaryName)
 		}
-		if !target.binary {
-			if _, duplicate := seenPayload[target.relativePath]; duplicate {
-				return nil, fmt.Errorf("%w: duplicate payload member %q", ErrArchiveRejected, target.relativePath)
-			}
-			if member.FileInfo().Size() > maxStagedPayloadBytes-payloadBytes {
-				return nil, fmt.Errorf("%w: payload files exceed the %d byte limit",
-					ErrArchiveRejected, maxStagedPayloadBytes)
-			}
+		if err := budget.admit(target, member.FileInfo().Size()); err != nil {
+			return nil, err
 		}
 		if declared := member.FileInfo().Size(); declared > s.maxFileBytes {
 			return nil, fmt.Errorf("%w: %s declares %d bytes, over the %d byte limit",
@@ -398,7 +400,7 @@ func (s *stager) extractFromZip(
 		if openErr != nil {
 			return nil, fmt.Errorf("%w: reading %s: %w", ErrArchiveRejected, member.Name, openErr)
 		}
-		payload, copyErr := s.copyArchiveMember(ctx, rc, target, member.Mode())
+		payload, copyErr := s.copyArchiveMember(ctx, rc, target)
 		closeQuietly(rc, "update archive member")
 		if copyErr != nil {
 			return nil, copyErr
@@ -407,11 +409,8 @@ func (s *stager) extractFromZip(
 			foundBinary = true
 			continue
 		}
-		seenPayload[target.relativePath] = struct{}{}
-		payloadBytes += payload.Size
-		if payloadBytes > maxStagedPayloadBytes {
-			return nil, fmt.Errorf("%w: payload files exceed the %d byte limit",
-				ErrArchiveRejected, maxStagedPayloadBytes)
+		if err := budget.record(target, payload); err != nil {
+			return nil, err
 		}
 		payloads = append(payloads, payload)
 	}

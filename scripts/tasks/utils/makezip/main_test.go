@@ -187,6 +187,12 @@ func TestExpandRelativeLinks(t *testing.T) {
 			platformID: "linux",
 			expected:   "[Home](https://zaparoo.org/docs/platforms/)",
 		},
+		{
+			name:       "filename ending in index",
+			content:    "[Platforms](platform-index.md)",
+			platformID: "linux",
+			expected:   "[Platforms](https://zaparoo.org/docs/platforms/platform-index/)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -430,38 +436,57 @@ func TestAddPayloadToArchives(t *testing.T) {
 	t.Parallel()
 
 	source := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(source, "services"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	//nolint:gosec // Executable archive fixture.
-	if err := os.WriteFile(filepath.Join(source, "services", "zaparoo_service"), []byte("service"), 0o755); err != nil {
+	payloadPath := filepath.Join(source, "zaparoo_service")
+	payloadContent := []byte("service")
+	if err := os.WriteFile(payloadPath, payloadContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, ".DS_Store"), []byte("metadata"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	roots := []updatepayload.Root{{SourceDir: source, ArchiveRoot: "scripts"}}
+	files := []updatepayload.File{{
+		SourcePath: payloadPath, ArchivePath: "scripts/services/zaparoo_service",
+		InstallPath: "services/zaparoo_service", Mode: 0o755,
+	}}
 
 	var zipBuf bytes.Buffer
 	zipWriter := zip.NewWriter(&zipBuf)
-	if err := addPayloadToZip(zipWriter, roots); err != nil {
+	if err := addPayloadToZip(zipWriter, files); err != nil {
 		t.Fatalf("addPayloadToZip failed: %v", err)
 	}
 	if err := zipWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
-	zipReader, err := zip.NewReader(bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len()))
-	if err != nil {
-		t.Fatal(err)
+	zipReader, zipErr := zip.NewReader(bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len()))
+	if zipErr != nil {
+		t.Fatal(zipErr)
 	}
 	zipNames := make([]string, 0, len(zipReader.File))
 	for _, file := range zipReader.File {
 		zipNames = append(zipNames, file.Name)
+		if file.Name != "scripts/services/zaparoo_service" {
+			continue
+		}
+		if file.Mode().Perm() != 0o755 {
+			t.Fatalf("zip payload mode = %o, want 755", file.Mode().Perm())
+		}
+		reader, openErr := file.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		content, readErr := io.ReadAll(reader)
+		_ = reader.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(content, payloadContent) {
+			t.Fatalf("zip payload content = %q, want %q", content, payloadContent)
+		}
 	}
 
 	var tarBuf bytes.Buffer
 	tarWriter := tar.NewWriter(&tarBuf)
-	if err := addPayloadToTar(tarWriter, roots); err != nil {
+	if err := addPayloadToTar(tarWriter, files); err != nil {
 		t.Fatalf("addPayloadToTar failed: %v", err)
 	}
 	if err := tarWriter.Close(); err != nil {
@@ -478,6 +503,19 @@ func TestAddPayloadToArchives(t *testing.T) {
 			t.Fatal(nextErr)
 		}
 		tarNames = append(tarNames, header.Name)
+		if header.Name != "scripts/services/zaparoo_service" {
+			continue
+		}
+		if header.FileInfo().Mode().Perm() != 0o755 {
+			t.Fatalf("tar payload mode = %o, want 755", header.Mode)
+		}
+		content, readErr := io.ReadAll(tarReader)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(content, payloadContent) {
+			t.Fatalf("tar payload content = %q, want %q", content, payloadContent)
+		}
 	}
 
 	want := []string{"scripts/services/zaparoo_service"}
@@ -492,14 +530,19 @@ func TestAddPayloadToArchives(t *testing.T) {
 func TestAddPayloadToArchives_MissingSourceFails(t *testing.T) {
 	t.Parallel()
 
-	roots := []updatepayload.Root{{SourceDir: filepath.Join(t.TempDir(), "missing"), ArchiveRoot: "scripts"}}
+	files := []updatepayload.File{{
+		SourcePath:  filepath.Join(t.TempDir(), "missing"),
+		ArchivePath: "scripts/missing",
+		InstallPath: "missing",
+		Mode:        0o644,
+	}}
 	var zipBuf bytes.Buffer
 	zipWriter := zip.NewWriter(&zipBuf)
-	if err := addPayloadToZip(zipWriter, roots); err == nil {
+	if err := addPayloadToZip(zipWriter, files); err == nil {
 		t.Fatal("addPayloadToZip unexpectedly accepted a missing source")
 	}
 	var tarBuf bytes.Buffer
-	if err := addPayloadToTar(tar.NewWriter(&tarBuf), roots); err == nil {
+	if err := addPayloadToTar(tar.NewWriter(&tarBuf), files); err == nil {
 		t.Fatal("addPayloadToTar unexpectedly accepted a missing source")
 	}
 }

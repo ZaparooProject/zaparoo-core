@@ -9,6 +9,7 @@ package batocera
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -27,6 +29,23 @@ import (
 func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
 	t.Parallel()
 	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
+func TestSettings_UpdatePayload(t *testing.T) {
+	t.Parallel()
+
+	files := (&Platform{}).UpdatePayload()
+	require.Len(t, files, 7)
+	byArchivePath := make(map[string]updatepayload.File, len(files))
+	for _, file := range files {
+		byArchivePath[file.ArchivePath] = file
+	}
+	assert.Equal(t, filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
+		byArchivePath["scripts/services/zaparoo_service"].SourcePath)
+	assert.Equal(t, "services/zaparoo_service",
+		byArchivePath["scripts/services/zaparoo_service"].InstallPath)
+	assert.Equal(t, "../roms/ports/Zaparoo.sh",
+		byArchivePath["scripts/ports/Zaparoo.sh"].InstallPath)
 }
 
 func TestPresentUIForwardsPassiveEvents(t *testing.T) {

@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -331,12 +332,13 @@ func TestCheck_CancelledContext(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestUpdatePayloadRootsOnlyForUnmanagedBatocera(t *testing.T) {
+func TestUpdatePayloadFilesOnlyForUnmanagedInstall(t *testing.T) {
 	t.Parallel()
 
-	assert.NotEmpty(t, updatePayloadRoots(&Options{PlatformID: platformids.Batocera}))
-	assert.Empty(t, updatePayloadRoots(&Options{PlatformID: platformids.Batocera, Managed: true}))
-	assert.Empty(t, updatePayloadRoots(&Options{PlatformID: platformids.Linux}))
+	payload := []updatepayload.File{{ArchivePath: "scripts/helper.sh"}}
+	assert.Equal(t, payload, updatePayloadFiles(&Options{Payload: payload}))
+	assert.Empty(t, updatePayloadFiles(&Options{Payload: payload, Managed: true}))
+	assert.Empty(t, updatePayloadFiles(&Options{}))
 }
 
 func TestAutoInstallReleaseAllowed(t *testing.T) {

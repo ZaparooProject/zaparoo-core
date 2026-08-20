@@ -44,6 +44,7 @@ func TestScheduledCheckAndOfferedVersionState(t *testing.T) {
 	assert.False(t, *failed.LastCheckOK)
 	assert.Equal(t, 2, failed.CheckFailures)
 	assert.Equal(t, "2.11.0", failed.LastOfferedVersion)
+	require.NotNil(t, failed.LastCheckAt)
 	assert.False(t, failed.LastCheckAt.IsZero())
 
 	require.NoError(t, recordScheduledCheck(dir, true))
@@ -81,6 +82,11 @@ func TestState_RoundTrip(t *testing.T) {
 	assert.Equal(t, "Mon, 17 Aug 2026 01:26:54 GMT", got.ManifestLastModified)
 	assert.True(t, seen.Equal(got.ManifestSeenAt))
 	assert.Equal(t, currentStateVersion, got.StateVersion)
+	assert.Nil(t, got.LastCheckAt)
+
+	data, err := os.ReadFile(filepath.Join(dir, stateFileName)) //nolint:gosec // test temp dir
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "lastCheckAt")
 }
 
 // A device with no state yet accepts any generation, which is what makes a
@@ -335,6 +341,18 @@ func TestUpdateResult_NilIsNotRecorded(t *testing.T) {
 
 	assert.Nil(t, peekUpdateResult(dir))
 	assert.NoFileExists(t, filepath.Join(dir, stateFileName))
+}
+
+func TestRecordDeferralAt_UsesInjectedClock(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.FixedZone("device", 9*60*60))
+	require.NoError(t, recordDeferralAt(dir, "v2.5.0", ReasonActiveMedia, now))
+
+	deferral := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, deferral)
+	assert.Equal(t, now.UTC(), deferral.Since)
 }
 
 func TestRecordDeferral_KeepsSinceAcrossReasons(t *testing.T) {

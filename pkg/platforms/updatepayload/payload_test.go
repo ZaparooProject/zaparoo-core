@@ -20,27 +20,16 @@
 package updatepayload
 
 import (
+	"path/filepath"
 	"testing"
 
-	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRoots(t *testing.T) {
+func TestRelativeArchivePath(t *testing.T) {
 	t.Parallel()
 
-	roots := Roots(platformids.Batocera)
-	assert.Equal(t, []Root{{SourceDir: "cmd/batocera/scripts", ArchiveRoot: "scripts"}}, roots)
-	assert.Empty(t, Roots(platformids.Linux))
-
-	roots[0].ArchiveRoot = "changed"
-	assert.Equal(t, "scripts", Roots(platformids.Batocera)[0].ArchiveRoot)
-}
-
-func TestRelativeMember(t *testing.T) {
-	t.Parallel()
-
-	root := Root{ArchiveRoot: "scripts"}
 	for _, tt := range []struct {
 		name   string
 		member string
@@ -49,35 +38,56 @@ func TestRelativeMember(t *testing.T) {
 	}{
 		{name: "nested", member: "scripts/services/zaparoo_service", want: "services/zaparoo_service", ok: true},
 		{name: "root file", member: "scripts/zaparoo_write_game.sh", want: "zaparoo_write_game.sh", ok: true},
-		{name: "root directory", member: "scripts", ok: false},
-		{name: "other root", member: "other/file", ok: false},
-		{name: "absolute", member: "/scripts/file", ok: false},
-		{name: "parent", member: "scripts/../file", ok: false},
-		{name: "nested parent", member: "scripts/a/../../file", ok: false},
-		{name: "dot", member: "scripts/./file", ok: false},
-		{name: "empty component", member: "scripts//file", ok: false},
-		{name: "backslash", member: `scripts\..\file`, ok: false},
+		{name: "root directory", member: "scripts"},
+		{name: "other root", member: "other/file"},
+		{name: "absolute", member: "/scripts/file"},
+		{name: "parent", member: "scripts/../file"},
+		{name: "nested parent", member: "scripts/a/../../file"},
+		{name: "dot", member: "scripts/./file"},
+		{name: "empty component", member: "scripts//file"},
+		{name: "backslash", member: `scripts\..\file`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := RelativeMember(root, tt.member)
+			got, ok := RelativeArchivePath("scripts", tt.member)
 			assert.Equal(t, tt.ok, ok)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-func TestIncludeSource(t *testing.T) {
+func TestMatchArchiveFile(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, IncludeSource("services/zaparoo_service"))
-	assert.False(t, IncludeSource(".DS_Store"))
-	assert.False(t, IncludeSource("configs/.DS_Store"))
-	assert.False(t, IncludeSource(`configs\.DS_Store`))
+	files := []File{{
+		ArchivePath: "scripts/ports/Zaparoo.sh",
+		InstallPath: "../roms/ports/Zaparoo.sh",
+		Mode:        0o755,
+	}}
+	file, ok := MatchArchiveFile(files, "scripts/ports/Zaparoo.sh")
+	require.True(t, ok)
+	assert.Equal(t, "../roms/ports/Zaparoo.sh", file.InstallPath)
+	assert.Equal(t, 0o755, int(file.Mode))
+
+	_, ok = MatchArchiveFile(files, "scripts/unconfigured.sh")
+	assert.False(t, ok)
+	assert.True(t, InvalidArchiveMember(files, "scripts/../outside"))
+	assert.False(t, InvalidArchiveMember(files, "scripts/unconfigured.sh"))
+}
+
+func TestResolveInstallPath(t *testing.T) {
+	t.Parallel()
+
+	binary := filepath.Join("userdata", "system", "zaparoo")
+	got, ok := ResolveInstallPath(binary, "../roms/ports/Zaparoo.sh")
+	assert.True(t, ok)
+	assert.Equal(t, filepath.Join("userdata", "roms", "ports", "Zaparoo.sh"), got)
+
+	_, ok = ResolveInstallPath(binary, "/outside")
+	assert.False(t, ok)
 }
 
 func FuzzPayloadMemberPath(f *testing.F) {
-	root := Root{ArchiveRoot: "scripts"}
 	for _, seed := range []string{
 		"scripts/file",
 		"scripts/a/b",
@@ -90,7 +100,7 @@ func FuzzPayloadMemberPath(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, member string) {
-		rel, ok := RelativeMember(root, member)
+		rel, ok := RelativeArchivePath("scripts", member)
 		if !ok {
 			return
 		}

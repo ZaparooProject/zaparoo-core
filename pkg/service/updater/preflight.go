@@ -39,12 +39,12 @@ const bytesPerMB = 1024 * 1024
 type spaceNeeds struct {
 	// free defaults to helpers.FreeDiskSpace. Injected so the check can be
 	// tested without filling a disk.
-	free          func(string) (uint64, error)
-	targetPath    string
-	stagingRoot   string
-	userDBPath    string
-	archiveSize   int64
-	payloadCopies bool
+	free        func(string) (uint64, error)
+	targetPath  string
+	stagingRoot string
+	userDBPath  string
+	archiveSize int64
+	payloadSize int64
 }
 
 // required totals every byte the install adds while the old binary and the old
@@ -61,13 +61,11 @@ type spaceNeeds struct {
 func (n *spaceNeeds) required() int64 {
 	binarySize := fileSizeOrZero(n.targetPath)
 	required := 2*n.archiveSize + 2*binarySize + fileSizeOrZero(n.userDBPath)
-	if n.payloadCopies {
-		// Payload files need a target-filesystem candidate and, where replacing
-		// existing files, a rollback copy. The signed manifest has no expanded
-		// payload size, so two archive-sized allowances conservatively bound the
-		// small Batocera scripts payload before download.
-		required += 2 * n.archiveSize
-	}
+	// Payload files need a target-filesystem candidate and, where replacing
+	// existing files, a rollback copy. payloadSize is the extraction limit when
+	// preflight runs before download, so compression cannot make this estimate
+	// smaller than the bytes installation may retain.
+	required += 2 * n.payloadSize
 	return required
 }
 

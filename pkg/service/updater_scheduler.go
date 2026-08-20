@@ -187,6 +187,8 @@ func (s *updaterScheduler) tryCheck(ctx context.Context) {
 			online := false
 			var result *updater.Result
 			var checkErr error
+			opts := serviceUpdaterOptions(s.cfg, s.platform, s.db, updater.ModeAuto)
+			opts.Gate = s.gateDeps(nil)
 			capture := func(checkCtx context.Context, opts updater.Options) (*updater.Result, error) {
 				result, checkErr = s.check(checkCtx, opts)
 				return result, checkErr
@@ -194,7 +196,7 @@ func (s *updaterScheduler) tryCheck(ctx context.Context) {
 			updater.CheckAndNotify(
 				taskCtx,
 				s.cfg,
-				serviceUpdaterOptions(s.cfg, s.platform, s.db, updater.ModeAuto),
+				opts,
 				s.state.Inbox(),
 				func(waitCtx context.Context, _ int) bool {
 					online = s.waitInternet(waitCtx, 3)
@@ -229,12 +231,13 @@ func autoInstallable(result *updater.Result) bool {
 }
 
 func (s *updaterScheduler) tryInstall(ctx context.Context) {
+	result := s.pending.Load()
 	if s.cfg == nil || !s.cfg.UpdateCheck() || !s.cfg.UpdateInstall() ||
-		s.installScheduled.Load() || !s.installDue(s.clock.Now()) || !autoInstallable(s.pending.Load()) {
+		s.installScheduled.Load() || !s.installDue(s.clock.Now()) || !autoInstallable(result) {
 		return
 	}
 
-	reporting := serviceUpdaterGateDeps(s.platform, s.db, s.state)
+	reporting := s.gateDeps(result)
 	decision, err := updater.CanApplyUpdate(ctx, reporting, updater.ModeAuto, false)
 	if err != nil {
 		log.Warn().Err(err).Msg("could not evaluate automatic update gate")
@@ -259,6 +262,7 @@ func (s *updaterScheduler) runInstall(ctx context.Context) {
 		return
 	}
 	opts := serviceUpdaterOptions(s.cfg, s.platform, s.db, updater.ModeAuto)
+	opts.Gate = s.gateDeps(s.pending.Load())
 	fresh, err := s.check(ctx, opts)
 	if err != nil || !autoInstallable(fresh) {
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -274,7 +278,7 @@ func (s *updaterScheduler) runInstall(ctx context.Context) {
 	}
 	s.pending.Store(fresh)
 
-	deps := serviceUpdaterGateDeps(s.platform, s.db, s.state)
+	deps := s.gateDeps(fresh)
 	deps.AcquireRestore = s.state.TryAcquireRestoreAccess
 	deps.AcquireMediaGate = s.state.AcquireUpdateMediaGate
 	decision, err := updater.CanApplyUpdate(ctx, deps, updater.ModeAuto, false)
@@ -311,6 +315,18 @@ func (s *updaterScheduler) runInstall(ctx context.Context) {
 	s.state.RestartService()
 }
 
+func (s *updaterScheduler) gateDeps(result *updater.Result) *updater.GateDeps {
+	deps := serviceUpdaterGateDeps(s.platform, s.db, s.state)
+	deps.Now = s.clock.Now
+	deps.DeferredSince = func() time.Time {
+		if result == nil {
+			return time.Time{}
+		}
+		return result.DeferredSince
+	}
+	return deps
+}
+
 func serviceUpdaterOptions(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -324,6 +340,9 @@ func serviceUpdaterOptions(
 		DeviceID:   cfg.DeviceID(),
 		Managed:    pl.ManagedByPackageManager(),
 		Mode:       mode,
+	}
+	if provider, ok := pl.(platforms.UpdatePayloadProvider); ok {
+		opts.Payload = provider.UpdatePayload()
 	}
 	if db != nil {
 		opts.UserDB = db.UserDB

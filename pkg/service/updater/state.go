@@ -56,7 +56,7 @@ var stateMu syncutil.Mutex
 //nolint:govet // Field order keeps persisted state grouped by manifest, check, and outcome.
 type updaterState struct {
 	ManifestSeenAt       time.Time       `json:"manifestSeenAt"`
-	LastCheckAt          time.Time       `json:"lastCheckAt,omitempty"`
+	LastCheckAt          *time.Time      `json:"lastCheckAt,omitempty"`
 	LastResult           *updateResult   `json:"lastResult,omitempty"`
 	Deferral             *updateDeferral `json:"deferral,omitempty"`
 	ManifestETag         string          `json:"manifestETag"`
@@ -255,7 +255,8 @@ func recordScheduledCheck(dir string, succeeded bool) error {
 	if err != nil {
 		return fmt.Errorf("loading updater state before recording scheduled check: %w", err)
 	}
-	st.LastCheckAt = time.Now().UTC()
+	checkedAt := time.Now().UTC()
+	st.LastCheckAt = &checkedAt
 	st.LastCheckOK = &succeeded
 	if succeeded {
 		st.CheckFailures = 0
@@ -375,6 +376,10 @@ func sameUpdateResult(a, b *updateResult) bool {
 // that is what the deadline is measured from; a different version starts the
 // clock again.
 func recordDeferral(dir, version, reason string) error {
+	return recordDeferralAt(dir, version, reason, time.Now().UTC())
+}
+
+func recordDeferralAt(dir, version, reason string, now time.Time) error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
@@ -386,7 +391,7 @@ func recordDeferral(dir, version, reason string) error {
 		return nil
 	}
 
-	since := time.Now().UTC()
+	since := now.UTC()
 	if st.Deferral != nil && st.Deferral.Version == version && !st.Deferral.Since.IsZero() {
 		since = st.Deferral.Since
 	}

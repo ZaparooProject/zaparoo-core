@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -52,6 +53,7 @@ type payloadInstallOps struct {
 	remove        func(string) error
 	stat          func(string) (os.FileInfo, error)
 	syncDirectory func(string) error
+	saveMarker    func(string, *pendingMarker) error
 }
 
 func defaultPayloadInstallOps() payloadInstallOps {
@@ -61,6 +63,7 @@ func defaultPayloadInstallOps() payloadInstallOps {
 		remove:        os.Remove,
 		stat:          os.Lstat,
 		syncDirectory: syncDir,
+		saveMarker:    saveMarker,
 	}
 }
 
@@ -69,17 +72,33 @@ func (o payloadInstallOps) withDefaults() payloadInstallOps {
 	if o.fs == nil {
 		o.fs = defaults.fs
 	}
+	_, osBacked := o.fs.(*afero.OsFs)
 	if o.replace == nil {
-		o.replace = defaults.replace
+		if osBacked {
+			o.replace = defaults.replace
+		} else {
+			o.replace = o.fs.Rename
+		}
 	}
 	if o.remove == nil {
-		o.remove = defaults.remove
+		o.remove = o.fs.Remove
 	}
 	if o.stat == nil {
-		o.stat = defaults.stat
+		if osBacked {
+			o.stat = defaults.stat
+		} else {
+			o.stat = o.fs.Stat
+		}
 	}
 	if o.syncDirectory == nil {
-		o.syncDirectory = defaults.syncDirectory
+		if osBacked {
+			o.syncDirectory = defaults.syncDirectory
+		} else {
+			o.syncDirectory = func(string) error { return nil }
+		}
+	}
+	if o.saveMarker == nil {
+		o.saveMarker = defaults.saveMarker
 	}
 	return o
 }
@@ -165,7 +184,7 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 		return candidateErr
 	}
 
-	payloadBackups, payloadErr := preparePayloadCandidates(opts.Staged, filepath.Dir(opts.TargetPath), payloadOps)
+	payloadBackups, payloadErr := preparePayloadCandidates(opts.Staged, opts.TargetPath, payloadOps)
 	if payloadErr != nil {
 		_ = os.Remove(candidatePath)
 		removePreparedPayload(payloadBackups, payloadOps)
@@ -391,21 +410,18 @@ func prepareInstallCandidate(
 
 func preparePayloadCandidates(
 	staged *StagedUpdate,
-	installRoot string,
+	binaryPath string,
 	ops payloadInstallOps,
 ) ([]payloadBackup, error) {
 	if staged == nil || len(staged.payloadFiles) == 0 {
 		return nil, nil
 	}
 	ops = ops.withDefaults()
-	root := filepath.Clean(installRoot)
 	prepared := make([]payloadBackup, 0, len(staged.payloadFiles))
 	for _, file := range staged.payloadFiles {
-		relative := filepath.FromSlash(file.RelativePath)
-		targetPath := filepath.Join(root, relative)
-		relToRoot, err := filepath.Rel(root, targetPath)
-		if err != nil || relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
-			return prepared, fmt.Errorf("payload target %q escapes install root", file.RelativePath)
+		targetPath, ok := updatepayload.ResolveInstallPath(binaryPath, file.RelativePath)
+		if !ok {
+			return prepared, fmt.Errorf("payload target %q is not configured", file.RelativePath)
 		}
 		entry := payloadBackup{
 			TargetPath:    targetPath,
@@ -416,7 +432,7 @@ func preparePayloadCandidates(
 		entryAt := &prepared[len(prepared)-1]
 
 		//nolint:gosec // target path is constrained beneath the resolved install root
-		if err := os.MkdirAll(filepath.Dir(targetPath), stateDirPerm); err != nil {
+		if err := (afero.Afero{Fs: ops.fs}).MkdirAll(filepath.Dir(targetPath), stateDirPerm); err != nil {
 			return prepared, fmt.Errorf("creating payload target directory: %w", err)
 		}
 		if err := ops.remove(entry.CandidatePath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -434,7 +450,7 @@ func preparePayloadCandidates(
 			return prepared, fmt.Errorf("payload target %q is not a regular file", targetPath)
 		}
 
-		if err := copyPayloadFile(file.Path, entry.CandidatePath, file.Mode); err != nil {
+		if err := copyPayloadFile(ops, file.Path, entry.CandidatePath, file.Mode); err != nil {
 			return prepared, fmt.Errorf("preparing payload candidate %q: %w", targetPath, err)
 		}
 		if err := ops.syncDirectory(filepath.Dir(targetPath)); err != nil {
@@ -450,7 +466,7 @@ func preparePayloadCandidates(
 		} else if !errors.Is(backupErr, os.ErrNotExist) {
 			return prepared, fmt.Errorf("checking payload backup %q: %w", entry.BackupPath, backupErr)
 		}
-		if err := copyPayloadFile(targetPath, entry.BackupPath, targetInfo.Mode().Perm()); err != nil {
+		if err := copyPayloadFile(ops, targetPath, entry.BackupPath, targetInfo.Mode().Perm()); err != nil {
 			return prepared, fmt.Errorf("preserving payload target %q: %w", targetPath, err)
 		}
 		if err := ops.syncDirectory(filepath.Dir(targetPath)); err != nil {
@@ -460,37 +476,38 @@ func preparePayloadCandidates(
 	return prepared, nil
 }
 
-func copyPayloadFile(source, target string, mode os.FileMode) error {
+func copyPayloadFile(ops payloadInstallOps, source, target string, mode os.FileMode) error {
+	ops = ops.withDefaults()
 	//nolint:gosec // source and target are derived from verified staging and a controlled install root
-	src, err := os.Open(source)
+	src, err := ops.fs.Open(source)
 	if err != nil {
 		return fmt.Errorf("opening payload source: %w", err)
 	}
 	defer func() { _ = src.Close() }()
 
 	//nolint:gosec // payload modes are normalized during staging
-	dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode.Perm())
+	dst, err := ops.fs.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode.Perm())
 	if err != nil {
 		return fmt.Errorf("creating payload sidecar: %w", err)
 	}
 	_, copyErr := io.Copy(dst, src)
-	chmodErr := dst.Chmod(mode.Perm())
+	chmodErr := ops.fs.Chmod(target, mode.Perm())
 	syncErr := dst.Sync()
 	closeErr := dst.Close()
 	if copyErr != nil {
-		_ = os.Remove(target)
+		_ = ops.remove(target)
 		return fmt.Errorf("copying payload sidecar: %w", copyErr)
 	}
 	if chmodErr != nil {
-		_ = os.Remove(target)
+		_ = ops.remove(target)
 		return fmt.Errorf("setting payload sidecar permissions: %w", chmodErr)
 	}
 	if syncErr != nil {
-		_ = os.Remove(target)
+		_ = ops.remove(target)
 		return fmt.Errorf("flushing payload sidecar: %w", syncErr)
 	}
 	if closeErr != nil {
-		_ = os.Remove(target)
+		_ = ops.remove(target)
 		return fmt.Errorf("closing payload sidecar: %w", closeErr)
 	}
 	return nil
@@ -555,6 +572,7 @@ func abortInstallWithOps(
 	fileOps.binary = binary
 	fileOps.replace = payloadOps.replace
 	fileOps.syncDirectory = payloadOps.syncDirectory
+	fileOps.saveMarker = payloadOps.saveMarker
 	if err := restorePayloadFiles(stateDirFor(dataDir), m, fileOps); err != nil {
 		return err
 	}

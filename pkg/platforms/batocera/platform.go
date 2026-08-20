@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -41,6 +42,52 @@ import (
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
+
+var updatePayload = []updatepayload.File{
+	{
+		SourcePath: filepath.Join("cmd", "batocera", "scripts", "configs", "emulationstation", "scripts",
+			"game-selected", "zaparoo_game_select.sh"),
+		ArchivePath: "scripts/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+		InstallPath: "configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+		Mode:        0o755,
+	},
+	{
+		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "configs", "multimedia_keys.conf"),
+		ArchivePath: "scripts/configs/multimedia_keys.conf",
+		InstallPath: "configs/multimedia_keys.conf",
+		Mode:        0o644,
+	},
+	{
+		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "content_downloader.png"),
+		ArchivePath: "scripts/content_downloader.png",
+		InstallPath: "content_downloader.png",
+		Mode:        0o644,
+	},
+	{
+		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "ports", "Zaparoo.sh"),
+		ArchivePath: "scripts/ports/Zaparoo.sh",
+		InstallPath: "../roms/ports/Zaparoo.sh",
+		Mode:        0o755,
+	},
+	{
+		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
+		ArchivePath: "scripts/services/zaparoo_service",
+		InstallPath: "services/zaparoo_service",
+		Mode:        0o755,
+	},
+	{
+		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_wrapper.sh"),
+		ArchivePath: "scripts/zaparoo_wrapper.sh",
+		InstallPath: "zaparoo_wrapper.sh",
+		Mode:        0o755,
+	},
+	{
+		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_write_game.sh"),
+		ArchivePath: "scripts/zaparoo_write_game.sh",
+		InstallPath: "zaparoo_write_game.sh",
+		Mode:        0o755,
+	},
+}
 
 const (
 	// HomeDir is hardcoded because home in env is not set at the point which
@@ -292,6 +339,10 @@ func (p *Platform) getESConfig() *ESSystemConfig {
 
 	p.esConfigCache = esCfg
 	return esCfg
+}
+
+func (*Platform) UpdatePayload() []updatepayload.File {
+	return append([]updatepayload.File(nil), updatePayload...)
 }
 
 func (*Platform) Settings() platforms.Settings {

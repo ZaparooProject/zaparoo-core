@@ -28,7 +28,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	archivepath "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -125,9 +124,13 @@ func expandRelativeLinks(content, _ string) string {
 		linkPath = strings.TrimSuffix(linkPath, ".mdx")
 		linkPath = strings.TrimSuffix(linkPath, ".md")
 
-		// Remove trailing /index since zaparoo.org doesn't need it in URLs
-		linkPath = strings.TrimSuffix(linkPath, "/index")
-		linkPath = strings.TrimSuffix(linkPath, "index")
+		// Remove a path-final index segment since zaparoo.org doesn't need
+		// it in URLs. A filename such as platform-index is not an index page.
+		if linkPath == "index" {
+			linkPath = ""
+		} else {
+			linkPath = strings.TrimSuffix(linkPath, "/index")
+		}
 
 		// Build the absolute URL based on how many levels up we go
 		// Source docs are at docs/platforms/{platform}/, so:
@@ -342,26 +345,33 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, _ string
 		}
 	}
 
-	return addPayloadToZip(zipWriter, updatepayload.Roots(platform))
+	return addPayloadToZip(zipWriter, payloadFiles(platform))
 }
 
-func addPayloadToZip(zipWriter *zip.Writer, roots []updatepayload.Root) error {
-	for _, root := range roots {
-		info, err := os.Stat(root.SourceDir)
+func addPayloadToZip(zipWriter *zip.Writer, files []updatepayload.File) error {
+	for _, file := range files {
+		if _, ok := updatepayload.MatchArchiveFile(files, file.ArchivePath); !ok {
+			return fmt.Errorf("payload archive path %q is invalid", file.ArchivePath)
+		}
+		info, err := os.Lstat(file.SourcePath)
 		if err != nil {
-			return fmt.Errorf("reading payload source %q: %w", root.SourceDir, err)
+			return fmt.Errorf("reading payload source %q: %w", file.SourcePath, err)
 		}
-		if !info.IsDir() {
-			return fmt.Errorf("payload source %q is not a directory", root.SourceDir)
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("payload source %q is not a regular file", file.SourcePath)
 		}
-		if err := addDirToZip(zipWriter, root.SourceDir, root.ArchiveRoot); err != nil {
-			return fmt.Errorf("adding payload source %q to zip: %w", root.SourceDir, err)
+		if err := addFileToZipMode(zipWriter, file.SourcePath, file.ArchivePath, file.Mode); err != nil {
+			return fmt.Errorf("adding payload source %q to zip: %w", file.SourcePath, err)
 		}
 	}
 	return nil
 }
 
 func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
+	return addFileToZipMode(zipWriter, filePath, arcname, 0)
+}
+
+func addFileToZipMode(zipWriter *zip.Writer, filePath, arcname string, mode os.FileMode) error {
 	//nolint:gosec // Safe: opens files in build script with controlled paths
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -382,6 +392,9 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 	}
 	header.Name = arcname
 	header.Method = zip.Deflate
+	if mode != 0 {
+		header.SetMode(mode.Perm())
+	}
 
 	writer, err := zipWriter.CreateHeader(header)
 	if err != nil {
@@ -391,29 +404,6 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 	_, err = io.Copy(writer, file)
 	if err != nil {
 		return fmt.Errorf("failed to copy file content to zip: %w", err)
-	}
-	return nil
-}
-
-func addDirToZip(zipWriter *zip.Writer, dirPath, archiveRoot string) error {
-	if err := filepath.Walk(dirPath, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-
-		relPath, err := filepath.Rel(dirPath, filePath)
-		if err != nil {
-			return fmt.Errorf("failed to get relative path: %w", err)
-		}
-		if !updatepayload.IncludeSource(relPath) {
-			return nil
-		}
-		return addFileToZip(zipWriter, filePath, archivepath.Join(archiveRoot, filepath.ToSlash(relPath)))
-	}); err != nil {
-		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
 	}
 	return nil
 }
@@ -470,26 +460,33 @@ func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, _ st
 		}
 	}
 
-	return addPayloadToTar(tarWriter, updatepayload.Roots(platform))
+	return addPayloadToTar(tarWriter, payloadFiles(platform))
 }
 
-func addPayloadToTar(tarWriter *tar.Writer, roots []updatepayload.Root) error {
-	for _, root := range roots {
-		info, err := os.Stat(root.SourceDir)
+func addPayloadToTar(tarWriter *tar.Writer, files []updatepayload.File) error {
+	for _, file := range files {
+		if _, ok := updatepayload.MatchArchiveFile(files, file.ArchivePath); !ok {
+			return fmt.Errorf("payload archive path %q is invalid", file.ArchivePath)
+		}
+		info, err := os.Lstat(file.SourcePath)
 		if err != nil {
-			return fmt.Errorf("reading payload source %q: %w", root.SourceDir, err)
+			return fmt.Errorf("reading payload source %q: %w", file.SourcePath, err)
 		}
-		if !info.IsDir() {
-			return fmt.Errorf("payload source %q is not a directory", root.SourceDir)
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("payload source %q is not a regular file", file.SourcePath)
 		}
-		if err := addDirToTar(tarWriter, root.SourceDir, root.ArchiveRoot); err != nil {
-			return fmt.Errorf("adding payload source %q to tar: %w", root.SourceDir, err)
+		if err := addFileToTarMode(tarWriter, file.SourcePath, file.ArchivePath, file.Mode); err != nil {
+			return fmt.Errorf("adding payload source %q to tar: %w", file.SourcePath, err)
 		}
 	}
 	return nil
 }
 
 func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
+	return addFileToTarMode(tarWriter, filePath, arcname, 0)
+}
+
+func addFileToTarMode(tarWriter *tar.Writer, filePath, arcname string, mode os.FileMode) error {
 	//nolint:gosec // Safe: opens files in build script with controlled paths
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -509,6 +506,9 @@ func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
 		return fmt.Errorf("operation failed: %w", err)
 	}
 	header.Name = arcname
+	if mode != 0 {
+		header.Mode = int64(mode.Perm())
+	}
 
 	err = tarWriter.WriteHeader(header)
 	if err != nil {
@@ -518,29 +518,6 @@ func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
 	_, err = io.Copy(tarWriter, file)
 	if err != nil {
 		return fmt.Errorf("failed to copy file content to tar: %w", err)
-	}
-	return nil
-}
-
-func addDirToTar(tarWriter *tar.Writer, dirPath, archiveRoot string) error {
-	if err := filepath.Walk(dirPath, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-
-		relPath, err := filepath.Rel(dirPath, filePath)
-		if err != nil {
-			return fmt.Errorf("failed to get relative path: %w", err)
-		}
-		if !updatepayload.IncludeSource(relPath) {
-			return nil
-		}
-		return addFileToTar(tarWriter, filePath, archivepath.Join(archiveRoot, filepath.ToSlash(relPath)))
-	}); err != nil {
-		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
 	}
 	return nil
 }

@@ -22,68 +22,89 @@
 package updatepayload
 
 import (
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
-
-	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 )
 
-// Root maps a repository source directory to its top-level archive and install
-// directory. ArchiveRoot is always slash-separated.
-type Root struct {
-	SourceDir   string
-	ArchiveRoot string
+// File is one exact file in a platform update payload. SourcePath uses native
+// separators; archive and install paths are slash-separated descendants.
+type File struct {
+	SourcePath  string
+	ArchivePath string
+	InstallPath string
+	Mode        os.FileMode
 }
 
-var rootsByPlatform = map[string][]Root{
-	platformids.Batocera: {
-		{SourceDir: "cmd/batocera/scripts", ArchiveRoot: "scripts"},
-	},
-}
-
-// Roots returns a copy of the payload roots configured for platformID.
-func Roots(platformID string) []Root {
-	roots := rootsByPlatform[platformID]
-	return append([]Root(nil), roots...)
-}
-
-// RelativeMember returns a clean path below root for an archive member. Archive
-// names are slash paths on every host; native separators and path traversal are
-// rejected before callers convert the result to a filesystem path.
-func RelativeMember(root Root, member string) (string, bool) {
-	if root.ArchiveRoot == "" || member == "" || strings.Contains(member, `\`) || path.IsAbs(member) {
+// RelativeArchivePath validates member and returns its path below archiveRoot.
+func RelativeArchivePath(archiveRoot, member string) (string, bool) {
+	if !validDescendant(archiveRoot) || member == "" ||
+		strings.Contains(member, `\`) || path.IsAbs(member) || path.Clean(member) != member {
 		return "", false
 	}
-	if path.Clean(root.ArchiveRoot) != root.ArchiveRoot || strings.Contains(root.ArchiveRoot, "/") {
-		return "", false
-	}
-	if path.Clean(member) != member {
-		return "", false
-	}
-	prefix := root.ArchiveRoot + "/"
+	prefix := archiveRoot + "/"
 	if !strings.HasPrefix(member, prefix) {
 		return "", false
 	}
-	rel := strings.TrimPrefix(member, prefix)
-	if rel == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+	relative := strings.TrimPrefix(member, prefix)
+	if !validDescendant(relative) {
 		return "", false
 	}
-	for component := range strings.SplitSeq(rel, "/") {
-		if component == "" || component == "." || component == ".." {
-			return "", false
-		}
-	}
-	return rel, true
+	return relative, true
 }
 
-// IncludeSource reports whether a source-tree entry belongs in a release
-// payload. Finder metadata is never part of the runtime payload.
-func IncludeSource(relative string) bool {
-	if relative == "" {
+// MatchArchiveFile returns the exact configured file represented by member.
+func MatchArchiveFile(files []File, member string) (File, bool) {
+	for _, file := range files {
+		archiveRoot, _, ok := strings.Cut(file.ArchivePath, "/")
+		if !ok || file.ArchivePath != member {
+			continue
+		}
+		if _, ok := RelativeArchivePath(archiveRoot, member); ok && validInstallPath(file.InstallPath) &&
+			validMode(file.Mode) {
+			return file, true
+		}
+	}
+	return File{}, false
+}
+
+// InvalidArchiveMember reports malformed names that claim a configured payload root.
+func InvalidArchiveMember(files []File, member string) bool {
+	for _, file := range files {
+		archiveRoot, _, ok := strings.Cut(file.ArchivePath, "/")
+		if !ok || (!strings.HasPrefix(member, archiveRoot+"/") &&
+			!strings.HasPrefix(member, archiveRoot+`\`)) {
+			continue
+		}
+		_, valid := RelativeArchivePath(archiveRoot, member)
+		return !valid
+	}
+	return false
+}
+
+// ResolveInstallPath resolves a configured path relative to the binary directory.
+func ResolveInstallPath(binaryPath, installPath string) (string, bool) {
+	if binaryPath == "" || !validInstallPath(installPath) {
+		return "", false
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(binaryPath), filepath.FromSlash(installPath))), true
+}
+
+func validMode(mode os.FileMode) bool {
+	return mode.Perm() == 0o644 || mode.Perm() == 0o755
+}
+
+func validInstallPath(value string) bool {
+	return value != "" && !strings.Contains(value, `\`) && !path.IsAbs(value) && path.Clean(value) == value
+}
+
+func validDescendant(value string) bool {
+	if value == "" || strings.Contains(value, `\`) || path.IsAbs(value) || path.Clean(value) != value {
 		return false
 	}
-	for component := range strings.SplitSeq(strings.ReplaceAll(relative, `\`, "/"), "/") {
-		if component == ".DS_Store" {
+	for component := range strings.SplitSeq(value, "/") {
+		if component == "" || component == "." || component == ".." {
 			return false
 		}
 	}

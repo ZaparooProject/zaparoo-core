@@ -175,7 +175,7 @@ var (
 type StageOptions struct {
 	Release        *otameta.Release
 	progress       *progressReporter
-	payloadRoots   []updatepayload.Root
+	payload        []updatepayload.File
 	PlatformID     string
 	Arch           string
 	OS             string
@@ -249,7 +249,7 @@ type stager struct {
 	current          string
 	platformID       string
 	stagingRoot      string
-	payloadRoots     []updatepayload.Root
+	payload          []updatepayload.File
 	maxFileBytes     int64
 	maxInflatedBytes int64
 	stallTimeout     time.Duration
@@ -331,6 +331,7 @@ func newStager(opts *StageOptions, fetch assetFetcher) (*stager, error) {
 		return nil, fmt.Errorf("staging an update needs the path of the binary to replace, got %q", opts.TargetPath)
 	}
 
+	payload := append([]updatepayload.File(nil), opts.payload...)
 	s := &stager{
 		fetch:            fetch,
 		release:          opts.Release,
@@ -341,7 +342,7 @@ func newStager(opts *StageOptions, fetch assetFetcher) (*stager, error) {
 		binaryName:       binaryName,
 		stagingRoot:      opts.StagingRoot,
 		current:          opts.CurrentVersion,
-		payloadRoots:     append([]updatepayload.Root(nil), opts.payloadRoots...),
+		payload:          payload,
 		maxFileBytes:     maxStagedFileBytes,
 		maxInflatedBytes: maxArchiveInflatedBytes,
 		stallTimeout:     downloadStallTimeout,

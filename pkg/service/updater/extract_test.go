@@ -36,6 +36,7 @@ import (
 	"strings"
 	"testing"
 
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/stretchr/testify/assert"
@@ -126,6 +127,21 @@ func writeZip(t *testing.T, path string, members []zipMember) {
 // extractHarness lays a tree out so an escape is visible: the archive, the
 // payload directory extraction is allowed to write into, and a sibling holding
 // a file that must never change.
+func extractTestPayload() []updatepayload.File {
+	return []updatepayload.File{
+		{
+			ArchivePath: "scripts/services/zaparoo_service",
+			InstallPath: "services/zaparoo_service",
+			Mode:        0o755,
+		},
+		{
+			ArchivePath: "scripts/configs/settings.conf",
+			InstallPath: "configs/settings.conf",
+			Mode:        0o644,
+		},
+	}
+}
+
 type extractHarness struct {
 	stager      *stager
 	base        string
@@ -593,20 +609,21 @@ func TestExtractRelease_IncludesConfiguredPayload(t *testing.T) {
 		t.Run(ext, func(t *testing.T) {
 			t.Parallel()
 			h := newExtractHarness(t, ext)
-			h.stager.payloadRoots = []updatepayload.Root{{ArchiveRoot: "scripts"}}
+			h.stager.platformID = platformids.Batocera
+			h.stager.payload = extractTestPayload()
 			h.stager.chmod = os.Chmod
 			switch ext {
 			case otameta.ArchiveExtTarGz:
 				writeTarGz(t, h.archivePath, []tarMember{
 					{name: "zaparoo", body: []byte("binary"), mode: 0o755},
-					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o755},
+					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o644},
 					{name: "scripts/configs/settings.conf", body: []byte("config"), mode: 0o600},
 					{name: "scripts/.DS_Store", body: []byte("metadata")},
 				})
 			case otameta.ArchiveExtZip:
 				writeZip(t, h.archivePath, []zipMember{
 					{name: "zaparoo", body: []byte("binary"), mode: 0o755},
-					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o755},
+					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o644},
 					{name: "scripts/configs/settings.conf", body: []byte("config"), mode: 0o600},
 					{name: "scripts/.DS_Store", body: []byte("metadata")},
 				})
@@ -617,9 +634,9 @@ func TestExtractRelease_IncludesConfiguredPayload(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.Len(t, payloads, 2)
-			assert.Equal(t, "scripts/services/zaparoo_service", payloads[0].RelativePath)
+			assert.Equal(t, "services/zaparoo_service", payloads[0].RelativePath)
 			assert.Equal(t, os.FileMode(0o755), payloads[0].Mode)
-			assert.Equal(t, "scripts/configs/settings.conf", payloads[1].RelativePath)
+			assert.Equal(t, "configs/settings.conf", payloads[1].RelativePath)
 			assert.Equal(t, os.FileMode(0o644), payloads[1].Mode)
 			assert.FileExists(t, filepath.Join(h.payloadDir, "scripts", "services", "zaparoo_service"))
 			assert.NoFileExists(t, filepath.Join(h.payloadDir, "scripts", ".DS_Store"))
@@ -635,14 +652,15 @@ func TestExtractRelease_RejectsDuplicateOrInvalidPayload(t *testing.T) {
 		member string
 		dupe   bool
 	}{
-		{name: "duplicate", member: "scripts/file", dupe: true},
+		{name: "duplicate", member: "scripts/services/zaparoo_service", dupe: true},
 		{name: "parent traversal", member: "scripts/../file"},
 		{name: "backslash traversal", member: `scripts\..\file`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			h := newExtractHarness(t, otameta.ArchiveExtZip)
-			h.stager.payloadRoots = []updatepayload.Root{{ArchiveRoot: "scripts"}}
+			h.stager.platformID = platformids.Batocera
+			h.stager.payload = extractTestPayload()
 			h.stager.chmod = os.Chmod
 			members := []zipMember{
 				{name: "zaparoo", body: []byte("binary"), mode: 0o755},
