@@ -61,11 +61,11 @@ type spaceNeeds struct {
 func (n *spaceNeeds) required() int64 {
 	binarySize := fileSizeOrZero(n.targetPath)
 	required := 2*n.archiveSize + 2*binarySize + fileSizeOrZero(n.userDBPath)
-	// Payload files need a target-filesystem candidate and, where replacing
-	// existing files, a rollback copy. payloadSize is the extraction limit when
-	// preflight runs before download, so compression cannot make this estimate
-	// smaller than the bytes installation may retain.
-	required += 2 * n.payloadSize
+	// Payload files remain staged while installation creates a target-filesystem
+	// candidate and, where replacing existing files, a rollback copy. payloadSize
+	// is the extraction limit when preflight runs before download, so compression
+	// cannot make this estimate smaller than the bytes installation may retain.
+	required += 3 * n.payloadSize
 	return required
 }
 

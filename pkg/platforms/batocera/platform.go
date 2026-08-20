@@ -43,52 +43,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var updatePayload = []updatepayload.File{
-	{
-		SourcePath: filepath.Join("cmd", "batocera", "scripts", "configs", "emulationstation", "scripts",
-			"game-selected", "zaparoo_game_select.sh"),
-		ArchivePath: "scripts/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
-		InstallPath: "configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
-		Mode:        0o755,
-	},
-	{
-		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "configs", "multimedia_keys.conf"),
-		ArchivePath: "scripts/configs/multimedia_keys.conf",
-		InstallPath: "configs/multimedia_keys.conf",
-		Mode:        0o644,
-	},
-	{
-		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "content_downloader.png"),
-		ArchivePath: "scripts/content_downloader.png",
-		InstallPath: "content_downloader.png",
-		Mode:        0o644,
-	},
-	{
-		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "ports", "Zaparoo.sh"),
-		ArchivePath: "scripts/ports/Zaparoo.sh",
-		InstallPath: "../roms/ports/Zaparoo.sh",
-		Mode:        0o755,
-	},
-	{
-		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
-		ArchivePath: "scripts/services/zaparoo_service",
-		InstallPath: "services/zaparoo_service",
-		Mode:        0o755,
-	},
-	{
-		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_wrapper.sh"),
-		ArchivePath: "scripts/zaparoo_wrapper.sh",
-		InstallPath: "zaparoo_wrapper.sh",
-		Mode:        0o755,
-	},
-	{
-		SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_write_game.sh"),
-		ArchivePath: "scripts/zaparoo_write_game.sh",
-		InstallPath: "zaparoo_write_game.sh",
-		Mode:        0o755,
-	},
-}
-
 const (
 	// HomeDir is hardcoded because home in env is not set at the point which
 	// the service file is called to start.
@@ -342,7 +296,7 @@ func (p *Platform) getESConfig() *ESSystemConfig {
 }
 
 func (*Platform) UpdatePayload() []updatepayload.File {
-	return append([]updatepayload.File(nil), updatePayload...)
+	return UpdatePayload()
 }
 
 func (*Platform) Settings() platforms.Settings {

@@ -15,5 +15,5 @@ func payloadFiles(platform string) []updatepayload.File {
 	if platform != "batocera" {
 		return nil
 	}
-	return (&batocera.Platform{}).UpdatePayload()
+	return batocera.UpdatePayload()
 }

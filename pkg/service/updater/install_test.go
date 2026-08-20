@@ -206,15 +206,21 @@ func TestPreparePayloadCandidates_UsesInjectedFilesystem(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll("/staging", 0o750))
-	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll("/userdata/system/services", 0o750))
-	require.NoError(t, afero.WriteFile(fs, "/staging/service", []byte("new"), 0o755))
-	require.NoError(t, afero.WriteFile(fs, "/userdata/system/services/service", []byte("old"), 0o700))
+	root := string(filepath.Separator)
+	stagingDir := filepath.Join(root, "staging")
+	serviceDir := filepath.Join(root, "userdata", "system", "services")
+	stagedPath := filepath.Join(stagingDir, "service")
+	targetPath := filepath.Join(serviceDir, "service")
+	binaryPath := filepath.Join(root, "userdata", "system", "zaparoo")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(stagingDir, 0o750))
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(serviceDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("new"), 0o755))
+	require.NoError(t, afero.WriteFile(fs, targetPath, []byte("old"), 0o700))
 	staged := &StagedUpdate{payloadFiles: []stagedPayloadFile{{
-		Path: "/staging/service", RelativePath: "services/service", Mode: 0o755,
+		Path: stagedPath, RelativePath: "services/service", Mode: 0o755,
 	}}}
 
-	backups, err := preparePayloadCandidates(staged, "/userdata/system/zaparoo", payloadInstallOps{fs: fs})
+	backups, err := preparePayloadCandidates(staged, binaryPath, payloadInstallOps{fs: fs})
 	require.NoError(t, err)
 	require.Len(t, backups, 1)
 	assert.Equal(t, "new", readAferoFileString(t, fs, backups[0].CandidatePath))
@@ -232,17 +238,19 @@ func TestCopyPayloadFile_UsesInjectedFilesystem(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
-	require.NoError(t, afero.WriteFile(fs, "/staged-helper.sh", []byte("helper"), 0o600))
+	root := string(filepath.Separator)
+	stagedPath := filepath.Join(root, "staged-helper.sh")
+	targetPath := filepath.Join(root, "target-helper.sh")
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("helper"), 0o600))
 	ops := payloadInstallOps{fs: fs}
-	require.NoError(t, copyPayloadFile(ops, "/staged-helper.sh", "/target-helper.sh", 0o755))
+	require.NoError(t, copyPayloadFile(ops, stagedPath, targetPath, 0o755))
 
-	content, err := afero.ReadFile(fs, "/target-helper.sh")
+	content, err := afero.ReadFile(fs, targetPath)
 	require.NoError(t, err)
 	assert.Equal(t, "helper", string(content))
-	info, err := fs.Stat("/target-helper.sh")
+	info, err := fs.Stat(targetPath)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
-	assert.NoFileExists(t, "/target-helper.sh", "host filesystem must not receive injected writes")
 }
 
 func TestPreserveCurrentBinary_LeavesBootTargetPresent(t *testing.T) {

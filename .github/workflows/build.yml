@@ -363,7 +363,7 @@ jobs:
             cp "_signed/${arch}/Zaparoo.exe" "_dist/${arch}/Zaparoo.exe"
 
             # Create distribution ZIP
-            go run scripts/tasks/utils/makezip/main.go \
+            go run ./scripts/tasks/utils/makezip \
               windows "_dist/${arch}" Zaparoo.exe \
               "zaparoo-windows_${arch}-${VERSION}.zip"
 

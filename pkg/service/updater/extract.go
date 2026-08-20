@@ -175,6 +175,7 @@ func verifyOpenArchive(ctx context.Context, f *os.File, want []byte) (int64, err
 
 type archiveMemberTarget struct {
 	destPath     string
+	archivePath  string
 	relativePath string
 	binary       bool
 	mode         os.FileMode
@@ -194,7 +195,7 @@ func (s *stager) memberTarget(name, binaryPath, payloadDir string) (archiveMembe
 		return archiveMemberTarget{}, false
 	}
 	return archiveMemberTarget{
-		destPath: destPath, relativePath: file.InstallPath, mode: file.Mode,
+		destPath: destPath, archivePath: file.ArchivePath, relativePath: file.InstallPath, mode: file.Mode,
 	}, true
 }
 
@@ -215,8 +216,8 @@ func (b *payloadBudget) admit(target archiveMemberTarget, declared int64) error 
 	if target.binary {
 		return nil
 	}
-	if _, duplicate := b.seen[target.relativePath]; duplicate {
-		return fmt.Errorf("%w: duplicate payload member %q", ErrArchiveRejected, target.relativePath)
+	if _, duplicate := b.seen[target.archivePath]; duplicate {
+		return fmt.Errorf("%w: duplicate payload member %q", ErrArchiveRejected, target.archivePath)
 	}
 	if declared > maxStagedPayloadBytes-b.bytes {
 		return fmt.Errorf("%w: payload files exceed the %d byte limit",
@@ -229,11 +230,20 @@ func (b *payloadBudget) record(target archiveMemberTarget, payload stagedPayload
 	if target.binary {
 		return nil
 	}
-	b.seen[target.relativePath] = struct{}{}
+	b.seen[target.archivePath] = struct{}{}
 	b.bytes += payload.Size
 	if b.bytes > maxStagedPayloadBytes {
 		return fmt.Errorf("%w: payload files exceed the %d byte limit",
 			ErrArchiveRejected, maxStagedPayloadBytes)
+	}
+	return nil
+}
+
+func (b *payloadBudget) requireAll(files []updatepayload.File) error {
+	for _, file := range files {
+		if _, ok := b.seen[file.ArchivePath]; !ok {
+			return fmt.Errorf("%w: required payload member %q is missing", ErrArchiveRejected, file.ArchivePath)
+		}
 	}
 	return nil
 }
@@ -352,6 +362,9 @@ func (s *stager) extractFromTarGz(
 	if !foundBinary {
 		return nil, fmt.Errorf("%w: no %s in it", ErrArchiveRejected, s.binaryName)
 	}
+	if err := budget.requireAll(s.payload); err != nil {
+		return nil, err
+	}
 	return payloads, nil
 }
 
@@ -416,6 +429,9 @@ func (s *stager) extractFromZip(
 	}
 	if !foundBinary {
 		return nil, fmt.Errorf("%w: no %s in it", ErrArchiveRejected, s.binaryName)
+	}
+	if err := budget.requireAll(s.payload); err != nil {
+		return nil, err
 	}
 	return payloads, nil
 }

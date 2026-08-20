@@ -348,11 +348,25 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, _ string
 	return addPayloadToZip(zipWriter, payloadFiles(platform))
 }
 
-func addPayloadToZip(zipWriter *zip.Writer, files []updatepayload.File) error {
+func validatePayloadFiles(files []updatepayload.File) error {
+	seen := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		if _, ok := updatepayload.MatchArchiveFile(files, file.ArchivePath); !ok {
+		if _, duplicate := seen[file.ArchivePath]; duplicate {
+			return fmt.Errorf("duplicate payload archive path %q", file.ArchivePath)
+		}
+		seen[file.ArchivePath] = struct{}{}
+		if _, ok := updatepayload.MatchArchiveFile([]updatepayload.File{file}, file.ArchivePath); !ok {
 			return fmt.Errorf("payload archive path %q is invalid", file.ArchivePath)
 		}
+	}
+	return nil
+}
+
+func addPayloadToZip(zipWriter *zip.Writer, files []updatepayload.File) error {
+	if err := validatePayloadFiles(files); err != nil {
+		return err
+	}
+	for _, file := range files {
 		info, err := os.Lstat(file.SourcePath)
 		if err != nil {
 			return fmt.Errorf("reading payload source %q: %w", file.SourcePath, err)
@@ -464,10 +478,10 @@ func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, _ st
 }
 
 func addPayloadToTar(tarWriter *tar.Writer, files []updatepayload.File) error {
+	if err := validatePayloadFiles(files); err != nil {
+		return err
+	}
 	for _, file := range files {
-		if _, ok := updatepayload.MatchArchiveFile(files, file.ArchivePath); !ok {
-			return fmt.Errorf("payload archive path %q is invalid", file.ArchivePath)
-		}
 		info, err := os.Lstat(file.SourcePath)
 		if err != nil {
 			return fmt.Errorf("reading payload source %q: %w", file.SourcePath, err)

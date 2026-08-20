@@ -547,6 +547,25 @@ func TestAddPayloadToArchives_MissingSourceFails(t *testing.T) {
 	}
 }
 
+func TestAddPayloadToArchives_DuplicateArchivePathFails(t *testing.T) {
+	t.Parallel()
+
+	files := []updatepayload.File{
+		{ArchivePath: "scripts/helper.sh", InstallPath: "helper.sh", Mode: 0o755},
+		{ArchivePath: "scripts/helper.sh", InstallPath: "other-helper.sh", Mode: 0o755},
+	}
+	var zipBuf bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuf)
+	if err := addPayloadToZip(zipWriter, files); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("addPayloadToZip duplicate error = %v", err)
+	}
+	var tarBuf bytes.Buffer
+	if err := addPayloadToTar(tar.NewWriter(&tarBuf), files); err == nil ||
+		!strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("addPayloadToTar duplicate error = %v", err)
+	}
+}
+
 func TestCopyFile(t *testing.T) {
 	t.Parallel()
 

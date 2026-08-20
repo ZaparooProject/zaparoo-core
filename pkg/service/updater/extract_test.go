@@ -644,6 +644,35 @@ func TestExtractRelease_IncludesConfiguredPayload(t *testing.T) {
 	}
 }
 
+func TestExtractRelease_RejectsMissingConfiguredPayload(t *testing.T) {
+	t.Parallel()
+
+	for _, ext := range []string{otameta.ArchiveExtTarGz, otameta.ArchiveExtZip} {
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+			h := newExtractHarness(t, ext)
+			h.stager.payload = extractTestPayload()
+			h.stager.chmod = os.Chmod
+			switch ext {
+			case otameta.ArchiveExtTarGz:
+				writeTarGz(t, h.archivePath, []tarMember{
+					{name: "zaparoo", body: []byte("binary"), mode: 0o755},
+					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o755},
+				})
+			case otameta.ArchiveExtZip:
+				writeZip(t, h.archivePath, []zipMember{
+					{name: "zaparoo", body: []byte("binary"), mode: 0o755},
+					{name: "scripts/services/zaparoo_service", body: []byte("service"), mode: 0o755},
+				})
+			}
+
+			err := h.extract(t, ext)
+			require.ErrorIs(t, err, ErrArchiveRejected)
+			assert.Contains(t, err.Error(), "scripts/configs/settings.conf")
+		})
+	}
+}
+
 func TestExtractRelease_RejectsDuplicateOrInvalidPayload(t *testing.T) {
 	t.Parallel()
 

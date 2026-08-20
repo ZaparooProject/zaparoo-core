@@ -38,14 +38,14 @@ func TestRelativeArchivePath(t *testing.T) {
 	}{
 		{name: "nested", member: "scripts/services/zaparoo_service", want: "services/zaparoo_service", ok: true},
 		{name: "root file", member: "scripts/zaparoo_write_game.sh", want: "zaparoo_write_game.sh", ok: true},
-		{name: "root directory", member: "scripts"},
-		{name: "other root", member: "other/file"},
-		{name: "absolute", member: "/scripts/file"},
-		{name: "parent", member: "scripts/../file"},
-		{name: "nested parent", member: "scripts/a/../../file"},
-		{name: "dot", member: "scripts/./file"},
-		{name: "empty component", member: "scripts//file"},
-		{name: "backslash", member: `scripts\..\file`},
+		{name: "root directory", member: "scripts", want: "", ok: false},
+		{name: "other root", member: "other/file", want: "", ok: false},
+		{name: "absolute", member: "/scripts/file", want: "", ok: false},
+		{name: "parent", member: "scripts/../file", want: "", ok: false},
+		{name: "nested parent", member: "scripts/a/../../file", want: "", ok: false},
+		{name: "dot", member: "scripts/./file", want: "", ok: false},
+		{name: "empty component", member: "scripts//file", want: "", ok: false},
+		{name: "backslash", member: `scripts\..\file`, want: "", ok: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

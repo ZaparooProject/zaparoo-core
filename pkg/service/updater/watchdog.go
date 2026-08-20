@@ -663,36 +663,7 @@ func restorePayloadFile(
 		return nil
 	}
 
-	if payload.BackupPath == "" || payload.TargetPath == "" {
-		return fmt.Errorf("%w: the update recorded no backup for a file it replaced", errRollbackPrerequisite)
-	}
-	_, statErr := fileOps.fs.Stat(payload.BackupPath)
-	if statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) && m.RestoringPath == payload.TargetPath {
-			if _, targetErr := fileOps.fs.Stat(payload.TargetPath); targetErr != nil {
-				return fmt.Errorf("restored backup and target are both unavailable for %q: %w",
-					payload.TargetPath, targetErr)
-			}
-			return nil
-		}
-		if errors.Is(statErr, os.ErrNotExist) {
-			return fmt.Errorf("%w: backup of %q: %w", errRollbackPrerequisite, payload.TargetPath, statErr)
-		}
-		return fmt.Errorf("reading the backup of %q: %w", payload.TargetPath, statErr)
-	}
-	if m.RestoringPath != payload.TargetPath {
-		m.RestoringPath = payload.TargetPath
-		if err := fileOps.save(dir, m); err != nil {
-			return fmt.Errorf("recording the payload being restored: %w", err)
-		}
-	}
-	if err := fileOps.replace(payload.BackupPath, payload.TargetPath); err != nil {
-		return fmt.Errorf("restoring %q: %w", payload.TargetPath, err)
-	}
-	if err := fileOps.syncDirectory(filepath.Dir(payload.TargetPath)); err != nil {
-		return fmt.Errorf("flushing restored file %q: %w", payload.TargetPath, err)
-	}
-	return nil
+	return restoreReplacedFileState(dir, m, payload.BackupPath, payload.TargetPath, fileOps, false)
 }
 
 // restoreReplacedFiles renames what the install displaced back over what it
@@ -717,6 +688,16 @@ func restoreReplacedFiles(dir string, m *pendingMarker, fileOps watchdogFileOps)
 func restoreReplacedFile(
 	dir string, m *pendingMarker, backupPath, targetPath string, fileOps watchdogFileOps,
 ) error {
+	return restoreReplacedFileState(dir, m, backupPath, targetPath, fileOps, true)
+}
+
+func restoreReplacedFileState(
+	dir string,
+	m *pendingMarker,
+	backupPath, targetPath string,
+	fileOps watchdogFileOps,
+	clearRestoringPath bool,
+) error {
 	if backupPath == "" || targetPath == "" {
 		return fmt.Errorf("%w: the update recorded no backup for a file it replaced", errRollbackPrerequisite)
 	}
@@ -727,9 +708,11 @@ func restoreReplacedFile(
 			if _, targetErr := fileOps.fs.Stat(targetPath); targetErr != nil {
 				return fmt.Errorf("restored backup and target are both unavailable for %q: %w", targetPath, targetErr)
 			}
-			m.RestoringPath = ""
-			if saveErr := fileOps.save(dir, m); saveErr != nil {
-				return fmt.Errorf("recording the completed file restore: %w", saveErr)
+			if clearRestoringPath {
+				m.RestoringPath = ""
+				if saveErr := fileOps.save(dir, m); saveErr != nil {
+					return fmt.Errorf("recording the completed file restore: %w", saveErr)
+				}
 			}
 			return nil
 		}
@@ -752,9 +735,11 @@ func restoreReplacedFile(
 	if err := fileOps.syncDirectory(filepath.Dir(targetPath)); err != nil {
 		return fmt.Errorf("flushing restored file %q: %w", targetPath, err)
 	}
-	m.RestoringPath = ""
-	if err := fileOps.save(dir, m); err != nil {
-		return fmt.Errorf("recording the completed file restore: %w", err)
+	if clearRestoringPath {
+		m.RestoringPath = ""
+		if err := fileOps.save(dir, m); err != nil {
+			return fmt.Errorf("recording the completed file restore: %w", err)
+		}
 	}
 	return nil
 }
