@@ -2146,6 +2146,32 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	assert.False(t, foundFiles["readme.txt"])
 }
 
+func TestShouldSkipExcludedSymlink_FsTimeout(t *testing.T) {
+	t.Parallel()
+
+	stat := func(context.Context, string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stale mount: %w", ErrFsTimeout)
+	}
+
+	shouldSkip, err := shouldSkipExcludedSymlink(context.Background(), "excluded-link", stat)
+	require.NoError(t, err)
+	assert.True(t, shouldSkip)
+}
+
+func TestShouldSkipExcludedSymlink_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stat := func(context.Context, string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stale mount: %w", ErrFsTimeout)
+	}
+
+	shouldSkip, err := shouldSkipExcludedSymlink(ctx, "excluded-link", stat)
+	assert.False(t, shouldSkip)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestGetFiles_SkipsLauncherExcludedDirectory(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	rootDir := t.TempDir()

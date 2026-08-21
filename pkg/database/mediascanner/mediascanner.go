@@ -568,6 +568,28 @@ func filterRunnableSystems(
 	return filtered
 }
 
+// shouldSkipExcludedSymlink reports whether an excluded symlink must be kept
+// out of the walk. A timeout means its target type is unknown, but allowing
+// fastwalk to follow it would immediately repeat the blocking stat without a
+// timeout. Context cancellation takes precedence so callers can stop the walk.
+func shouldSkipExcludedSymlink(
+	ctx context.Context,
+	path string,
+	stat func(context.Context, string) (os.FileInfo, error),
+) (bool, error) {
+	targetInfo, err := stat(ctx, path)
+	if err == nil {
+		return targetInfo.IsDir(), nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if errors.Is(err, ErrFsTimeout) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -634,18 +656,15 @@ func GetFiles(
 		}
 		isSymlink := d.Type()&os.ModeSymlink != 0
 		if (d.IsDir() || isSymlink) && matcher.ShouldSkipScanDirectory(system.ID, p) {
-			isDirectory := d.IsDir()
+			shouldSkip := d.IsDir()
 			if isSymlink {
-				targetInfo, statErr := statWithContext(ctx, p)
-				if statErr != nil {
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return ctxErr
-					}
-				} else {
-					isDirectory = targetInfo.IsDir()
+				var skipErr error
+				shouldSkip, skipErr = shouldSkipExcludedSymlink(ctx, p, statWithContext)
+				if skipErr != nil {
+					return skipErr
 				}
 			}
-			if isDirectory {
+			if shouldSkip {
 				directoriesExcluded.Add(1)
 				log.Info().
 					Str("system", systemID).
