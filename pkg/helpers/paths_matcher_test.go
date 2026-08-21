@@ -315,6 +315,18 @@ func TestLauncherMatcher_ShouldSkipScanDirectory(t *testing.T) {
 			SystemID: "Shared",
 			Folders:  []string{filepath.Join("shared", "generated")},
 		},
+		{
+			ID:                    "SharedSkippedFiltered",
+			SystemID:              "SharedSkipped",
+			Folders:               []string{"shared-skipped"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:                 "SharedSkippedNonFilesystem",
+			SystemID:           "SharedSkipped",
+			Folders:            []string{"shared-skipped"},
+			SkipFilesystemScan: true,
+		},
 	})
 
 	cfg := &config.Instance{}
@@ -336,6 +348,9 @@ func TestLauncherMatcher_ShouldSkipScanDirectory(t *testing.T) {
 	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "other", "_Organized")))
 	assert.False(t, matcher.ShouldSkipScanDirectory("Shared", filepath.Join(rootDir, "shared", "generated")),
 		"one launcher must not hide a directory needed by another launcher")
+	sharedSkipped := filepath.Join(rootDir, "shared-skipped", "generated")
+	assert.True(t, matcher.ShouldSkipScanDirectory("SharedSkipped", sharedSkipped),
+		"a non-filesystem launcher must not prevent a filesystem launcher from excluding a directory")
 
 	aliasPath := filepath.Join(organized, "Pooyan.mra")
 	assert.True(t, matcher.MatchSystemFile("Arcade", aliasPath),

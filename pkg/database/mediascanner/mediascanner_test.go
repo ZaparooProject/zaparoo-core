@@ -2150,20 +2150,26 @@ func TestGetFiles_SkipsLauncherExcludedDirectory(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	rootDir := t.TempDir()
 	arcadeDir := filepath.Join(rootDir, "_Arcade")
-	organizedDir := filepath.Join(arcadeDir, "_Organized", "_1 A-E")
-	require.NoError(t, os.MkdirAll(organizedDir, 0o750))
+	organizedTarget := filepath.Join(rootDir, "organized-target")
+	organizedTargetDir := filepath.Join(organizedTarget, "_1 A-E")
+	require.NoError(t, os.MkdirAll(arcadeDir, 0o750))
+	require.NoError(t, os.MkdirAll(organizedTargetDir, 0o750))
+	organizedLink := filepath.Join(arcadeDir, "_Organized")
+	require.NoError(t, os.Symlink(organizedTarget, organizedLink))
 
 	canonicalPath := filepath.Join(arcadeDir, "Pooyan.mra")
 	require.NoError(t, os.WriteFile(canonicalPath, []byte("<misterromdescription/>"), 0o600))
-	aliasPath := filepath.Join(organizedDir, "Pooyan.mra")
-	require.NoError(t, os.Symlink(canonicalPath, aliasPath))
+	aliasPath := filepath.Join(organizedLink, "_1 A-E", "Pooyan.mra")
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(organizedTargetDir, "Pooyan.mra")))
+	fileAliasPath := filepath.Join(arcadeDir, "ExcludedFile.mra")
+	require.NoError(t, os.Symlink(canonicalPath, fileAliasPath))
 
 	launcher := platforms.Launcher{
 		ID:                    "arcade-launcher",
 		SystemID:              systemdefs.SystemArcade,
 		Folders:               []string{"_Arcade"},
 		Extensions:            []string{".mra"},
-		ScanDirectoryExcludes: []string{"_Organized"},
+		ScanDirectoryExcludes: []string{"_Organized", "ExcludedFile.mra"},
 	}
 
 	fs := testhelpers.NewMemoryFS()
@@ -2188,7 +2194,7 @@ func TestGetFiles_SkipsLauncherExcludedDirectory(t *testing.T) {
 
 	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []string{canonicalPath}, files)
+	assert.ElementsMatch(t, []string{canonicalPath, fileAliasPath}, files)
 
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
 	assert.True(t, matcher.MatchSystemFile(systemdefs.SystemArcade, aliasPath),

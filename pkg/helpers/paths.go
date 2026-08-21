@@ -416,6 +416,9 @@ func (m *LauncherMatcher) ShouldSkipScanDirectory(systemID, path string) bool {
 
 	for i := range launchers {
 		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
 		lc := m.precomp[launcher.ID]
 		if lc == nil {
 			continue

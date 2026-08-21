@@ -13,6 +13,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
@@ -302,25 +303,39 @@ func TestArcadeSystemCacheRecaptureInvalidatesClassification(t *testing.T) {
 }
 
 func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
-	arcadeDir := filepath.Join(root, "_Arcade", "subdirectory")
+	arcadeRoot := filepath.Join(root, "_Arcade")
+	arcadeDir := filepath.Join(arcadeRoot, "subdirectory")
+	organizedDir := filepath.Join(arcadeRoot, "_Organized", "_1 A-E")
 	require.NoError(t, os.MkdirAll(arcadeDir, 0o750))
+	require.NoError(t, os.MkdirAll(organizedDir, 0o750))
 	mraPath := filepath.Join(arcadeDir, "game.mra")
 	mglPath := filepath.Join(arcadeDir, "shortcut.MGL")
 	txtPath := filepath.Join(arcadeDir, "notes.txt")
-	for _, path := range []string{mraPath, mglPath, txtPath} {
+	canonicalPath := filepath.Join(arcadeRoot, "Pooyan.mra")
+	for _, path := range []string{mraPath, mglPath, txtPath, canonicalPath} {
 		require.NoError(t, os.WriteFile(path, []byte("test"), 0o600))
 	}
+	aliasPath := filepath.Join(organizedDir, "Pooyan.mra")
+	require.NoError(t, os.Symlink(canonicalPath, aliasPath))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[launchers]\nindex_root = [%q]\n", root)))
-	cache := newArcadeSystemCache(NewPlatform())
+	platform := NewPlatform()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(platform.Launchers(cfg))
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+	cache := newArcadeSystemCache(platform)
 
 	results, err := cache.scanFiles(context.Background(), cfg)
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []platforms.ScanResult{{Path: mraPath}, {Path: mglPath}}, results)
+	assert.ElementsMatch(t, []platforms.ScanResult{
+		{Path: mraPath},
+		{Path: mglPath},
+		{Path: canonicalPath},
+	}, results)
 }
 
 func TestAddNeoGeoMVSLauncherSharesScannerCache(t *testing.T) {

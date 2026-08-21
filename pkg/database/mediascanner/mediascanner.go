@@ -632,14 +632,27 @@ func GetFiles(
 		if d.Type()&os.ModeSymlink != 0 {
 			symlinksEncountered.Add(1)
 		}
-		if (d.IsDir() || d.Type()&os.ModeSymlink != 0) &&
-			matcher.ShouldSkipScanDirectory(system.ID, p) {
-			directoriesExcluded.Add(1)
-			log.Info().
-				Str("system", systemID).
-				Str("path", p).
-				Msg("skipping launcher-excluded scan directory")
-			return filepath.SkipDir
+		isSymlink := d.Type()&os.ModeSymlink != 0
+		if (d.IsDir() || isSymlink) && matcher.ShouldSkipScanDirectory(system.ID, p) {
+			isDirectory := d.IsDir()
+			if isSymlink {
+				targetInfo, statErr := statWithContext(ctx, p)
+				if statErr != nil {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return ctxErr
+					}
+				} else {
+					isDirectory = targetInfo.IsDir()
+				}
+			}
+			if isDirectory {
+				directoriesExcluded.Add(1)
+				log.Info().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping launcher-excluded scan directory")
+				return filepath.SkipDir
+			}
 		}
 
 		if n%5000 == 0 {
