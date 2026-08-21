@@ -22,7 +22,6 @@ package mediadb
 import (
 	"context"
 	"database/sql"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -63,10 +62,23 @@ func readPragmas(
 	return cacheSize, tempStore
 }
 
-// TestBeginTransactionAppliesIndexingCacheBoost forces the pool-level pragma
-// calls onto a different connection from the writer. The writer candidate also
-// retains a temp table, reproducing SQLite's rejection when temp_store is
-// incorrectly changed after BeginTx.
+func requirePoolWait(t *testing.T, sqlDB *sql.DB, failureMessage string) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for sqlDB.Stats().WaitCount == 0 {
+		select {
+		case <-deadline.C:
+			t.Fatal(failureMessage)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+// TestBeginTransactionAppliesIndexingCacheBoost forces pool-wide pragma setup
+// onto a different connection from the writer. The writer retains a temp table,
+// reproducing SQLite's rejection when temp_store is changed after BeginTx.
 func TestBeginTransactionAppliesIndexingCacheBoost(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -74,26 +86,41 @@ func TestBeginTransactionAppliesIndexingCacheBoost(t *testing.T) {
 	sqlDB := mediaDB.sql.Load()
 	sqlDB.SetMaxOpenConns(2)
 
-	staleWriter, err := sqlDB.Conn(ctx)
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	staleWriter := mediaDB.txConn
+	_, err := mediaDB.tx.ExecContext(ctx, "CREATE TEMP TABLE stale_writer_temp (id INTEGER)")
 	require.NoError(t, err)
-	_, err = staleWriter.ExecContext(ctx, "CREATE TEMP TABLE stale_writer_temp (id INTEGER)")
-	require.NoError(t, err)
-	require.NoError(t, staleWriter.Close())
+	require.NoError(t, staleWriter.Raw(func(driverConn any) error {
+		sqliteConn, ok := driverConn.(*sqlite3.SQLiteConn)
+		require.True(t, ok)
+		return sqliteConn.RegisterFunc("stale_writer_marker", func() int { return 1 }, true)
+	}))
 
-	// Hold the stale connection so pool-level setup must use another one.
-	heldWriter, err := sqlDB.Conn(ctx)
-	require.NoError(t, err)
-	var tempTableCount int
-	require.NoError(t, heldWriter.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sqlite_temp_master WHERE name = 'stale_writer_temp'").Scan(&tempTableCount))
-	require.Equal(t, 1, tempTableCount)
-
+	// Active writer stays at defaults while pool-wide setup configures other slot.
 	mediaDB.SetIndexingCacheSize(true)
-	require.NoError(t, heldWriter.Close()) // Returned last, making it the writer candidate.
+	cacheSize, tempStore := readPragmas(ctx, t, mediaDB.tx)
+	require.Equal(t, -8192, cacheSize)
+	require.Equal(t, tempStoreFile, tempStore)
 
+	heldBoosted, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = heldBoosted.Close() })
+	cacheSize, tempStore = readPragmas(ctx, t, heldBoosted)
+	require.Equal(t, -32768, cacheSize)
+	require.Equal(t, tempStoreMemory, tempStore)
+
+	require.NoError(t, mediaDB.RollbackTransaction())
 	require.NoError(t, mediaDB.BeginTransaction(false))
 	require.NotNil(t, mediaDB.txConn)
-	cacheSize, tempStore := readPragmas(ctx, t, mediaDB.tx)
+	require.NoError(t, heldBoosted.Close())
+
+	// Changing temp_store clears the temp schema, so use a connection-local
+	// function to prove BeginTransaction selected the stale physical connection.
+	var staleWriterMarker int
+	require.NoError(t, mediaDB.tx.QueryRowContext(ctx,
+		"SELECT stale_writer_marker()").Scan(&staleWriterMarker))
+	require.Equal(t, 1, staleWriterMarker)
+	cacheSize, tempStore = readPragmas(ctx, t, mediaDB.tx)
 	assert.Equal(t, -32768, cacheSize)
 	assert.Equal(t, tempStoreMemory, tempStore)
 	require.NoError(t, mediaDB.RollbackTransaction())
@@ -113,6 +140,46 @@ func TestBeginTransactionAppliesIndexingCacheBoost(t *testing.T) {
 		assert.Equal(t, tempStoreFile, tempStore)
 		require.NoError(t, conn.Close())
 	}
+}
+
+func TestIndexingCacheBoostAppliesToEveryPooledConnection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+	sqlDB.SetMaxOpenConns(2)
+
+	mediaDB.SetIndexingCacheSize(true)
+	pooled := make([]*sql.Conn, 0, 2)
+	for range 2 {
+		conn, err := sqlDB.Conn(ctx)
+		require.NoError(t, err)
+		pooled = append(pooled, conn)
+	}
+	for _, conn := range pooled {
+		cacheSize, tempStore := readPragmas(ctx, t, conn)
+		assert.Equal(t, -32768, cacheSize)
+		assert.Equal(t, tempStoreMemory, tempStore)
+		require.NoError(t, conn.Close())
+	}
+}
+
+func TestIndexingPragmaRestoreWithUnlimitedPool(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+	sqlDB.SetMaxOpenConns(1)
+	mediaDB.SetIndexingCacheSize(true)
+	sqlDB.SetMaxOpenConns(0)
+
+	mediaDB.SetIndexingCacheSize(false)
+	conn, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	cacheSize, tempStore := readPragmas(ctx, t, conn)
+	assert.Equal(t, -8192, cacheSize)
+	assert.Equal(t, tempStoreFile, tempStore)
+	require.NoError(t, conn.Close())
 }
 
 func TestWriterConnectionRestoresDefaults(t *testing.T) {
@@ -237,16 +304,7 @@ func TestBeginTransactionPoolWaitHonorsCancellation(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- mediaDB.BeginTransaction(false) }()
 
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for sqlDB.Stats().WaitCount == 0 {
-		select {
-		case <-deadline.C:
-			t.Fatal("BeginTransaction did not wait for exhausted pool")
-		default:
-			runtime.Gosched()
-		}
-	}
+	requirePoolWait(t, sqlDB, "BeginTransaction did not wait for exhausted pool")
 	cancel()
 	err = <-result
 	require.Error(t, err)
@@ -273,20 +331,11 @@ func TestIndexingPragmaRestorePoolWaitHonorsCancellation(t *testing.T) {
 		close(done)
 	}()
 
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for sqlDB.Stats().WaitCount == 0 {
-		select {
-		case <-deadline.C:
-			t.Fatal("pragma restoration did not wait for exhausted pool")
-		default:
-			runtime.Gosched()
-		}
-	}
+	requirePoolWait(t, sqlDB, "pragma restoration did not wait for exhausted pool")
 	cancel()
 	select {
 	case <-done:
-	case <-deadline.C:
+	case <-time.After(5 * time.Second):
 		t.Fatal("pragma restoration did not stop after context cancellation")
 	}
 	require.NoError(t, held.Close())

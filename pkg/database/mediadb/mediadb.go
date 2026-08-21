@@ -107,8 +107,11 @@ var mediaWALCheckpointThreshold int64 = 96 * 1024 * 1024
 // writer effectively owns a connection full-time, so the pool widens by one
 // to keep a search and a browse from queueing behind each other.
 const (
-	baseMaxOpenConns     = 2
-	indexingMaxOpenConns = 3
+	baseMaxOpenConns         = 2
+	indexingMaxOpenConns     = 3
+	defaultConnCacheSize     = "-8192"
+	defaultConnTempStore     = "FILE"
+	connectionAcquireTimeout = 5 * time.Second
 )
 
 // getSqliteConnParams constructs the SQLite connection string. MediaDB uses
@@ -125,7 +128,7 @@ const (
 // synchronous=FULL since it holds non-rebuildable user data.
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
+		"&_cache_size=" + defaultConnCacheSize + "&_temp_store=" + defaultConnTempStore + "&_mmap_size=0" +
 		"&_page_size=8192&_foreign_keys=ON&_txlock=immediate"
 }
 
@@ -497,10 +500,9 @@ func (db *MediaDB) GetDBPath() string {
 // built by the post-indexing cache population are only a few MB, and the default
 // temp_store=FILE writes them to slow storage (SD card) on embedded devices.
 //
-// Both pragmas are per-connection, and the pool exec below only reaches
-// whichever connection happens to be free — not necessarily the one the bulk
-// writer's transaction will pin. BeginTransaction therefore re-applies the
-// current settings on its own connection, which is where the boost matters.
+// Both pragmas are per-connection, so every pooled connection is configured
+// when the indexing state changes. BeginTransaction also re-applies the current
+// settings on its dedicated connection before starting the transaction.
 func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	db.indexingCacheBoost.Store(enable)
 	sqlDB := db.sql.Load()
@@ -512,41 +514,80 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 		return
 	}
 
-	cacheSize, tempStore := db.connPragmaValues()
-	_, err := sqlDB.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
-	if err != nil {
-		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing cache size")
-	}
-	_, err = sqlDB.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore)
-	if err != nil {
-		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing temp_store")
-	}
+	db.applyPooledConnPragmas(sqlDB)
 }
 
-// restorePooledConnPragmas checks out every pool slot simultaneously, resets
-// each physical connection, then returns them. Holding sqlMu prevents a writer
-// transaction from starting while the pool is drained. An existing writer is
-// excluded because its pinned connection restores itself when it finishes.
-func (db *MediaDB) restorePooledConnPragmas(sqlDB *sql.DB) {
-	db.sqlMu.Lock()
-	defer db.sqlMu.Unlock()
-
-	connCount := sqlDB.Stats().MaxOpenConnections
+// drainPooledConns checks out every pool slot simultaneously. The caller must
+// hold sqlMu so a writer transaction cannot start while the pool is drained.
+func (db *MediaDB) drainPooledConns(sqlDB *sql.DB) ([]*sql.Conn, error) {
+	stats := sqlDB.Stats()
+	connCount := stats.MaxOpenConnections
+	if connCount <= 0 {
+		connCount = max(stats.OpenConnections, 1)
+	}
 	if db.txConn != nil {
 		connCount--
 	}
 	if connCount <= 0 {
-		return
+		return nil, nil
 	}
 
+	acquireCtx, cancel := context.WithTimeout(db.ctx, connectionAcquireTimeout)
+	defer cancel()
 	conns := make([]*sql.Conn, 0, connCount)
 	for range connCount {
-		conn, err := sqlDB.Conn(db.ctx)
+		conn, err := sqlDB.Conn(acquireCtx)
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to acquire pooled connection while restoring indexing pragmas")
-			break
+			return conns, fmt.Errorf("failed to acquire pooled connection: %w", err)
 		}
 		conns = append(conns, conn)
+	}
+	return conns, nil
+}
+
+// applyPooledConnPragmas drains the pool so both indexing pragmas reach every
+// available physical connection rather than whichever connection Exec selects.
+func (db *MediaDB) applyPooledConnPragmas(sqlDB *sql.DB) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	conns, acquireErr := db.drainPooledConns(sqlDB)
+	if acquireErr != nil {
+		if errors.Is(acquireErr, context.DeadlineExceeded) {
+			log.Warn().Err(acquireErr).Msg("timed out acquiring pooled connections while enabling indexing pragmas")
+		} else {
+			log.Warn().Err(acquireErr).Msg("failed to acquire pooled connection while enabling indexing pragmas")
+		}
+	}
+
+	cacheSize, tempStore := db.connPragmaValues()
+	for _, conn := range conns {
+		if _, err := conn.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize); err != nil {
+			log.Warn().Err(err).Bool("enable", true).Msg("failed to set indexing cache size")
+		}
+		if _, err := conn.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore); err != nil {
+			log.Warn().Err(err).Bool("enable", true).Msg("failed to set indexing temp_store")
+		}
+		if err := conn.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to release pooled connection after enabling indexing pragmas")
+		}
+	}
+}
+
+// restorePooledConnPragmas drains the pool, resets each physical connection,
+// then returns them. An existing writer is excluded because its pinned
+// connection restores itself when it finishes.
+func (db *MediaDB) restorePooledConnPragmas(sqlDB *sql.DB) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	conns, acquireErr := db.drainPooledConns(sqlDB)
+	if acquireErr != nil {
+		if errors.Is(acquireErr, context.DeadlineExceeded) {
+			log.Warn().Err(acquireErr).Msg("timed out acquiring pooled connections while restoring indexing pragmas")
+		} else {
+			log.Warn().Err(acquireErr).Msg("failed to acquire pooled connection while restoring indexing pragmas")
+		}
 	}
 	for _, conn := range conns {
 		if err := db.closeWriterConn(conn); err != nil {
@@ -562,7 +603,7 @@ func (db *MediaDB) connPragmaValues() (cacheSize, tempStore string) {
 	if db.indexingCacheBoost.Load() {
 		return "-32768", "MEMORY"
 	}
-	return "-8192", "FILE"
+	return defaultConnCacheSize, defaultConnTempStore
 }
 
 // applyConnPragmas configures a dedicated connection before it starts a
@@ -590,7 +631,7 @@ func (db *MediaDB) closeWriterConn(conn *sql.Conn) error {
 
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(db.ctx), 5*time.Second)
 	defer cancel()
-	resetErr := applyConnPragmas(cleanupCtx, conn, "-8192", "FILE")
+	resetErr := applyConnPragmas(cleanupCtx, conn, defaultConnCacheSize, defaultConnTempStore)
 	if resetErr != nil {
 		discardErr := conn.Raw(func(any) error { return driver.ErrBadConn })
 		if errors.Is(discardErr, driver.ErrBadConn) {
@@ -1864,7 +1905,9 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	}
 	db.mediaSearchBoundsDirty = false
 
-	conn, err := sqlDB.Conn(db.ctx)
+	acquireCtx, cancel := context.WithTimeout(db.ctx, connectionAcquireTimeout)
+	conn, err := sqlDB.Conn(acquireCtx)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("failed to acquire writer connection: %w", err)
 	}
