@@ -369,9 +369,23 @@ func TestInsertCoinAmount(t *testing.T) {
 			wantKeys: []string{"5"},
 		},
 		{
+			name: "zero amount inserts no coins",
+			args: []string{"0"},
+		},
+		{
 			name:     "supplied amount is honored",
 			args:     []string{"2"},
 			wantKeys: []string{"5", "5"},
+		},
+		{
+			name:      "negative amount returns error",
+			args:      []string{"-1"},
+			wantError: "invalid amount '-1'",
+		},
+		{
+			name:      "amount above maximum returns error",
+			args:      []string{"100"},
+			wantError: "invalid amount '100'",
 		},
 		{
 			name:      "invalid amount returns error",
