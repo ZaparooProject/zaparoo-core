@@ -303,15 +303,24 @@ func insertCoin(
 	env platforms.CmdEnv,
 	key string,
 ) (platforms.CmdResult, error) {
+	const maxAmount = 99
+
 	var amount int
 
-	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] != "" {
+	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "" {
 		amount = 1
 	} else {
 		var err error
 		amount, err = strconv.Atoi(env.Cmd.Args[0])
 		if err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("invalid amount '%s': %w", env.Cmd.Args[0], err)
+		}
+		if amount < 0 || amount > maxAmount {
+			return platforms.CmdResult{}, fmt.Errorf(
+				"invalid amount '%s': must be between 0 and %d",
+				env.Cmd.Args[0],
+				maxAmount,
+			)
 		}
 	}
 
