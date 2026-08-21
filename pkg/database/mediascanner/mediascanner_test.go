@@ -2146,6 +2146,55 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	assert.False(t, foundFiles["readme.txt"])
 }
 
+func TestGetFiles_SkipsLauncherExcludedDirectory(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	arcadeDir := filepath.Join(rootDir, "_Arcade")
+	organizedDir := filepath.Join(arcadeDir, "_Organized", "_1 A-E")
+	require.NoError(t, os.MkdirAll(organizedDir, 0o750))
+
+	canonicalPath := filepath.Join(arcadeDir, "Pooyan.mra")
+	require.NoError(t, os.WriteFile(canonicalPath, []byte("<misterromdescription/>"), 0o600))
+	aliasPath := filepath.Join(organizedDir, "Pooyan.mra")
+	require.NoError(t, os.Symlink(canonicalPath, aliasPath))
+
+	launcher := platforms.Launcher{
+		ID:                    "arcade-launcher",
+		SystemID:              systemdefs.SystemArcade,
+		Folders:               []string{"_Arcade"},
+		Extensions:            []string{".mra"},
+		ScanDirectoryExcludes: []string{"_Organized"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{canonicalPath}, files)
+
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+	assert.True(t, matcher.MatchSystemFile(systemdefs.SystemArcade, aliasPath),
+		"excluded directory media must remain directly launchable")
+}
+
 func TestGetFiles_RespectsLauncherScanExcludes(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	rootDir := t.TempDir()

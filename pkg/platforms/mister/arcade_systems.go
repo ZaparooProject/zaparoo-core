@@ -266,6 +266,7 @@ func (c *arcadeSystemCache) scanFiles(
 	cfg *config.Instance,
 ) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
+	matcher := helpers.NewLauncherMatcher(cfg, c.platform)
 	for _, root := range c.platform.RootDirs(cfg) {
 		select {
 		case <-ctx.Done():
@@ -291,6 +292,10 @@ func (c *arcadeSystemCache) scanFiles(
 					return walkEntryErr
 				}
 				if info.IsDir() {
+					if matcher.ShouldSkipScanDirectory(systemdefs.SystemArcade, path) {
+						log.Info().Str("path", path).Msg("skipping launcher-excluded MiSTer arcade directory")
+						return filepath.SkipDir
+					}
 					return nil
 				}
 				ext := filepath.Ext(path)

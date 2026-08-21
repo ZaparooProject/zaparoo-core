@@ -232,11 +232,12 @@ func pathHasPrefixNormalized(normPath, normRoot string) bool {
 // launcherPrecomp holds per-launcher precomputed values to eliminate repeated
 // string allocations inside the hot pathIsLauncher loop.
 type launcherPrecomp struct {
-	normMediaPath string   // normDataDir + "/media/" + lower(SystemID), empty when SystemID is ""
-	rootPairs     []string // normRoot + "/" + normFolder for every root × relative-folder combination
-	absFolders    []string // normalized absolute folder paths (already normalized from folderCache)
-	extensions    []string // pre-lowercased extensions
-	scanExcludes  []string // pre-normalized scan-only exclude patterns
+	normMediaPath         string   // normDataDir + "/media/" + lower(SystemID), empty when SystemID is ""
+	rootPairs             []string // normRoot + "/" + normFolder for every root × relative-folder combination
+	absFolders            []string // normalized absolute folder paths (already normalized from folderCache)
+	extensions            []string // pre-lowercased extensions
+	scanExcludes          []string // pre-normalized scan-only file exclude patterns
+	scanDirectoryExcludes []string // pre-normalized scan-only directory exclude patterns
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -326,6 +327,12 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		for _, exclude := range l.ScanExcludes {
 			lp.scanExcludes = append(lp.scanExcludes, NormalizePathForComparison(exclude))
 		}
+		for _, exclude := range l.ScanDirectoryExcludes {
+			lp.scanDirectoryExcludes = append(
+				lp.scanDirectoryExcludes,
+				NormalizePathForComparison(exclude),
+			)
+		}
 
 		precomp[l.ID] = lp
 	}
@@ -396,6 +403,56 @@ func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
 		Int("launchersChecked", len(launchers)).
 		Msg("no launcher matched file")
 
+	return false
+}
+
+// ShouldSkipScanDirectory reports whether every launcher scanning path for the
+// given system excludes that directory. Requiring agreement preserves files
+// needed by another launcher that shares the same scan root.
+func (m *LauncherMatcher) ShouldSkipScanDirectory(systemID, path string) bool {
+	normPath := NormalizePathForComparison(path)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	matched := false
+
+	for i := range launchers {
+		launcher := &launchers[i]
+		lc := m.precomp[launcher.ID]
+		if lc == nil {
+			continue
+		}
+
+		for _, roots := range [][]string{lc.rootPairs, lc.absFolders} {
+			for _, root := range roots {
+				if !pathHasPrefixNormalized(normPath, root) {
+					continue
+				}
+				relPath := strings.TrimPrefix(normPath, root)
+				relPath = strings.TrimPrefix(relPath, "/")
+				if relPath == "" {
+					return false
+				}
+
+				matched = true
+				if !scanDirectoryExcludeMatches(relPath, lc.scanDirectoryExcludes) {
+					return false
+				}
+			}
+		}
+	}
+
+	return matched
+}
+
+func scanDirectoryExcludeMatches(relPath string, patterns []string) bool {
+	base := stdpath.Base(relPath)
+	for _, pattern := range patterns {
+		if pattern == "" || pattern == "." {
+			continue
+		}
+		if scanExcludePatternMatches(relPath, base, pattern) {
+			return true
+		}
+	}
 	return false
 }
 

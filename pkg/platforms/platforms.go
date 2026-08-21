@@ -336,6 +336,11 @@ type Launcher struct {
 	// the base filename; patterns with a slash can match any path suffix. They
 	// only affect media scanning; direct path launches can still match the launcher.
 	ScanExcludes []string
+	// ScanDirectoryExcludes are case-insensitive slash-normalized glob patterns
+	// relative to this launcher's Folders. Matching directories are not traversed.
+	// Patterns without a slash match a directory basename; patterns with a slash
+	// can match any relative path suffix. Direct path launches remain unaffected.
+	ScanDirectoryExcludes []string
 	// Folders to scan for files, relative to the root folders of the platform.
 	Folders []string
 	// Accepted schemes for URI-style launches.

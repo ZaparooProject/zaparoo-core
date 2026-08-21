@@ -585,6 +585,8 @@ func GetFiles(
 	}
 
 	var entriesScanned atomic.Int64
+	var symlinksEncountered atomic.Int64
+	var directoriesExcluded atomic.Int64
 	walkStartTime := time.Now()
 
 	var mu syncutil.Mutex
@@ -627,6 +629,19 @@ func GetFiles(
 		}
 
 		n := entriesScanned.Add(1)
+		if d.Type()&os.ModeSymlink != 0 {
+			symlinksEncountered.Add(1)
+		}
+		if (d.IsDir() || d.Type()&os.ModeSymlink != 0) &&
+			matcher.ShouldSkipScanDirectory(system.ID, p) {
+			directoriesExcluded.Add(1)
+			log.Info().
+				Str("system", systemID).
+				Str("path", p).
+				Msg("skipping launcher-excluded scan directory")
+			return filepath.SkipDir
+		}
+
 		if n%5000 == 0 {
 			log.Debug().
 				Str("system", systemID).
@@ -704,6 +719,8 @@ func GetFiles(
 		Str("system", systemID).
 		Str("path", path).
 		Int64("entriesScanned", scanned).
+		Int64("symlinksEncountered", symlinksEncountered.Load()).
+		Int64("directoriesExcluded", directoriesExcluded.Load()).
 		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
