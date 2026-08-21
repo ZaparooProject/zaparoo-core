@@ -26,9 +26,7 @@ import "testing"
 func TestPayloadFilesLinux(t *testing.T) {
 	t.Parallel()
 
-	if got := len(payloadFiles("batocera")); got != 7 {
-		t.Fatalf("batocera payload file count = %d, want 7", got)
-	}
+	assertBatoceraPayloadFiles(t)
 	if got := payloadFiles("linux"); got != nil {
 		t.Fatalf("linux payload files = %v, want nil", got)
 	}

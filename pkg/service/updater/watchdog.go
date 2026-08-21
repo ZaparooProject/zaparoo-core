@@ -325,6 +325,7 @@ func runStartupWatchdogWithOps(
 				stat:          fileOps.fs.Stat,
 				syncDirectory: fileOps.syncDirectory,
 				saveMarker:    fileOps.save,
+				clearMarker:   fileOps.clear,
 			})
 
 	case actionFinalize:

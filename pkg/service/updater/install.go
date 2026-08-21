@@ -54,6 +54,7 @@ type payloadInstallOps struct {
 	stat          func(string) (os.FileInfo, error)
 	syncDirectory func(string) error
 	saveMarker    func(string, *pendingMarker) error
+	clearMarker   func(string) error
 }
 
 func defaultPayloadInstallOps() payloadInstallOps {
@@ -64,6 +65,7 @@ func defaultPayloadInstallOps() payloadInstallOps {
 		stat:          os.Lstat,
 		syncDirectory: syncDir,
 		saveMarker:    saveMarker,
+		clearMarker:   clearMarker,
 	}
 }
 
@@ -99,6 +101,9 @@ func (o payloadInstallOps) withDefaults() payloadInstallOps {
 	}
 	if o.saveMarker == nil {
 		o.saveMarker = defaults.saveMarker
+	}
+	if o.clearMarker == nil {
+		o.clearMarker = defaults.clearMarker
 	}
 	return o
 }
@@ -573,6 +578,7 @@ func abortInstallWithOps(
 	fileOps.replace = payloadOps.replace
 	fileOps.syncDirectory = payloadOps.syncDirectory
 	fileOps.marker.save = payloadOps.saveMarker
+	fileOps.marker.clear = payloadOps.clearMarker
 	if err := restorePayloadFiles(stateDirFor(dataDir), m, fileOps); err != nil {
 		return err
 	}
@@ -580,7 +586,7 @@ func abortInstallWithOps(
 		return err
 	}
 
-	if err := clearMarker(stateDirFor(dataDir)); err != nil {
+	if err := payloadOps.clearMarker(stateDirFor(dataDir)); err != nil {
 		return err
 	}
 	removeInstallArtifacts(ctx, m, candidatePath, binary, payloadOps)

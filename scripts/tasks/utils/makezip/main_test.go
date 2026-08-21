@@ -38,6 +38,59 @@ import (
 	"github.com/spf13/afero"
 )
 
+func assertBatoceraPayloadFiles(t *testing.T) {
+	t.Helper()
+
+	want := []updatepayload.File{
+		{
+			SourcePath: filepath.Join("cmd", "batocera", "scripts", "configs", "emulationstation", "scripts",
+				"game-selected", "zaparoo_game_select.sh"),
+			ArchivePath: "scripts/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+			InstallPath: "configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "configs", "multimedia_keys.conf"),
+			ArchivePath: "scripts/configs/multimedia_keys.conf",
+			InstallPath: "configs/multimedia_keys.conf",
+			Mode:        0o644,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "content_downloader.png"),
+			ArchivePath: "scripts/content_downloader.png",
+			InstallPath: "content_downloader.png",
+			Mode:        0o644,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "ports", "Zaparoo.sh"),
+			ArchivePath: "scripts/ports/Zaparoo.sh",
+			InstallPath: "../roms/ports/Zaparoo.sh",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
+			ArchivePath: "scripts/services/zaparoo_service",
+			InstallPath: "services/zaparoo_service",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_wrapper.sh"),
+			ArchivePath: "scripts/zaparoo_wrapper.sh",
+			InstallPath: "zaparoo_wrapper.sh",
+			Mode:        0o755,
+		},
+		{
+			SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_write_game.sh"),
+			ArchivePath: "scripts/zaparoo_write_game.sh",
+			InstallPath: "zaparoo_write_game.sh",
+			Mode:        0o755,
+		},
+	}
+	if got := payloadFiles("batocera"); !slices.Equal(got, want) {
+		t.Fatalf("batocera payload files = %#v, want %#v", got, want)
+	}
+}
+
 func TestStripFrontmatter(t *testing.T) {
 	t.Parallel()
 
@@ -549,6 +602,29 @@ func TestAddPayloadToArchives_MissingSourceFails(t *testing.T) {
 	var tarBuf bytes.Buffer
 	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil {
 		t.Fatal("addPayloadToTar unexpectedly accepted a missing source")
+	}
+}
+
+func TestAddPayloadToArchives_DirectorySourceFails(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	if err := fs.MkdirAll("payload-dir", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	files := []updatepayload.File{{
+		SourcePath: "payload-dir", ArchivePath: "scripts/payload-dir",
+		InstallPath: "payload-dir", Mode: 0o755,
+	}}
+	var zipBuf bytes.Buffer
+	err := addPayloadToZip(fs, zip.NewWriter(&zipBuf), files)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("addPayloadToZip directory source error = %v", err)
+	}
+	var tarBuf bytes.Buffer
+	err = addPayloadToTar(fs, tar.NewWriter(&tarBuf), files)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("addPayloadToTar directory source error = %v", err)
 	}
 }
 
