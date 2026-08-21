@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -156,6 +157,155 @@ func TestInstallStaged_ArmsWatchdogBeforeRestart(t *testing.T) {
 	assert.Equal(t, testCurrentVersion, m.PreviousVersion)
 	assert.Equal(t, testStageVersion, m.TargetVersion)
 	assert.Equal(t, int64(412), m.ManifestGeneration)
+}
+
+func TestInstallStaged_RestoresPayloadWhenIncomingVersionNeverRan(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	installRoot := filepath.Dir(f.targetPath)
+
+	existingStaged := filepath.Join(f.stagingDir, "scripts", "services", "zaparoo_service")
+	newStaged := filepath.Join(f.stagingDir, "scripts", "new-helper.sh")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingStaged), 0o750))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(existingStaged, []byte("new service"), 0o755))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(newStaged, []byte("new helper"), 0o755))
+	existingTarget := filepath.Join(installRoot, "services", "zaparoo_service")
+	newTarget := filepath.Join(installRoot, "new-helper.sh")
+	require.NoError(t, os.MkdirAll(filepath.Dir(existingTarget), 0o750))
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(existingTarget, []byte("old service"), 0o700))
+	opts.Staged.payloadFiles = []stagedPayloadFile{
+		{Path: existingStaged, RelativePath: "services/zaparoo_service", Mode: 0o755},
+		{Path: newStaged, RelativePath: "new-helper.sh", Mode: 0o755},
+	}
+
+	require.NoError(t, installStaged(t.Context(), opts))
+	assert.Equal(t, "new service", readFileString(t, existingTarget))
+	assert.Equal(t, "new helper", readFileString(t, newTarget))
+	m, err := loadMarker(stateDirFor(f.dataDir))
+	require.NoError(t, err)
+	require.Len(t, m.PayloadBackups, 2)
+	assert.False(t, m.PayloadBackups[0].OriginalMissing)
+	assert.True(t, m.PayloadBackups[1].OriginalMissing)
+
+	// Seeing the outgoing version means the incoming binary never ran. Abort
+	// payload and binary changes without restoring UserDB.
+	require.NoError(t, runStartupWatchdogWithOps(
+		t.Context(), f.dataDir, testCurrentVersion, defaultWatchdogFileOps(),
+	))
+	assert.Equal(t, "old service", readFileString(t, existingTarget))
+	assert.NoFileExists(t, newTarget)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.NoFileExists(t, f.snapshotPath, "abort discards the unused snapshot instead of restoring it")
+}
+
+func TestPreparePayloadCandidates_UsesInjectedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := string(filepath.Separator)
+	stagingDir := filepath.Join(root, "staging")
+	serviceDir := filepath.Join(root, "userdata", "system", "services")
+	stagedPath := filepath.Join(stagingDir, "service")
+	targetPath := filepath.Join(serviceDir, "service")
+	binaryPath := filepath.Join(root, "userdata", "system", "zaparoo")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(stagingDir, 0o750))
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(serviceDir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("new"), 0o755))
+	require.NoError(t, afero.WriteFile(fs, targetPath, []byte("old"), 0o700))
+	candidatePath := installSidecarPath(targetPath, installCandidateSuffix)
+	backupPath := installSidecarPath(targetPath, installBackupSuffix)
+	require.NoError(t, afero.WriteFile(fs, candidatePath, []byte("stale candidate"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("stale backup"), 0o600))
+	staged := &StagedUpdate{payloadFiles: []stagedPayloadFile{{
+		Path: stagedPath, RelativePath: "services/service", Mode: 0o755,
+	}}}
+
+	backups, err := preparePayloadCandidates(staged, binaryPath, payloadInstallOps{fs: fs})
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
+	assert.Equal(t, candidatePath, backups[0].CandidatePath)
+	assert.Equal(t, backupPath, backups[0].BackupPath)
+	assert.Equal(t, "new", readAferoFileString(t, fs, candidatePath))
+	assert.Equal(t, "old", readAferoFileString(t, fs, backupPath))
+}
+
+func TestPreparePayloadCandidates_RejectsDirectoryTarget(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := string(filepath.Separator)
+	stagedPath := filepath.Join(root, "staging", "service")
+	targetPath := filepath.Join(root, "userdata", "system", "services", "service")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(filepath.Dir(stagedPath), 0o750))
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(targetPath, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("new"), 0o755))
+	staged := &StagedUpdate{payloadFiles: []stagedPayloadFile{{
+		Path: stagedPath, RelativePath: "services/service", Mode: 0o755,
+	}}}
+
+	backups, err := preparePayloadCandidates(
+		staged,
+		filepath.Join(root, "userdata", "system", "zaparoo"),
+		payloadInstallOps{fs: fs},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a regular file")
+	require.Len(t, backups, 1)
+	_, statErr := fs.Stat(backups[0].CandidatePath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func readAferoFileString(t *testing.T, fs afero.Fs, path string) string {
+	t.Helper()
+	content, err := afero.ReadFile(fs, path)
+	require.NoError(t, err)
+	return string(content)
+}
+
+func TestRemovePreparedPayloadUsesInjectedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := string(filepath.Separator)
+	candidatePath := filepath.Join(root, "service.zaparoo-update-new")
+	backupPath := filepath.Join(root, "service.zaparoo-update-backup")
+	require.NoError(t, afero.WriteFile(fs, candidatePath, []byte("candidate"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, backupPath, []byte("backup"), 0o600))
+
+	removePreparedPayload([]payloadBackup{{
+		CandidatePath: candidatePath,
+		BackupPath:    backupPath,
+	}}, payloadInstallOps{fs: fs})
+
+	_, candidateErr := fs.Stat(candidatePath)
+	require.ErrorIs(t, candidateErr, os.ErrNotExist)
+	_, backupErr := fs.Stat(backupPath)
+	require.ErrorIs(t, backupErr, os.ErrNotExist)
+}
+
+func TestCopyPayloadFile_UsesInjectedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	hostRoot := t.TempDir()
+	stagedPath := filepath.Join(hostRoot, "staged-helper.sh")
+	targetPath := filepath.Join(hostRoot, "target-helper.sh")
+	require.NoError(t, (afero.Afero{Fs: fs}).MkdirAll(hostRoot, 0o750))
+	require.NoError(t, afero.WriteFile(fs, stagedPath, []byte("helper"), 0o600))
+	ops := payloadInstallOps{fs: fs}
+	require.NoError(t, copyPayloadFile(ops, stagedPath, targetPath, 0o755))
+
+	content, err := afero.ReadFile(fs, targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, "helper", string(content))
+	info, err := fs.Stat(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	assert.NoFileExists(t, targetPath, "host filesystem must not receive injected writes")
 }
 
 func TestPreserveCurrentBinary_LeavesBootTargetPresent(t *testing.T) {

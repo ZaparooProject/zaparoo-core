@@ -99,6 +99,9 @@ func updaterOptions(env *requests.RequestEnv, mode updater.Mode) updater.Options
 		Managed:    env.Platform.ManagedByPackageManager(),
 		Mode:       mode,
 	}
+	if provider, ok := env.Platform.(platforms.UpdatePayloadProvider); ok {
+		opts.Payload = provider.UpdatePayload()
+	}
 	if env.Database != nil {
 		opts.UserDB = env.Database.UserDB
 	}

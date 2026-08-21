@@ -31,6 +31,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestScheduledCheckAndOfferedVersionState(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	require.NoError(t, recordScheduledCheck(dir, false))
+	require.NoError(t, recordScheduledCheck(dir, false))
+	require.NoError(t, recordOfferedVersion(dir, "2.11.0"))
+	failed, err := loadStateWithError(dir)
+	require.NoError(t, err)
+	require.NotNil(t, failed.LastCheckOK)
+	assert.False(t, *failed.LastCheckOK)
+	assert.Equal(t, 2, failed.CheckFailures)
+	assert.Equal(t, "2.11.0", failed.LastOfferedVersion)
+	require.NotNil(t, failed.LastCheckAt)
+	assert.False(t, failed.LastCheckAt.IsZero())
+
+	require.NoError(t, recordScheduledCheck(dir, true))
+	succeeded, err := loadStateWithError(dir)
+	require.NoError(t, err)
+	require.NotNil(t, succeeded.LastCheckOK)
+	assert.True(t, *succeeded.LastCheckOK)
+	assert.Zero(t, succeeded.CheckFailures)
+	assert.Equal(t, "2.11.0", lastOfferedVersion(dir))
+}
+
 func TestStateDirFor(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +82,11 @@ func TestState_RoundTrip(t *testing.T) {
 	assert.Equal(t, "Mon, 17 Aug 2026 01:26:54 GMT", got.ManifestLastModified)
 	assert.True(t, seen.Equal(got.ManifestSeenAt))
 	assert.Equal(t, currentStateVersion, got.StateVersion)
+	assert.Nil(t, got.LastCheckAt)
+
+	data, err := os.ReadFile(filepath.Join(dir, stateFileName)) //nolint:gosec // test temp dir
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "lastCheckAt")
 }
 
 // A device with no state yet accepts any generation, which is what makes a
@@ -98,6 +128,32 @@ func TestState_NewerVersionIsReadButNotOverwritten(t *testing.T) {
 	after, err := os.ReadFile(filepath.Join(dir, stateFileName)) //nolint:gosec // test temp dir
 	require.NoError(t, err)
 	assert.Equal(t, future, after)
+}
+
+func TestSchedulerStateWriters_DoNotOverwriteCorruptState(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		write func(string) error
+		name  string
+	}{
+		{name: "check", write: func(dir string) error { return recordScheduledCheck(dir, true) }},
+		{name: "offered", write: func(dir string) error { return recordOfferedVersion(dir, "2.11.0") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := filepath.Join(t.TempDir(), "updater")
+			require.NoError(t, os.MkdirAll(dir, stateDirPerm))
+			path := filepath.Join(dir, stateFileName)
+			corrupt := []byte("{not json")
+			require.NoError(t, os.WriteFile(path, corrupt, stateFilePerm))
+
+			require.Error(t, tt.write(dir))
+			after, err := os.ReadFile(path) //nolint:gosec // test-owned path
+			require.NoError(t, err)
+			assert.Equal(t, corrupt, after)
+		})
+	}
 }
 
 func TestRecordUpdateResult_DoesNotOverwriteCorruptState(t *testing.T) {
@@ -285,6 +341,18 @@ func TestUpdateResult_NilIsNotRecorded(t *testing.T) {
 
 	assert.Nil(t, peekUpdateResult(dir))
 	assert.NoFileExists(t, filepath.Join(dir, stateFileName))
+}
+
+func TestRecordDeferralAt_UsesInjectedClock(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "updater")
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.FixedZone("device", 9*60*60))
+	require.NoError(t, recordDeferralAt(dir, "v2.5.0", ReasonActiveMedia, now))
+
+	deferral := peekDeferral(dir, "v2.5.0")
+	require.NotNil(t, deferral)
+	assert.Equal(t, now.UTC(), deferral.Since)
 }
 
 func TestRecordDeferral_KeepsSinceAcrossReasons(t *testing.T) {

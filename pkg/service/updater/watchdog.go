@@ -68,10 +68,17 @@ const (
 	actionRollBack
 )
 
+type watchdogMarkerOps struct {
+	load   func(string) (*pendingMarker, error)
+	save   func(string, *pendingMarker) error
+	clear  func(string) error
+	record func(string, *pendingMarker) error
+}
+
 type watchdogFileOps struct {
-	fs         afero.Fs
-	replace    func(string, string) error
-	saveMarker func(string, *pendingMarker) error
+	fs      afero.Fs
+	replace func(string, string) error
+	marker  *watchdogMarkerOps
 	// binary puts back a file that may be the image this process is running
 	// from, which not every platform will let a plain replacement touch, and
 	// clears whatever an earlier swap had to leave behind to do it.
@@ -114,11 +121,44 @@ func (e *rolledBackError) Unwrap() []error {
 	return []error{ErrRolledBack, e.cause}
 }
 
+func (o watchdogFileOps) load(dir string) (*pendingMarker, error) {
+	if o.marker == nil || o.marker.load == nil {
+		return loadMarker(dir)
+	}
+	return o.marker.load(dir)
+}
+
+func (o watchdogFileOps) save(dir string, marker *pendingMarker) error {
+	if o.marker == nil || o.marker.save == nil {
+		return saveMarker(dir, marker)
+	}
+	return o.marker.save(dir, marker)
+}
+
+func (o watchdogFileOps) clear(dir string) error {
+	if o.marker == nil || o.marker.clear == nil {
+		return clearMarker(dir)
+	}
+	return o.marker.clear(dir)
+}
+
+func (o watchdogFileOps) record(dir string, marker *pendingMarker) error {
+	if o.marker == nil || o.marker.record == nil {
+		return recordMarkerResult(dir, marker)
+	}
+	return o.marker.record(dir, marker)
+}
+
 func defaultWatchdogFileOps() watchdogFileOps {
 	return watchdogFileOps{
-		fs:              afero.NewOsFs(),
-		replace:         replaceFile,
-		saveMarker:      saveMarker,
+		fs:      afero.NewOsFs(),
+		replace: replaceFile,
+		marker: &watchdogMarkerOps{
+			load:   loadMarker,
+			save:   saveMarker,
+			clear:  clearMarker,
+			record: recordMarkerResult,
+		},
 		binary:          defaultInstallBinaryOps(),
 		syncDirectory:   syncDir,
 		removeStaging:   removeStagingDir,
@@ -224,7 +264,7 @@ func runStartupWatchdogWithOps(
 	defer markerMu.Unlock()
 
 	dir := stateDirFor(dataDir)
-	m, err := loadMarker(dir)
+	m, err := fileOps.load(dir)
 	if err != nil {
 		// A newer or unusable marker cannot safely direct this build. Leave it and
 		// every update snapshot alone so a compatible build or operator still has
@@ -241,7 +281,7 @@ func runStartupWatchdogWithOps(
 	switch decideWatchdogAction(m, currentVersion) {
 	case actionNone:
 		if m != nil && m.Outcome == outcomeRollbackBlocked {
-			if err := recordMarkerResult(dir, m); err != nil {
+			if err := fileOps.record(dir, m); err != nil {
 				log.Warn().Err(err).Msg("could not retain the blocked rollback result")
 			}
 		}
@@ -253,7 +293,7 @@ func runStartupWatchdogWithOps(
 			Str("markerVersion", m.TargetVersion).
 			Str("running", currentVersion).
 			Msg("discarding an update marker that does not describe this version")
-		if err := clearMarker(dir); err != nil {
+		if err := fileOps.clear(dir); err != nil {
 			return err
 		}
 		sweepUpdateSnapshotsFS(fileOps.fs, dataDir, "")
@@ -262,7 +302,7 @@ func runStartupWatchdogWithOps(
 	case actionConfirm:
 		m.State = markerConfirming
 		m.Attempts++
-		if err := saveMarker(dir, m); err != nil {
+		if err := fileOps.save(dir, m); err != nil {
 			// Without confirming on disk a failed startup looks like a first
 			// boot to the next one, so it would try to confirm again instead of
 			// rolling back. Report it; the next boot re-runs this same step.
@@ -276,8 +316,17 @@ func runStartupWatchdogWithOps(
 		return nil
 
 	case actionAbortInstall:
-		return abortInstall(ctx, dataDir, m,
-			installSidecarPath(m.TargetPath, installCandidateSuffix), fileOps.binary)
+		return abortInstallWithOps(ctx, dataDir, m,
+			installSidecarPath(m.TargetPath, installCandidateSuffix), fileOps.binary,
+			payloadInstallOps{
+				fs:            fileOps.fs,
+				replace:       fileOps.replace,
+				remove:        fileOps.fs.Remove,
+				stat:          fileOps.fs.Stat,
+				syncDirectory: fileOps.syncDirectory,
+				saveMarker:    fileOps.save,
+				clearMarker:   fileOps.clear,
+			})
 
 	case actionFinalize:
 		return finalizeTerminalUpdate(ctx, dataDir, m, fileOps)
@@ -472,7 +521,7 @@ func rollBack(
 	dir := stateDirFor(dataDir)
 	m.State = markerRollingBack
 	m.RollbackAttempts++
-	if err := fileOps.saveMarker(dir, m); err != nil {
+	if err := fileOps.save(dir, m); err != nil {
 		// Nothing has been moved yet, and without this on disk an interrupted
 		// rollback would not know to resume, nor how many times it already has.
 		// Stop here rather than start a swap that cannot be finished.
@@ -481,15 +530,15 @@ func rollBack(
 
 	if !m.UserDBRestored {
 		if err := restoreUserDB(ctx, dataDir, m, fileOps); err != nil {
-			return handleRollbackFailure(dir, m, err)
+			return handleRollbackFailure(dir, m, fileOps, err)
 		}
 		// Recorded before the binary moves, because a rollback that fails after
 		// this point resumes on the next boot with the device having been in
 		// use in between. Writing the snapshot again then would throw those
 		// writes away.
 		m.UserDBRestored = true
-		if err := fileOps.saveMarker(dir, m); err != nil {
-			failureErr := handleRollbackFailure(dir, m,
+		if err := fileOps.save(dir, m); err != nil {
+			failureErr := handleRollbackFailure(dir, m, fileOps,
 				fmt.Errorf("recording the restored user database: %w", err))
 			if failureErr == nil {
 				return nil
@@ -498,12 +547,12 @@ func rollBack(
 		}
 	}
 	if err := restoreReplacedFiles(dir, m, fileOps); err != nil {
-		return handleRollbackFailure(dir, m, err)
+		return handleRollbackFailure(dir, m, fileOps, err)
 	}
 
 	m.Outcome = outcomeRolledBack
 	m.OutcomeAt = time.Now().UTC()
-	if err := saveMarker(dir, m); err != nil {
+	if err := fileOps.save(dir, m); err != nil {
 		return newRolledBackError(m.TargetPath,
 			fmt.Errorf("recording the completed rollback: %w", err))
 	}
@@ -519,12 +568,14 @@ func rollBack(
 	return newRolledBackError(m.TargetPath, nil)
 }
 
-func handleRollbackFailure(dir string, m *pendingMarker, cause error) error {
+func handleRollbackFailure(
+	dir string, m *pendingMarker, fileOps watchdogFileOps, cause error,
+) error {
 	if errors.Is(cause, errRollbackPrerequisite) {
-		return blockRollback(dir, m, cause)
+		return blockRollback(dir, m, fileOps, cause)
 	}
 	if m.RollbackAttempts >= rollbackAttemptLimit {
-		return blockRollback(dir, m, fmt.Errorf(
+		return blockRollback(dir, m, fileOps, fmt.Errorf(
 			"rollback failed on %d attempts: %w", m.RollbackAttempts, cause))
 	}
 	log.Error().Err(cause).
@@ -537,7 +588,7 @@ func handleRollbackFailure(dir string, m *pendingMarker, cause error) error {
 
 // blockRollback gives up on a rollback only when a prerequisite is permanently
 // missing or corrupt. Retryable I/O errors leave markerRollingBack intact.
-func blockRollback(dir string, m *pendingMarker, cause error) error {
+func blockRollback(dir string, m *pendingMarker, fileOps watchdogFileOps, cause error) error {
 	log.Error().Err(cause).
 		Str("failed", m.TargetVersion).
 		Str("wanted", m.PreviousVersion).
@@ -546,10 +597,10 @@ func blockRollback(dir string, m *pendingMarker, cause error) error {
 	m.Outcome = outcomeRollbackBlocked
 	m.OutcomeAt = time.Now().UTC()
 	m.OutcomeDetail = cause.Error()
-	if err := saveMarker(dir, m); err != nil {
+	if err := fileOps.save(dir, m); err != nil {
 		return fmt.Errorf("recording that rollback was abandoned: %w", err)
 	}
-	if err := recordMarkerResult(dir, m); err != nil {
+	if err := fileOps.record(dir, m); err != nil {
 		log.Warn().Err(err).Msg("could not record the blocked rollback result")
 	}
 	return nil
@@ -582,14 +633,79 @@ func restoreUserDB(
 	return nil
 }
 
+func restorePayloadFiles(dir string, m *pendingMarker, fileOps watchdogFileOps) error {
+	for len(m.PayloadBackups) > 0 {
+		payload := m.PayloadBackups[0]
+		if err := restorePayloadFile(dir, m, payload, fileOps); err != nil {
+			return err
+		}
+		if err := removePayloadCandidate(payload, fileOps); err != nil {
+			return err
+		}
+
+		// Remove each completed entry durably before moving to the next file.
+		// Its backup may have been consumed by rename, so retaining the entry
+		// would make a later boot mistake completed work for a missing prerequisite.
+		m.PayloadBackups = m.PayloadBackups[1:]
+		m.RestoringPath = ""
+		if err := fileOps.save(dir, m); err != nil {
+			return fmt.Errorf("recording the completed payload restore: %w", err)
+		}
+	}
+	return nil
+}
+
+func removePayloadCandidate(payload payloadBackup, fileOps watchdogFileOps) error {
+	if payload.CandidatePath == "" {
+		return nil
+	}
+	if err := fileOps.fs.Remove(payload.CandidatePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("removing unused payload candidate %q: %w", payload.CandidatePath, err)
+	}
+	if err := fileOps.syncDirectory(filepath.Dir(payload.CandidatePath)); err != nil {
+		return fmt.Errorf("flushing removed payload candidate %q: %w", payload.CandidatePath, err)
+	}
+	return nil
+}
+
+func restorePayloadFile(
+	dir string, m *pendingMarker, payload payloadBackup, fileOps watchdogFileOps,
+) error {
+	if payload.OriginalMissing {
+		_, statErr := fileOps.fs.Stat(payload.TargetPath)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return nil
+		}
+		if statErr != nil {
+			return fmt.Errorf("reading newly installed payload %q: %w", payload.TargetPath, statErr)
+		}
+		if m.RestoringPath != payload.TargetPath {
+			m.RestoringPath = payload.TargetPath
+			if err := fileOps.save(dir, m); err != nil {
+				return fmt.Errorf("recording the payload being removed: %w", err)
+			}
+		}
+		if err := fileOps.fs.Remove(payload.TargetPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing newly installed payload %q: %w", payload.TargetPath, err)
+		}
+		if err := fileOps.syncDirectory(filepath.Dir(payload.TargetPath)); err != nil {
+			return fmt.Errorf("flushing removed payload %q: %w", payload.TargetPath, err)
+		}
+		return nil
+	}
+
+	return restoreReplacedFileState(dir, m, payload.BackupPath, payload.TargetPath, fileOps, false)
+}
+
 // restoreReplacedFiles renames what the install displaced back over what it
 // installed. The binary goes last so that a failure part way through leaves the
 // new one in place, which is the state blockRollback is willing to run in.
 func restoreReplacedFiles(dir string, m *pendingMarker, fileOps watchdogFileOps) error {
-	for _, p := range m.PayloadBackups {
-		if err := restoreReplacedFile(dir, m, p.BackupPath, p.TargetPath, fileOps); err != nil {
-			return err
-		}
+	if err := restorePayloadFiles(dir, m, fileOps); err != nil {
+		return err
 	}
 	// The binary is the one file the rollback may have to put back underneath a
 	// process that is running from it, so it does not go through the plain
@@ -606,6 +722,16 @@ func restoreReplacedFiles(dir string, m *pendingMarker, fileOps watchdogFileOps)
 func restoreReplacedFile(
 	dir string, m *pendingMarker, backupPath, targetPath string, fileOps watchdogFileOps,
 ) error {
+	return restoreReplacedFileState(dir, m, backupPath, targetPath, fileOps, true)
+}
+
+func restoreReplacedFileState(
+	dir string,
+	m *pendingMarker,
+	backupPath, targetPath string,
+	fileOps watchdogFileOps,
+	clearRestoringPath bool,
+) error {
 	if backupPath == "" || targetPath == "" {
 		return fmt.Errorf("%w: the update recorded no backup for a file it replaced", errRollbackPrerequisite)
 	}
@@ -616,9 +742,11 @@ func restoreReplacedFile(
 			if _, targetErr := fileOps.fs.Stat(targetPath); targetErr != nil {
 				return fmt.Errorf("restored backup and target are both unavailable for %q: %w", targetPath, targetErr)
 			}
-			m.RestoringPath = ""
-			if saveErr := saveMarker(dir, m); saveErr != nil {
-				return fmt.Errorf("recording the completed file restore: %w", saveErr)
+			if clearRestoringPath {
+				m.RestoringPath = ""
+				if saveErr := fileOps.save(dir, m); saveErr != nil {
+					return fmt.Errorf("recording the completed file restore: %w", saveErr)
+				}
 			}
 			return nil
 		}
@@ -630,7 +758,7 @@ func restoreReplacedFile(
 
 	if m.RestoringPath != targetPath {
 		m.RestoringPath = targetPath
-		if err := saveMarker(dir, m); err != nil {
+		if err := fileOps.save(dir, m); err != nil {
 			return fmt.Errorf("recording the file being restored: %w", err)
 		}
 	}
@@ -641,9 +769,11 @@ func restoreReplacedFile(
 	if err := fileOps.syncDirectory(filepath.Dir(targetPath)); err != nil {
 		return fmt.Errorf("flushing restored file %q: %w", targetPath, err)
 	}
-	m.RestoringPath = ""
-	if err := saveMarker(dir, m); err != nil {
-		return fmt.Errorf("recording the completed file restore: %w", err)
+	if clearRestoringPath {
+		m.RestoringPath = ""
+		if err := fileOps.save(dir, m); err != nil {
+			return fmt.Errorf("recording the completed file restore: %w", err)
+		}
 	}
 	return nil
 }
@@ -655,7 +785,7 @@ func finalizeTerminalUpdate(
 		return errors.New("finalizing an update needs a completed outcome")
 	}
 	dir := stateDirFor(dataDir)
-	if err := recordMarkerResult(dir, m); err != nil {
+	if err := fileOps.record(dir, m); err != nil {
 		return err
 	}
 
@@ -678,7 +808,7 @@ func finalizeTerminalUpdate(
 	// line.
 	fileOps.binary.sweep(m.TargetPath)
 	sweepUpdateSnapshotsFS(fileOps.fs, dataDir, "")
-	if err := clearMarker(dir); err != nil {
+	if err := fileOps.clear(dir); err != nil {
 		return fmt.Errorf("clearing the completed update marker: %w", err)
 	}
 	return nil

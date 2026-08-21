@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -292,6 +293,10 @@ func (p *Platform) getESConfig() *ESSystemConfig {
 
 	p.esConfigCache = esCfg
 	return esCfg
+}
+
+func (*Platform) UpdatePayload() []updatepayload.File {
+	return UpdatePayload()
 }
 
 func (*Platform) Settings() platforms.Settings {

@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -207,6 +208,31 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestCheckAndNotify_DeduplicatesOfferedVersion(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetUpdateCheck(true)
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.Anything).
+		Return(&database.InboxMessage{DBID: 1}, nil).Once()
+	inboxSvc := inbox.NewService(mockUserDB, make(chan models.Notification, 10))
+	opts := linuxOptions()
+	opts.DataDir = t.TempDir()
+	checkFn := func(context.Context, Options) (*Result, error) {
+		return &Result{
+			CurrentVersion: "2.9.0", LatestVersion: "2.10.0",
+			UpdateAvailable: true,
+		}, nil
+	}
+
+	CheckAndNotify(t.Context(), cfg, opts, inboxSvc, alwaysOnline, checkFn, false)
+	CheckAndNotify(t.Context(), cfg, opts, inboxSvc, alwaysOnline, checkFn, false)
+
+	mockUserDB.AssertExpectations(t)
+	assert.Equal(t, "2.10.0", lastOfferedVersion(stateDirFor(opts.DataDir)))
+}
+
 // A package-managed device still gets told a release exists, so the message has
 // to point at the thing that actually installs it there.
 func TestCheckAndNotify_ManagedInstallBodyNamesThePackageManager(t *testing.T) {
@@ -304,6 +330,30 @@ func TestCheck_CancelledContext(t *testing.T) {
 	result, err := Check(ctx, linuxOptions())
 	require.Error(t, err)
 	assert.Nil(t, result)
+}
+
+func TestUpdatePayloadFilesOnlyForUnmanagedInstall(t *testing.T) {
+	t.Parallel()
+
+	payload := []updatepayload.File{{ArchivePath: "scripts/helper.sh"}}
+	assert.Equal(t, payload, updatePayloadFiles(&Options{Payload: payload}))
+	assert.Empty(t, updatePayloadFiles(&Options{Payload: payload, Managed: true}))
+	assert.Empty(t, updatePayloadFiles(&Options{}))
+}
+
+func TestAutoInstallReleaseAllowed(t *testing.T) {
+	t.Parallel()
+
+	held := &otameta.Release{TagName: "v2.10.0", Rollout: 0}
+	full := &otameta.Release{TagName: "v2.10.0", Rollout: 100}
+	require.NoError(t, autoInstallReleaseAllowed(&Options{Mode: ModeManual, Managed: true}, held))
+	require.ErrorIs(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, Managed: true}, full),
+		errAutoInstallIneligible)
+	require.ErrorIs(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, DeviceID: "device-1"}, held),
+		errAutoInstallIneligible)
+	assert.NoError(t, autoInstallReleaseAllowed(&Options{Mode: ModeAuto}, full))
 }
 
 func TestApply_UpdateInProgress(t *testing.T) {

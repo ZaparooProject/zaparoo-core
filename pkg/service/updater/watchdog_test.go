@@ -43,6 +43,19 @@ const (
 	testTargetVersion = "2.2.0"
 )
 
+type recordingRemoveFS struct {
+	afero.Fs
+	record func(string)
+}
+
+func (f *recordingRemoveFS) Remove(name string) error {
+	f.record(name)
+	if err := f.Fs.Remove(name); err != nil {
+		return fmt.Errorf("removing %q: %w", name, err)
+	}
+	return nil
+}
+
 func TestDecideWatchdogAction(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +333,83 @@ func TestRunStartupWatchdog_ResumesInterruptedRollback(t *testing.T) {
 	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 	assert.Equal(t, "before the update", readTestDBNote(t, f.dbPath))
 	assert.NoFileExists(t, markerPath(dir))
+}
+
+func TestRunStartupWatchdog_ResumesInterruptedPayloadRestore(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dataDir := filepath.Join("data", "zaparoo")
+	binDir := filepath.Join("system", "bin")
+	assetDir := filepath.Join("system", "assets")
+	targetPath := filepath.Join(binDir, "zaparoo")
+	backupPath := filepath.Join(binDir, ".zaparoo.zap-old")
+	assetPath := filepath.Join(assetDir, "menu.png")
+	assetBackup := filepath.Join(assetDir, ".menu.png.zap-old")
+	stagingDir := filepath.Join(dataDir, "updater", "staging", testTargetVersion)
+	for _, dir := range []string{binDir, assetDir, stagingDir} {
+		require.NoError(t, fs.MkdirAll(dir, 0o750))
+	}
+	for path, content := range map[string]string{
+		targetPath: "new binary", backupPath: "old binary",
+		assetPath: "new asset", assetBackup: "old asset",
+	} {
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
+
+	marker := &pendingMarker{
+		State: markerRollingBack, TargetPath: targetPath, BackupPath: backupPath,
+		StagingDir: stagingDir, PreviousVersion: testPrevVersion, TargetVersion: testTargetVersion,
+		BinaryReplaced: true, UserDBRestored: true, RestoringPath: assetPath,
+		PayloadBackups: []payloadBackup{{TargetPath: assetPath, BackupPath: assetBackup}},
+	}
+	require.NoError(t, fs.Rename(assetBackup, assetPath))
+	recorded := false
+	fileOps := watchdogFileOps{
+		fs: fs,
+		marker: &watchdogMarkerOps{
+			load: func(string) (*pendingMarker, error) {
+				return marker, nil
+			},
+			save: func(_ string, saved *pendingMarker) error {
+				marker = saved
+				return nil
+			},
+			clear: func(string) error {
+				marker = nil
+				return nil
+			},
+			record: func(_ string, saved *pendingMarker) error {
+				recorded = true
+				assert.Equal(t, outcomeRolledBack, saved.Outcome)
+				return nil
+			},
+		},
+		replace: fs.Rename,
+		binary: installBinaryOps{
+			replaceRunning:  fs.Rename,
+			sweepSuperseded: func(string) {},
+		},
+		syncDirectory: func(string) error { return nil },
+		removeStaging: func(_ context.Context, path string) error {
+			return fs.RemoveAll(path)
+		},
+		restoreDatabase: func(context.Context, afero.Fs, string, string) error {
+			t.Fatal("database was restored twice")
+			return nil
+		},
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), dataDir, testTargetVersion, fileOps)
+	require.ErrorIs(t, err, ErrRolledBack)
+	asset, readErr := afero.ReadFile(fs, assetPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "old asset", string(asset))
+	binary, readErr := afero.ReadFile(fs, targetPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "old binary", string(binary))
+	assert.True(t, recorded)
+	assert.Nil(t, marker)
 }
 
 // The same missing backup on a rollback that has not started yet is a real
@@ -621,7 +711,6 @@ func TestRunStartupWatchdog_AbortsInterruptedInstallWithoutRestoringDB(t *testin
 	t.Parallel()
 
 	f := newInstallFixture(t)
-	dir := stateDirFor(f.dataDir)
 	// The swap never took the target name: the outgoing binary is still in
 	// place, so abort must not replace it from the backup.
 	//nolint:gosec // executable stand-in owned by this test
@@ -630,13 +719,19 @@ func TestRunStartupWatchdog_AbortsInterruptedInstallWithoutRestoringDB(t *testin
 	require.NoError(t, os.WriteFile(f.backupPath, []byte("backup binary"), 0o755))
 	m := f.marker(markerInstalling)
 	m.BinaryReplaced = false
-	require.NoError(t, saveMarker(dir, m))
+	cleared := false
+	ops := defaultWatchdogFileOps()
+	ops.marker.load = func(string) (*pendingMarker, error) { return m, nil }
+	ops.marker.clear = func(string) error {
+		cleared = true
+		return nil
+	}
 
-	require.NoError(t, RunStartupWatchdog(t.Context(), f.dataDir, testPrevVersion))
+	require.NoError(t, runStartupWatchdogWithOps(t.Context(), f.dataDir, testPrevVersion, ops))
 
 	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 	assert.Equal(t, "after the update", readTestDBNote(t, f.dbPath))
-	assert.NoFileExists(t, markerPath(dir))
+	assert.True(t, cleared)
 	assert.NoFileExists(t, f.snapshotPath)
 	assert.NoDirExists(t, f.stagingDir)
 }
@@ -895,8 +990,7 @@ func TestRunStartupWatchdog_MarkerWithoutASnapshotBlocksRollback(t *testing.T) {
 	assert.Equal(t, outcomeRollbackBlocked, blocked.Outcome)
 }
 
-// Payload extras have no producer yet, but the rollback already restores them,
-// and the binary has to go last: a failure part way through then leaves the new
+// Payload extras restore before the binary: a failure part way through leaves the new
 // binary in place, which is the state a blocked rollback can live with.
 func TestRunStartupWatchdog_RestoresPayloadFilesBeforeTheBinary(t *testing.T) {
 	t.Parallel()
@@ -933,6 +1027,109 @@ func TestRunStartupWatchdog_RestoresPayloadFilesBeforeTheBinary(t *testing.T) {
 	assert.Equal(t, "old asset", readFileString(t, assetPath))
 	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 	assert.NoFileExists(t, assetBackup, "a restored backup is not left behind")
+}
+
+func TestRunStartupWatchdog_RemovesNewPayloadFileBeforeTheBinary(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	assetPath := filepath.Join(t.TempDir(), "new-helper.sh")
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(assetPath, []byte("new asset"), 0o755))
+	m := f.marker(markerConfirming)
+	m.PayloadBackups = []payloadBackup{{TargetPath: assetPath, OriginalMissing: true}}
+	require.NoError(t, saveMarker(dir, m))
+
+	ops := defaultWatchdogFileOps()
+	var restored []string
+	osFS := ops.fs
+	ops.fs = &recordingRemoveFS{Fs: osFS, record: func(path string) {
+		if path == assetPath {
+			restored = append(restored, path)
+		}
+	}}
+	ops.restoreDatabase = func(ctx context.Context, _ afero.Fs, source, target string) error {
+		return userdb.RestoreFileTo(ctx, osFS, source, target)
+	}
+	originalReplace := ops.binary.replaceRunning
+	ops.binary.replaceRunning = func(source, target string) error {
+		restored = append(restored, target)
+		return originalReplace(source, target)
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, ErrRolledBack)
+	assert.Equal(t, []string{assetPath, f.targetPath}, restored)
+	assert.NoFileExists(t, assetPath)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+}
+
+func TestRestorePayloadFiles_RemovesUnusedCandidate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	candidatePath := filepath.Join(dir, "helper.zaparoo-update-new.sh")
+	require.NoError(t, os.WriteFile(candidatePath, []byte("candidate"), 0o600))
+	m := &pendingMarker{PayloadBackups: []payloadBackup{{
+		TargetPath: filepath.Join(dir, "helper.sh"), CandidatePath: candidatePath, OriginalMissing: true,
+	}}}
+
+	require.NoError(t, restorePayloadFiles(dir, m, defaultWatchdogFileOps()))
+	assert.NoFileExists(t, candidatePath)
+	assert.Empty(t, m.PayloadBackups)
+}
+
+func TestRunStartupWatchdog_ResumesAfterAnEarlierPayloadWasRestored(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	assetDir := t.TempDir()
+	firstPath := filepath.Join(assetDir, "first.sh")
+	firstBackup := filepath.Join(assetDir, ".first.sh.old")
+	secondPath := filepath.Join(assetDir, "second.sh")
+	secondBackup := filepath.Join(assetDir, ".second.sh.old")
+	for path, content := range map[string]string{
+		firstPath: "new first", firstBackup: "old first",
+		secondPath: "new second", secondBackup: "old second",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+
+	m := f.marker(markerConfirming)
+	m.PayloadBackups = []payloadBackup{
+		{TargetPath: firstPath, BackupPath: firstBackup},
+		{TargetPath: secondPath, BackupPath: secondBackup},
+	}
+	require.NoError(t, saveMarker(dir, m))
+
+	errSecond := errors.New("second payload is busy")
+	firstOps := defaultWatchdogFileOps()
+	originalReplace := firstOps.replace
+	firstOps.replace = func(source, target string) error {
+		if target == secondPath {
+			return errSecond
+		}
+		return originalReplace(source, target)
+	}
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, firstOps)
+	require.ErrorIs(t, err, errSecond)
+	assert.Equal(t, "old first", readFileString(t, firstPath))
+	assert.Equal(t, "new second", readFileString(t, secondPath))
+	assert.NoFileExists(t, firstBackup)
+
+	pending, loadErr := loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, pending)
+	require.Len(t, pending.PayloadBackups, 1)
+	assert.Equal(t, secondPath, pending.PayloadBackups[0].TargetPath)
+
+	err = runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, defaultWatchdogFileOps())
+	require.ErrorIs(t, err, ErrRolledBack)
+	assert.Equal(t, "old first", readFileString(t, firstPath))
+	assert.Equal(t, "old second", readFileString(t, secondPath))
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 }
 
 // A payload entry with no backup recorded cannot be restored, and guessing is
@@ -1004,9 +1201,9 @@ func TestRunStartupWatchdog_StopsStartupWhenRestoredDatabaseCannotBeRecorded(t *
 
 	saveErr := errors.New("marker storage unavailable")
 	ops := defaultWatchdogFileOps()
-	realSaveMarker := ops.saveMarker
+	realSaveMarker := ops.marker.save
 	saveCalls := 0
-	ops.saveMarker = func(gotDir string, m *pendingMarker) error {
+	ops.marker.save = func(gotDir string, m *pendingMarker) error {
 		saveCalls++
 		if saveCalls == 2 {
 			return saveErr
@@ -1120,6 +1317,7 @@ func TestRestoreReplacedFiles_RestoresTheBinaryThroughTheRunningImageSwap(t *tes
 			BackupPath: filepath.Join(dir, "extra.backup.dll"),
 		}},
 	}
+	payloadTarget := m.PayloadBackups[0].TargetPath
 	for _, path := range []string{m.BackupPath, m.PayloadBackups[0].BackupPath} {
 		require.NoError(t, afero.WriteFile(fs, path, []byte("old"), 0o600))
 	}
@@ -1135,7 +1333,7 @@ func TestRestoreReplacedFiles_RestoresTheBinaryThroughTheRunningImageSwap(t *tes
 	}
 
 	require.NoError(t, restoreReplacedFiles(dir, m, fileOps))
-	assert.Equal(t, []string{m.PayloadBackups[0].TargetPath}, plain)
+	assert.Equal(t, []string{payloadTarget}, plain)
 	assert.Equal(t, []string{m.TargetPath}, running)
 }
 

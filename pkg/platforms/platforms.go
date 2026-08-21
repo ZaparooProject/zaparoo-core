@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -382,6 +383,10 @@ type BackupPlan struct {
 
 type BackupProvider interface {
 	BackupDefinitions() []BackupDefinition
+}
+
+type UpdatePayloadProvider interface {
+	UpdatePayload() []updatepayload.File
 }
 
 type BackupPlanningProvider interface {

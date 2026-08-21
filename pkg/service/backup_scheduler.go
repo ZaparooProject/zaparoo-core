@@ -40,13 +40,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type remoteHeartbeatState struct {
-	lastSuccess time.Time
-	nextAttempt time.Time
-	backoff     time.Duration
-	idle        bool
-}
-
 type playSyncConfiguration struct {
 	bearer  string
 	enabled bool
@@ -99,29 +92,6 @@ func (s *staleNoticeState) shouldNotify(now time.Time, stale bool) bool {
 	return true
 }
 
-func (s *remoteHeartbeatState) due(now time.Time) bool {
-	if !s.lastSuccess.IsZero() && now.Sub(s.lastSuccess) < remoteHeartbeatInterval {
-		return false
-	}
-	return s.nextAttempt.IsZero() || !now.Before(s.nextAttempt)
-}
-
-func (s *remoteHeartbeatState) recordFailure(now time.Time) {
-	s.idle = false
-	if s.backoff <= 0 {
-		s.backoff = remoteHeartbeatInitialBackoff
-	}
-	s.nextAttempt = now.Add(s.backoff)
-	s.backoff = min(s.backoff*2, remoteHeartbeatMaxBackoff)
-}
-
-func (s *remoteHeartbeatState) recordSuccess(now time.Time) {
-	s.idle = false
-	s.lastSuccess = now
-	s.nextAttempt = time.Time{}
-	s.backoff = remoteHeartbeatInitialBackoff
-}
-
 // onlineFailureRequiresWarning separates expected inactivity (disabled,
 // unlinked, or shutdown) from failures support logs must retain.
 func onlineFailureRequiresWarning(err error, expected bool) bool {
@@ -145,7 +115,7 @@ func (c playSyncConfiguration) eligible() bool {
 	return c.enabled && c.bearer != ""
 }
 
-func recordPlaySyncError(retryState *remoteHeartbeatState, now time.Time, err error) bool {
+func recordPlaySyncError(retryState *intervalState, now time.Time, err error) bool {
 	expected := backupsvc.IsRemoteUnlinkedError(err) || backupsvc.IsPlaySyncDisabledError(err)
 	if expected {
 		retryState.idle = true
@@ -153,7 +123,7 @@ func recordPlaySyncError(retryState *remoteHeartbeatState, now time.Time, err er
 		retryState.backoff = remoteHeartbeatInitialBackoff
 		return true
 	}
-	retryState.recordFailure(now)
+	retryState.recordFailure(now, remoteHeartbeatInitialBackoff, remoteHeartbeatMaxBackoff)
 	return false
 }
 
@@ -219,15 +189,15 @@ func remoteBackupSchedulerLoop(
 		)
 	}
 
-	heartbeatState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
+	heartbeatState := intervalState{backoff: remoteHeartbeatInitialBackoff}
 	tryHeartbeat := func() {
 		now := time.Now()
-		if !heartbeatState.due(now) {
+		if !heartbeatState.due(now, remoteHeartbeatInterval) {
 			return
 		}
 		mgr := backupsvc.NewManager(cfg, pl, db).WithCoordinator(st.BackupCoordinator())
 		if err := mgr.SendHeartbeat(ctx); err != nil {
-			heartbeatState.recordFailure(now)
+			heartbeatState.recordFailure(now, remoteHeartbeatInitialBackoff, remoteHeartbeatMaxBackoff)
 			expected := backupsvc.IsRemoteUnlinkedError(err)
 			if onlineFailureRequiresWarning(err, expected) {
 				log.Warn().Err(err).
@@ -238,7 +208,7 @@ func remoteBackupSchedulerLoop(
 			}
 			return
 		}
-		heartbeatState.recordSuccess(now)
+		heartbeatState.recordSuccess(now, remoteHeartbeatInitialBackoff)
 	}
 
 	staleState := staleNoticeState{}
@@ -257,7 +227,7 @@ func remoteBackupSchedulerLoop(
 	// heartbeats, and completed sessions request immediate passes through this
 	// same serialized path. Requests coalesce, remain pending across failures,
 	// and never bypass retry backoff.
-	playSyncState := remoteHeartbeatState{backoff: remoteHeartbeatInitialBackoff}
+	playSyncState := intervalState{backoff: remoteHeartbeatInitialBackoff}
 	playSyncPending := false
 	var idlePlaySyncConfiguration playSyncConfiguration
 	tryPlaySync := func() {
@@ -293,7 +263,7 @@ func remoteBackupSchedulerLoop(
 			}
 			return
 		}
-		playSyncState.recordSuccess(now)
+		playSyncState.recordSuccess(now, remoteHeartbeatInitialBackoff)
 		idlePlaySyncConfiguration = playSyncConfiguration{}
 		playSyncPending = false
 		if info.Uploaded > 0 {
@@ -326,7 +296,7 @@ func remoteBackupSchedulerLoop(
 // playSyncDue reports whether a play-history sync pass should run now.
 // A session lifecycle or active-heartbeat request bypasses the normal success
 // interval, but never the failure backoff.
-func playSyncDue(s *remoteHeartbeatState, now time.Time, pending bool) bool {
+func playSyncDue(s *intervalState, now time.Time, pending bool) bool {
 	if s.idle {
 		return false
 	}

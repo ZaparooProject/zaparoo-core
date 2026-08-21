@@ -9,6 +9,7 @@ package batocera
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -27,6 +29,95 @@ import (
 func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
 	t.Parallel()
 	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+}
+
+func TestSettings_UpdatePayload(t *testing.T) {
+	t.Parallel()
+
+	files := (&Platform{}).UpdatePayload()
+	require.Len(t, files, 7)
+	byArchivePath := make(map[string]updatepayload.File, len(files))
+	for _, file := range files {
+		byArchivePath[file.ArchivePath] = file
+	}
+
+	tests := []struct {
+		name string
+		want updatepayload.File
+	}{
+		{
+			name: "game selected hook",
+			want: updatepayload.File{
+				SourcePath: filepath.Join("cmd", "batocera", "scripts", "configs", "emulationstation", "scripts",
+					"game-selected", "zaparoo_game_select.sh"),
+				ArchivePath: "scripts/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+				InstallPath: "configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "multimedia keys",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "configs", "multimedia_keys.conf"),
+				ArchivePath: "scripts/configs/multimedia_keys.conf",
+				InstallPath: "configs/multimedia_keys.conf",
+				Mode:        0o644,
+			},
+		},
+		{
+			name: "content downloader image",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "content_downloader.png"),
+				ArchivePath: "scripts/content_downloader.png",
+				InstallPath: "content_downloader.png",
+				Mode:        0o644,
+			},
+		},
+		{
+			name: "ports launcher",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "ports", "Zaparoo.sh"),
+				ArchivePath: "scripts/ports/Zaparoo.sh",
+				InstallPath: "../roms/ports/Zaparoo.sh",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "service",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "services", "zaparoo_service"),
+				ArchivePath: "scripts/services/zaparoo_service",
+				InstallPath: "services/zaparoo_service",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "wrapper",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_wrapper.sh"),
+				ArchivePath: "scripts/zaparoo_wrapper.sh",
+				InstallPath: "zaparoo_wrapper.sh",
+				Mode:        0o755,
+			},
+		},
+		{
+			name: "write game",
+			want: updatepayload.File{
+				SourcePath:  filepath.Join("cmd", "batocera", "scripts", "zaparoo_write_game.sh"),
+				ArchivePath: "scripts/zaparoo_write_game.sh",
+				InstallPath: "zaparoo_write_game.sh",
+				Mode:        0o755,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := byArchivePath[tt.want.ArchivePath]
+			require.True(t, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestPresentUIForwardsPassiveEvents(t *testing.T) {

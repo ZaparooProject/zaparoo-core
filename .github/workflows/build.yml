@@ -268,7 +268,10 @@ jobs:
         with:
           sparse-checkout: |
             scripts/
+            pkg/platforms/batocera/payload.go
+            pkg/platforms/updatepayload/
             go.mod
+            go.sum
           sparse-checkout-cone-mode: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -363,7 +366,7 @@ jobs:
             cp "_signed/${arch}/Zaparoo.exe" "_dist/${arch}/Zaparoo.exe"
 
             # Create distribution ZIP
-            go run scripts/tasks/utils/makezip/main.go \
+            go run ./scripts/tasks/utils/makezip \
               windows "_dist/${arch}" Zaparoo.exe \
               "zaparoo-windows_${arch}-${VERSION}.zip"
 

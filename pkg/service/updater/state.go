@@ -52,14 +52,20 @@ var stateMu syncutil.Mutex
 // purpose: the database is included in backups, so a watermark stored there
 // would roll backwards whenever an old backup was restored, which is a
 // self-inflicted downgrade window.
+//
+//nolint:govet // Field order keeps persisted state grouped by manifest, check, and outcome.
 type updaterState struct {
 	ManifestSeenAt       time.Time       `json:"manifestSeenAt"`
+	LastCheckAt          *time.Time      `json:"lastCheckAt,omitempty"`
 	LastResult           *updateResult   `json:"lastResult,omitempty"`
 	Deferral             *updateDeferral `json:"deferral,omitempty"`
 	ManifestETag         string          `json:"manifestETag"`
 	ManifestLastModified string          `json:"manifestLastModified"`
+	LastOfferedVersion   string          `json:"lastOfferedVersion,omitempty"`
 	ManifestGeneration   int64           `json:"manifestGeneration"`
+	CheckFailures        int             `json:"checkFailures,omitempty"`
 	StateVersion         int             `json:"stateVersion"`
+	LastCheckOK          *bool           `json:"lastCheckOK,omitempty"` //nolint:tagliatelle // Established initialism.
 }
 
 // updateDeferral records that an automatic install has been putting a version
@@ -238,6 +244,58 @@ func writeFileAtomicWithSync(
 	return nil
 }
 
+func recordScheduledCheck(dir string, succeeded bool) error {
+	if dir == "" {
+		return nil
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording scheduled check: %w", err)
+	}
+	checkedAt := time.Now().UTC()
+	st.LastCheckAt = &checkedAt
+	st.LastCheckOK = &succeeded
+	if succeeded {
+		st.CheckFailures = 0
+	} else {
+		st.CheckFailures++
+	}
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording scheduled update check: %w", err)
+	}
+	return nil
+}
+
+func lastOfferedVersion(dir string) string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return loadState(dir).LastOfferedVersion
+}
+
+func recordOfferedVersion(dir, version string) error {
+	if dir == "" || version == "" {
+		return nil
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording offered version: %w", err)
+	}
+	if st.LastOfferedVersion == version {
+		return nil
+	}
+	st.LastOfferedVersion = version
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording offered update version: %w", err)
+	}
+	return nil
+}
+
 // recordUpdateResult stores how an update finished so the boot after it can say
 // so. Terminal cleanup keeps its marker until this succeeds, allowing a later
 // boot to retry result persistence without repeating rollback.
@@ -318,6 +376,10 @@ func sameUpdateResult(a, b *updateResult) bool {
 // that is what the deadline is measured from; a different version starts the
 // clock again.
 func recordDeferral(dir, version, reason string) error {
+	return recordDeferralAt(dir, version, reason, time.Now().UTC())
+}
+
+func recordDeferralAt(dir, version, reason string, now time.Time) error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
@@ -329,7 +391,7 @@ func recordDeferral(dir, version, reason string) error {
 		return nil
 	}
 
-	since := time.Now().UTC()
+	since := now.UTC()
 	if st.Deferral != nil && st.Deferral.Version == version && !st.Deferral.Since.IsZero() {
 		since = st.Deferral.Since
 	}

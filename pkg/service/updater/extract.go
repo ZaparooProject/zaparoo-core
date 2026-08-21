@@ -38,9 +38,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater/otameta"
 )
 
@@ -95,36 +97,49 @@ func (w *errWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// extractBinary opens the archive once, proves the bytes sitting on disk are
-// still the ones the signed manifest describes, and copies the executable out of
-// that same open file.
-func (s *stager) extractBinary(ctx context.Context, archivePath, ext string, want []byte, destPath string) error {
+// extractRelease opens the archive once, proves the bytes sitting on disk are
+// still the ones the signed manifest describes, and copies the executable and
+// configured platform payload out of that same open file.
+func (s *stager) extractRelease(
+	ctx context.Context,
+	archivePath, ext string,
+	want []byte,
+	binaryPath, payloadDir string,
+) ([]stagedPayloadFile, error) {
 	//nolint:gosec // the path is built by this package inside its own staging directory
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return fmt.Errorf("opening the update archive: %w", err)
+		return nil, fmt.Errorf("opening the update archive: %w", err)
 	}
 	defer closeQuietly(f, "update archive")
 
 	size, err := verifyOpenArchive(ctx, f, want)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Only the tar path reads sequentially; zip addresses the handle directly and
 	// does not care where the offset is. Rewinding both keeps that an
 	// implementation detail of the format rather than of this function.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewinding the update archive: %w", err)
+		return nil, fmt.Errorf("rewinding the update archive: %w", err)
 	}
 
 	switch ext {
 	case otameta.ArchiveExtTarGz:
-		return s.extractFromTarGz(ctx, f, destPath)
+		return s.extractFromTarGz(ctx, f, binaryPath, payloadDir)
 	case otameta.ArchiveExtZip:
-		return s.extractFromZip(ctx, f, size, destPath)
+		return s.extractFromZip(ctx, f, size, binaryPath, payloadDir)
 	default:
-		return fmt.Errorf("%w: %q is not an archive type this build unpacks", ErrArchiveRejected, ext)
+		return nil, fmt.Errorf("%w: %q is not an archive type this build unpacks", ErrArchiveRejected, ext)
 	}
+}
+
+// extractBinary preserves the focused extraction seam used by binary-only
+// tests. Production staging uses extractRelease so configured payload files are
+// returned to the installer.
+func (s *stager) extractBinary(ctx context.Context, archivePath, ext string, want []byte, destPath string) error {
+	_, err := s.extractRelease(ctx, archivePath, ext, want, destPath, filepath.Dir(destPath))
+	return err
 }
 
 // verifyOpenArchive re-checks the archive against the manifest digest, reading
@@ -158,25 +173,135 @@ func verifyOpenArchive(ctx context.Context, f *os.File, want []byte) (int64, err
 	return size, nil
 }
 
-func (s *stager) extractFromTarGz(ctx context.Context, f *os.File, destPath string) error {
+type archiveMemberTarget struct {
+	destPath     string
+	archivePath  string
+	relativePath string
+	binary       bool
+	mode         os.FileMode
+}
+
+func (s *stager) memberTarget(name, binaryPath, payloadDir string) (archiveMemberTarget, bool) {
+	if s.wantsMember(name) {
+		return archiveMemberTarget{destPath: binaryPath, binary: true}, true
+	}
+	file, ok := updatepayload.MatchArchiveFile(s.payload, name)
+	if !ok {
+		return archiveMemberTarget{}, false
+	}
+	destPath := filepath.Join(payloadDir, filepath.FromSlash(file.ArchivePath))
+	nativeRelative, err := filepath.Rel(payloadDir, destPath)
+	if err != nil || nativeRelative == ".." || strings.HasPrefix(nativeRelative, ".."+string(filepath.Separator)) {
+		return archiveMemberTarget{}, false
+	}
+	return archiveMemberTarget{
+		destPath: destPath, archivePath: file.ArchivePath, relativePath: file.InstallPath, mode: file.Mode,
+	}, true
+}
+
+func (s *stager) invalidPayloadMember(name string) bool {
+	return updatepayload.InvalidArchiveMember(s.payload, name)
+}
+
+type payloadBudget struct {
+	seen  map[string]struct{}
+	bytes int64
+}
+
+func newPayloadBudget() *payloadBudget {
+	return &payloadBudget{seen: make(map[string]struct{})}
+}
+
+func (b *payloadBudget) admit(target archiveMemberTarget, declared int64) error {
+	if target.binary {
+		return nil
+	}
+	if _, duplicate := b.seen[target.archivePath]; duplicate {
+		return fmt.Errorf("%w: duplicate payload member %q", ErrArchiveRejected, target.archivePath)
+	}
+	if declared > maxStagedPayloadBytes-b.bytes {
+		return fmt.Errorf("%w: payload files exceed the %d byte limit",
+			ErrArchiveRejected, maxStagedPayloadBytes)
+	}
+	return nil
+}
+
+func (b *payloadBudget) record(target archiveMemberTarget, payload stagedPayloadFile) error {
+	if target.binary {
+		return nil
+	}
+	b.seen[target.archivePath] = struct{}{}
+	b.bytes += payload.Size
+	if b.bytes > maxStagedPayloadBytes {
+		return fmt.Errorf("%w: payload files exceed the %d byte limit",
+			ErrArchiveRejected, maxStagedPayloadBytes)
+	}
+	return nil
+}
+
+func (b *payloadBudget) requireAll(files []updatepayload.File) error {
+	for _, file := range files {
+		if _, ok := b.seen[file.ArchivePath]; !ok {
+			return fmt.Errorf("%w: required payload member %q is missing", ErrArchiveRejected, file.ArchivePath)
+		}
+	}
+	return nil
+}
+
+func (s *stager) copyArchiveMember(
+	ctx context.Context,
+	src io.Reader,
+	target archiveMemberTarget,
+) (stagedPayloadFile, error) {
+	if !target.binary {
+		//nolint:gosec // target is derived from a validated configured payload root
+		if err := os.MkdirAll(filepath.Dir(target.destPath), stateDirPerm); err != nil {
+			return stagedPayloadFile{}, fmt.Errorf("creating staged payload directory: %w", err)
+		}
+	}
+	if err := copyStagedFile(ctx, src, target.destPath, s.maxFileBytes); err != nil {
+		return stagedPayloadFile{}, err
+	}
+	if target.binary {
+		return stagedPayloadFile{}, nil
+	}
+	mode := target.mode.Perm()
+	if err := s.chmod(target.destPath, mode); err != nil {
+		return stagedPayloadFile{}, fmt.Errorf(
+			"setting staged payload permissions for %q: %w", target.relativePath, err)
+	}
+	info, err := os.Stat(target.destPath)
+	if err != nil {
+		return stagedPayloadFile{}, fmt.Errorf("reading staged payload %q: %w", target.relativePath, err)
+	}
+	return stagedPayloadFile{
+		Path:         target.destPath,
+		RelativePath: target.relativePath,
+		Mode:         mode,
+		Size:         info.Size(),
+	}, nil
+}
+
+func (s *stager) extractFromTarGz(
+	ctx context.Context,
+	f *os.File,
+	binaryPath, payloadDir string,
+) ([]stagedPayloadFile, error) {
 	gz, err := gzip.NewReader(&ctxReader{ctx: ctx, source: f})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("reading the update archive was cancelled: %w", ctxErr)
+			return nil, fmt.Errorf("reading the update archive was cancelled: %w", ctxErr)
 		}
-		return fmt.Errorf("%w: reading the update archive: %w", ErrArchiveRejected, err)
+		return nil, fmt.Errorf("%w: reading the update archive: %w", ErrArchiveRejected, err)
 	}
 	defer closeQuietly(gz, "update archive decompressor")
 
-	// The member count bounds how many entries the walk visits; this bounds how
-	// much content getting to them can cost. A skipped member still has to be
-	// inflated in full, because gzip cannot seek past one, so without a ceiling
-	// here a bomb ahead of the binary would run unbounded.
 	inflated := &io.LimitedReader{R: gz, N: s.maxInflatedBytes + 1}
 	overBudget := func() bool { return inflated.N <= 0 }
-
 	tr := tar.NewReader(inflated)
-	found := false
+	foundBinary := false
+	budget := newPayloadBudget()
+	var payloads []stagedPayloadFile
 	members := 0
 	for {
 		header, nextErr := tr.Next()
@@ -184,101 +309,131 @@ func (s *stager) extractFromTarGz(ctx context.Context, f *os.File, destPath stri
 			break
 		}
 		if nextErr != nil {
-			// Caller intent first. ErrArchiveRejected is a permanent verdict on the
-			// release, so returning it for what was really a shutdown would condemn
-			// a build nothing had actually found fault with.
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return fmt.Errorf("reading the update archive was cancelled: %w", ctxErr)
+				return nil, fmt.Errorf("reading the update archive was cancelled: %w", ctxErr)
 			}
 			if overBudget() {
-				return fmt.Errorf("%w: more than %d bytes of content in it",
+				return nil, fmt.Errorf("%w: more than %d bytes of content in it",
 					ErrArchiveRejected, s.maxInflatedBytes)
 			}
-			return fmt.Errorf("%w: reading the update archive: %w", ErrArchiveRejected, nextErr)
+			return nil, fmt.Errorf("%w: reading the update archive: %w", ErrArchiveRejected, nextErr)
 		}
-
 		members++
 		if members > maxArchiveMembers {
-			return fmt.Errorf("%w: more than %d members", ErrArchiveRejected, maxArchiveMembers)
+			return nil, fmt.Errorf("%w: more than %d members", ErrArchiveRejected, maxArchiveMembers)
 		}
-
-		// Regular files only. A symlink, hardlink, device node, fifo or
-		// directory entry is skipped rather than reasoned about.
-		if header.Typeflag != tar.TypeReg || !s.wantsMember(header.Name) {
+		if header.Typeflag != tar.TypeReg {
 			continue
 		}
-		if found {
-			return fmt.Errorf("%w: more than one %s", ErrArchiveRejected, s.binaryName)
+		if s.invalidPayloadMember(header.Name) {
+			return nil, fmt.Errorf("%w: invalid payload member %q", ErrArchiveRejected, header.Name)
+		}
+		target, wanted := s.memberTarget(header.Name, binaryPath, payloadDir)
+		if !wanted {
+			continue
+		}
+		if target.binary && foundBinary {
+			return nil, fmt.Errorf("%w: more than one %s", ErrArchiveRejected, s.binaryName)
+		}
+		if err := budget.admit(target, header.Size); err != nil {
+			return nil, err
 		}
 		if header.Size > s.maxFileBytes {
-			return fmt.Errorf("%w: %s declares %d bytes, over the %d byte limit",
+			return nil, fmt.Errorf("%w: %s declares %d bytes, over the %d byte limit",
 				ErrArchiveRejected, header.Name, header.Size, s.maxFileBytes)
 		}
-		if copyErr := copyStagedFile(ctx, tr, destPath, s.maxFileBytes); copyErr != nil {
-			// copyStagedFile already reports a cancellation as one, so only the
-			// budget needs separating out here.
+		payload, copyErr := s.copyArchiveMember(ctx, tr, target)
+		if copyErr != nil {
 			if ctx.Err() == nil && overBudget() {
-				return fmt.Errorf("%w: more than %d bytes of content in it",
+				return nil, fmt.Errorf("%w: more than %d bytes of content in it",
 					ErrArchiveRejected, s.maxInflatedBytes)
 			}
-			return copyErr
+			return nil, copyErr
 		}
-		found = true
-	}
-
-	if !found {
-		return fmt.Errorf("%w: no %s in it", ErrArchiveRejected, s.binaryName)
-	}
-	return nil
-}
-
-func (s *stager) extractFromZip(ctx context.Context, f *os.File, size int64, destPath string) error {
-	// No total-content ceiling here, unlike the tar walk: a zip member that is
-	// not wanted is never opened, so nothing but the binary is ever inflated and
-	// maxFileBytes already bounds that.
-	r, err := zip.NewReader(f, size)
-	if err != nil {
-		return fmt.Errorf("%w: reading the update archive: %w", ErrArchiveRejected, err)
-	}
-
-	if len(r.File) > maxArchiveMembers {
-		return fmt.Errorf("%w: more than %d members", ErrArchiveRejected, maxArchiveMembers)
-	}
-
-	found := false
-	for _, member := range r.File {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("reading the update archive: %w", ctxErr)
-		}
-		// Regular files only, same as the tar walk: the mode bits are what
-		// carry a zip symlink, and a directory entry is not a file.
-		if !member.Mode().IsRegular() || !s.wantsMember(member.Name) {
+		if target.binary {
+			foundBinary = true
 			continue
 		}
-		if found {
-			return fmt.Errorf("%w: more than one %s", ErrArchiveRejected, s.binaryName)
+		if err := budget.record(target, payload); err != nil {
+			return nil, err
+		}
+		payloads = append(payloads, payload)
+	}
+	if !foundBinary {
+		return nil, fmt.Errorf("%w: no %s in it", ErrArchiveRejected, s.binaryName)
+	}
+	if err := budget.requireAll(s.payload); err != nil {
+		return nil, err
+	}
+	return payloads, nil
+}
+
+func (s *stager) extractFromZip(
+	ctx context.Context,
+	f *os.File,
+	size int64,
+	binaryPath, payloadDir string,
+) ([]stagedPayloadFile, error) {
+	r, err := zip.NewReader(f, size)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading the update archive: %w", ErrArchiveRejected, err)
+	}
+	if len(r.File) > maxArchiveMembers {
+		return nil, fmt.Errorf("%w: more than %d members", ErrArchiveRejected, maxArchiveMembers)
+	}
+
+	foundBinary := false
+	budget := newPayloadBudget()
+	var payloads []stagedPayloadFile
+	for _, member := range r.File {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("reading the update archive: %w", ctxErr)
+		}
+		if !member.Mode().IsRegular() {
+			continue
+		}
+		if s.invalidPayloadMember(member.Name) {
+			return nil, fmt.Errorf("%w: invalid payload member %q", ErrArchiveRejected, member.Name)
+		}
+		target, wanted := s.memberTarget(member.Name, binaryPath, payloadDir)
+		if !wanted {
+			continue
+		}
+		if target.binary && foundBinary {
+			return nil, fmt.Errorf("%w: more than one %s", ErrArchiveRejected, s.binaryName)
+		}
+		if err := budget.admit(target, member.FileInfo().Size()); err != nil {
+			return nil, err
 		}
 		if declared := member.FileInfo().Size(); declared > s.maxFileBytes {
-			return fmt.Errorf("%w: %s declares %d bytes, over the %d byte limit",
+			return nil, fmt.Errorf("%w: %s declares %d bytes, over the %d byte limit",
 				ErrArchiveRejected, member.Name, declared, s.maxFileBytes)
 		}
-
 		rc, openErr := member.Open()
 		if openErr != nil {
-			return fmt.Errorf("%w: reading %s: %w", ErrArchiveRejected, member.Name, openErr)
+			return nil, fmt.Errorf("%w: reading %s: %w", ErrArchiveRejected, member.Name, openErr)
 		}
-		copyErr := copyStagedFile(ctx, rc, destPath, s.maxFileBytes)
+		payload, copyErr := s.copyArchiveMember(ctx, rc, target)
 		closeQuietly(rc, "update archive member")
 		if copyErr != nil {
-			return copyErr
+			return nil, copyErr
 		}
-		found = true
+		if target.binary {
+			foundBinary = true
+			continue
+		}
+		if err := budget.record(target, payload); err != nil {
+			return nil, err
+		}
+		payloads = append(payloads, payload)
 	}
-
-	if !found {
-		return fmt.Errorf("%w: no %s in it", ErrArchiveRejected, s.binaryName)
+	if !foundBinary {
+		return nil, fmt.Errorf("%w: no %s in it", ErrArchiveRejected, s.binaryName)
 	}
-	return nil
+	if err := budget.requireAll(s.payload); err != nil {
+		return nil, err
+	}
+	return payloads, nil
 }
 
 // wantsMember reports whether a member is the binary being staged. It has to be

@@ -689,19 +689,6 @@ func startService(
 		},
 	)
 	idleSched.Schedule(
-		st.GetContext(), "updater-check",
-		5*time.Second, 300*time.Second,
-		func(ctx context.Context) {
-			updater.CheckAndNotify(
-				ctx, cfg,
-				updater.Options{PlatformID: pl.ID(), DataDir: helpers.DataDir(pl)},
-				st.Inbox(),
-				helpers.WaitForInternetContext, updater.Check,
-				pl.ManagedByPackageManager(),
-			)
-		},
-	)
-	idleSched.Schedule(
 		st.GetContext(), "history-retention-cleanup",
 		5*time.Second, 300*time.Second,
 		func(ctx context.Context) {
@@ -731,6 +718,7 @@ func startService(
 	startRemoteBackupScheduler(
 		st.GetContext(), cfg, pl, db, st, idleSched, backupPauser, playSyncRequests, backgroundWG,
 	)
+	startUpdaterScheduler(st.GetContext(), cfg, pl, db, st, idleSched, backgroundWG)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)

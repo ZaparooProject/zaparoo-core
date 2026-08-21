@@ -110,8 +110,10 @@ var markerMu syncutil.Mutex
 // came from. Payload extras are not installed yet; the field exists from the
 // first version of the marker so adding them later is not a schema change.
 type payloadBackup struct {
-	TargetPath string `json:"targetPath"`
-	BackupPath string `json:"backupPath"`
+	TargetPath      string `json:"targetPath"`
+	BackupPath      string `json:"backupPath,omitempty"`
+	CandidatePath   string `json:"candidatePath,omitempty"`
+	OriginalMissing bool   `json:"originalMissing,omitempty"`
 }
 
 // pendingMarker is the record an update leaves behind for the boot that follows
