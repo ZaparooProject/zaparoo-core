@@ -305,7 +305,7 @@ func insertCoin(
 ) (platforms.CmdResult, error) {
 	var amount int
 
-	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] != "" {
+	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "" {
 		amount = 1
 	} else {
 		var err error

@@ -350,6 +350,64 @@ func TestCmdCoinMultiplayerKeys(t *testing.T) {
 	}
 }
 
+func TestInsertCoinAmount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		wantError string
+		args      []string
+		wantKeys  []string
+	}{
+		{
+			name:     "omitted amount defaults to one",
+			wantKeys: []string{"5"},
+		},
+		{
+			name:     "empty amount defaults to one",
+			args:     []string{""},
+			wantKeys: []string{"5"},
+		},
+		{
+			name:     "supplied amount is honored",
+			args:     []string{"2"},
+			wantKeys: []string{"5", "5"},
+		},
+		{
+			name:      "invalid amount returns error",
+			args:      []string{"invalid"},
+			wantError: "invalid amount 'invalid'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			if len(tt.wantKeys) > 0 {
+				mockPlatform.On("KeyboardPress", "5").Return(nil).Times(len(tt.wantKeys))
+			}
+
+			env := platforms.CmdEnv{
+				Cmd: gozapscript.Command{
+					Name: gozapscript.ZapScriptCmdInputCoinP1,
+					Args: tt.args,
+				},
+			}
+
+			_, err := insertCoin(mockPlatform, env, "5")
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantKeys, mockPlatform.GetKeyboardPresses())
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestCmdKeyboard_CombosBlocksSingleChar(t *testing.T) {
 	t.Parallel()
 
