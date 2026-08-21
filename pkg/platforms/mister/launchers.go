@@ -2285,11 +2285,12 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 		// Other
 		{
-			ID:         systemdefs.SystemArcade,
-			SystemID:   systemdefs.SystemArcade,
-			Folders:    []string{"_Arcade"},
-			Extensions: []string{".mra", ".mgl"},
-			Launch:     launchArcade(pl, systemdefs.SystemArcade),
+			ID:                    systemdefs.SystemArcade,
+			SystemID:              systemdefs.SystemArcade,
+			Folders:               []string{"_Arcade"},
+			Extensions:            []string{".mra", ".mgl"},
+			ScanDirectoryExcludes: []string{"_Organized"},
+			Launch:                launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,

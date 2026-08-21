@@ -2146,6 +2146,87 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	assert.False(t, foundFiles["readme.txt"])
 }
 
+func TestShouldSkipExcludedSymlink_FsTimeout(t *testing.T) {
+	t.Parallel()
+
+	stat := func(context.Context, string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stale mount: %w", ErrFsTimeout)
+	}
+
+	shouldSkip, err := shouldSkipExcludedSymlink(context.Background(), "excluded-link", stat)
+	require.NoError(t, err)
+	assert.True(t, shouldSkip)
+}
+
+func TestShouldSkipExcludedSymlink_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stat := func(context.Context, string) (os.FileInfo, error) {
+		return nil, fmt.Errorf("stale mount: %w", ErrFsTimeout)
+	}
+
+	shouldSkip, err := shouldSkipExcludedSymlink(ctx, "excluded-link", stat)
+	assert.False(t, shouldSkip)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGetFiles_SkipsLauncherExcludedDirectory(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	arcadeDir := filepath.Join(rootDir, "_Arcade")
+	organizedTarget := filepath.Join(rootDir, "organized-target")
+	organizedTargetDir := filepath.Join(organizedTarget, "_1 A-E")
+	require.NoError(t, os.MkdirAll(arcadeDir, 0o750))
+	require.NoError(t, os.MkdirAll(organizedTargetDir, 0o750))
+	organizedLink := filepath.Join(arcadeDir, "_Organized")
+	require.NoError(t, os.Symlink(organizedTarget, organizedLink))
+
+	canonicalPath := filepath.Join(arcadeDir, "Pooyan.mra")
+	require.NoError(t, os.WriteFile(canonicalPath, []byte("<misterromdescription/>"), 0o600))
+	aliasPath := filepath.Join(organizedLink, "_1 A-E", "Pooyan.mra")
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(organizedTargetDir, "Pooyan.mra")))
+	fileAliasPath := filepath.Join(arcadeDir, "ExcludedFile.mra")
+	require.NoError(t, os.Symlink(canonicalPath, fileAliasPath))
+
+	launcher := platforms.Launcher{
+		ID:                    "arcade-launcher",
+		SystemID:              systemdefs.SystemArcade,
+		Folders:               []string{"_Arcade"},
+		Extensions:            []string{".mra"},
+		ScanDirectoryExcludes: []string{"_Organized", "ExcludedFile.mra"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemArcade, arcadeDir, nil)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{canonicalPath, fileAliasPath}, files)
+
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+	assert.True(t, matcher.MatchSystemFile(systemdefs.SystemArcade, aliasPath),
+		"excluded directory media must remain directly launchable")
+}
+
 func TestGetFiles_RespectsLauncherScanExcludes(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	rootDir := t.TempDir()

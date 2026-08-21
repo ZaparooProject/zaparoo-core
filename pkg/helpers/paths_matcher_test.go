@@ -290,6 +290,73 @@ func TestLauncherMatcher_MatchSystemFileForScanExcludes(t *testing.T) {
 	assert.True(t, matcher.MatchSystemFileForScan("NES", nonMatchingWildcardPath))
 }
 
+func TestLauncherMatcher_ShouldSkipScanDirectory(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:                    "Arcade",
+			SystemID:              "Arcade",
+			Folders:               []string{"_Arcade"},
+			Extensions:            []string{".mra"},
+			ScanDirectoryExcludes: []string{"_Organized"},
+		},
+		{
+			ID:                    "SharedFiltered",
+			SystemID:              "Shared",
+			Folders:               []string{"shared"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:       "SharedUnfiltered",
+			SystemID: "Shared",
+			Folders:  []string{filepath.Join("shared", "generated")},
+		},
+		{
+			ID:                    "SharedSkippedFiltered",
+			SystemID:              "SharedSkipped",
+			Folders:               []string{"shared-skipped"},
+			ScanDirectoryExcludes: []string{"generated"},
+		},
+		{
+			ID:                 "SharedSkippedNonFilesystem",
+			SystemID:           "SharedSkipped",
+			Folders:            []string{"shared-skipped"},
+			SkipFilesystemScan: true,
+		},
+	})
+
+	cfg := &config.Instance{}
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	organized := filepath.Join(rootDir, "_Arcade", "_oRgAnIzEd")
+	assert.True(t, matcher.ShouldSkipScanDirectory("Arcade", organized))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "_Arcade")))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "_Arcade", "alternatives")))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Arcade", filepath.Join(rootDir, "other", "_Organized")))
+	assert.False(t, matcher.ShouldSkipScanDirectory("Shared", filepath.Join(rootDir, "shared", "generated")),
+		"one launcher must not hide a directory needed by another launcher")
+	sharedSkipped := filepath.Join(rootDir, "shared-skipped", "generated")
+	assert.True(t, matcher.ShouldSkipScanDirectory("SharedSkipped", sharedSkipped),
+		"a non-filesystem launcher must not prevent a filesystem launcher from excluding a directory")
+
+	aliasPath := filepath.Join(organized, "Pooyan.mra")
+	assert.True(t, matcher.MatchSystemFile("Arcade", aliasPath),
+		"scan directory exclusions must not affect direct launches")
+}
+
 func TestLauncherMatcher_RootSlashAndDotFolder(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
