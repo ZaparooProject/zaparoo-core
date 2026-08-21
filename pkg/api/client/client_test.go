@@ -20,6 +20,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,7 +36,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/gorilla/websocket"
+	"github.com/jonboulle/clockwork"
 	"github.com/olahol/melody"
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,6 +79,32 @@ func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.D
 		time.Sleep(time.Millisecond)
 	}
 	return false
+}
+
+type recordingTimer struct {
+	clockwork.Timer
+	stopped bool
+}
+
+func (t *recordingTimer) Stop() bool {
+	t.stopped = true
+	return t.Timer.Stop()
+}
+
+type recordingClock struct {
+	clockwork.Clock
+	timer *recordingTimer
+}
+
+func (c *recordingClock) NewTimer(d time.Duration) clockwork.Timer {
+	c.timer = &recordingTimer{Timer: c.Clock.NewTimer(d)}
+	return c.timer
+}
+
+type waitNotificationsResult struct {
+	err    error
+	method string
+	params string
 }
 
 func TestLocalClient_ValidRequest(t *testing.T) {
@@ -649,6 +679,189 @@ func TestWaitNotifications_Timeout(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRequestTimeout)
 }
 
+func TestWaitNotifications_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	server := helpers.NewWebSocketTestServer(t, nil)
+	defer server.Close()
+
+	port := parseServerPort(t, server.Server)
+	cfg := testConfigWithPort(t, port)
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan waitNotificationsResult, 1)
+
+	go func() {
+		method, params, err := WaitNotifications(ctx, -1, cfg, "tokens.added")
+		resultCh <- waitNotificationsResult{method: method, params: params, err: err}
+	}()
+
+	require.True(t, waitForWebSocketSession(server, time.Second))
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		require.ErrorIs(t, result.err, ErrRequestCancelled)
+		assert.Empty(t, result.method)
+		assert.Empty(t, result.params)
+	case <-time.After(time.Second):
+		t.Fatal("WaitNotifications did not complete after cancellation")
+	}
+}
+
+func TestWaitNotifications_IntentionalCloseIsJoinedAndTraceLogged(t *testing.T) {
+	server := helpers.NewWebSocketTestServer(t, nil)
+	defer server.Close()
+
+	port := parseServerPort(t, server.Server)
+	cfg := testConfigWithPort(t, port)
+	var logs bytes.Buffer
+	originalLogger := zlog.Logger
+	zlog.Logger = zerolog.New(&logs).Level(zerolog.TraceLevel)
+	t.Cleanup(func() { zlog.Logger = originalLogger })
+
+	_, _, err := WaitNotifications(context.Background(), 20*time.Millisecond, cfg, "tokens.added")
+	require.ErrorIs(t, err, ErrRequestTimeout)
+
+	lines := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))
+	require.Len(t, lines, 1, "reader must finish logging before WaitNotifications returns")
+	var event map[string]any
+	require.NoError(t, json.Unmarshal(lines[0], &event))
+	assert.Equal(t, "trace", event[zerolog.LevelFieldName])
+	assert.Equal(t, "websocket closed", event[zerolog.MessageFieldName])
+}
+
+func TestWaitNotifications_StopsTimer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		expectedErr error
+		trigger     func(
+			t *testing.T,
+			fakeClock *clockwork.FakeClock,
+			server *helpers.WebSocketTestServer,
+			cancel context.CancelFunc,
+		)
+		name string
+	}{
+		{
+			name: "timeout",
+			trigger: func(
+				_ *testing.T,
+				fakeClock *clockwork.FakeClock,
+				_ *helpers.WebSocketTestServer,
+				_ context.CancelFunc,
+			) {
+				fakeClock.Advance(time.Second)
+			},
+			expectedErr: ErrRequestTimeout,
+		},
+		{
+			name: "cancellation",
+			trigger: func(
+				_ *testing.T,
+				_ *clockwork.FakeClock,
+				_ *helpers.WebSocketTestServer,
+				cancel context.CancelFunc,
+			) {
+				cancel()
+			},
+			expectedErr: ErrRequestCancelled,
+		},
+		{
+			name: "notification success",
+			trigger: func(
+				t *testing.T,
+				_ *clockwork.FakeClock,
+				server *helpers.WebSocketTestServer,
+				_ context.CancelFunc,
+			) {
+				notification := []byte(`{"jsonrpc":"2.0","method":"tokens.added","params":{"token":"123"}}`)
+				require.NoError(t, server.Melody.Broadcast(notification))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := helpers.NewWebSocketTestServer(t, nil)
+			defer server.Close()
+			port := parseServerPort(t, server.Server)
+			cfg := testConfigWithPort(t, port)
+			fakeClock := clockwork.NewFakeClock()
+			clock := &recordingClock{Clock: fakeClock}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			resultCh := make(chan waitNotificationsResult, 1)
+
+			go func() {
+				method, params, err := waitNotificationsWithClock(ctx, time.Second, cfg, clock, "tokens.added")
+				resultCh <- waitNotificationsResult{method: method, params: params, err: err}
+			}()
+
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+			defer waitCancel()
+			require.NoError(t, fakeClock.BlockUntilContext(waitCtx, 1))
+			require.True(t, waitForWebSocketSession(server, time.Second))
+			tt.trigger(t, fakeClock, server, cancel)
+
+			select {
+			case result := <-resultCh:
+				if tt.expectedErr != nil {
+					require.ErrorIs(t, result.err, tt.expectedErr)
+				} else {
+					require.NoError(t, result.err)
+					assert.Equal(t, "tokens.added", result.method)
+					assert.JSONEq(t, `{"token":"123"}`, result.params)
+				}
+				require.NotNil(t, clock.timer)
+				assert.True(t, clock.timer.stopped)
+			case <-time.After(time.Second):
+				t.Fatal("WaitNotifications did not complete")
+			}
+		})
+	}
+}
+
+func TestWaitNotifications_ConcurrentCallerAndPeerClose(t *testing.T) {
+	t.Parallel()
+
+	server := helpers.NewWebSocketTestServer(t, nil)
+	defer server.Close()
+	port := parseServerPort(t, server.Server)
+	cfg := testConfigWithPort(t, port)
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan error, 1)
+
+	go func() {
+		_, _, err := WaitNotifications(ctx, -1, cfg, "tokens.added")
+		resultCh <- err
+	}()
+
+	require.True(t, waitForWebSocketSession(server, time.Second))
+	start := make(chan struct{})
+	peerClosed := make(chan struct{})
+	go func() {
+		<-start
+		_ = server.Melody.CloseWithMsg(melody.FormatCloseMessage(websocket.CloseAbnormalClosure, "peer closed"))
+		close(peerClosed)
+	}()
+	close(start)
+	cancel()
+
+	select {
+	case err := <-resultCh:
+		assert.True(t,
+			errors.Is(err, ErrRequestCancelled) || errors.Is(err, ErrRequestTimeout),
+			"unexpected concurrent-close result: %v", err,
+		)
+	case <-time.After(time.Second):
+		t.Fatal("concurrent close deadlocked WaitNotifications")
+	}
+	<-peerClosed
+}
+
 func TestLocalAPIClient_Call(t *testing.T) {
 	t.Parallel()
 
@@ -895,6 +1108,83 @@ func TestWaitForAPI_Timeout(t *testing.T) {
 
 	assert.False(t, result)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+}
+
+func TestWaitNotificationsReadLogLevel(t *testing.T) {
+	t.Parallel()
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		err           error
+		ctx           context.Context
+		name          string
+		expected      zerolog.Level
+		callerClosing bool
+	}{
+		{
+			name:          "intentional local close",
+			ctx:           context.Background(),
+			callerClosing: true,
+			err:           net.ErrClosed,
+			expected:      zerolog.TraceLevel,
+		},
+		{
+			name:     "ended request context",
+			ctx:      cancelledCtx,
+			err:      &websocket.CloseError{Code: websocket.CloseAbnormalClosure},
+			expected: zerolog.TraceLevel,
+		},
+		{
+			name:     "normal peer close",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseNormalClosure},
+			expected: zerolog.DebugLevel,
+		},
+		{
+			name:     "peer going away",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseGoingAway},
+			expected: zerolog.DebugLevel,
+		},
+		{
+			name:     "abnormal peer close",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseAbnormalClosure},
+			expected: zerolog.WarnLevel,
+		},
+		{
+			name:     "peer close without status",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseNoStatusReceived},
+			expected: zerolog.WarnLevel,
+		},
+		{
+			name:     "unmarked network close",
+			ctx:      context.Background(),
+			err:      net.ErrClosed,
+			expected: zerolog.WarnLevel,
+		},
+		{
+			name:     "protocol failure",
+			ctx:      context.Background(),
+			err:      &websocket.CloseError{Code: websocket.CloseProtocolError},
+			expected: zerolog.ErrorLevel,
+		},
+		{
+			name:     "unexpected read failure",
+			ctx:      context.Background(),
+			err:      errors.New("read failed"),
+			expected: zerolog.ErrorLevel,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, waitNotificationsReadLogLevel(tt.ctx, tt.callerClosing, tt.err))
+		})
+	}
 }
 
 // TestIsExpectedWebsocketClose verifies that expected disconnects (including the
