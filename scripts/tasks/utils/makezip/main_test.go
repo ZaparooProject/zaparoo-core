@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
+	"github.com/spf13/afero"
 )
 
 func TestStripFrontmatter(t *testing.T) {
@@ -380,7 +381,7 @@ func TestCreateZipFile(t *testing.T) {
 			t.Fatalf("failed to write readme file: %v", err)
 		}
 
-		err := createZipFile(zipPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
+		err := createZipFile(afero.NewOsFs(), zipPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
 		if err != nil {
 			t.Fatalf("createZipFile failed: %v", err)
 		}
@@ -420,7 +421,9 @@ func TestCreateTarGzFile(t *testing.T) {
 			t.Fatalf("failed to write readme file: %v", err)
 		}
 
-		err := createTarGzFile(tarGzPath, appPath, licensePath, readmePath, "testplatform", tmpDir)
+		err := createTarGzFile(
+			afero.NewOsFs(), tarGzPath, appPath, licensePath, readmePath, "testplatform", tmpDir,
+		)
 		if err != nil {
 			t.Fatalf("createTarGzFile failed: %v", err)
 		}
@@ -435,13 +438,14 @@ func TestCreateTarGzFile(t *testing.T) {
 func TestAddPayloadToArchives(t *testing.T) {
 	t.Parallel()
 
-	source := t.TempDir()
-	payloadPath := filepath.Join(source, "zaparoo_service")
-	payloadContent := []byte("service")
-	if err := os.WriteFile(payloadPath, payloadContent, 0o600); err != nil {
+	fs := afero.NewMemMapFs()
+	source := "payload"
+	if err := fs.MkdirAll(source, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, ".DS_Store"), []byte("metadata"), 0o600); err != nil {
+	payloadPath := filepath.Join(source, "zaparoo_service")
+	payloadContent := []byte("service")
+	if err := afero.WriteFile(fs, payloadPath, payloadContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	files := []updatepayload.File{{
@@ -451,7 +455,7 @@ func TestAddPayloadToArchives(t *testing.T) {
 
 	var zipBuf bytes.Buffer
 	zipWriter := zip.NewWriter(&zipBuf)
-	if err := addPayloadToZip(zipWriter, files); err != nil {
+	if err := addPayloadToZip(fs, zipWriter, files); err != nil {
 		t.Fatalf("addPayloadToZip failed: %v", err)
 	}
 	if err := zipWriter.Close(); err != nil {
@@ -486,7 +490,7 @@ func TestAddPayloadToArchives(t *testing.T) {
 
 	var tarBuf bytes.Buffer
 	tarWriter := tar.NewWriter(&tarBuf)
-	if err := addPayloadToTar(tarWriter, files); err != nil {
+	if err := addPayloadToTar(fs, tarWriter, files); err != nil {
 		t.Fatalf("addPayloadToTar failed: %v", err)
 	}
 	if err := tarWriter.Close(); err != nil {
@@ -530,19 +534,20 @@ func TestAddPayloadToArchives(t *testing.T) {
 func TestAddPayloadToArchives_MissingSourceFails(t *testing.T) {
 	t.Parallel()
 
+	fs := afero.NewMemMapFs()
 	files := []updatepayload.File{{
-		SourcePath:  filepath.Join(t.TempDir(), "missing"),
+		SourcePath:  "missing",
 		ArchivePath: "scripts/missing",
 		InstallPath: "missing",
 		Mode:        0o644,
 	}}
 	var zipBuf bytes.Buffer
 	zipWriter := zip.NewWriter(&zipBuf)
-	if err := addPayloadToZip(zipWriter, files); err == nil {
+	if err := addPayloadToZip(fs, zipWriter, files); err == nil {
 		t.Fatal("addPayloadToZip unexpectedly accepted a missing source")
 	}
 	var tarBuf bytes.Buffer
-	if err := addPayloadToTar(tar.NewWriter(&tarBuf), files); err == nil {
+	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil {
 		t.Fatal("addPayloadToTar unexpectedly accepted a missing source")
 	}
 }
@@ -550,17 +555,18 @@ func TestAddPayloadToArchives_MissingSourceFails(t *testing.T) {
 func TestAddPayloadToArchives_DuplicateArchivePathFails(t *testing.T) {
 	t.Parallel()
 
+	fs := afero.NewMemMapFs()
 	files := []updatepayload.File{
 		{ArchivePath: "scripts/helper.sh", InstallPath: "helper.sh", Mode: 0o755},
 		{ArchivePath: "scripts/helper.sh", InstallPath: "other-helper.sh", Mode: 0o755},
 	}
 	var zipBuf bytes.Buffer
 	zipWriter := zip.NewWriter(&zipBuf)
-	if err := addPayloadToZip(zipWriter, files); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if err := addPayloadToZip(fs, zipWriter, files); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("addPayloadToZip duplicate error = %v", err)
 	}
 	var tarBuf bytes.Buffer
-	if err := addPayloadToTar(tar.NewWriter(&tarBuf), files); err == nil ||
+	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil ||
 		!strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("addPayloadToTar duplicate error = %v", err)
 	}
@@ -569,16 +575,17 @@ func TestAddPayloadToArchives_DuplicateArchivePathFails(t *testing.T) {
 func TestAddPayloadToArchives_InvalidDefinitionFails(t *testing.T) {
 	t.Parallel()
 
+	fs := afero.NewMemMapFs()
 	files := []updatepayload.File{{
 		ArchivePath: "scripts/helper.sh", InstallPath: "/outside/helper.sh", Mode: 0o755,
 	}}
 	var zipBuf bytes.Buffer
-	if err := addPayloadToZip(zip.NewWriter(&zipBuf), files); err == nil ||
+	if err := addPayloadToZip(fs, zip.NewWriter(&zipBuf), files); err == nil ||
 		!strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("addPayloadToZip invalid definition error = %v", err)
 	}
 	var tarBuf bytes.Buffer
-	if err := addPayloadToTar(tar.NewWriter(&tarBuf), files); err == nil ||
+	if err := addPayloadToTar(fs, tar.NewWriter(&tarBuf), files); err == nil ||
 		!strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("addPayloadToTar invalid definition error = %v", err)
 	}

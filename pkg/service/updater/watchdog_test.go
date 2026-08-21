@@ -338,25 +338,78 @@ func TestRunStartupWatchdog_ResumesInterruptedRollback(t *testing.T) {
 func TestRunStartupWatchdog_ResumesInterruptedPayloadRestore(t *testing.T) {
 	t.Parallel()
 
-	f := newInstallFixture(t)
-	dir := stateDirFor(f.dataDir)
-	assetDir := t.TempDir()
+	fs := afero.NewMemMapFs()
+	dataDir := filepath.Join("data", "zaparoo")
+	binDir := filepath.Join("system", "bin")
+	assetDir := filepath.Join("system", "assets")
+	targetPath := filepath.Join(binDir, "zaparoo")
+	backupPath := filepath.Join(binDir, ".zaparoo.zap-old")
 	assetPath := filepath.Join(assetDir, "menu.png")
 	assetBackup := filepath.Join(assetDir, ".menu.png.zap-old")
-	require.NoError(t, os.WriteFile(assetPath, []byte("new asset"), 0o600))
-	require.NoError(t, os.WriteFile(assetBackup, []byte("old asset"), 0o600))
+	stagingDir := filepath.Join(dataDir, "updater", "staging", testTargetVersion)
+	for _, dir := range []string{binDir, assetDir, stagingDir} {
+		require.NoError(t, fs.MkdirAll(dir, 0o750))
+	}
+	for path, content := range map[string]string{
+		targetPath: "new binary", backupPath: "old binary",
+		assetPath: "new asset", assetBackup: "old asset",
+	} {
+		require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o600))
+	}
 
-	m := f.marker(markerRollingBack)
-	m.RestoringPath = assetPath
-	m.PayloadBackups = []payloadBackup{{TargetPath: assetPath, BackupPath: assetBackup}}
-	require.NoError(t, saveMarker(dir, m))
-	require.NoError(t, replaceFile(assetBackup, assetPath))
+	marker := &pendingMarker{
+		State: markerRollingBack, TargetPath: targetPath, BackupPath: backupPath,
+		StagingDir: stagingDir, PreviousVersion: testPrevVersion, TargetVersion: testTargetVersion,
+		BinaryReplaced: true, UserDBRestored: true, RestoringPath: assetPath,
+		PayloadBackups: []payloadBackup{{TargetPath: assetPath, BackupPath: assetBackup}},
+	}
+	require.NoError(t, fs.Rename(assetBackup, assetPath))
+	recorded := false
+	fileOps := watchdogFileOps{
+		fs: fs,
+		marker: &watchdogMarkerOps{
+			load: func(string) (*pendingMarker, error) {
+				return marker, nil
+			},
+			save: func(_ string, saved *pendingMarker) error {
+				marker = saved
+				return nil
+			},
+			clear: func(string) error {
+				marker = nil
+				return nil
+			},
+			record: func(_ string, saved *pendingMarker) error {
+				recorded = true
+				assert.Equal(t, outcomeRolledBack, saved.Outcome)
+				return nil
+			},
+		},
+		replace: fs.Rename,
+		binary: installBinaryOps{
+			replaceRunning:  fs.Rename,
+			sweepSuperseded: func(string) {},
+		},
+		syncDirectory: func(string) error { return nil },
+		removeStaging: func(_ context.Context, path string) error {
+			return fs.RemoveAll(path)
+		},
+		restoreDatabase: func(context.Context, afero.Fs, string, string) error {
+			t.Fatal("database was restored twice")
+			return nil
+		},
+	}
 
-	err := RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion)
+	err := runStartupWatchdogWithOps(t.Context(), dataDir, testTargetVersion, fileOps)
 	require.ErrorIs(t, err, ErrRolledBack)
-	assert.Equal(t, "old asset", readFileString(t, assetPath))
-	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
-	assert.NoFileExists(t, markerPath(dir))
+	asset, readErr := afero.ReadFile(fs, assetPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "old asset", string(asset))
+	binary, readErr := afero.ReadFile(fs, targetPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "old binary", string(binary))
+	assert.True(t, recorded)
+	assert.Nil(t, marker)
 }
 
 // The same missing backup on a rollback that has not started yet is a real
@@ -1143,9 +1196,9 @@ func TestRunStartupWatchdog_StopsStartupWhenRestoredDatabaseCannotBeRecorded(t *
 
 	saveErr := errors.New("marker storage unavailable")
 	ops := defaultWatchdogFileOps()
-	realSaveMarker := ops.saveMarker
+	realSaveMarker := ops.marker.save
 	saveCalls := 0
-	ops.saveMarker = func(gotDir string, m *pendingMarker) error {
+	ops.marker.save = func(gotDir string, m *pendingMarker) error {
 		saveCalls++
 		if saveCalls == 2 {
 			return saveErr

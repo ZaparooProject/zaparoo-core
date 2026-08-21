@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
+	"github.com/spf13/afero"
 )
 
 const baseURL = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
@@ -299,11 +300,12 @@ func main() {
 	}
 
 	// Determine format based on file extension
+	fs := afero.NewOsFs()
 	var err error
 	if strings.HasSuffix(archiveName, ".tar.gz") {
-		err = createTarGzFile(archivePath, appPath, licensePath, readmePath, platform, buildDir)
+		err = createTarGzFile(fs, archivePath, appPath, licensePath, readmePath, platform, buildDir)
 	} else {
-		err = createZipFile(archivePath, appPath, licensePath, readmePath, platform, buildDir)
+		err = createZipFile(fs, archivePath, appPath, licensePath, readmePath, platform, buildDir)
 	}
 
 	if err != nil {
@@ -312,7 +314,7 @@ func main() {
 	}
 }
 
-func createZipFile(zipPath, appPath, licensePath, readmePath, platform, _ string) error {
+func createZipFile(fs afero.Fs, zipPath, appPath, licensePath, readmePath, platform, _ string) error {
 	//nolint:gosec // Safe: creates zip files in build script with controlled paths
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -339,13 +341,13 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, _ string
 	}
 
 	for _, file := range filesToAdd {
-		err := addFileToZip(zipWriter, file.path, file.arcname)
+		err := addFileToZip(fs, zipWriter, file.path, file.arcname)
 		if err != nil {
 			return fmt.Errorf("error adding file to zip: %w", err)
 		}
 	}
 
-	return addPayloadToZip(zipWriter, payloadFiles(platform))
+	return addPayloadToZip(fs, zipWriter, payloadFiles(platform))
 }
 
 func validatePayloadFiles(files []updatepayload.File) error {
@@ -362,36 +364,50 @@ func validatePayloadFiles(files []updatepayload.File) error {
 	return nil
 }
 
-func addPayloadToZip(zipWriter *zip.Writer, files []updatepayload.File) error {
+func payloadSourceInfo(fs afero.Fs, path string) (os.FileInfo, error) {
+	if lstater, ok := fs.(afero.Lstater); ok {
+		info, _, err := lstater.LstatIfPossible(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading payload source info: %w", err)
+		}
+		return info, nil
+	}
+	info, err := fs.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading payload source info: %w", err)
+	}
+	return info, nil
+}
+
+func addPayloadToZip(fs afero.Fs, zipWriter *zip.Writer, files []updatepayload.File) error {
 	if err := validatePayloadFiles(files); err != nil {
 		return err
 	}
 	for _, file := range files {
-		info, err := os.Lstat(file.SourcePath)
+		info, err := payloadSourceInfo(fs, file.SourcePath)
 		if err != nil {
 			return fmt.Errorf("reading payload source %q: %w", file.SourcePath, err)
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("payload source %q is not a regular file", file.SourcePath)
 		}
-		if err := addFileToZipMode(zipWriter, file.SourcePath, file.ArchivePath, file.Mode); err != nil {
+		if err := addFileToZipMode(fs, zipWriter, file.SourcePath, file.ArchivePath, file.Mode); err != nil {
 			return fmt.Errorf("adding payload source %q to zip: %w", file.SourcePath, err)
 		}
 	}
 	return nil
 }
 
-func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
-	return addFileToZipMode(zipWriter, filePath, arcname, 0)
+func addFileToZip(fs afero.Fs, zipWriter *zip.Writer, filePath, arcname string) error {
+	return addFileToZipMode(fs, zipWriter, filePath, arcname, 0)
 }
 
-func addFileToZipMode(zipWriter *zip.Writer, filePath, arcname string, mode os.FileMode) error {
-	//nolint:gosec // Safe: opens files in build script with controlled paths
-	file, err := os.Open(filePath)
+func addFileToZipMode(fs afero.Fs, zipWriter *zip.Writer, filePath, arcname string, mode os.FileMode) error {
+	file, err := fs.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %w", filePath, err)
 	}
-	defer func(file *os.File) {
+	defer func(file afero.File) {
 		_ = file.Close()
 	}(file)
 
@@ -434,7 +450,7 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, _ string) error {
+func createTarGzFile(fs afero.Fs, tarGzPath, appPath, licensePath, readmePath, platform, _ string) error {
 	//nolint:gosec // Safe: creates tar.gz files in build script with controlled paths
 	tarGzFile, err := os.Create(tarGzPath)
 	if err != nil {
@@ -468,45 +484,44 @@ func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, _ st
 	}
 
 	for _, file := range filesToAdd {
-		err := addFileToTar(tarWriter, file.path, file.arcname)
+		err := addFileToTar(fs, tarWriter, file.path, file.arcname)
 		if err != nil {
 			return fmt.Errorf("error adding file to tar: %w", err)
 		}
 	}
 
-	return addPayloadToTar(tarWriter, payloadFiles(platform))
+	return addPayloadToTar(fs, tarWriter, payloadFiles(platform))
 }
 
-func addPayloadToTar(tarWriter *tar.Writer, files []updatepayload.File) error {
+func addPayloadToTar(fs afero.Fs, tarWriter *tar.Writer, files []updatepayload.File) error {
 	if err := validatePayloadFiles(files); err != nil {
 		return err
 	}
 	for _, file := range files {
-		info, err := os.Lstat(file.SourcePath)
+		info, err := payloadSourceInfo(fs, file.SourcePath)
 		if err != nil {
 			return fmt.Errorf("reading payload source %q: %w", file.SourcePath, err)
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("payload source %q is not a regular file", file.SourcePath)
 		}
-		if err := addFileToTarMode(tarWriter, file.SourcePath, file.ArchivePath, file.Mode); err != nil {
+		if err := addFileToTarMode(fs, tarWriter, file.SourcePath, file.ArchivePath, file.Mode); err != nil {
 			return fmt.Errorf("adding payload source %q to tar: %w", file.SourcePath, err)
 		}
 	}
 	return nil
 }
 
-func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
-	return addFileToTarMode(tarWriter, filePath, arcname, 0)
+func addFileToTar(fs afero.Fs, tarWriter *tar.Writer, filePath, arcname string) error {
+	return addFileToTarMode(fs, tarWriter, filePath, arcname, 0)
 }
 
-func addFileToTarMode(tarWriter *tar.Writer, filePath, arcname string, mode os.FileMode) error {
-	//nolint:gosec // Safe: opens files in build script with controlled paths
-	file, err := os.Open(filePath)
+func addFileToTarMode(fs afero.Fs, tarWriter *tar.Writer, filePath, arcname string, mode os.FileMode) error {
+	file, err := fs.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %w", filePath, err)
 	}
-	defer func(file *os.File) {
+	defer func(file afero.File) {
 		_ = file.Close()
 	}(file)
 

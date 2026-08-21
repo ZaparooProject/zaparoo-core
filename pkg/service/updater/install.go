@@ -572,7 +572,7 @@ func abortInstallWithOps(
 	fileOps.binary = binary
 	fileOps.replace = payloadOps.replace
 	fileOps.syncDirectory = payloadOps.syncDirectory
-	fileOps.saveMarker = payloadOps.saveMarker
+	fileOps.marker.save = payloadOps.saveMarker
 	if err := restorePayloadFiles(stateDirFor(dataDir), m, fileOps); err != nil {
 		return err
 	}

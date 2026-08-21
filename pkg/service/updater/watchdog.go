@@ -68,10 +68,17 @@ const (
 	actionRollBack
 )
 
+type watchdogMarkerOps struct {
+	load   func(string) (*pendingMarker, error)
+	save   func(string, *pendingMarker) error
+	clear  func(string) error
+	record func(string, *pendingMarker) error
+}
+
 type watchdogFileOps struct {
-	fs         afero.Fs
-	replace    func(string, string) error
-	saveMarker func(string, *pendingMarker) error
+	fs      afero.Fs
+	replace func(string, string) error
+	marker  *watchdogMarkerOps
 	// binary puts back a file that may be the image this process is running
 	// from, which not every platform will let a plain replacement touch, and
 	// clears whatever an earlier swap had to leave behind to do it.
@@ -114,18 +121,44 @@ func (e *rolledBackError) Unwrap() []error {
 	return []error{ErrRolledBack, e.cause}
 }
 
+func (o watchdogFileOps) load(dir string) (*pendingMarker, error) {
+	if o.marker == nil || o.marker.load == nil {
+		return loadMarker(dir)
+	}
+	return o.marker.load(dir)
+}
+
 func (o watchdogFileOps) save(dir string, marker *pendingMarker) error {
-	if o.saveMarker == nil {
+	if o.marker == nil || o.marker.save == nil {
 		return saveMarker(dir, marker)
 	}
-	return o.saveMarker(dir, marker)
+	return o.marker.save(dir, marker)
+}
+
+func (o watchdogFileOps) clear(dir string) error {
+	if o.marker == nil || o.marker.clear == nil {
+		return clearMarker(dir)
+	}
+	return o.marker.clear(dir)
+}
+
+func (o watchdogFileOps) record(dir string, marker *pendingMarker) error {
+	if o.marker == nil || o.marker.record == nil {
+		return recordMarkerResult(dir, marker)
+	}
+	return o.marker.record(dir, marker)
 }
 
 func defaultWatchdogFileOps() watchdogFileOps {
 	return watchdogFileOps{
-		fs:              afero.NewOsFs(),
-		replace:         replaceFile,
-		saveMarker:      saveMarker,
+		fs:      afero.NewOsFs(),
+		replace: replaceFile,
+		marker: &watchdogMarkerOps{
+			load:   loadMarker,
+			save:   saveMarker,
+			clear:  clearMarker,
+			record: recordMarkerResult,
+		},
 		binary:          defaultInstallBinaryOps(),
 		syncDirectory:   syncDir,
 		removeStaging:   removeStagingDir,
@@ -231,7 +264,7 @@ func runStartupWatchdogWithOps(
 	defer markerMu.Unlock()
 
 	dir := stateDirFor(dataDir)
-	m, err := loadMarker(dir)
+	m, err := fileOps.load(dir)
 	if err != nil {
 		// A newer or unusable marker cannot safely direct this build. Leave it and
 		// every update snapshot alone so a compatible build or operator still has
@@ -248,7 +281,7 @@ func runStartupWatchdogWithOps(
 	switch decideWatchdogAction(m, currentVersion) {
 	case actionNone:
 		if m != nil && m.Outcome == outcomeRollbackBlocked {
-			if err := recordMarkerResult(dir, m); err != nil {
+			if err := fileOps.record(dir, m); err != nil {
 				log.Warn().Err(err).Msg("could not retain the blocked rollback result")
 			}
 		}
@@ -260,7 +293,7 @@ func runStartupWatchdogWithOps(
 			Str("markerVersion", m.TargetVersion).
 			Str("running", currentVersion).
 			Msg("discarding an update marker that does not describe this version")
-		if err := clearMarker(dir); err != nil {
+		if err := fileOps.clear(dir); err != nil {
 			return err
 		}
 		sweepUpdateSnapshotsFS(fileOps.fs, dataDir, "")
@@ -269,7 +302,7 @@ func runStartupWatchdogWithOps(
 	case actionConfirm:
 		m.State = markerConfirming
 		m.Attempts++
-		if err := saveMarker(dir, m); err != nil {
+		if err := fileOps.save(dir, m); err != nil {
 			// Without confirming on disk a failed startup looks like a first
 			// boot to the next one, so it would try to confirm again instead of
 			// rolling back. Report it; the next boot re-runs this same step.
@@ -566,7 +599,7 @@ func blockRollback(dir string, m *pendingMarker, fileOps watchdogFileOps, cause 
 	if err := fileOps.save(dir, m); err != nil {
 		return fmt.Errorf("recording that rollback was abandoned: %w", err)
 	}
-	if err := recordMarkerResult(dir, m); err != nil {
+	if err := fileOps.record(dir, m); err != nil {
 		log.Warn().Err(err).Msg("could not record the blocked rollback result")
 	}
 	return nil
@@ -751,7 +784,7 @@ func finalizeTerminalUpdate(
 		return errors.New("finalizing an update needs a completed outcome")
 	}
 	dir := stateDirFor(dataDir)
-	if err := recordMarkerResult(dir, m); err != nil {
+	if err := fileOps.record(dir, m); err != nil {
 		return err
 	}
 
@@ -774,7 +807,7 @@ func finalizeTerminalUpdate(
 	// line.
 	fileOps.binary.sweep(m.TargetPath)
 	sweepUpdateSnapshotsFS(fileOps.fs, dataDir, "")
-	if err := clearMarker(dir); err != nil {
+	if err := fileOps.clear(dir); err != nil {
 		return fmt.Errorf("clearing the completed update marker: %w", err)
 	}
 	return nil
