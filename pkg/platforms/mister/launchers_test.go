@@ -580,6 +580,7 @@ func TestArcadeLauncherExtensions(t *testing.T) {
 
 	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
 	assert.Equal(t, []string{"_Arcade"}, arcadeLauncher.Folders)
+	assert.Equal(t, []string{"_Organized"}, arcadeLauncher.ScanDirectoryExcludes)
 	assert.Contains(t, arcadeLauncher.Extensions, ".mra")
 	assert.Contains(t, arcadeLauncher.Extensions, ".mgl")
 }

@@ -594,6 +594,28 @@ func directoryWalkWorkers(resourceConstrained bool, pauser *syncutil.Pauser) int
 	return 0
 }
 
+// shouldSkipExcludedSymlink reports whether an excluded symlink must be kept
+// out of the walk. A timeout means its target type is unknown, but allowing
+// fastwalk to follow it would immediately repeat the blocking stat without a
+// timeout. Context cancellation takes precedence so callers can stop the walk.
+func shouldSkipExcludedSymlink(
+	ctx context.Context,
+	path string,
+	stat func(context.Context, string) (os.FileInfo, error),
+) (bool, error) {
+	targetInfo, err := stat(ctx, path)
+	if err == nil {
+		return targetInfo.IsDir(), nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if errors.Is(err, ErrFsTimeout) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -611,6 +633,8 @@ func GetFiles(
 	}
 
 	var entriesScanned atomic.Int64
+	var symlinksEncountered atomic.Int64
+	var directoriesExcluded atomic.Int64
 	walkStartTime := time.Now()
 
 	var mu syncutil.Mutex
@@ -647,6 +671,29 @@ func GetFiles(
 		}
 
 		n := entriesScanned.Add(1)
+		if d.Type()&os.ModeSymlink != 0 {
+			symlinksEncountered.Add(1)
+		}
+		isSymlink := d.Type()&os.ModeSymlink != 0
+		if (d.IsDir() || isSymlink) && matcher.ShouldSkipScanDirectory(system.ID, p) {
+			shouldSkip := d.IsDir()
+			if isSymlink {
+				var skipErr error
+				shouldSkip, skipErr = shouldSkipExcludedSymlink(ctx, p, statWithContext)
+				if skipErr != nil {
+					return skipErr
+				}
+			}
+			if shouldSkip {
+				directoriesExcluded.Add(1)
+				log.Info().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping launcher-excluded scan directory")
+				return filepath.SkipDir
+			}
+		}
+
 		if n%5000 == 0 {
 			log.Debug().
 				Str("system", systemID).
@@ -738,6 +785,8 @@ func GetFiles(
 		Str("system", systemID).
 		Str("path", path).
 		Int64("entriesScanned", scanned).
+		Int64("symlinksEncountered", symlinksEncountered.Load()).
+		Int64("directoriesExcluded", directoriesExcluded.Load()).
 		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
