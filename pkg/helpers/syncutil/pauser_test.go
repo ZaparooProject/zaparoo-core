@@ -165,6 +165,19 @@ func TestPauser_BaselineThrottleSleepsWithoutReportingThrottled(t *testing.T) {
 	assert.False(t, p.IsPaused())
 }
 
+type doneSignalingContext struct {
+	context.Context
+	doneCalled chan struct{}
+}
+
+func (c *doneSignalingContext) Done() <-chan struct{} {
+	select {
+	case c.doneCalled <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
 func TestPauser_BaselineSleepObservesPause(t *testing.T) {
 	p := NewPauser()
 	p.SetBaselineThrottle(ThrottleBackground)
@@ -173,12 +186,16 @@ func TestPauser_BaselineSleepObservesPause(t *testing.T) {
 	p.baselineWorkStart = time.Now().Add(-time.Millisecond)
 	p.mu.Unlock()
 
+	ctx := &doneSignalingContext{
+		Context:    context.Background(),
+		doneCalled: make(chan struct{}, 1),
+	}
 	done := make(chan error, 1)
 	go func() {
-		done <- p.Wait(context.Background())
+		done <- p.Wait(ctx)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	<-ctx.doneCalled
 	p.Pause()
 	select {
 	case err := <-done:

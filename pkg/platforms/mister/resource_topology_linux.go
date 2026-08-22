@@ -71,14 +71,15 @@ func runResourceTopologyManager(
 			if !initialized || active != lastActive {
 				if irqErr := hooks.setMMCAffinity(active); irqErr != nil {
 					log.Warn().Err(irqErr).Msg("failed to apply MiSTer MMC IRQ affinity")
-				}
-				if active {
-					log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
 				} else {
-					log.Info().Msg("MiSTer frontend inactive: Core restored to CPUs 0-1")
+					if active {
+						log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
+					} else {
+						log.Info().Msg("MiSTer frontend inactive: Core restored to CPUs 0-1")
+					}
+					initialized = true
+					lastActive = active
 				}
-				initialized = true
-				lastActive = active
 			}
 		}
 

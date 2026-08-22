@@ -93,6 +93,55 @@ func TestResourceTopologyManager_TransitionsAndRestoresOnCancellation(t *testing
 	}
 }
 
+func TestResourceTopologyManager_RetriesFailedMMCAffinityUpdate(t *testing.T) {
+	coreCalls := make(chan bool, 3)
+	irqCalls := make(chan bool, 3)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	irqAttempts := 0
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				if active {
+					irqAttempts++
+					if irqAttempts == 1 {
+						return errors.New("MMC affinity update failed")
+					}
+				}
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	ticks <- time.Now()
+	require.True(t, <-coreCalls)
+	select {
+	case active := <-irqCalls:
+		require.True(t, active, "failed MMC update must be retried on next tick")
+	case <-time.After(time.Second):
+		t.Fatal("failed MMC affinity update was not retried")
+	}
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
 func TestResourceTopologyManager_RestoresIRQAfterCoreRestoreFailure(t *testing.T) {
 	coreCalls := make(chan bool, 2)
 	irqCalls := make(chan bool, 2)
