@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -45,15 +46,20 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 	}
 
 	tagged := params.Tags != nil && len(*params.Tags) > 0
+	var tagFilters []zapscript.TagFilter
+	if tagged {
+		var err error
+		tagFilters, err = filters.ParseTagFilters(*params.Tags)
+		if err != nil {
+			return nil, models.ClientErrf("failed to parse tag filters: %w", err)
+		}
+	}
+
 	countsStarted := time.Now()
 	mediaCounts := make(map[string]int)
 	mediaCountsAvailable := false
 	var indexed []string
 	if tagged {
-		tagFilters, err := filters.ParseTagFilters(*params.Tags)
-		if err != nil {
-			return nil, models.ClientErrf("failed to parse tag filters: %w", err)
-		}
 		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, tagFilters)
 		if err != nil {
 			return nil, fmt.Errorf("error getting tagged system media counts: %w", err)

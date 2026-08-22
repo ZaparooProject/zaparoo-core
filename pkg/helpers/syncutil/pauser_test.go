@@ -165,6 +165,31 @@ func TestPauser_BaselineThrottleSleepsWithoutReportingThrottled(t *testing.T) {
 	assert.False(t, p.IsPaused())
 }
 
+func TestPauser_BaselineSleepObservesPause(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(time.Millisecond, 50*time.Millisecond)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-time.Millisecond)
+	p.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Wait(context.Background())
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	p.Pause()
+	select {
+	case err := <-done:
+		require.Failf(t, "Wait returned while paused", "error: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+
+	p.Resume()
+	require.NoError(t, <-done)
+}
+
 func TestBaselineSleepForElapsed_CapsLongWorkCompensation(t *testing.T) {
 	assert.Equal(t, maxBaselineThrottleSleep, baselineSleepForElapsed(
 		3*time.Second, backgroundThrottleWork, backgroundThrottleSleep,

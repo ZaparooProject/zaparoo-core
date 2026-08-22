@@ -296,11 +296,15 @@ func (p *Pauser) Wait(ctx context.Context) error {
 			select {
 			case <-timer.C:
 				p.mu.Lock()
-				if p.state == stateRunning && p.baselineEnabled {
+				stillRunning := p.state == stateRunning
+				if stillRunning && p.baselineEnabled {
 					p.baselineWorkStart = time.Now()
 				}
 				p.mu.Unlock()
-				return nil
+				if stillRunning {
+					return nil
+				}
+				continue
 			case <-ctx.Done():
 				timer.Stop()
 				return ctx.Err()

@@ -83,6 +83,24 @@ func batchCommitLimit(pauser *syncutil.Pauser) int {
 	return maxFilesPerTransaction
 }
 
+type indexingPragmaDB interface {
+	SetIndexingCacheSize(enable bool)
+	SetWALAutoCheckpoint(pages int)
+}
+
+func configureIndexingPragmas(db indexingPragmaDB, baselinePaced bool) func() {
+	db.SetIndexingCacheSize(true)
+	if baselinePaced {
+		db.SetWALAutoCheckpoint(constrainedWALAutoCheckpoint)
+	}
+	return func() {
+		if baselinePaced {
+			db.SetWALAutoCheckpoint(defaultWALAutoCheckpoint)
+		}
+		db.SetIndexingCacheSize(false)
+	}
+}
+
 // maxReconcileRowsPerTransaction is kept for tests that exercise historical
 // reconcile-volume commits. Production now commits at every system boundary;
 // only the file-limit path can still commit mid-system.
@@ -874,15 +892,11 @@ func NewNamesIndex(
 	tags.SetCompanyNameCache(make(map[string]tags.TagValue))
 	defer tags.SetCompanyNameCache(nil)
 
-	// Temporarily increase SQLite cache to 32MB for bulk indexing.
-	db.SetIndexingCacheSize(true)
-	defer db.SetIndexingCacheSize(false)
-	if pauser.HasBaselineThrottle() {
-		// Smaller automatic checkpoints cap storage stalls inside tx.Commit on
-		// constrained platforms. Restore SQLite's default after indexing.
-		db.SetWALAutoCheckpoint(constrainedWALAutoCheckpoint)
-		defer db.SetWALAutoCheckpoint(defaultWALAutoCheckpoint)
-	}
+	// Temporarily increase SQLite cache to 32MB for bulk indexing. Constrained
+	// indexing also bounds automatic checkpoints, with both settings restored on
+	// every return path.
+	cleanupPragmas := configureIndexingPragmas(db, pauser.HasBaselineThrottle())
+	defer cleanupPragmas()
 
 	log.Info().
 		Int("systemCount", len(systems)).

@@ -51,6 +51,93 @@ func TestSettings_MiSTerResourcePolicies(t *testing.T) {
 	assert.True(t, settings.ResourceConstrained)
 }
 
+func TestResourceTopologyManager_TransitionsAndRestoresOnCancellation(t *testing.T) {
+	leaseStates := make(chan bool, 2)
+	leaseStates <- true
+	leaseStates <- false
+	coreCalls := make(chan bool, 3)
+	irqCalls := make(chan bool, 3)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) {
+				return <-leaseStates, nil
+			},
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	ticks <- time.Now()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_RestoresIRQAfterCoreRestoreFailure(t *testing.T) {
+	coreCalls := make(chan bool, 2)
+	irqCalls := make(chan bool, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, make(chan time.Time), resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				if !active {
+					return errors.New("core affinity restore failed")
+				}
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestMiSTerResourceTopologyPaths(t *testing.T) {
+	t.Parallel()
+	root := string(filepath.Separator)
+	assert.Equal(t, filepath.Join(root, "tmp", "zaparoo", "frontend.active.lock"), frontendResourceLeasePath)
+	assert.Equal(t, filepath.Join(root, "proc", "interrupts"), interruptsPath)
+	assert.Equal(t, filepath.Join(root, "proc", "self", "task"), coreTasksPath)
+	assert.Equal(t, filepath.Join(root, "proc", "irq"), irqAffinityRoot)
+}
+
 // mockLauncherManager is a minimal mock for testing
 type mockLauncherManager struct{}
 

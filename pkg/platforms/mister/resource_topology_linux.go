@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,57 +18,86 @@ import (
 )
 
 const (
-	frontendResourceLeasePath = "/tmp/zaparoo/frontend.active.lock"
-	interruptsPath            = "/proc/interrupts"
-	mmcIRQDevice              = "dw-mci"
-	resourceTopologyInterval  = time.Second
+	mmcIRQDevice             = "dw-mci"
+	resourceTopologyInterval = time.Second
 )
+
+var (
+	frontendResourceLeasePath = filepath.Join(string(filepath.Separator), "tmp", "zaparoo", "frontend.active.lock")
+	interruptsPath            = filepath.Join(string(filepath.Separator), "proc", "interrupts")
+	coreTasksPath             = filepath.Join(string(filepath.Separator), "proc", "self", "task")
+	irqAffinityRoot           = filepath.Join(string(filepath.Separator), "proc", "irq")
+)
+
+type resourceTopologyHooks struct {
+	leaseActive     func() (bool, error)
+	setCoreAffinity func(bool) error
+	setMMCAffinity  func(bool) error
+}
 
 // StartResourceTopologyManager keeps CPU0 available to the software frontend
 // only while frontend holds its kernel-backed activity lease. The lease is
 // released automatically on exit or forced termination, so Core restarts and
 // frontend startup ordering cannot leave topology in a stale state.
 func StartResourceTopologyManager(ctx context.Context) {
+	ticker := time.NewTicker(resourceTopologyInterval)
 	go func() {
-		ticker := time.NewTicker(resourceTopologyInterval)
 		defer ticker.Stop()
-
-		initialized := false
-		lastActive := false
-		for {
-			active, err := frontendResourceLeaseActive()
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to read MiSTer frontend resource lease")
-			} else {
-				// Reapply process affinity every pass so threads created after a
-				// transition inherit or receive the current topology.
-				if affinityErr := setCoreAffinity(active); affinityErr != nil {
-					log.Warn().Err(affinityErr).Msg("failed to apply MiSTer Core CPU affinity")
-				}
-				if !initialized || active != lastActive {
-					if irqErr := setMMCAffinity(active); irqErr != nil {
-						log.Warn().Err(irqErr).Msg("failed to apply MiSTer MMC IRQ affinity")
-					}
-					if active {
-						log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
-					} else {
-						log.Info().Msg("MiSTer frontend inactive: Core restored to CPUs 0-1")
-					}
-					initialized = true
-					lastActive = active
-				}
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
+		runResourceTopologyManager(ctx, ticker.C, resourceTopologyHooks{
+			leaseActive:     frontendResourceLeaseActive,
+			setCoreAffinity: setCoreAffinity,
+			setMMCAffinity:  setMMCAffinity,
+		})
 	}()
 }
 
+func runResourceTopologyManager(
+	ctx context.Context,
+	ticks <-chan time.Time,
+	hooks resourceTopologyHooks,
+) {
+	initialized := false
+	lastActive := false
+	for {
+		active, err := hooks.leaseActive()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to read MiSTer frontend resource lease")
+		} else {
+			// Reapply process affinity every pass so threads created after a
+			// transition inherit or receive the current topology.
+			if affinityErr := hooks.setCoreAffinity(active); affinityErr != nil {
+				log.Warn().Err(affinityErr).Msg("failed to apply MiSTer Core CPU affinity")
+			}
+			if !initialized || active != lastActive {
+				if irqErr := hooks.setMMCAffinity(active); irqErr != nil {
+					log.Warn().Err(irqErr).Msg("failed to apply MiSTer MMC IRQ affinity")
+				}
+				if active {
+					log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
+				} else {
+					log.Info().Msg("MiSTer frontend inactive: Core restored to CPUs 0-1")
+				}
+				initialized = true
+				lastActive = active
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			if affinityErr := hooks.setCoreAffinity(false); affinityErr != nil {
+				log.Warn().Err(affinityErr).Msg("failed to restore MiSTer Core CPU affinity during shutdown")
+			}
+			if irqErr := hooks.setMMCAffinity(false); irqErr != nil {
+				log.Warn().Err(irqErr).Msg("failed to restore MiSTer MMC IRQ affinity during shutdown")
+			}
+			return
+		case <-ticks:
+		}
+	}
+}
+
 func frontendResourceLeaseActive() (bool, error) {
+	//nolint:gosec // Fixed internal path assembled from constant components.
 	file, err := os.OpenFile(
 		frontendResourceLeasePath,
 		os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW,
@@ -102,7 +132,7 @@ func setCoreAffinity(frontendActive bool) error {
 		cpus.Set(1)
 	}
 
-	tasks, err := os.ReadDir("/proc/self/task")
+	tasks, err := os.ReadDir(coreTasksPath)
 	if err != nil {
 		return fmt.Errorf("reading Core tasks: %w", err)
 	}
@@ -122,6 +152,7 @@ func setCoreAffinity(frontendActive bool) error {
 }
 
 func setMMCAffinity(frontendActive bool) error {
+	//nolint:gosec // Fixed procfs path assembled from constant components.
 	interrupts, err := os.ReadFile(interruptsPath)
 	if err != nil {
 		return fmt.Errorf("reading interrupts: %w", err)
@@ -135,7 +166,7 @@ func setMMCAffinity(frontendActive bool) error {
 	if frontendActive {
 		cpus = "1"
 	}
-	affinityPath := fmt.Sprintf("/proc/irq/%d/smp_affinity_list", irq)
+	affinityPath := filepath.Join(irqAffinityRoot, strconv.Itoa(irq), "smp_affinity_list")
 	if err = os.WriteFile(affinityPath, []byte(cpus), 0o600); err != nil {
 		return fmt.Errorf("writing IRQ %d affinity: %w", irq, err)
 	}
