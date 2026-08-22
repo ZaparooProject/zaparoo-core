@@ -44,9 +44,243 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
+func TestSettings_MiSTerResourcePolicies(t *testing.T) {
 	t.Parallel()
-	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+	settings := (&Platform{}).Settings()
+	assert.True(t, settings.DisableZapScriptInTUI)
+	assert.True(t, settings.ResourceConstrained)
+}
+
+func TestResourceTopologyManager_TransitionsAndRestoresOnCancellation(t *testing.T) {
+	leaseStates := make(chan bool, 2)
+	leaseStates <- true
+	leaseStates <- false
+	coreCalls := make(chan bool, 3)
+	irqCalls := make(chan bool, 3)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) {
+				return <-leaseStates, nil
+			},
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	ticks <- time.Now()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_RetriesFailedMMCAffinityUpdate(t *testing.T) {
+	coreCalls := make(chan bool, 3)
+	irqCalls := make(chan bool, 3)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	irqAttempts := 0
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				if active {
+					irqAttempts++
+					if irqAttempts == 1 {
+						return errors.New("MMC affinity update failed")
+					}
+				}
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	ticks <- time.Now()
+	require.True(t, <-coreCalls)
+	select {
+	case active := <-irqCalls:
+		require.True(t, active, "failed MMC update must be retried on next tick")
+	case <-time.After(time.Second):
+		t.Fatal("failed MMC affinity update was not retried")
+	}
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_RestoresIRQAfterCoreRestoreFailure(t *testing.T) {
+	coreCalls := make(chan bool, 2)
+	irqCalls := make(chan bool, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, make(chan time.Time), resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				if !active {
+					return errors.New("core affinity restore failed")
+				}
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestResourceTopologyManager_RetriesLeaseProbeAfterError(t *testing.T) {
+	leaseCalls := make(chan int, 2)
+	coreCalls := make(chan bool, 2)
+	irqCalls := make(chan bool, 2)
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	attempt := 0
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) {
+				attempt++
+				leaseCalls <- attempt
+				if attempt == 1 {
+					return false, errors.New("lease probe failed")
+				}
+				return true, nil
+			},
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	require.Equal(t, 1, <-leaseCalls)
+	ticks <- time.Now()
+	require.Equal(t, 2, <-leaseCalls)
+	require.True(t, <-coreCalls)
+	require.True(t, <-irqCalls)
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+}
+
+func TestSetMMCAffinityAt(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	interruptsFile := filepath.Join(root, "interrupts")
+	affinityRoot := filepath.Join(root, "irq")
+	affinityDir := filepath.Join(affinityRoot, "42")
+	require.NoError(t, os.MkdirAll(affinityDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		interruptsFile,
+		[]byte(" 42: 1 2 3 4 dw-mci\n"),
+		0o600,
+	))
+	affinityFile := filepath.Join(affinityDir, "smp_affinity_list")
+	require.NoError(t, os.WriteFile(affinityFile, nil, 0o600))
+
+	require.NoError(t, setMMCAffinityAt(interruptsFile, affinityRoot, true))
+	contents, err := os.ReadFile(affinityFile) //nolint:gosec // Controlled test path.
+	require.NoError(t, err)
+	assert.Equal(t, "1", string(contents))
+
+	require.NoError(t, setMMCAffinityAt(interruptsFile, affinityRoot, false))
+	contents, err = os.ReadFile(affinityFile) //nolint:gosec // Controlled test path.
+	require.NoError(t, err)
+	assert.Equal(t, "0-1", string(contents))
+}
+
+func TestFindIRQ(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		interrupts string
+		device     string
+		wantIRQ    int
+		wantFound  bool
+	}{
+		{name: "matching device", interrupts: " 42: 1 2 3 4 dw-mci\n", device: "dw-mci", wantIRQ: 42, wantFound: true},
+		{name: "other device", interrupts: " 42: 1 2 3 4 xhci-hcd\n", device: "dw-mci"},
+		{name: "invalid IRQ", interrupts: " bad: 1 2 3 4 dw-mci\n", device: "dw-mci"},
+		{name: "missing separator", interrupts: "42 dw-mci\n", device: "dw-mci"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			irq, found := findIRQ(tt.interrupts, tt.device)
+			assert.Equal(t, tt.wantIRQ, irq)
+			assert.Equal(t, tt.wantFound, found)
+		})
+	}
+}
+
+func TestMiSTerResourceTopologyPaths(t *testing.T) {
+	t.Parallel()
+	root := string(filepath.Separator)
+	assert.Equal(t, filepath.Join(root, "tmp", "zaparoo", "frontend.active.lock"), frontendResourceLeasePath)
+	assert.Equal(t, filepath.Join(root, "proc", "interrupts"), interruptsPath)
+	assert.Equal(t, filepath.Join(root, "proc", "self", "task"), coreTasksPath)
+	assert.Equal(t, filepath.Join(root, "proc", "irq"), irqAffinityRoot)
 }
 
 // mockLauncherManager is a minimal mock for testing

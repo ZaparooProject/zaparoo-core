@@ -71,7 +71,7 @@ func TestFlagMissingMedia_ChunksLargeMissingSet(t *testing.T) {
 	_, err = sqlDB.ExecContext(ctx, "INSERT INTO ScanStage (Path) VALUES (?)", keepPath)
 	require.NoError(t, err)
 
-	affected, err := sqlFlagMissingMedia(ctx, sqlDB, "C64", 1)
+	affected, err := sqlFlagMissingMedia(ctx, sqlDB, "C64", 1, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, scanFlagMissingBatchSize+1, affected)
 

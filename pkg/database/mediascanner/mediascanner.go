@@ -55,10 +55,10 @@ import (
 const (
 	maxFilesPerTransaction = 5000
 	// throttledMaxFilesPerTransaction is used instead of maxFilesPerTransaction
-	// while background indexing is throttled or paused, so each commit's fsync
-	// burst stays short and a throttle wait quickly follows it, rather than one
-	// large uninterrupted 5000-file batch.
+	// while background indexing is explicitly throttled or paused.
 	throttledMaxFilesPerTransaction = 500
+	constrainedWALAutoCheckpoint    = 128
+	defaultWALAutoCheckpoint        = 1000
 	mediaDatabaseCorruptMessage     = "media database is corrupt; manual repair or rebuild required; " +
 		"original database left untouched"
 	// walkEntryWaitInterval is how often (in scanned filesystem entries) the
@@ -69,17 +69,36 @@ const (
 	// parallel. Probes are independent metadata reads; running a few at once
 	// hides the per-root latency of cold or slow storage without stampeding it.
 	rootValidationConcurrency = 4
+	slowZIPListingThreshold   = 5 * time.Second
 )
 
 // batchCommitLimit returns the file-count threshold for committing an
-// indexing batch. While throttled or paused, commits are kept small so each
-// fsync burst is short and a throttle wait quickly follows it, instead of one
-// large uninterrupted batch competing with foreground storage access.
+// indexing batch. Explicitly throttled or paused work uses smaller commits so
+// each fsync burst yields sooner to foreground activity. Baseline pacing does
+// not change transaction size.
 func batchCommitLimit(pauser *syncutil.Pauser) int {
 	if pauser.IsThrottled() || pauser.IsPaused() {
 		return throttledMaxFilesPerTransaction
 	}
 	return maxFilesPerTransaction
+}
+
+type indexingPragmaDB interface {
+	SetIndexingCacheSize(enable bool)
+	SetWALAutoCheckpoint(pages int)
+}
+
+func configureIndexingPragmas(db indexingPragmaDB, baselinePaced bool) func() {
+	db.SetIndexingCacheSize(true)
+	if baselinePaced {
+		db.SetWALAutoCheckpoint(constrainedWALAutoCheckpoint)
+	}
+	return func() {
+		if baselinePaced {
+			db.SetWALAutoCheckpoint(defaultWALAutoCheckpoint)
+		}
+		db.SetIndexingCacheSize(false)
+	}
 }
 
 // maxReconcileRowsPerTransaction is kept for tests that exercise historical
@@ -568,6 +587,13 @@ func filterRunnableSystems(
 	return filtered
 }
 
+func directoryWalkWorkers(resourceConstrained bool, pauser *syncutil.Pauser) int {
+	if resourceConstrained || pauser.IsThrottled() || pauser.IsPaused() {
+		return 1
+	}
+	return 0
+}
+
 // shouldSkipExcludedSymlink reports whether an excluded symlink must be kept
 // out of the walk. A timeout means its target type is unknown, but allowing
 // fastwalk to follow it would immediately repeat the blocking stat without a
@@ -615,14 +641,8 @@ func GetFiles(
 	var results []string
 
 	conf := &fastwalk.Config{
-		Follow: true,
-	}
-	if pauser.IsThrottled() || pauser.IsPaused() {
-		// A parallel walk otherwise escapes the throttle: its worker
-		// goroutines keep hammering storage regardless of the duty cycle
-		// checked below. Single-threaded walking keeps concurrent reads
-		// bounded while throttled or paused.
-		conf.NumWorkers = 1
+		Follow:     true,
+		NumWorkers: directoryWalkWorkers(platform.Settings().ResourceConstrained, pauser),
 	}
 
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
@@ -718,10 +738,24 @@ func GetFiles(
 
 		if helpers.IsZip(p) && platform.Settings().ZipsAsDirs {
 			log.Trace().Str("path", p).Msg("opening zip file for indexing")
-			zipFiles, zipErr := helpers.ListZip(p)
+			zipStarted := time.Now()
+			zipFiles, zipErr := helpers.ListZipWithYield(
+				ctx, p, func() error { return pauser.Wait(ctx) },
+			)
+			zipElapsed := time.Since(zipStarted)
 			if zipErr != nil {
-				log.Warn().Err(zipErr).Msgf("error listing zip: %s", p)
+				if errors.Is(zipErr, context.Canceled) || errors.Is(zipErr, context.DeadlineExceeded) {
+					return fmt.Errorf("ZIP listing stopped: %w", zipErr)
+				}
+				log.Warn().Err(zipErr).Str("path", p).Dur("elapsed", zipElapsed).Msg("error listing zip")
 				return nil
+			}
+			if zipElapsed > slowZIPListingThreshold {
+				log.Warn().
+					Str("path", p).
+					Int("entries", len(zipFiles)).
+					Dur("elapsed", zipElapsed).
+					Msg("zip listing took longer than expected")
 			}
 
 			mu.Lock()
@@ -907,9 +941,11 @@ func NewNamesIndex(
 	tags.SetCompanyNameCache(make(map[string]tags.TagValue))
 	defer tags.SetCompanyNameCache(nil)
 
-	// Temporarily increase SQLite cache to 32MB for bulk indexing
-	db.SetIndexingCacheSize(true)
-	defer db.SetIndexingCacheSize(false)
+	// Temporarily increase SQLite cache to 32MB for bulk indexing. Constrained
+	// indexing also bounds automatic checkpoints, with both settings restored on
+	// every return path.
+	cleanupPragmas := configureIndexingPragmas(db, pauser.HasBaselineThrottle())
+	defer cleanupPragmas()
 
 	log.Info().
 		Int("systemCount", len(systems)).
@@ -1523,7 +1559,10 @@ func NewNamesIndex(
 				Msg("file collection hit errors; keeping existing missing-media state for this system")
 		}
 		reconcileStats, reconcileErr := db.ReconcileStagedSystem(
-			ctx, systemID, database.ScanReconcileOpts{IncompleteScan: scanIncomplete},
+			ctx, systemID, database.ScanReconcileOpts{
+				Yield:          func() error { return pauser.Wait(ctx) },
+				IncompleteScan: scanIncomplete,
+			},
 		)
 		if reconcileErr != nil {
 			if errors.Is(reconcileErr, context.Canceled) {

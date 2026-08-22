@@ -30,11 +30,13 @@ package mediadb_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/scantest"
@@ -153,6 +155,48 @@ func TestReconcileStagedSystem_IdempotentRescanIsNoOp(t *testing.T) {
 	assert.Equal(t, int64(0), stats.MediaUpserted)
 	assert.Equal(t, int64(0), stats.MediaMissing)
 	assert.Equal(t, int64(0), stats.TouchedTitles)
+}
+
+func TestReconcileStagedSystem_YieldsBetweenSQLSteps(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	yields := 0
+	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	scantest.IndexMediaPathsWithOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{
+		Yield: func() error {
+			yields++
+			return nil
+		},
+	}, gamePath)
+
+	assert.GreaterOrEqual(t, yields, 10, "reconcile should pace between set-based SQL steps")
+}
+
+func TestReconcileStagedSystem_PropagatesYieldError(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	require.NoError(t, mediascanner.SeedCanonicalTags(ctx, mediaDB))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	t.Cleanup(func() { _ = mediaDB.RollbackTransaction() })
+	require.NoError(t, mediaDB.ClearScanStage())
+	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	require.NoError(t, mediascanner.StageMediaPath(&mediascanner.StageMediaPathParams{
+		DB:       mediaDB,
+		SystemID: "SNES",
+		Path:     gamePath,
+	}))
+
+	yieldErr := errors.New("pacing stopped")
+	_, err := mediaDB.ReconcileStagedSystem(ctx, "SNES", database.ScanReconcileOpts{
+		Yield: func() error { return yieldErr },
+	})
+	require.ErrorIs(t, err, yieldErr)
+	assert.Contains(t, err.Error(), "scan reconcile pacing after insert titles failed")
 }
 
 // TestReconcileStagedSystem_IncompleteScanPreservesMissingState pins

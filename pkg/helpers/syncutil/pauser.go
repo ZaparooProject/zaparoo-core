@@ -37,10 +37,9 @@ const (
 type ThrottleLevel int
 
 const (
-	// ThrottleLight is the default for most cores: work for one quantum,
-	// then sleep. 50ms/150ms yields ~25% duty, keeping storage and CPU
-	// mostly free for a foreground consumer while still making steady
-	// progress.
+	// ThrottleLight is the default while ordinary foreground media is
+	// active. 50ms/150ms yields ~25% duty, keeping storage and CPU mostly
+	// free for the foreground consumer while still making steady progress.
 	ThrottleLight ThrottleLevel = iota
 	// ThrottleHeavy is for storage-streaming cores (CD-based, etc.) whose
 	// continuous reads are sensitive to any competing I/O. 20ms/300ms
@@ -49,21 +48,40 @@ const (
 	// bursts interfere with playback, so the work window is short and
 	// infrequent enough to stay out of a foreground consumer's way.
 	ThrottleHeavy
+	// ThrottleBackground is a baseline for long-running jobs even when no
+	// media is active. Equal work and sleep quanta reserve regular CPU time
+	// for UI, API, reader, and audio work without changing process priority.
+	ThrottleBackground
 )
 
 const (
-	lightThrottleWork  = 50 * time.Millisecond
-	lightThrottleSleep = 150 * time.Millisecond
-	heavyThrottleWork  = 20 * time.Millisecond
-	heavyThrottleSleep = 300 * time.Millisecond
+	backgroundThrottleWork   = 40 * time.Millisecond
+	backgroundThrottleSleep  = 40 * time.Millisecond
+	lightThrottleWork        = 50 * time.Millisecond
+	lightThrottleSleep       = 150 * time.Millisecond
+	heavyThrottleWork        = 20 * time.Millisecond
+	heavyThrottleSleep       = 300 * time.Millisecond
+	maxBaselineThrottleSleep = time.Second
 )
 
 // quantaForLevel returns the work/sleep duty-cycle quanta for a throttle level.
 func quantaForLevel(level ThrottleLevel) (work, sleep time.Duration) {
-	if level == ThrottleHeavy {
+	switch level {
+	case ThrottleHeavy:
 		return heavyThrottleWork, heavyThrottleSleep
+	case ThrottleBackground:
+		return backgroundThrottleWork, backgroundThrottleSleep
+	default:
+		return lightThrottleWork, lightThrottleSleep
 	}
-	return lightThrottleWork, lightThrottleSleep
+}
+
+func baselineSleepForElapsed(elapsed, workQuantum, sleepQuantum time.Duration) time.Duration {
+	sleep := sleepQuantum
+	if elapsed > workQuantum && workQuantum > 0 {
+		sleep = time.Duration(float64(sleepQuantum) * (float64(elapsed) / float64(workQuantum)))
+	}
+	return min(sleep, maxBaselineThrottleSleep)
 }
 
 // Pauser is a thread-safe pause/throttle/resume primitive using the
@@ -74,13 +92,17 @@ func quantaForLevel(level ThrottleLevel) (work, sleep time.Duration) {
 //
 // A nil *Pauser is safe to use: Wait always returns nil.
 type Pauser struct {
-	workStart    time.Time
-	ch           chan struct{}
-	workQuantum  time.Duration
-	sleepQuantum time.Duration
-	state        pauseState
-	level        ThrottleLevel
-	mu           Mutex
+	workStart           time.Time
+	baselineWorkStart   time.Time
+	ch                  chan struct{}
+	workQuantum         time.Duration
+	sleepQuantum        time.Duration
+	baselineWorkQuantum time.Duration
+	baselineSleep       time.Duration
+	state               pauseState
+	level               ThrottleLevel
+	mu                  Mutex
+	baselineEnabled     bool
 }
 
 // NewPauser returns a Pauser in the running state.
@@ -93,6 +115,24 @@ func NewPauser() *Pauser {
 		workQuantum:  work,
 		sleepQuantum: sleep,
 	}
+}
+
+// SetBaselineThrottle enables a duty cycle while the pauser is otherwise in
+// its running state. Explicit Pause and Throttle calls still override it, and
+// Resume returns to this baseline. Baseline pacing does not make IsThrottled
+// true, so status reporting and transaction sizing continue to describe only
+// foreground-media restrictions.
+func (p *Pauser) SetBaselineThrottle(level ThrottleLevel) {
+	if p == nil {
+		return
+	}
+	work, sleep := quantaForLevel(level)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.baselineEnabled = true
+	p.baselineWorkQuantum = work
+	p.baselineSleep = sleep
+	p.baselineWorkStart = time.Now()
 }
 
 // Pause requests a full pause. Idempotent: calling Pause when already
@@ -142,6 +182,7 @@ func (p *Pauser) Throttle(level ThrottleLevel) {
 func (p *Pauser) Resume() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.baselineWorkStart = time.Now()
 	if p.state == stateRunning {
 		return
 	}
@@ -171,6 +212,16 @@ func (p *Pauser) IsThrottled() bool {
 	return p.state == stateThrottled
 }
 
+// HasBaselineThrottle reports whether running work uses baseline pacing.
+func (p *Pauser) HasBaselineThrottle() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.baselineEnabled
+}
+
 // Level returns the throttle level applied by the most recent Throttle call.
 // Only meaningful while IsThrottled is true. A nil receiver returns ThrottleLight.
 func (p *Pauser) Level() ThrottleLevel {
@@ -182,8 +233,8 @@ func (p *Pauser) Level() ThrottleLevel {
 	return p.level
 }
 
-// SetThrottleQuanta overrides the throttle duty cycle. Non-positive values
-// are ignored. Intended for configuration and tests.
+// SetThrottleQuanta overrides the explicit throttle duty cycle. Non-positive
+// values are ignored. Intended for configuration and tests.
 func (p *Pauser) SetThrottleQuanta(work, sleep time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -195,10 +246,24 @@ func (p *Pauser) SetThrottleQuanta(work, sleep time.Duration) {
 	}
 }
 
-// Wait applies the current state to the caller. It returns nil immediately
-// when running, blocks until Resume while paused, and enforces the duty
-// cycle while throttled. It returns the context error if the context is
-// cancelled while blocked or sleeping. A nil receiver returns nil.
+// SetBaselineThrottleQuanta overrides the running-state baseline duty cycle.
+// Non-positive values are ignored. Intended for configuration and tests.
+func (p *Pauser) SetBaselineThrottleQuanta(work, sleep time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if work > 0 {
+		p.baselineWorkQuantum = work
+	}
+	if sleep > 0 {
+		p.baselineSleep = sleep
+	}
+}
+
+// Wait applies the current state to the caller. Running work returns
+// immediately unless a baseline throttle is enabled, paused work blocks until
+// Resume, and explicitly throttled work follows its stronger duty cycle. It
+// returns the context error if the context is cancelled while blocked or
+// sleeping. A nil receiver returns nil.
 func (p *Pauser) Wait(ctx context.Context) error {
 	if p == nil {
 		return nil
@@ -213,11 +278,37 @@ func (p *Pauser) Wait(ctx context.Context) error {
 		ch := p.ch
 		sleepQuantum := p.sleepQuantum
 		workExpired := state == stateThrottled && time.Since(p.workStart) >= p.workQuantum
+		baselineEnabled := p.baselineEnabled
+		baselineElapsed := time.Since(p.baselineWorkStart)
+		baselineSleep := baselineSleepForElapsed(
+			baselineElapsed, p.baselineWorkQuantum, p.baselineSleep,
+		)
+		baselineExpired := state == stateRunning && baselineEnabled &&
+			baselineElapsed >= p.baselineWorkQuantum
 		p.mu.Unlock()
 
 		switch state {
 		case stateRunning:
-			return nil
+			if !baselineExpired {
+				return nil
+			}
+			timer := time.NewTimer(baselineSleep)
+			select {
+			case <-timer.C:
+				p.mu.Lock()
+				stillRunning := p.state == stateRunning
+				if stillRunning && p.baselineEnabled {
+					p.baselineWorkStart = time.Now()
+				}
+				p.mu.Unlock()
+				if stillRunning {
+					return nil
+				}
+				continue
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
 		case statePaused:
 			select {
 			case <-ch:

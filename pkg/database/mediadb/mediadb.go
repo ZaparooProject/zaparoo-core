@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,8 +108,12 @@ var mediaWALCheckpointThreshold int64 = 96 * 1024 * 1024
 // writer effectively owns a connection full-time, so the pool widens by one
 // to keep a search and a browse from queueing behind each other.
 const (
-	baseMaxOpenConns     = 2
-	indexingMaxOpenConns = 3
+	baseMaxOpenConns         = 2
+	indexingMaxOpenConns     = 3
+	defaultConnCacheSize     = "-8192"
+	defaultConnTempStore     = "FILE"
+	defaultWALAutoCheckpoint = 1000
+	connectionAcquireTimeout = 5 * time.Second
 )
 
 // getSqliteConnParams constructs the SQLite connection string. MediaDB uses
@@ -124,7 +130,7 @@ const (
 // synchronous=FULL since it holds non-rebuildable user data.
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
+		"&_cache_size=" + defaultConnCacheSize + "&_temp_store=" + defaultConnTempStore + "&_mmap_size=0" +
 		"&_page_size=8192&_foreign_keys=ON&_txlock=immediate"
 }
 
@@ -141,6 +147,11 @@ type mediaSearchBoundsLoad struct {
 	found      bool
 }
 
+type systemMediaCountsSnapshot struct {
+	counts     []database.SystemMediaCount
+	generation uint64
+}
+
 type MediaDB struct {
 	clock                   clockwork.Clock
 	ctx                     context.Context
@@ -149,6 +160,7 @@ type MediaDB struct {
 	batchInsertTagType      *BatchInserter
 	stmtInsertMedia         *sql.Stmt
 	tx                      *sql.Tx
+	txConn                  *sql.Conn
 	stmtInsertSystem        *sql.Stmt
 	sql                     database.Conn
 	stmtInsertTag           *sql.Stmt
@@ -165,6 +177,7 @@ type MediaDB struct {
 	batchInsertSystem       *BatchInserter
 	batchInsertScanTag      *BatchInserter
 	slugSearchCache         atomic.Pointer[SlugSearchCache]
+	systemMediaCountsCache  atomic.Pointer[systemMediaCountsSnapshot]
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
 	dbPath                  string
@@ -183,6 +196,8 @@ type MediaDB struct {
 	needsIndexRebuild       atomic.Bool
 	isOptimizing            atomic.Bool
 	indexingCacheBoost      atomic.Bool
+	walAutoCheckpoint       atomic.Int64
+	systemMediaCountsGen    atomic.Uint64
 	inTransaction           bool
 	browseCacheDirty        bool
 	utilityTagCacheDirty    bool
@@ -220,6 +235,8 @@ type invalidationScope struct {
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
+	db.systemMediaCountsCache.Store(nil)
+	db.systemMediaCountsGen.Add(1)
 	if scope.MediaRowsChanged {
 		db.clearMediaSearchBounds()
 	}
@@ -495,24 +512,139 @@ func (db *MediaDB) GetDBPath() string {
 // built by the post-indexing cache population are only a few MB, and the default
 // temp_store=FILE writes them to slow storage (SD card) on embedded devices.
 //
-// Both pragmas are per-connection, and the pool exec below only reaches
-// whichever connection happens to be free — not necessarily the one the bulk
-// writer's transaction will pin. BeginTransaction therefore re-applies the
-// current settings on its own connection, which is where the boost matters.
+// Both pragmas are per-connection, so every pooled connection is configured
+// when the indexing state changes. BeginTransaction also re-applies the current
+// settings on its dedicated connection before starting the transaction.
 func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	db.indexingCacheBoost.Store(enable)
-	if db.sql.Load() == nil {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return
+	}
+	if !enable {
+		db.restorePooledConnPragmas(sqlDB)
 		return
 	}
 
-	cacheSize, tempStore := db.connPragmaValues()
-	_, err := db.sql.Load().ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
-	if err != nil {
-		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing cache size")
+	db.applyPooledConnPragmas(sqlDB)
+}
+
+// SetWALAutoCheckpoint applies a per-connection SQLite WAL checkpoint trigger.
+// Resource-constrained indexing lowers it to cap automatic checkpoint bursts
+// inside tx.Commit, then restores SQLite's default after indexing.
+func (db *MediaDB) SetWALAutoCheckpoint(pages int) {
+	if pages <= 0 {
+		return
 	}
-	_, err = db.sql.Load().ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore)
-	if err != nil {
-		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing temp_store")
+	db.walAutoCheckpoint.Store(int64(pages))
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return
+	}
+
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	conns, acquireErr := db.drainPooledConns(sqlDB)
+	if acquireErr != nil {
+		log.Warn().Err(acquireErr).Int("pages", pages).
+			Msg("failed to acquire pooled connections while setting WAL autocheckpoint")
+	}
+	//nolint:gosec // pages is a validated positive integer, not SQL input.
+	query := "PRAGMA wal_autocheckpoint = " + strconv.Itoa(pages)
+	for _, conn := range conns {
+		if _, err := conn.ExecContext(db.ctx, query); err != nil {
+			log.Warn().Err(err).Int("pages", pages).Msg("failed to set WAL autocheckpoint")
+		}
+		if err := conn.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to release pooled connection after setting WAL autocheckpoint")
+		}
+	}
+}
+
+func (db *MediaDB) walAutoCheckpointPages() int {
+	pages := db.walAutoCheckpoint.Load()
+	if pages <= 0 {
+		return defaultWALAutoCheckpoint
+	}
+	return int(pages)
+}
+
+// drainPooledConns checks out every pool slot simultaneously. The caller must
+// hold sqlMu so a writer transaction cannot start while the pool is drained.
+func (db *MediaDB) drainPooledConns(sqlDB *sql.DB) ([]*sql.Conn, error) {
+	stats := sqlDB.Stats()
+	connCount := stats.MaxOpenConnections
+	if connCount <= 0 {
+		connCount = max(stats.OpenConnections, 1)
+	}
+	if db.txConn != nil {
+		connCount--
+	}
+	if connCount <= 0 {
+		return nil, nil
+	}
+
+	acquireCtx, cancel := context.WithTimeout(db.ctx, connectionAcquireTimeout)
+	defer cancel()
+	conns := make([]*sql.Conn, 0, connCount)
+	for range connCount {
+		conn, err := sqlDB.Conn(acquireCtx)
+		if err != nil {
+			return conns, fmt.Errorf("failed to acquire pooled connection: %w", err)
+		}
+		conns = append(conns, conn)
+	}
+	return conns, nil
+}
+
+// applyPooledConnPragmas drains the pool so both indexing pragmas reach every
+// available physical connection rather than whichever connection Exec selects.
+func (db *MediaDB) applyPooledConnPragmas(sqlDB *sql.DB) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	conns, acquireErr := db.drainPooledConns(sqlDB)
+	if acquireErr != nil {
+		if errors.Is(acquireErr, context.DeadlineExceeded) {
+			log.Warn().Err(acquireErr).Msg("timed out acquiring pooled connections while enabling indexing pragmas")
+		} else {
+			log.Warn().Err(acquireErr).Msg("failed to acquire pooled connection while enabling indexing pragmas")
+		}
+	}
+
+	cacheSize, tempStore := db.connPragmaValues()
+	for _, conn := range conns {
+		if _, err := conn.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize); err != nil {
+			log.Warn().Err(err).Bool("enable", true).Msg("failed to set indexing cache size")
+		}
+		if _, err := conn.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore); err != nil {
+			log.Warn().Err(err).Bool("enable", true).Msg("failed to set indexing temp_store")
+		}
+		if err := conn.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to release pooled connection after enabling indexing pragmas")
+		}
+	}
+}
+
+// restorePooledConnPragmas drains the pool, resets each physical connection,
+// then returns them. An existing writer is excluded because its pinned
+// connection restores itself when it finishes.
+func (db *MediaDB) restorePooledConnPragmas(sqlDB *sql.DB) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	conns, acquireErr := db.drainPooledConns(sqlDB)
+	if acquireErr != nil {
+		if errors.Is(acquireErr, context.DeadlineExceeded) {
+			log.Warn().Err(acquireErr).Msg("timed out acquiring pooled connections while restoring indexing pragmas")
+		} else {
+			log.Warn().Err(acquireErr).Msg("failed to acquire pooled connection while restoring indexing pragmas")
+		}
+	}
+	for _, conn := range conns {
+		if err := db.closeWriterConn(conn); err != nil {
+			log.Warn().Err(err).Msg("failed to restore pooled connection after indexing")
+		}
 	}
 }
 
@@ -523,21 +655,71 @@ func (db *MediaDB) connPragmaValues() (cacheSize, tempStore string) {
 	if db.indexingCacheBoost.Load() {
 		return "-32768", "MEMORY"
 	}
-	return "-8192", "FILE"
+	return defaultConnCacheSize, defaultConnTempStore
 }
 
-// applyConnPragmas sets the per-connection pragmas on the connection a
-// transaction has pinned, making the indexing cache boost deterministic for
-// the writer regardless of which pooled connection the earlier pool-level
-// exec happened to land on.
-func (db *MediaDB) applyConnPragmas(tx *sql.Tx) {
-	cacheSize, tempStore := db.connPragmaValues()
-	if _, err := tx.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize); err != nil {
-		log.Warn().Err(err).Msg("failed to set transaction connection cache size")
+// applyConnPragmas configures a dedicated connection before it starts a
+// transaction. temp_store cannot be changed from inside a transaction once the
+// connection has used temporary objects, so pragma setup must precede BeginTx.
+func applyConnPragmas(
+	ctx context.Context, conn *sql.Conn, cacheSize, tempStore string,
+) error {
+	if _, err := conn.ExecContext(ctx, "PRAGMA cache_size = "+cacheSize); err != nil {
+		return fmt.Errorf("failed to set writer connection cache size: %w", err)
 	}
-	if _, err := tx.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore); err != nil {
-		log.Warn().Err(err).Msg("failed to set transaction connection temp_store")
+	if _, err := conn.ExecContext(ctx, "PRAGMA temp_store = "+tempStore); err != nil {
+		return fmt.Errorf("failed to set writer connection temp_store: %w", err)
 	}
+	return nil
+}
+
+// closeWriterConn restores steady-state settings before returning a writer
+// connection to the pool. If restoration fails, the physical connection is
+// discarded so boosted settings cannot leak into later foreground work. Setup
+// failure paths call this directly because partially applied pragmas are unsafe.
+func (db *MediaDB) closeWriterConn(conn *sql.Conn) error {
+	if conn == nil {
+		return nil
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(db.ctx), 5*time.Second)
+	defer cancel()
+	resetErr := applyConnPragmas(cleanupCtx, conn, defaultConnCacheSize, defaultConnTempStore)
+	if resetErr != nil {
+		discardErr := conn.Raw(func(any) error { return driver.ErrBadConn })
+		if errors.Is(discardErr, driver.ErrBadConn) {
+			discardErr = nil
+		}
+		closeErr := conn.Close()
+		if closeErr != nil {
+			closeErr = fmt.Errorf("failed to close writer connection: %w", closeErr)
+		}
+		return errors.Join(resetErr, discardErr, closeErr)
+	}
+	if err := conn.Close(); err != nil {
+		return fmt.Errorf("failed to close writer connection: %w", err)
+	}
+	return nil
+}
+
+func (db *MediaDB) releaseWriterConn() error {
+	conn := db.txConn
+	db.txConn = nil
+	if conn == nil {
+		return nil
+	}
+
+	// Preserve the hot page cache between indexing batches. Resetting cache_size
+	// after every commit evicts cached pages, making the next reconcile reread the
+	// database from slow storage. SetIndexingCacheSize(false) drains and restores
+	// the whole pool when indexing ends.
+	if db.indexingCacheBoost.Load() {
+		if err := conn.Close(); err != nil {
+			return fmt.Errorf("failed to release boosted writer connection: %w", err)
+		}
+		return nil
+	}
+	return db.closeWriterConn(conn)
 }
 
 // AnalyzeApproximate refreshes query-planner statistics before synchronous
@@ -1030,9 +1212,9 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// query would otherwise race the swap-to-nil and panic.
 
 	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
-	// the reopen below. The caller guarantees no transaction is in flight during
-	// recovery, so this write needs no sqlMu (matching the lock-free Close()/Open() swap).
+	// the reopen below. Close has already rolled back and released any writer connection.
 	db.tx = nil
+	db.txConn = nil
 	db.inTransaction = false
 
 	if keepBackup {
@@ -1416,25 +1598,30 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 }
 
 func (db *MediaDB) Close() error {
-	if db.sql.Load() == nil {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
 		return nil
 	}
 
 	// Wait for all background operations (optimization, etc.) to complete
-	// before closing the database connection
+	// before closing the database connection.
 	db.WaitForBackgroundOperations()
 
-	logSQLTraceSummary()
-	clearUtilityTagCacheFor(db.sql.Load())
-	clearImagePropertyTagCacheFor(db.sql.Load())
-	unregisterCoverAvailabilityCacheOwner(db.sql.Load())
-	clearPrefixPolicyCacheFor(db.sql.Load())
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	transactionErr := db.rollbackTransactionLocked()
 
-	err := db.sql.Load().Close()
-	if err != nil {
-		return fmt.Errorf("failed to close database: %w", err)
+	logSQLTraceSummary()
+	clearUtilityTagCacheFor(sqlDB)
+	clearImagePropertyTagCacheFor(sqlDB)
+	unregisterCoverAvailabilityCacheOwner(sqlDB)
+	clearPrefixPolicyCacheFor(sqlDB)
+
+	closeErr := sqlDB.Close()
+	if closeErr != nil {
+		closeErr = fmt.Errorf("failed to close database: %w", closeErr)
 	}
-	return nil
+	return errors.Join(transactionErr, closeErr)
 }
 
 func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationScope {
@@ -1730,49 +1917,7 @@ func (db *MediaDB) SeedCanonicalTagDefinitions(ctx context.Context) error {
 	return sqlSeedCanonicalTags(ctx, db.conn())
 }
 
-// RollbackTransaction rolls back the current transaction and cleans up resources
-func (db *MediaDB) RollbackTransaction() error {
-	db.sqlMu.Lock()
-	defer db.sqlMu.Unlock()
-
-	if db.tx == nil {
-		return nil // No active transaction
-	}
-
-	// Clean up prepared statements and batch inserters first
-	db.closeAllPreparedStatements()
-	_ = db.closeAllBatchInserters()
-
-	// Rollback the transaction
-	err := db.tx.Rollback()
-	db.tx = nil
-	db.inTransaction = false // Clear transaction flag (no cache invalidation needed on rollback)
-	db.clearBrowseCacheInvalidation()
-	db.utilityTagCacheDirty = false
-	db.mediaSearchBoundsDirty = false
-	if err != nil {
-		return fmt.Errorf("failed to rollback transaction: %w", err)
-	}
-
-	return nil
-}
-
-// rollbackAndLogError helper function to handle rollback with error logging
-// Note: This is called from BeginTransaction which already holds the mutex lock,
-// so we perform the rollback directly without calling RollbackTransaction
-func (db *MediaDB) rollbackAndLogError() {
-	if db.tx == nil {
-		return
-	}
-
-	// Clean up prepared statements and batch inserters first
-	db.closeAllPreparedStatements()
-	_ = db.closeAllBatchInserters()
-
-	// Rollback the transaction
-	if rbErr := db.tx.Rollback(); rbErr != nil {
-		log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
-	}
+func (db *MediaDB) clearTransactionState() {
 	db.tx = nil
 	db.inTransaction = false
 	db.clearBrowseCacheInvalidation()
@@ -1780,31 +1925,79 @@ func (db *MediaDB) rollbackAndLogError() {
 	db.mediaSearchBoundsDirty = false
 }
 
+// rollbackTransactionLocked rolls back and releases the dedicated writer
+// connection. The caller must hold sqlMu.
+func (db *MediaDB) rollbackTransactionLocked() error {
+	if db.tx == nil {
+		return db.releaseWriterConn()
+	}
+
+	db.closeAllPreparedStatements()
+	batchErr := db.closeAllBatchInserters()
+	rbErr := db.tx.Rollback()
+	db.clearTransactionState()
+	connErr := db.releaseWriterConn()
+	return errors.Join(batchErr, rbErr, connErr)
+}
+
+// RollbackTransaction rolls back the current transaction and cleans up resources.
+func (db *MediaDB) RollbackTransaction() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	if err := db.rollbackTransactionLocked(); err != nil {
+		return fmt.Errorf("failed to rollback transaction: %w", err)
+	}
+	return nil
+}
+
+// rollbackAndLogError handles setup failures while BeginTransaction holds sqlMu.
+func (db *MediaDB) rollbackAndLogError() {
+	if err := db.rollbackTransactionLocked(); err != nil {
+		log.Error().Err(err).Msg("failed to clean up transaction during setup")
+	}
+}
+
 func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
-	if db.sql.Load() == nil {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
 		return ErrNullSQL
 	}
 
-	// Check if a transaction is already active
-	if db.inTransaction {
+	if db.inTransaction || db.tx != nil || db.txConn != nil {
 		return errors.New("transaction already in progress")
 	}
 	db.mediaSearchBoundsDirty = false
 
-	// Begin a proper transaction
-	tx, err := db.sql.Load().BeginTx(db.ctx, nil)
+	acquireCtx, cancel := context.WithTimeout(db.ctx, connectionAcquireTimeout)
+	conn, err := sqlDB.Conn(acquireCtx)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("failed to acquire writer connection: %w", err)
+	}
+	cacheSize, tempStore := db.connPragmaValues()
+	if err = applyConnPragmas(db.ctx, conn, cacheSize, tempStore); err != nil {
+		cleanupErr := db.closeWriterConn(conn)
+		return errors.Join(err, cleanupErr)
+	}
+	walAutoCheckpoint := db.walAutoCheckpointPages()
+	if _, err = conn.ExecContext(db.ctx,
+		"PRAGMA wal_autocheckpoint = "+strconv.Itoa(walAutoCheckpoint),
+	); err != nil {
+		cleanupErr := db.closeWriterConn(conn)
+		return errors.Join(fmt.Errorf("failed to set writer WAL autocheckpoint: %w", err), cleanupErr)
+	}
+
+	tx, err := conn.BeginTx(db.ctx, nil)
+	if err != nil {
+		cleanupErr := db.closeWriterConn(conn)
+		return errors.Join(fmt.Errorf("failed to begin transaction: %w", err), cleanupErr)
 	}
 	db.tx = tx
-	// The transaction has now pinned a connection; apply the per-connection
-	// pragmas here so the bulk writer actually runs with the indexing cache
-	// boost (temp tables from prior pooled use are already released, so the
-	// temp_store change is safe at this point).
-	db.applyConnPragmas(tx)
+	db.txConn = conn
 
 	// Use batch inserters if enabled, otherwise use prepared statements
 	if batchEnabled {
@@ -2019,53 +2212,28 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 		return nil // No active transaction
 	}
 
-	// Flush all batch inserters before committing (if any were created)
-	// Check if batch inserters exist rather than relying on a mode flag
+	// Flush all batch inserters before committing (if any were created).
 	if db.batchInsertSystem != nil {
 		if closeErr := db.closeAllBatchInserters(); closeErr != nil {
-			if rbErr := db.tx.Rollback(); rbErr != nil {
-				db.tx = nil
-				db.inTransaction = false
-				db.clearBrowseCacheInvalidation()
-				db.utilityTagCacheDirty = false
-				db.mediaSearchBoundsDirty = false
-				return fmt.Errorf("failed to flush batch inserts: %w; rollback also failed: %w", closeErr, rbErr)
-			}
-			db.tx = nil
-			db.inTransaction = false
-			db.clearBrowseCacheInvalidation()
-			db.utilityTagCacheDirty = false
-			db.mediaSearchBoundsDirty = false
-			return fmt.Errorf("failed to flush batch inserts: %w", closeErr)
+			cleanupErr := db.rollbackTransactionLocked()
+			return errors.Join(fmt.Errorf("failed to flush batch inserts: %w", closeErr), cleanupErr)
 		}
 	} else {
-		// Clean up prepared statements
 		db.closeAllPreparedStatements()
 	}
-
-	// Commit the transaction
-	err := db.tx.Commit()
-	if err != nil {
-		// Try to rollback and combine errors if both fail
-		if rbErr := db.tx.Rollback(); rbErr != nil {
-			db.tx = nil
-			db.inTransaction = false
-			db.clearBrowseCacheInvalidation()
-			db.utilityTagCacheDirty = false
-			db.mediaSearchBoundsDirty = false
-			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
-		}
-		db.tx = nil
-		db.inTransaction = false
-		db.clearBrowseCacheInvalidation()
-		db.utilityTagCacheDirty = false
-		db.mediaSearchBoundsDirty = false
-		return fmt.Errorf("failed to commit transaction: %w", err)
+	if err := db.tx.Commit(); err != nil {
+		cleanupErr := db.rollbackTransactionLocked()
+		return errors.Join(fmt.Errorf("failed to commit transaction: %w", err), cleanupErr)
 	}
 
-	// Transaction committed successfully - invalidate cache once and clear transaction flag
+	// Release the pinned writer before post-commit pool queries and checkpoints.
+	// A cleanup failure does not turn an already-successful commit into an
+	// apparent write failure; closeWriterConn discards connections it cannot reset.
 	db.tx = nil
 	db.inTransaction = false
+	if connErr := db.releaseWriterConn(); connErr != nil {
+		log.Warn().Err(connErr).Msg("failed to reset writer connection after commit")
+	}
 
 	// During indexing, keep last-good slug search coverage available for
 	// foreground launches/searches, but still invalidate durable/count caches so
@@ -2921,7 +3089,26 @@ func (db *MediaDB) SystemMediaCounts(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+	if len(tagFilters) > 0 {
+		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+	}
+	if cached := db.systemMediaCountsCache.Load(); cached != nil &&
+		cached.generation == db.systemMediaCountsGen.Load() {
+		return slices.Clone(cached.counts), nil
+	}
+
+	generation := db.systemMediaCountsGen.Load()
+	counts, err := sqlSystemMediaCounts(ctx, db.sql.Load(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if generation == db.systemMediaCountsGen.Load() {
+		db.systemMediaCountsCache.Store(&systemMediaCountsSnapshot{
+			counts:     slices.Clone(counts),
+			generation: generation,
+		})
+	}
+	return counts, nil
 }
 
 // RandomGame returns a uniformly selected media row from the specified systems.

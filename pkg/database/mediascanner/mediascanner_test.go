@@ -2490,6 +2490,18 @@ func TestGetFiles_SkipsAppleDoubleFiles(t *testing.T) {
 	assert.Contains(t, files[0], "game.nes")
 }
 
+type recordingIndexingPragmaDB struct {
+	calls []string
+}
+
+func (db *recordingIndexingPragmaDB) SetIndexingCacheSize(enable bool) {
+	db.calls = append(db.calls, fmt.Sprintf("cache:%t", enable))
+}
+
+func (db *recordingIndexingPragmaDB) SetWALAutoCheckpoint(pages int) {
+	db.calls = append(db.calls, fmt.Sprintf("wal:%d", pages))
+}
+
 // TestBatchCommitLimit_FullSpeedWhenNotThrottled verifies a nil or running
 // pauser leaves the batch commit size at its full-speed default.
 func TestBatchCommitLimit_FullSpeedWhenNotThrottled(t *testing.T) {
@@ -2514,6 +2526,49 @@ func TestBatchCommitLimit_ShrinksWhenThrottledOrPaused(t *testing.T) {
 	paused := syncutil.NewPauser()
 	paused.Pause()
 	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(paused), "paused pauser")
+}
+
+func TestConfigureIndexingPragmas_BaselinePacingRestoresOnReturn(t *testing.T) {
+	t.Parallel()
+
+	db := &recordingIndexingPragmaDB{}
+	earlyErr := errors.New("stop indexing early")
+	err := func() error {
+		cleanup := configureIndexingPragmas(db, true)
+		defer cleanup()
+		return earlyErr
+	}()
+	require.ErrorIs(t, err, earlyErr)
+	assert.Equal(t, []string{
+		"cache:true",
+		fmt.Sprintf("wal:%d", constrainedWALAutoCheckpoint),
+		fmt.Sprintf("wal:%d", defaultWALAutoCheckpoint),
+		"cache:false",
+	}, db.calls)
+}
+
+func TestConfigureIndexingPragmas_UnpacedSkipsWAL(t *testing.T) {
+	t.Parallel()
+
+	db := &recordingIndexingPragmaDB{}
+	cleanup := configureIndexingPragmas(db, false)
+	cleanup()
+	assert.Equal(t, []string{"cache:true", "cache:false"}, db.calls)
+}
+
+func TestDirectoryWalkWorkers_ConstrainedOrRestricted(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 1, directoryWalkWorkers(true, nil), "resource-constrained platform")
+	assert.Zero(t, directoryWalkWorkers(false, nil), "unrestricted platform")
+
+	throttled := syncutil.NewPauser()
+	throttled.Throttle(syncutil.ThrottleLight)
+	assert.Equal(t, 1, directoryWalkWorkers(false, throttled), "throttled pauser")
+
+	paused := syncutil.NewPauser()
+	paused.Pause()
+	assert.Equal(t, 1, directoryWalkWorkers(false, paused), "paused pauser")
 }
 
 // TestGetFiles_PausedPauserInterruptsWalk verifies GetFiles periodically

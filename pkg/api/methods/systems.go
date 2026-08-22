@@ -21,7 +21,9 @@ package methods
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -33,7 +35,8 @@ import (
 )
 
 func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received systems request")
+	started := time.Now()
+	log.Debug().Msg("received systems request")
 
 	var params models.SystemsParams
 	if len(env.Params) > 0 {
@@ -43,14 +46,20 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 	}
 
 	tagged := params.Tags != nil && len(*params.Tags) > 0
+	var tagFilters []zapscript.TagFilter
+	if tagged {
+		var err error
+		tagFilters, err = filters.ParseTagFilters(*params.Tags)
+		if err != nil {
+			return nil, models.ClientErrf("failed to parse tag filters: %w", err)
+		}
+	}
+
+	countsStarted := time.Now()
 	mediaCounts := make(map[string]int)
 	mediaCountsAvailable := false
 	var indexed []string
 	if tagged {
-		tagFilters, err := filters.ParseTagFilters(*params.Tags)
-		if err != nil {
-			return nil, models.ClientErrf("failed to parse tag filters: %w", err)
-		}
 		counts, err := env.Database.MediaDB.SystemMediaCounts(env.Context, tagFilters)
 		if err != nil {
 			return nil, fmt.Errorf("error getting tagged system media counts: %w", err)
@@ -86,10 +95,12 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		}
 	}
 
+	countsDuration := time.Since(countsStarted)
 	if len(indexed) == 0 {
 		log.Debug().Msg("no indexed systems found")
 	}
 
+	assemblyStarted := time.Now()
 	systemIDs := make([]string, 0, len(indexed))
 	seenCandidates := make(map[string]struct{}, len(indexed))
 	addSystemID := func(id string) {
@@ -179,5 +190,13 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		}
 	}
 
+	log.Debug().
+		Bool("tagged", tagged).
+		Int("indexedSystems", len(indexed)).
+		Int("responseSystems", len(respSystems)).
+		Dur("countsDuration", countsDuration).
+		Dur("assemblyDuration", time.Since(assemblyStarted)).
+		Dur("totalDuration", time.Since(started)).
+		Msg("systems request completed")
 	return models.SystemsResponse{Systems: respSystems}, nil
 }
