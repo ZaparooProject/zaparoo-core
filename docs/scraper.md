@@ -6,6 +6,7 @@ Current scraper implementations:
 
 - `gamelist.xml` imports EmulationStation metadata such as developer, publisher, genre, rating, player count, descriptions, artwork paths, videos, manuals, and ScreenScraper game IDs.
 - `media-folder` imports image paths from EmulationStation-style `media/` folders under each system folder. It does not read `gamelist.xml`, download assets, or write non-image metadata. A force run (re-scrape) also deletes stale image properties whose paths match the same local media-folder convention and whose replacement file is no longer found.
+- `mister-docs` imports locally installed MiSTer Downloader artwork, manuals, game metadata, and English synopses from `docs/<system>/` directories. It is registered only on MiSTer and never downloads source assets itself.
 
 ## Code Layout
 
@@ -14,6 +15,7 @@ Current scraper implementations:
 | `pkg/database/scraper/` | Shared scrape types (`ScrapeOptions`, `ScrapeUpdate`), sentinel helper, and small channel startup helper |
 | `pkg/database/scraper/gamelistxml/` | EmulationStation `gamelist.xml` scraper loop, matcher, mapper, and companion-entry handling |
 | `pkg/database/scraper/localmedia/` | EmulationStation `media/` folder image-path importer |
+| `pkg/database/scraper/misterdocs/` | MiSTer installed artwork/manual database discovery, parsing, matching, and importing |
 | `pkg/platforms/shared/esmedia/` | Shared EmulationStation media-folder path resolver |
 | `pkg/platforms/*` | Platform scraper registration through `Platform.Scrapers` |
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB scraper read/write helpers, property/blob helpers, and metadata graph queries |
@@ -150,6 +152,56 @@ For each indexed system, the scraper also checks `<custom_path>/<system ID>/game
 Custom gamelists enrich existing indexed records; they do not create systems, titles, or media rows. For systems that index virtual or non-file-backed entries (where the stored media path does not correspond to a real file), `<path>` must match the exact path the indexer stored for that media row.
 
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
+
+## MiSTer Installed Docs Databases
+
+The MiSTer-only `mister-docs` scraper indexes assets already installed by MiSTer Downloader or Update All. Downloader remains responsible for downloading, verifying, updating, and placing third-party content. Core performs no online database enumeration and does not edit Downloader configuration.
+
+Example artwork sources:
+
+```ini
+[chipster6502/artworkdb-snes]
+db_url = https://raw.githubusercontent.com/chipster6502/artworkdb-nintendo-consoles/db/snes_box2d.json.zip
+
+[chipster6502/artworkdb-genesis]
+db_url = https://raw.githubusercontent.com/chipster6502/artworkdb-sega/db/genesis_box2d.json.zip
+
+[chipster6502/artworkdb-arcade]
+db_url = https://raw.githubusercontent.com/chipster6502/artworkdb-arcade/db/arcade_box2d.json.zip
+```
+
+Game manuals can be selected through Update All's **Game Manuals (EN)** settings or installed through compatible Downloader database sections. These collections are large; Core intentionally does not mirror or bulk-download them.
+
+### Discovery
+
+Core derives `docs` roots from MiSTer's configured SD, USB, network/CIFS, and custom index roots. It recognizes content by installed format rather than repository name:
+
+- Artwork: `docs/<system>/Artwork/index.tsv` plus image files in the same directory.
+- Optional title metadata: `gameinfo.tsv` beside the artwork index.
+- Optional description: `synopsis_en.tsv` beside the artwork index.
+- Manuals: direct PDF files in a child directory whose name contains `manual`, for example `docs/SNES/Manuals/` or `docs/NES/Famicom Disk System Manuals/`.
+
+This format-based discovery means future compatible databases need no Core update. Run `mister-docs` again after Downloader installs or updates content. Normal runs rescan installed records idempotently; force runs additionally delete stale box-art/manual properties whose old paths are proven to belong to a discovered MiSTer docs convention.
+
+Metadata files are treated as untrusted input. Core bounds their size and record count, rejects symlink/path escapes and non-regular assets, skips ambiguous matches, and continues past malformed optional sources where possible.
+
+### Matching And Fields
+
+`index.tsv` maps ROM or MRA basenames to canonical artwork keys. Core prefers an exact media basename match. When no exact media match exists, a unique title-slug match may receive title-level artwork; ambiguous matches are skipped. CRC and size columns are not used because hashing every installed ROM would impose substantial MiSTer I/O.
+
+| Source | Destination |
+|---|---|
+| Artwork image | `property:image-boxart` at media scope for exact matches, title scope for unique slug fallback |
+| `gameinfo.tsv` year | title tag `year` |
+| `gameinfo.tsv` genre | title tag `genre` |
+| `gameinfo.tsv` developer | title tag `developer` |
+| `gameinfo.tsv` players | title tag `players` using highest numeric value |
+| `synopsis_en.tsv` synopsis | title property `property:description` |
+| Manual PDF | title property `property:manual` |
+
+Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. System manuals, overlays, charts, unknown titles, and collisions are left unmatched instead of being attached speculatively. Base-system sources can enrich compatible fallback systems such as SNES MSU and Genesis variants.
+
+If multiple docs roots provide the same property, MiSTer root order decides which source wins. As with other scrapers, running a different scraper later may replace exclusive tags or same-type properties.
 
 ## ZaparooCompanion Entries
 
