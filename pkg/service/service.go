@@ -370,7 +370,8 @@ func startService(
 
 	player := audio.NewMalgoPlayer()
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
-	playbackManager := audio.NewLongformPlaybackManager(pl.Settings().LowPowerAudio)
+	platformSettings := pl.Settings()
+	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
@@ -540,9 +541,15 @@ func startService(
 	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
-	// Create pausers to pause heavy background media work while a game is running.
+	// Resource-constrained platforms pace indexing and scraping so UI, API,
+	// reader, and audio work gets regular CPU time. Active media can impose the
+	// stronger light/heavy throttle or full pause through these same pausers.
 	indexPauser := syncutil.NewPauser()
 	scrapePauser := syncutil.NewPauser()
+	if platformSettings.ResourceConstrained {
+		indexPauser.SetBaselineThrottle(syncutil.ThrottleBackground)
+		scrapePauser.SetBaselineThrottle(syncutil.ThrottleBackground)
+	}
 	backupPauser := syncutil.NewPauser()
 
 	discoveryService := discovery.New(cfg)

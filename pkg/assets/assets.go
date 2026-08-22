@@ -23,6 +23,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
@@ -66,6 +67,8 @@ type SystemMetadata struct {
 	Manufacturer string `json:"manufacturer"`
 }
 
+var systemMetadataCache sync.Map
+
 func GetSystemMetadata(system string) (SystemMetadata, error) {
 	var metadata SystemMetadata
 
@@ -74,6 +77,11 @@ func GetSystemMetadata(system string) (SystemMetadata, error) {
 	resolvedSystem, err := systemdefs.LookupSystem(system)
 	if err == nil && resolvedSystem != nil {
 		system = resolvedSystem.ID
+	}
+	if cached, ok := systemMetadataCache.Load(system); ok {
+		if cachedMetadata, valid := cached.(SystemMetadata); valid {
+			return cachedMetadata, nil
+		}
 	}
 
 	data, err := Systems.ReadFile("systems/" + system + ".json")
@@ -84,6 +92,10 @@ func GetSystemMetadata(system string) (SystemMetadata, error) {
 	err = json.Unmarshal(data, &metadata)
 	if err != nil {
 		return metadata, fmt.Errorf("failed to unmarshal system metadata: %w", err)
+	}
+	cached, _ := systemMetadataCache.LoadOrStore(system, metadata)
+	if cachedMetadata, valid := cached.(SystemMetadata); valid {
+		return cachedMetadata, nil
 	}
 	return metadata, nil
 }

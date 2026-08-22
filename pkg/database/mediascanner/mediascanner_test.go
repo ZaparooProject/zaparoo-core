@@ -2435,6 +2435,21 @@ func TestBatchCommitLimit_ShrinksWhenThrottledOrPaused(t *testing.T) {
 	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(paused), "paused pauser")
 }
 
+func TestDirectoryWalkWorkers_ConstrainedOrRestricted(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 1, directoryWalkWorkers(true, nil), "resource-constrained platform")
+	assert.Zero(t, directoryWalkWorkers(false, nil), "unrestricted platform")
+
+	throttled := syncutil.NewPauser()
+	throttled.Throttle(syncutil.ThrottleLight)
+	assert.Equal(t, 1, directoryWalkWorkers(false, throttled), "throttled pauser")
+
+	paused := syncutil.NewPauser()
+	paused.Pause()
+	assert.Equal(t, 1, directoryWalkWorkers(false, paused), "paused pauser")
+}
+
 // TestGetFiles_PausedPauserInterruptsWalk verifies GetFiles periodically
 // checks the pauser during the directory walk itself, not just per-file in
 // the caller's indexing loop. A paused walk over enough entries to cross the

@@ -155,6 +155,23 @@ func TestReconcileStagedSystem_IdempotentRescanIsNoOp(t *testing.T) {
 	assert.Equal(t, int64(0), stats.TouchedTitles)
 }
 
+func TestReconcileStagedSystem_YieldsBetweenSQLSteps(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	yields := 0
+	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	scantest.IndexMediaPathsWithOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{
+		Yield: func() error {
+			yields++
+			return nil
+		},
+	}, gamePath)
+
+	assert.GreaterOrEqual(t, yields, 10, "reconcile should pace between set-based SQL steps")
+}
+
 // TestReconcileStagedSystem_IncompleteScanPreservesMissingState pins
 // ScanReconcileOpts.IncompleteScan: a scan known to have only partially
 // collected a system's files must not flag the unstaged remainder missing,

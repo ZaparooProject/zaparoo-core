@@ -20,7 +20,9 @@
 package helpers
 
 import (
+	"archive/zip"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1367,6 +1369,39 @@ func TestListZip(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestListZipWithYield_Cooperative(t *testing.T) {
+	t.Parallel()
+
+	zipPath := filepath.Join(t.TempDir(), "large-directory.zip")
+	file, err := os.Create(zipPath) //nolint:gosec // Test path is created under t.TempDir.
+	require.NoError(t, err)
+	writer := zip.NewWriter(file)
+	for i := range 450 {
+		_, err = writer.Create(fmt.Sprintf("entry-%04d.rom", i))
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Close())
+	require.NoError(t, file.Close())
+
+	yields := 0
+	files, err := ListZipWithYield(context.Background(), zipPath, func() error {
+		yields++
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, 450)
+	assert.GreaterOrEqual(t, yields, 3)
+}
+
+func TestListZipWithYield_StopsWhenCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ListZipWithYield(ctx, "testdata/test.zip", nil)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestCopyFile(t *testing.T) {

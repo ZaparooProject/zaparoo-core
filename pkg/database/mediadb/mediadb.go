@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -111,6 +112,7 @@ const (
 	indexingMaxOpenConns     = 3
 	defaultConnCacheSize     = "-8192"
 	defaultConnTempStore     = "FILE"
+	defaultWALAutoCheckpoint = 1000
 	connectionAcquireTimeout = 5 * time.Second
 )
 
@@ -145,6 +147,11 @@ type mediaSearchBoundsLoad struct {
 	found      bool
 }
 
+type systemMediaCountsSnapshot struct {
+	counts     []database.SystemMediaCount
+	generation uint64
+}
+
 type MediaDB struct {
 	clock                   clockwork.Clock
 	ctx                     context.Context
@@ -170,6 +177,7 @@ type MediaDB struct {
 	batchInsertSystem       *BatchInserter
 	batchInsertScanTag      *BatchInserter
 	slugSearchCache         atomic.Pointer[SlugSearchCache]
+	systemMediaCountsCache  atomic.Pointer[systemMediaCountsSnapshot]
 	batchInsertScanStage    *BatchInserter
 	batchInsertScanProperty *BatchInserter
 	dbPath                  string
@@ -188,6 +196,8 @@ type MediaDB struct {
 	needsIndexRebuild       atomic.Bool
 	isOptimizing            atomic.Bool
 	indexingCacheBoost      atomic.Bool
+	walAutoCheckpoint       atomic.Int64
+	systemMediaCountsGen    atomic.Uint64
 	inTransaction           bool
 	browseCacheDirty        bool
 	utilityTagCacheDirty    bool
@@ -225,6 +235,8 @@ type invalidationScope struct {
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
+	db.systemMediaCountsCache.Store(nil)
+	db.systemMediaCountsGen.Add(1)
 	if scope.MediaRowsChanged {
 		db.clearMediaSearchBounds()
 	}
@@ -517,6 +529,46 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	db.applyPooledConnPragmas(sqlDB)
 }
 
+// SetWALAutoCheckpoint applies a per-connection SQLite WAL checkpoint trigger.
+// Resource-constrained indexing lowers it to cap automatic checkpoint bursts
+// inside tx.Commit, then restores SQLite's default after indexing.
+func (db *MediaDB) SetWALAutoCheckpoint(pages int) {
+	if pages <= 0 {
+		return
+	}
+	db.walAutoCheckpoint.Store(int64(pages))
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return
+	}
+
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	conns, acquireErr := db.drainPooledConns(sqlDB)
+	if acquireErr != nil {
+		log.Warn().Err(acquireErr).Int("pages", pages).
+			Msg("failed to acquire pooled connections while setting WAL autocheckpoint")
+	}
+	//nolint:gosec // pages is a validated positive integer, not SQL input.
+	query := "PRAGMA wal_autocheckpoint = " + strconv.Itoa(pages)
+	for _, conn := range conns {
+		if _, err := conn.ExecContext(db.ctx, query); err != nil {
+			log.Warn().Err(err).Int("pages", pages).Msg("failed to set WAL autocheckpoint")
+		}
+		if err := conn.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to release pooled connection after setting WAL autocheckpoint")
+		}
+	}
+}
+
+func (db *MediaDB) walAutoCheckpointPages() int {
+	pages := db.walAutoCheckpoint.Load()
+	if pages <= 0 {
+		return defaultWALAutoCheckpoint
+	}
+	return int(pages)
+}
+
 // drainPooledConns checks out every pool slot simultaneously. The caller must
 // hold sqlMu so a writer transaction cannot start while the pool is drained.
 func (db *MediaDB) drainPooledConns(sqlDB *sql.DB) ([]*sql.Conn, error) {
@@ -623,7 +675,8 @@ func applyConnPragmas(
 
 // closeWriterConn restores steady-state settings before returning a writer
 // connection to the pool. If restoration fails, the physical connection is
-// discarded so boosted settings cannot leak into later foreground work.
+// discarded so boosted settings cannot leak into later foreground work. Setup
+// failure paths call this directly because partially applied pragmas are unsafe.
 func (db *MediaDB) closeWriterConn(conn *sql.Conn) error {
 	if conn == nil {
 		return nil
@@ -652,6 +705,20 @@ func (db *MediaDB) closeWriterConn(conn *sql.Conn) error {
 func (db *MediaDB) releaseWriterConn() error {
 	conn := db.txConn
 	db.txConn = nil
+	if conn == nil {
+		return nil
+	}
+
+	// Preserve the hot page cache between indexing batches. Resetting cache_size
+	// after every commit evicts cached pages, making the next reconcile reread the
+	// database from slow storage. SetIndexingCacheSize(false) drains and restores
+	// the whole pool when indexing ends.
+	if db.indexingCacheBoost.Load() {
+		if err := conn.Close(); err != nil {
+			return fmt.Errorf("failed to release boosted writer connection: %w", err)
+		}
+		return nil
+	}
 	return db.closeWriterConn(conn)
 }
 
@@ -1916,6 +1983,13 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		cleanupErr := db.closeWriterConn(conn)
 		return errors.Join(err, cleanupErr)
 	}
+	walAutoCheckpoint := db.walAutoCheckpointPages()
+	if _, err = conn.ExecContext(db.ctx,
+		"PRAGMA wal_autocheckpoint = "+strconv.Itoa(walAutoCheckpoint),
+	); err != nil {
+		cleanupErr := db.closeWriterConn(conn)
+		return errors.Join(fmt.Errorf("failed to set writer WAL autocheckpoint: %w", err), cleanupErr)
+	}
 
 	tx, err := conn.BeginTx(db.ctx, nil)
 	if err != nil {
@@ -2147,7 +2221,6 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	} else {
 		db.closeAllPreparedStatements()
 	}
-
 	if err := db.tx.Commit(); err != nil {
 		cleanupErr := db.rollbackTransactionLocked()
 		return errors.Join(fmt.Errorf("failed to commit transaction: %w", err), cleanupErr)
@@ -3016,7 +3089,26 @@ func (db *MediaDB) SystemMediaCounts(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+	if len(tagFilters) > 0 {
+		return sqlSystemMediaCounts(ctx, db.sql.Load(), tagFilters)
+	}
+	if cached := db.systemMediaCountsCache.Load(); cached != nil &&
+		cached.generation == db.systemMediaCountsGen.Load() {
+		return slices.Clone(cached.counts), nil
+	}
+
+	generation := db.systemMediaCountsGen.Load()
+	counts, err := sqlSystemMediaCounts(ctx, db.sql.Load(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if generation == db.systemMediaCountsGen.Load() {
+		db.systemMediaCountsCache.Store(&systemMediaCountsSnapshot{
+			counts:     slices.Clone(counts),
+			generation: generation,
+		})
+	}
+	return counts, nil
 }
 
 // RandomGame returns a uniformly selected media row from the specified systems.

@@ -1907,6 +1907,10 @@ func (*MockMediaDBI) SetIndexingCacheSize(_ bool) {
 	// No-op for mock — cache_size is a SQLite-specific optimization
 }
 
+func (*MockMediaDBI) SetWALAutoCheckpoint(_ int) {
+	// No-op for mock — WAL autocheckpoint is a SQLite-specific optimization.
+}
+
 func (m *MockMediaDBI) DropSecondaryIndexes() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {

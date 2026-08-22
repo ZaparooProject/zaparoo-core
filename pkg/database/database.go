@@ -787,6 +787,10 @@ type ScanStagedMedia struct {
 // ScanReconcileOpts adjusts how a staged-system reconcile treats the staged
 // file set.
 type ScanReconcileOpts struct {
+	// Yield runs between set-based reconcile steps and chunked missing-media
+	// updates. Background indexers use it for cooperative pacing; nil preserves
+	// unpaced callers such as foreground maintenance and tests.
+	Yield func() error
 	// IncompleteScan means file collection for this system hit errors (an
 	// unreadable path, a failed launcher scanner), so the staged set may be a
 	// subset of what actually exists. Staged files are still upserted and
@@ -983,6 +987,7 @@ type MediaDBI interface {
 	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
 
 	SetIndexingCacheSize(enable bool)
+	SetWALAutoCheckpoint(pages int)
 	DropSecondaryIndexes() error
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error

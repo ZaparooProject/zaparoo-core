@@ -222,7 +222,13 @@ func logScanReconcileStep(systemID, step string, affected int64, elapsed time.Du
 		Msg("scan reconcile step completed")
 }
 
-func sqlFlagMissingMedia(ctx context.Context, db sqlQueryable, systemID string, systemDBID int64) (int64, error) {
+func sqlFlagMissingMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	systemID string,
+	systemDBID int64,
+	yield func() error,
+) (int64, error) {
 	const step = "flag missing media"
 	totalStart := time.Now()
 	totalAffected := int64(0)
@@ -266,6 +272,11 @@ func sqlFlagMissingMedia(ctx context.Context, db sqlQueryable, systemID string, 
 				Int64("rowsAffected", totalAffected).
 				Dur("elapsed", chunkElapsed).
 				Msg("scan reconcile chunk completed")
+		}
+		if yield != nil {
+			if yieldErr := yield(); yieldErr != nil {
+				return totalAffected, fmt.Errorf("scan reconcile pacing after %s failed: %w", step, yieldErr)
+			}
 		}
 		if affected < scanFlagMissingBatchSize {
 			break
@@ -336,6 +347,17 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	}()
 	log.Debug().Str("system", systemID).Bool("incompleteScan", opts.IncompleteScan).Msg("scan reconcile started")
 
+	execStep := func(step, query string, args ...any) (int64, error) {
+		affected, execErr := scanReconcileExec(ctx, db, systemID, step, query, args...)
+		if execErr != nil || opts.Yield == nil {
+			return affected, execErr
+		}
+		if yieldErr := opts.Yield(); yieldErr != nil {
+			return affected, fmt.Errorf("scan reconcile pacing after %s failed: %w", step, yieldErr)
+		}
+		return affected, nil
+	}
+
 	systemDBID, found, err := sqlResolveScanSystem(ctx, db, systemID)
 	if err != nil {
 		return stats, err
@@ -349,7 +371,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// New titles: one row per staged slug not yet present for this system. The
 	// per-slug representative row is the lowest path, so multi-file titles pick
 	// their metadata deterministically.
-	stats.TitlesInserted, err = scanReconcileExec(ctx, db, systemID, "insert titles", `
+	stats.TitlesInserted, err = execStep("insert titles", `
 		INSERT INTO MediaTitles (SystemDBID, Slug, Name, SlugLength, SlugWordCount, SecondarySlug)
 		SELECT ?, s.Slug, s.TitleName, s.SlugLength, s.SlugWordCount, NULLIF(s.SecondarySlug, '')
 		FROM ScanStage s
@@ -366,7 +388,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// on either column changing, since SearchMediaBySecondarySlug would
 	// otherwise keep matching against a stale secondary slug for rows that
 	// only get here via the Name branch.
-	stats.TitlesRenamed, err = scanReconcileExec(ctx, db, systemID, "rename titles", `
+	stats.TitlesRenamed, err = execStep("rename titles", `
 		UPDATE MediaTitles SET
 			Name = (
 				SELECT s.TitleName FROM ScanStage s
@@ -462,7 +484,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		})
 	}
 	for _, capture := range preUpsertCaptures {
-		if _, err = scanReconcileExec(ctx, db, systemID, capture.step, capture.query, capture.args...); err != nil {
+		if _, err = execStep(capture.step, capture.query, capture.args...); err != nil {
 			return stats, err
 		}
 	}
@@ -470,7 +492,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// Media upsert: insert new rows, and update existing rows only when a
 	// tracked field actually differs (title reassignment, parent dir move,
 	// sort name change, or a missing row re-found on disk).
-	stats.MediaUpserted, err = scanReconcileExec(ctx, db, systemID, "upsert media", `
+	stats.MediaUpserted, err = execStep("upsert media", `
 		INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName, IsMissing)
 		SELECT t.DBID, ?, s.Path, s.ParentDir, s.SortName, 0
 		FROM ScanStage s
@@ -489,7 +511,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, err
 	}
 
-	if _, err = scanReconcileExec(ctx, db, systemID, "upsert media properties", `
+	if _, err = execStep("upsert media properties", `
 		INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text)
 		SELECT m.DBID, t.DBID, sp.Text
 		FROM ScanStageProperties sp
@@ -509,7 +531,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// report progress and honour cancellation between batches instead of spending
 	// minutes in one opaque SQLite statement.
 	if !opts.IncompleteScan {
-		stats.MediaMissing, err = sqlFlagMissingMedia(ctx, db, systemID, systemDBID)
+		stats.MediaMissing, err = sqlFlagMissingMedia(ctx, db, systemID, systemDBID, opts.Yield)
 		if err != nil {
 			return stats, err
 		}
@@ -524,7 +546,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		dynamicArgs[i] = t
 	}
 	//nolint:gosec // dynamicHolders is only "?" placeholders.
-	stats.TagsInserted, err = scanReconcileExec(ctx, db, systemID, "insert dynamic tags", fmt.Sprintf(`
+	stats.TagsInserted, err = execStep("insert dynamic tags", fmt.Sprintf(`
 		INSERT INTO Tags (TypeDBID, Tag)
 		SELECT DISTINCT tt.DBID, st.Tag
 		FROM ScanStageTags st
@@ -538,7 +560,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 
 	// A tag added to an existing media changes its title's disambiguation.
 	// Runs after the media upsert so MediaTitleDBID reflects any reassignment.
-	if _, err = scanReconcileExec(ctx, db, systemID, "capture tag additions", `
+	if _, err = execStep("capture tag additions", `
 		WITH multi_titles AS (
 			SELECT MediaTitleDBID FROM Media
 			WHERE SystemDBID = ? AND IsMissing = 0
@@ -557,7 +579,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		return stats, err
 	}
 
-	stats.TagLinksAdded, err = scanReconcileExec(ctx, db, systemID, "insert tag links", `
+	stats.TagLinksAdded, err = execStep("insert tag links", `
 		INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID)
 		SELECT m.DBID, t.DBID
 		FROM ScanStageTags st
@@ -571,7 +593,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	// Stale scanner-owned links on staged media: capture the owning titles,
 	// then delete the links.
 	staleTagTitleArgs := append([]any{systemDBID}, scanNonScannerTypeArgs(systemDBID)...)
-	if _, err = scanReconcileExec(ctx, db, systemID, "capture stale tag titles",
+	if _, err = execStep("capture stale tag titles",
 		"WITH multi_titles AS ("+
 			"SELECT MediaTitleDBID FROM Media WHERE SystemDBID = ? AND IsMissing = 0 "+
 			"GROUP BY MediaTitleDBID HAVING COUNT(*) > 1) "+
@@ -580,7 +602,7 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		staleTagTitleArgs...); err != nil {
 		return stats, err
 	}
-	stats.TagLinksDeleted, err = scanReconcileExec(ctx, db, systemID, "delete stale tag links",
+	stats.TagLinksDeleted, err = execStep("delete stale tag links",
 		"DELETE FROM MediaTags WHERE (MediaDBID, TagDBID) IN (SELECT mt.MediaDBID, mt.TagDBID"+
 			scanStaleLinkFilter+")",
 		scanNonScannerTypeArgs(systemDBID)...)
@@ -600,6 +622,11 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 		Int64("titleCount", touchedCount).
 		Dur("elapsed", countTouchedElapsed).
 		Msg("scan reconcile touched titles counted")
+	if opts.Yield != nil {
+		if yieldErr := opts.Yield(); yieldErr != nil {
+			return stats, fmt.Errorf("scan reconcile pacing after touched-title count failed: %w", yieldErr)
+		}
+	}
 	if touchedCount > 0 {
 		if err = ctx.Err(); err != nil {
 			return stats, fmt.Errorf("scan reconcile cancelled before disambiguation recompute: %w", err)
@@ -635,6 +662,11 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			Int64("titleCount", touchedCount).
 			Dur("elapsed", disambiguationElapsed).
 			Msg("scan reconcile disambiguation recompute completed")
+		if opts.Yield != nil {
+			if yieldErr := opts.Yield(); yieldErr != nil {
+				return stats, fmt.Errorf("scan reconcile pacing after disambiguation failed: %w", yieldErr)
+			}
+		}
 	}
 
 	if clearErr := sqlClearScanStage(ctx, db); clearErr != nil {

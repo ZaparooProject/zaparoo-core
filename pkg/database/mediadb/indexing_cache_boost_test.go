@@ -182,7 +182,7 @@ func TestIndexingPragmaRestoreWithUnlimitedPool(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
-func TestWriterConnectionRestoresDefaults(t *testing.T) {
+func TestWriterConnectionRetainsBoostUntilIndexingEnds(t *testing.T) {
 	t.Parallel()
 	for _, finish := range []string{"commit", "rollback"} {
 		t.Run(finish, func(t *testing.T) {
@@ -204,6 +204,14 @@ func TestWriterConnectionRestoresDefaults(t *testing.T) {
 			}
 
 			conn, err := sqlDB.Conn(ctx)
+			require.NoError(t, err)
+			cacheSize, tempStore = readPragmas(ctx, t, conn)
+			assert.Equal(t, -32768, cacheSize)
+			assert.Equal(t, tempStoreMemory, tempStore)
+			require.NoError(t, conn.Close())
+
+			mediaDB.SetIndexingCacheSize(false)
+			conn, err = sqlDB.Conn(ctx)
 			require.NoError(t, err)
 			cacheSize, tempStore = readPragmas(ctx, t, conn)
 			assert.Equal(t, -8192, cacheSize)

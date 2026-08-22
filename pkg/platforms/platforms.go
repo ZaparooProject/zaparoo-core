@@ -431,10 +431,10 @@ type Settings struct {
 	// the main TUI occupies the platform's primary display. Utility widgets do
 	// not apply this policy because their controls can trigger ZapScript.
 	DisableZapScriptInTUI bool
-	// LowPowerAudio indicates the platform has very limited CPU available for
-	// audio decoding, so streaming playback trades resampler quality for
-	// decode speed.
-	LowPowerAudio bool
+	// ResourceConstrained indicates the platform has limited CPU and I/O
+	// capacity. Core uses lower-cost audio processing and cooperatively paces
+	// expensive background media work on these platforms.
+	ResourceConstrained bool
 }
 
 // ScraperCustomOption is a single user-configurable option for a scraper.

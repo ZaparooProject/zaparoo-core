@@ -44,9 +44,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSettings_DisablesZapScriptWhileTUIOpen(t *testing.T) {
+func TestSettings_MiSTerResourcePolicies(t *testing.T) {
 	t.Parallel()
-	assert.True(t, (&Platform{}).Settings().DisableZapScriptInTUI)
+	settings := (&Platform{}).Settings()
+	assert.True(t, settings.DisableZapScriptInTUI)
+	assert.True(t, settings.ResourceConstrained)
 }
 
 // mockLauncherManager is a minimal mock for testing

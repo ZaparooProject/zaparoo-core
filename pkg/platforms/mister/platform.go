@@ -303,6 +303,7 @@ func (p *Platform) StartPost(
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
+	StartResourceTopologyManager(ctx)
 
 	tr, stopTr, err := tracker.StartTracker(
 		ctx,
@@ -486,7 +487,7 @@ func (*Platform) Settings() platforms.Settings {
 		LogDir:                misterconfig.TempDir,
 		ZipsAsDirs:            true,
 		DisableZapScriptInTUI: true,
-		LowPowerAudio:         true,
+		ResourceConstrained:   true,
 	}
 }
 

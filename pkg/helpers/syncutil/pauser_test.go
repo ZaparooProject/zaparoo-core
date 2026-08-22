@@ -150,6 +150,60 @@ func TestPauser_MultipleWaitersUnblocked(t *testing.T) {
 	}
 }
 
+func TestPauser_BaselineThrottleSleepsWithoutReportingThrottled(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(10*time.Millisecond, 20*time.Millisecond)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-10 * time.Millisecond)
+	p.mu.Unlock()
+
+	start := time.Now()
+	require.NoError(t, p.Wait(context.Background()))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.False(t, p.IsThrottled())
+	assert.False(t, p.IsPaused())
+}
+
+func TestBaselineSleepForElapsed_CapsLongWorkCompensation(t *testing.T) {
+	assert.Equal(t, maxBaselineThrottleSleep, baselineSleepForElapsed(
+		3*time.Second, backgroundThrottleWork, backgroundThrottleSleep,
+	))
+}
+
+func TestBaselineSleepForElapsed_PreservesShortWorkRatio(t *testing.T) {
+	assert.Equal(t, 80*time.Millisecond, baselineSleepForElapsed(
+		80*time.Millisecond, backgroundThrottleWork, backgroundThrottleSleep,
+	))
+}
+
+func TestPauser_ResumeReturnsToBaselineThrottle(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(10*time.Millisecond, 20*time.Millisecond)
+	p.Throttle(ThrottleHeavy)
+	p.Resume()
+
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-10 * time.Millisecond)
+	p.mu.Unlock()
+	start := time.Now()
+	require.NoError(t, p.Wait(context.Background()))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.False(t, p.IsThrottled())
+}
+
+func TestPauser_ResumeResetsRunningBaselineWindow(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-time.Hour)
+	p.mu.Unlock()
+
+	p.Resume()
+	require.NoError(t, p.Wait(context.Background()))
+}
+
 func TestPauser_ThrottleAllowsWorkWithinQuantum(t *testing.T) {
 	p := NewPauser()
 	p.Throttle(ThrottleLight)
@@ -298,6 +352,17 @@ func TestPauser_ThrottleHeavyUsesHeavyPreset(t *testing.T) {
 	defer p.mu.Unlock()
 	assert.Equal(t, heavyThrottleWork, p.workQuantum)
 	assert.Equal(t, heavyThrottleSleep, p.sleepQuantum)
+}
+
+func TestPauser_BaselineThrottleUsesBackgroundPreset(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	assert.True(t, p.baselineEnabled)
+	assert.Equal(t, backgroundThrottleWork, p.baselineWorkQuantum)
+	assert.Equal(t, backgroundThrottleSleep, p.baselineSleep)
 }
 
 func TestPauser_ThrottleLevelSwitchUpdatesQuanta(t *testing.T) {
