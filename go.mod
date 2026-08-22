@@ -23,7 +23,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
-	github.com/gen2brain/malgo v0.11.25
+	github.com/gen2brain/malgo v0.11.26
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/getsentry/sentry-go/zerolog v0.48.0
 	github.com/go-chi/chi/v5 v5.3.1
