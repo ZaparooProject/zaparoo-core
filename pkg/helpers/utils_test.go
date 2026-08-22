@@ -22,6 +22,7 @@ package helpers
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1371,20 +1372,25 @@ func TestListZip(t *testing.T) {
 	}
 }
 
-func TestListZipWithYield_Cooperative(t *testing.T) {
-	t.Parallel()
-
+func createZipWithEntries(t *testing.T, count int) string {
+	t.Helper()
 	zipPath := filepath.Join(t.TempDir(), "large-directory.zip")
 	file, err := os.Create(zipPath) //nolint:gosec // Test path is created under t.TempDir.
 	require.NoError(t, err)
 	writer := zip.NewWriter(file)
-	for i := range 450 {
+	for i := range count {
 		_, err = writer.Create(fmt.Sprintf("entry-%04d.rom", i))
 		require.NoError(t, err)
 	}
 	require.NoError(t, writer.Close())
 	require.NoError(t, file.Close())
+	return zipPath
+}
 
+func TestListZipWithYield_Cooperative(t *testing.T) {
+	t.Parallel()
+
+	zipPath := createZipWithEntries(t, 450)
 	yields := 0
 	files, err := ListZipWithYield(context.Background(), zipPath, func() error {
 		yields++
@@ -1393,6 +1399,23 @@ func TestListZipWithYield_Cooperative(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, files, 450)
 	assert.GreaterOrEqual(t, yields, 3)
+}
+
+func TestListZipWithYield_PropagatesParsingYieldError(t *testing.T) {
+	t.Parallel()
+
+	zipPath := createZipWithEntries(t, 450)
+	yieldErr := errors.New("foreground work pending")
+	yields := 0
+	_, err := ListZipWithYield(context.Background(), zipPath, func() error {
+		yields++
+		if yields == 2 {
+			return yieldErr
+		}
+		return nil
+	})
+	require.ErrorIs(t, err, yieldErr)
+	assert.Equal(t, 2, yields)
 }
 
 func TestListZipWithYield_StopsWhenCanceled(t *testing.T) {

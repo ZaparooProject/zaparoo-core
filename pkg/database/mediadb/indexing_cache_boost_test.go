@@ -164,6 +164,42 @@ func TestIndexingCacheBoostAppliesToEveryPooledConnection(t *testing.T) {
 	}
 }
 
+func TestWALAutoCheckpointAppliesToPoolAndWriter(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+	sqlDB.SetMaxOpenConns(2)
+
+	assertPooledValues := func(want int) {
+		t.Helper()
+		conns := make([]*sql.Conn, 0, 2)
+		for range 2 {
+			conn, err := sqlDB.Conn(ctx)
+			require.NoError(t, err)
+			conns = append(conns, conn)
+		}
+		for _, conn := range conns {
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx, "PRAGMA wal_autocheckpoint").Scan(&got))
+			assert.Equal(t, want, got)
+			require.NoError(t, conn.Close())
+		}
+	}
+
+	mediaDB.SetWALAutoCheckpoint(128)
+	assertPooledValues(128)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	var writerValue int
+	require.NoError(t, mediaDB.tx.QueryRowContext(ctx, "PRAGMA wal_autocheckpoint").Scan(&writerValue))
+	assert.Equal(t, 128, writerValue)
+	require.NoError(t, mediaDB.RollbackTransaction())
+
+	mediaDB.SetWALAutoCheckpoint(defaultWALAutoCheckpoint)
+	assertPooledValues(defaultWALAutoCheckpoint)
+}
+
 func TestIndexingPragmaRestoreWithUnlimitedPool(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

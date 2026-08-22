@@ -166,6 +166,31 @@ func TestSystemMediaCounts_UsesBrowseCache(t *testing.T) {
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 42}}, counts)
 }
 
+func TestSystemMediaCounts_CacheIsIsolatedAndInvalidated(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	system := insertSystemWithMedia(
+		t, mediaDB, "NES", "Game One", filepath.Join("roms", "nes", "game-one.nes"),
+	)
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, counts)
+
+	counts[0].Count = 99
+	cached, err := mediaDB.SystemMediaCounts(ctx, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, cached)
+
+	insertSystemMedia(t, mediaDB, system, "Game Two", filepath.Join("roms", "nes", "game-two.nes"))
+	refreshed, err := mediaDB.SystemMediaCounts(ctx, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, refreshed)
+}
+
 func TestRandomGameWithQuery_BroadSystemsUsesBrowseCounts(t *testing.T) {
 	t.Parallel()
 

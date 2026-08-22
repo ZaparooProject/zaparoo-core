@@ -178,6 +178,16 @@ func (c *doneSignalingContext) Done() <-chan struct{} {
 	return c.Context.Done()
 }
 
+func TestPauser_HasBaselineThrottle(t *testing.T) {
+	var nilPauser *Pauser
+	assert.False(t, nilPauser.HasBaselineThrottle())
+
+	p := NewPauser()
+	assert.False(t, p.HasBaselineThrottle())
+	p.SetBaselineThrottle(ThrottleBackground)
+	assert.True(t, p.HasBaselineThrottle())
+}
+
 func TestPauser_BaselineSleepObservesPause(t *testing.T) {
 	p := NewPauser()
 	p.SetBaselineThrottle(ThrottleBackground)
@@ -205,6 +215,29 @@ func TestPauser_BaselineSleepObservesPause(t *testing.T) {
 
 	p.Resume()
 	require.NoError(t, <-done)
+}
+
+func TestPauser_BaselineSleepHonorsCancellation(t *testing.T) {
+	p := NewPauser()
+	p.SetBaselineThrottle(ThrottleBackground)
+	p.SetBaselineThrottleQuanta(time.Millisecond, time.Hour)
+	p.mu.Lock()
+	p.baselineWorkStart = time.Now().Add(-time.Millisecond)
+	p.mu.Unlock()
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx := &doneSignalingContext{
+		Context:    baseCtx,
+		doneCalled: make(chan struct{}, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Wait(ctx)
+	}()
+
+	<-ctx.doneCalled
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestBaselineSleepForElapsed_CapsLongWorkCompensation(t *testing.T) {

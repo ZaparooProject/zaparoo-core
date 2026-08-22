@@ -153,8 +153,11 @@ func setCoreAffinity(frontendActive bool) error {
 }
 
 func setMMCAffinity(frontendActive bool) error {
-	//nolint:gosec // Fixed procfs path assembled from constant components.
-	interrupts, err := os.ReadFile(interruptsPath)
+	return setMMCAffinityAt(interruptsPath, irqAffinityRoot, frontendActive)
+}
+
+func setMMCAffinityAt(interruptsFile, affinityRoot string, frontendActive bool) error {
+	interrupts, err := os.ReadFile(interruptsFile) //nolint:gosec // Internal path or controlled test path.
 	if err != nil {
 		return fmt.Errorf("reading interrupts: %w", err)
 	}
@@ -167,7 +170,7 @@ func setMMCAffinity(frontendActive bool) error {
 	if frontendActive {
 		cpus = "1"
 	}
-	affinityPath := filepath.Join(irqAffinityRoot, strconv.Itoa(irq), "smp_affinity_list")
+	affinityPath := filepath.Join(affinityRoot, strconv.Itoa(irq), "smp_affinity_list")
 	if err = os.WriteFile(affinityPath, []byte(cpus), 0o600); err != nil {
 		return fmt.Errorf("writing IRQ %d affinity: %w", irq, err)
 	}
