@@ -45,6 +45,16 @@ and removes a cron as something that can silently fail.
 
 ### Promoting a release
 
+Prereleases promoted to the beta OTA channel must use `vX.Y.Z-beta.N` or
+`vX.Y.Z-rc.N`, where `N` is an unpadded numeric SemVer prerelease identifier,
+for example `v2.17.0-beta.10` or `v2.17.0-rc.1`. Do not use forms such as
+`-beta10` or `-rc01`: SemVer either sorts them incorrectly or rejects their
+numeric identifiers. Alpha remains a valid version stage for builds and GitHub
+releases, but alpha releases are not promotable to the beta OTA channel. OTA
+validate checks this policy before release assets, and the shared manifest
+generator enforces it during manual promotion. Nightly tags keep their existing
+convention.
+
 1. Wait for **OTA validate** to pass on the release. Its job summary lists the
    inputs to use. A failure here means the release is not promotable at all —
    usually a platform archive missing from the build matrix.

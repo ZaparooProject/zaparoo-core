@@ -61,7 +61,7 @@ jobs:
           is_nightly: ${{ inputs.is_nightly || 'false' }}
         run: |
           # Detect pre-release builds (nightly, alpha, beta, rc, etc.)
-          # Any tag with a hyphen after the version (e.g. v2.10.0-beta2) is pre-release
+          # Any tag with a hyphen after the version (e.g. v2.10.0-beta.2) is pre-release
           VERSION="${tag#v}"
           if [[ "$is_nightly" == "true" ]] || [[ "$tag" == *"nightly"* ]]; then
             PRERELEASE="--prerelease"

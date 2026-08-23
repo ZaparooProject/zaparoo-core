@@ -71,7 +71,7 @@ func TestNormalizeManifest_BackfillsLegacyFields(t *testing.T) {
 		LastAssetID:   3,
 		Releases: []*release{
 			{ID: 1, TagName: "v2.16.0", Prerelease: false},
-			{ID: 2, TagName: "v2.17.0-beta1", Prerelease: true},
+			{ID: 2, TagName: "v2.17.0-beta.1", Prerelease: true},
 		},
 	}
 
@@ -156,7 +156,7 @@ func TestManifestRoundTrip(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	path := filepath.Join("out", manifestName)
 
-	original := newTestManifest(t, []string{"v2.16.0", "v2.17.0-beta1"}, []string{channelStable, channelBeta})
+	original := newTestManifest(t, []string{"v2.16.0", "v2.17.0-beta.1"}, []string{channelStable, channelBeta})
 	stampManifest(original, 42, "k1", time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC))
 	require.NoError(t, writeManifest(fs, original, path))
 

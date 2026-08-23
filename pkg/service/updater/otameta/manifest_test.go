@@ -360,7 +360,7 @@ func TestVersionFromTag(t *testing.T) {
 
 	assert.Equal(t, "2.16.1", VersionFromTag("v2.16.1"))
 	assert.Equal(t, "2.16.1", VersionFromTag("2.16.1"))
-	assert.Equal(t, "2.17.0-beta1", VersionFromTag("v2.17.0-beta1"))
+	assert.Equal(t, "2.17.0-beta.1", VersionFromTag("v2.17.0-beta.1"))
 }
 
 func TestFindRelease(t *testing.T) {

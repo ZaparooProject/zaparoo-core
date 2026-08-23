@@ -157,7 +157,7 @@ func TestVersionFromTag(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "2.16.1", versionFromTag("v2.16.1"))
-	assert.Equal(t, "2.17.0-beta1", versionFromTag("v2.17.0-beta1"))
+	assert.Equal(t, "2.17.0-beta.1", versionFromTag("v2.17.0-beta.1"))
 	assert.Equal(t, "2.16.1", versionFromTag("2.16.1"))
 }
 
