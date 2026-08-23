@@ -251,7 +251,7 @@ func TestReplaceRunningBinary_ReportsBothFailuresWhenTheOutgoingBinaryCannotGoBa
 	err := replaceRunningBinaryWith(f.source, f.target, ops)
 
 	require.ErrorIs(t, err, fatal)
-	assert.Contains(t, err.Error(), f.target,
+	assert.Contains(t, err.Error(), fmt.Sprintf("%q", f.target),
 		"the error has to name the binary that is no longer there")
 	assert.NoFileExists(t, f.target)
 	assert.FileExists(t, f.superseded, "the outgoing binary is still recoverable by hand")

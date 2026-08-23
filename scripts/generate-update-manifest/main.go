@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -207,7 +208,25 @@ func loadPublishedChecksums(fs afero.Fs, path string) ([]checksumEntry, error) {
 
 // applyPromote gathers the local archives, cross-checks them against the
 // GitHub release, and adds the release to the manifest.
+var canonicalOTAPrereleaseTag = regexp.MustCompile(
+	`^v\d+\.\d+\.\d+-(beta|rc)\.(0|[1-9]\d*)$`,
+)
+
+func validateCandidateTag(tag, channel string) error {
+	if channel == channelBeta && !canonicalOTAPrereleaseTag.MatchString(tag) {
+		return fmt.Errorf(
+			"invalid beta-channel tag %q: use vX.Y.Z-beta.N or vX.Y.Z-rc.N",
+			tag,
+		)
+	}
+	return nil
+}
+
 func applyPromote(fs afero.Fs, m *manifest, opts *options) (*release, error) {
+	if err := validateCandidateTag(opts.tag, opts.channel); err != nil {
+		return nil, err
+	}
+
 	archives, err := scanArchives(fs, opts.archivesDir)
 	if err != nil {
 		return nil, err

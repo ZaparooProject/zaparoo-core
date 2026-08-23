@@ -152,7 +152,7 @@ func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
 		received = opts
 		return &updater.Result{
 			CurrentVersion:  "2.9.0",
-			LatestVersion:   "2.10.0-beta1",
+			LatestVersion:   "2.10.0-beta.1",
 			UpdateAvailable: true,
 		}, nil
 	}
