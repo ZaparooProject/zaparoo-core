@@ -57,6 +57,18 @@ func (db *UserDB) UpdateMediaHistoryIdentity(dbid int64, identity *database.Medi
 	return sqlUpdateMediaHistoryIdentity(db.ctx, db.sql.Load(), dbid, identity)
 }
 
+// UpdateMediaHistoryIdentityAndPath is UpdateMediaHistoryIdentity plus a
+// MediaPath correction, for backfilling legacy rows recorded under a
+// non-path external identifier (e.g. a MiSTer arcade set name).
+func (db *UserDB) UpdateMediaHistoryIdentityAndPath(
+	dbid int64, path string, identity *database.MediaIdentity,
+) (bool, error) {
+	if db.sql.Load() == nil {
+		return false, ErrNullSQL
+	}
+	return sqlUpdateMediaHistoryIdentityAndPath(db.ctx, db.sql.Load(), dbid, path, identity)
+}
+
 // CloseMediaHistory finalizes a media history entry with end time and final play time.
 func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
 	if db.sql.Load() == nil {
@@ -278,6 +290,50 @@ func sqlUpdateMediaHistoryIdentity(
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("failed to count media history identity update: %w", err)
+	}
+	return rows > 0, nil
+}
+
+// sqlUpdateMediaHistoryIdentityAndPath is sqlUpdateMediaHistoryIdentity plus
+// a MediaPath correction. DBID, ID (session UUID), StartTime/EndTime,
+// PlayTime, and ProfileID are untouched.
+func sqlUpdateMediaHistoryIdentityAndPath(
+	ctx context.Context, db *sql.DB, dbid int64, path string, identity *database.MediaIdentity,
+) (bool, error) {
+	if identity == nil {
+		return false, errors.New("media history identity is required")
+	}
+	if path == "" {
+		return false, errors.New("media history path is required")
+	}
+	result, err := db.ExecContext(ctx, `
+		UPDATE MediaHistory
+		SET MediaPath = ?, MediaName = ?, Tags = ?, MediaIdentity = ?, MediaIdentityPolicyVersion = ?,
+		    UpdatedAt = MAX(?, UpdatedAt + 1), SyncedAt = NULL
+		WHERE DBID = ?
+		  AND (
+		    MediaIdentityPolicyVersion < ? OR
+		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '') OR
+		    MediaPath <> ?
+		  );
+	`,
+		path,
+		identity.DisplayName,
+		database.EncodeTagStrings(identity.LegacyTags()),
+		database.EncodeMediaIdentity(identity),
+		identity.PolicyVersion,
+		time.Now().Unix(),
+		dbid,
+		identity.PolicyVersion,
+		identity.PolicyVersion,
+		path,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute media history identity and path update: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to count media history identity and path update: %w", err)
 	}
 	return rows > 0, nil
 }

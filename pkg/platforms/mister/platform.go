@@ -367,6 +367,22 @@ func (p *Platform) StartPost(
 		log.Debug().Msg("no idle scheduler; skipping arcade DB update")
 	}
 
+	// One-time cleanup: resolve legacy MediaHistory rows recorded under a
+	// bare arcade set name (from before the tracker could canonicalize
+	// externally detected arcade launches) to their real .mra path and
+	// identity. Deferred to the idle scheduler for the same reason as the
+	// arcade DB update; the task itself retries internally until it
+	// succeeds, since Schedule only runs it once.
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "arcade-history-backfill",
+			5*time.Second, 300*time.Second,
+			func(ctx context.Context) { tracker.RunArcadeHistoryBackfill(ctx, db, tr) },
+		)
+	} else {
+		log.Debug().Msg("no idle scheduler; skipping arcade history backfill")
+	}
+
 	// If the RBF cache loaded from disk but its shallow manifest drifted,
 	// the persisted entries are still serving requests but a rescan is
 	// needed to pick up any added/removed cores. Defer the rescan to the

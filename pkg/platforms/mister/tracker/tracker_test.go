@@ -9,11 +9,102 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeFileInfo/fakeDirEntry/fakeFS give composeSelectedPath a small
+// in-memory filesystem, so tests can exercise MiSTer's SD/USB root selection
+// and directory browsing without depending on real paths like /media/fat
+// existing on the test machine.
+type fakeFileInfo struct {
+	name  string
+	isDir bool
+}
+
+func (f fakeFileInfo) Name() string { return f.name }
+func (fakeFileInfo) Size() int64    { return 0 }
+func (f fakeFileInfo) Mode() os.FileMode {
+	if f.isDir {
+		return os.ModeDir
+	}
+	return 0
+}
+func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool      { return f.isDir }
+func (fakeFileInfo) Sys() any           { return nil }
+
+type fakeDirEntry struct {
+	name  string
+	isDir bool
+}
+
+func (f fakeDirEntry) Name() string { return f.name }
+func (f fakeDirEntry) IsDir() bool  { return f.isDir }
+func (f fakeDirEntry) Type() os.FileMode {
+	if f.isDir {
+		return os.ModeDir
+	}
+	return 0
+}
+
+func (f fakeDirEntry) Info() (os.FileInfo, error) {
+	return fakeFileInfo(f), nil
+}
+
+func fakeFile(name string) fakeDirEntry { return fakeDirEntry{name: name} }
+func fakeDir(name string) fakeDirEntry  { return fakeDirEntry{name: name, isDir: true} }
+
+type fakeFS struct {
+	dirs  map[string][]fakeDirEntry
+	files map[string]bool
+}
+
+func newFakeFS() *fakeFS {
+	return &fakeFS{dirs: map[string][]fakeDirEntry{}, files: map[string]bool{}}
+}
+
+// addDir registers path as a directory containing entries. Any child
+// directory entries are registered too (as empty, unless later overridden by
+// their own addDir call).
+func (f *fakeFS) addDir(path string, entries ...fakeDirEntry) {
+	f.dirs[path] = entries
+	for _, e := range entries {
+		child := filepath.Join(path, e.name)
+		if e.isDir {
+			if _, ok := f.dirs[child]; !ok {
+				f.dirs[child] = nil
+			}
+		} else {
+			f.files[child] = true
+		}
+	}
+}
+
+func (f *fakeFS) stat(path string) (os.FileInfo, error) {
+	if _, ok := f.dirs[path]; ok {
+		return fakeFileInfo{name: filepath.Base(path), isDir: true}, nil
+	}
+	if f.files[path] {
+		return fakeFileInfo{name: filepath.Base(path), isDir: false}, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+func (f *fakeFS) readDir(path string) ([]os.DirEntry, error) {
+	entries, ok := f.dirs[path]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	out := make([]os.DirEntry, len(entries))
+	for i, e := range entries {
+		out[i] = e
+	}
+	return out, nil
+}
 
 func writeRecentEntry(t *testing.T, filename, directory, name string) {
 	t.Helper()
@@ -24,44 +115,17 @@ func writeRecentEntry(t *testing.T, filename, directory, name string) {
 	require.NoError(t, os.WriteFile(filename, entry, 0o600))
 }
 
-func TestSelectedFullPath(t *testing.T) {
-	t.Parallel()
-
-	selectedPath := filepath.Join(misterconfig.SDRootDir, "games", "SNES", "Game.sfc")
-	t.Run("selected", func(t *testing.T) {
-		path, err := selectedFullPath(
-			[]byte("selected\n"),
-			[]byte(" "+selectedPath+"\n"),
-		)
-		require.NoError(t, err)
-		assert.Equal(t, selectedPath, path)
-	})
-
-	for _, status := range []string{"active", "cancelled", ""} {
-		t.Run("ignores "+status, func(t *testing.T) {
-			path, err := selectedFullPath([]byte(status), []byte(selectedPath))
-			require.NoError(t, err)
-			assert.Empty(t, path)
-		})
-	}
-
-	t.Run("selected requires path", func(t *testing.T) {
-		_, err := selectedFullPath([]byte("selected"), nil)
-		require.Error(t, err)
-	})
-}
-
-func TestResolveRecentGamePath(t *testing.T) {
+func TestResolveStorageRelativePath(t *testing.T) {
 	t.Parallel()
 
 	relativePath := filepath.Join("games", "GBC", "Game.gbc")
 	assert.Equal(t,
 		filepath.Join(misterconfig.SDRootDir, relativePath),
-		resolveRecentGamePath(relativePath, nil, func(string) bool { return false }),
+		resolveStorageRelativePath(relativePath, nil, func(string) bool { return false }),
 	)
 
 	usb1Path := filepath.Join(filepath.Dir(misterconfig.SDRootDir), "usb1", relativePath)
-	assert.Equal(t, usb1Path, resolveRecentGamePath(
+	assert.Equal(t, usb1Path, resolveStorageRelativePath(
 		relativePath,
 		[]byte{1, 0, 0, 0},
 		func(path string) bool { return path == usb1Path },
@@ -70,8 +134,227 @@ func TestResolveRecentGamePath(t *testing.T) {
 	absolutePath := filepath.Join(string(filepath.Separator), "media", "network", "Game.gbc")
 	assert.Equal(t,
 		absolutePath,
-		resolveRecentGamePath(absolutePath, []byte{1, 0, 0, 0}, func(string) bool { return false }),
+		resolveStorageRelativePath(absolutePath, []byte{1, 0, 0, 0}, func(string) bool { return false }),
 	)
+}
+
+func TestReadFileSelectionFrom(t *testing.T) {
+	t.Parallel()
+
+	writeFiles := func(t *testing.T, status, fullPath, currentPath string) (string, string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		statusFile := filepath.Join(dir, "FILESELECT")
+		fullPathFile := filepath.Join(dir, "FULLPATH")
+		currentPathFile := filepath.Join(dir, "CURRENTPATH")
+		require.NoError(t, os.WriteFile(statusFile, []byte(status), 0o600))
+		require.NoError(t, os.WriteFile(fullPathFile, []byte(fullPath), 0o600))
+		require.NoError(t, os.WriteFile(currentPathFile, []byte(currentPath), 0o600))
+		return statusFile, fullPathFile, currentPathFile
+	}
+
+	t.Run("selected", func(t *testing.T) {
+		t.Parallel()
+		statusFile, fullPathFile, currentPathFile := writeFiles(
+			t, "selected", "/media/fat/_Arcade/Pooyan.mra\x00\x00", "Pooyan\x00",
+		)
+		sel, err := readFileSelectionFrom(statusFile, fullPathFile, currentPathFile)
+		require.NoError(t, err)
+		assert.Equal(t, fileSelection{
+			Status:      "selected",
+			FullPath:    "/media/fat/_Arcade/Pooyan.mra",
+			CurrentPath: "Pooyan",
+		}, sel)
+	})
+
+	for _, status := range []string{"active", "cancelled", ""} {
+		t.Run("does not read FULLPATH/CURRENTPATH when "+status, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			statusFile := filepath.Join(dir, "FILESELECT")
+			require.NoError(t, os.WriteFile(statusFile, []byte(status), 0o600))
+			// FULLPATH/CURRENTPATH don't exist; reading them would error.
+			sel, err := readFileSelectionFrom(
+				statusFile,
+				filepath.Join(dir, "FULLPATH"),
+				filepath.Join(dir, "CURRENTPATH"),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, status, sel.Status)
+			assert.Empty(t, sel.FullPath)
+			assert.Empty(t, sel.CurrentPath)
+		})
+	}
+
+	t.Run("missing status file errors", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		_, err := readFileSelectionFrom(
+			filepath.Join(dir, "FILESELECT"),
+			filepath.Join(dir, "FULLPATH"),
+			filepath.Join(dir, "CURRENTPATH"),
+		)
+		require.Error(t, err)
+	})
+
+	t.Run("missing FULLPATH errors once selected", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		statusFile := filepath.Join(dir, "FILESELECT")
+		require.NoError(t, os.WriteFile(statusFile, []byte("selected"), 0o600))
+		_, err := readFileSelectionFrom(
+			statusFile, filepath.Join(dir, "FULLPATH"), filepath.Join(dir, "CURRENTPATH"),
+		)
+		require.Error(t, err)
+	})
+
+	t.Run("missing CURRENTPATH errors once selected", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		statusFile, fullPathFile, currentPathFile := writeFiles(t, "selected", "/media/fat/game.rom", "")
+		require.NoError(t, os.Remove(currentPathFile))
+		_, err := readFileSelectionFrom(statusFile, fullPathFile, filepath.Join(dir, "CURRENTPATH"))
+		require.Error(t, err)
+	})
+}
+
+func TestComposeSelectedPath(t *testing.T) {
+	t.Parallel()
+
+	sdSNES := filepath.Join(misterconfig.SDRootDir, "games", "SNES")
+	sdArcade := filepath.Join(misterconfig.SDRootDir, "_Arcade")
+	sdPSX := filepath.Join(misterconfig.SDRootDir, "games", "PSX")
+	sdNeoGeo := filepath.Join(misterconfig.SDRootDir, "games", "NEOGEO")
+	sdRoot := misterconfig.SDRootDir
+	usbGBC := filepath.Join(filepath.Dir(misterconfig.SDRootDir), "usb1", "games", "GBC")
+
+	fs := newFakeFS()
+	fs.addDir(sdSNES, fakeFile("Game1.sfc"), fakeFile("Game2.sfc"))
+	fs.addDir(sdArcade,
+		fakeFile("Pooyan.mra"), fakeFile("Other.mgl"),
+		fakeFile("Game.a"), fakeFile("Game.b"),
+		fakeFile("SNES_20220101.rbf"),
+	)
+	fs.addDir(sdRoot, fakeDir("games"), fakeDir("_Arcade"))
+	fs.addDir(sdPSX, fakeDir("Game (Disc 1)"))
+	fs.addDir(filepath.Join(sdPSX, "Game (Disc 1)"), fakeFile("Game.cue"))
+	fs.addDir(sdNeoGeo, fakeDir("mslug"))
+	fs.addDir(filepath.Join(sdNeoGeo, "mslug"), fakeFile("046-p1.p1"), fakeFile("046-s1.s1"))
+	fs.addDir(usbGBC, fakeFile("Game.gbc"))
+
+	tests := []struct {
+		sel     fileSelection
+		name    string
+		want    string
+		storage []byte
+		wantOK  bool
+	}{
+		{
+			name: "not selected",
+			sel:  fileSelection{Status: "active", FullPath: sdSNES, CurrentPath: "Game1"},
+		},
+		{
+			name: "current path is parent reference",
+			sel:  fileSelection{Status: "selected", FullPath: sdSNES, CurrentPath: ".."},
+		},
+		{
+			name: "current path is empty",
+			sel:  fileSelection{Status: "selected", FullPath: sdSNES, CurrentPath: ""},
+		},
+		{
+			name:   "first of two games in the same folder",
+			sel:    fileSelection{Status: "selected", FullPath: sdSNES, CurrentPath: "Game1"},
+			wantOK: true,
+			want:   filepath.Join(sdSNES, "Game1.sfc"),
+		},
+		{
+			name:   "second of two games in the same folder",
+			sel:    fileSelection{Status: "selected", FullPath: sdSNES, CurrentPath: "Game2"},
+			wantOK: true,
+			want:   filepath.Join(sdSNES, "Game2.sfc"),
+		},
+		{
+			name:   "extension-stripped MRA selection",
+			sel:    fileSelection{Status: "selected", FullPath: sdArcade, CurrentPath: "Pooyan"},
+			wantOK: true,
+			want:   filepath.Join(sdArcade, "Pooyan.mra"),
+		},
+		{
+			name: "core datecode name is unrecoverable",
+			sel:  fileSelection{Status: "selected", FullPath: sdArcade, CurrentPath: "SNES"},
+		},
+		{
+			name: "ambiguous extension-stripped match is refused",
+			sel:  fileSelection{Status: "selected", FullPath: sdArcade, CurrentPath: "Game"},
+		},
+		{
+			name: "MGL-driven absolute path matches basename verbatim",
+			sel: fileSelection{
+				Status: "selected", FullPath: filepath.Join(sdArcade, "Pooyan.mra"), CurrentPath: "Pooyan.mra",
+			},
+			wantOK: true,
+			want:   filepath.Join(sdArcade, "Pooyan.mra"),
+		},
+		{
+			name: "stale FULLPATH basename mismatch is refused",
+			sel: fileSelection{
+				Status: "selected", FullPath: filepath.Join(sdArcade, "Pooyan.mra"), CurrentPath: "Other",
+			},
+		},
+		{
+			name:   "disc folder with one file resolves to the file",
+			sel:    fileSelection{Status: "selected", FullPath: sdPSX, CurrentPath: "Game (Disc 1)"},
+			wantOK: true,
+			want:   filepath.Join(sdPSX, "Game (Disc 1)", "Game.cue"),
+		},
+		{
+			name:   "multi-file folder set resolves to the folder",
+			sel:    fileSelection{Status: "selected", FullPath: sdNeoGeo, CurrentPath: "mslug"},
+			wantOK: true,
+			want:   filepath.Join(sdNeoGeo, "mslug"),
+		},
+		{
+			name:    "USB root resolution for relative FULLPATH",
+			sel:     fileSelection{Status: "selected", FullPath: filepath.Join("games", "GBC"), CurrentPath: "Game"},
+			storage: []byte{1, 0, 0, 0},
+			wantOK:  true,
+			want:    filepath.Join(usbGBC, "Game.gbc"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := composeSelectedPath(tt.sel, tt.storage, fs.stat, fs.readDir)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+func TestIsSystemOrMenuPath(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.ScriptsDir, "update.sh")))
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.CoreConfigFolder, "SNES.ini")))
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.LinuxDir, "menu.rbf")))
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.SDRootDir, "_Arcade", "cores", "core.rbf")))
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.SDRootDir, "filters", "snes.ini")))
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.SDRootDir, "presets", "preset.cfg")))
+	assert.True(t, isSystemOrMenuPath(filepath.Join(misterconfig.SDRootDir, "readme.txt")))
+
+	assert.False(t, isSystemOrMenuPath(filepath.Join(misterconfig.SDRootDir, "games", "SNES", "Game.sfc")))
+	assert.False(t, isSystemOrMenuPath(filepath.Join(misterconfig.SDRootDir, "_Arcade", "Pooyan.mra")))
+}
+
+func TestHasSystemLauncher(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, hasSystemLauncher(nil))
+	assert.False(t, hasSystemLauncher([]platforms.Launcher{{ID: "Generic"}}))
+	assert.True(t, hasSystemLauncher([]platforms.Launcher{{ID: "Generic"}, {ID: "SNES", SystemID: "SNES"}}))
 }
 
 func TestRecentGamePath(t *testing.T) {

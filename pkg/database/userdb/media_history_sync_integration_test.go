@@ -238,6 +238,88 @@ func TestMediaHistoryIdentityMutation_RequeuesAfterStaleSyncAcknowledgement(t *t
 	assert.False(t, updated, "same-policy live/backfill races must be idempotent")
 }
 
+// A backfilled arcade set-name row (recorded under a bare set name like
+// "pooyan" because the launch wasn't Zaparoo-initiated) must resync under
+// its original session UUID with the corrected canonical path, not as a
+// second session - the server upserts by session_uuid, so this is what
+// keeps the enrichment from creating a duplicate remote session.
+func TestMediaHistoryIdentityAndPathMutation_RequeuesWithSameUUIDAndCanonicalPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	sessionUUID := "22222222-2222-4222-8222-222222222222"
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	startTime := base.Add(-30 * time.Minute)
+	dbid, err := userDB.AddMediaHistory(&database.MediaHistoryEntry{
+		ID: sessionUUID, StartTime: startTime, SystemID: "Arcade", SystemName: "Arcade",
+		MediaPath: "pooyan", MediaName: "Arcade", LauncherID: "", PlayTime: 1800,
+		BootUUID: "boot-1", ClockReliable: true, ClockSource: "system",
+		CreatedAt: startTime, UpdatedAt: base.Add(-time.Second),
+	})
+	require.NoError(t, err)
+	require.NoError(t, userDB.CloseMediaHistory(dbid, base, 1800))
+
+	initial, err := userDB.GetMediaHistorySyncBatch(time.Time{}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, initial, 1)
+	require.Equal(t, sessionUUID, initial[0].ID)
+	staleRef := database.MediaHistorySyncRef{DBID: dbid, UpdatedAt: initial[0].UpdatedAt}
+	require.NoError(t, userDB.MarkMediaHistorySynced(
+		[]database.MediaHistorySyncRef{staleRef}, time.Now().Truncate(time.Second),
+	))
+
+	canonicalPath := filepath.Join("_Arcade", "Pooyan.mra")
+	identity := mediaHistoryIdentityFixture("Pooyan", database.CurrentMediaIdentityPolicyVersion)
+	updated, err := userDB.UpdateMediaHistoryIdentityAndPath(dbid, canonicalPath, identity)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	batch, err := userDB.GetMediaHistorySyncBatch(time.Time{}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, batch, 1, "the correction must requeue the existing row, not add a second one")
+	assert.Equal(t, sessionUUID, batch[0].ID, "resync must upsert the original session, not create a duplicate")
+	assert.Equal(t, canonicalPath, batch[0].MediaPath)
+	assert.Equal(t, identity, batch[0].MediaIdentity)
+	assert.Nil(t, batch[0].SyncedAt)
+	assert.True(t, batch[0].UpdatedAt.After(staleRef.UpdatedAt))
+}
+
+func TestMediaHistoryIdentityAndPathMutation_CorrectsPathWithCurrentIdentity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	now := time.Now().Truncate(time.Second)
+	dbid, err := userDB.AddMediaHistory(&database.MediaHistoryEntry{
+		ID: "33333333-3333-4333-8333-333333333333", StartTime: now.Add(-time.Minute),
+		SystemID: "Arcade", SystemName: "Arcade", MediaPath: "pooyan", MediaName: "Pooyan",
+		BootUUID: "boot-1", ClockReliable: true, ClockSource: "system",
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Second),
+	})
+	require.NoError(t, err)
+
+	identity := mediaHistoryIdentityFixture("Pooyan", database.CurrentMediaIdentityPolicyVersion)
+	updated, err := userDB.UpdateMediaHistoryIdentity(dbid, identity)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	canonicalPath := filepath.Join("_Arcade", "Pooyan.mra")
+	updated, err = userDB.UpdateMediaHistoryIdentityAndPath(dbid, canonicalPath, identity)
+	require.NoError(t, err)
+	require.True(t, updated, "canonical path correction must not be blocked by a current identity")
+
+	history, err := userDB.GetMediaHistory([]string{"Arcade"}, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, canonicalPath, history[0].MediaPath)
+	assert.Equal(t, identity, history[0].MediaIdentity)
+}
+
 func TestMediaHistoryCloseAndIdentityEnrichment_PreserveBothUpdates(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
