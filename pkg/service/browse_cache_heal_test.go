@@ -43,6 +43,8 @@ import (
 func runBrowseCacheHealOptimizingCycle(t *testing.T, populateErr error) {
 	t.Helper()
 
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil)
 	mockDB.On("GetTotalMediaCount").Return(1000, nil)
@@ -103,6 +105,9 @@ func TestCheckAndHealBrowseCache_RebuildsWhenStale(t *testing.T) {
 
 func TestCheckAndHealBrowseCache_ClearsOptimizingOnRebuildFailure(t *testing.T) {
 	runBrowseCacheHealOptimizingCycle(t, errors.New("rebuild boom"))
+	if pendingMediaWriteRetries.Load()&mediaWriteRetryBrowseCacheHeal != 0 {
+		t.Error("expected non-conflict rebuild failure not to schedule an immediate retry")
+	}
 }
 
 func TestCheckAndHealBrowseCache_SkipsWhenFresh(t *testing.T) {

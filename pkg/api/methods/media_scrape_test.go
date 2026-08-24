@@ -163,6 +163,9 @@ func TestHandleMediaScrape_IndexingInProgress(t *testing.T) {
 	defer statusInstance.clear()
 
 	mockDB := testhelpers.NewMockMediaDBI()
+	lease, acquireErr := mockDB.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	require.NoError(t, acquireErr)
+	defer lease.Release()
 	env := makeScrapeEnv(t,
 		map[string]platforms.Scraper{"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper")},
 		mockDB,
@@ -988,6 +991,7 @@ func TestHandleMediaScrape_PersistStatusErrorClearsRunning(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to persist scraping status")
 	assert.False(t, IsScrapingRunning())
+	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())
 	mockDB.AssertExpectations(t)
 }
 
@@ -1009,6 +1013,7 @@ func TestHandleMediaScrape_PersistOperationErrorClearsRunning(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to persist scraping operation")
 	assert.False(t, IsScrapingRunning())
+	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())
 	mockDB.AssertExpectations(t)
 }
 
@@ -1034,6 +1039,7 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to start scraper")
 
 	assert.False(t, IsScrapingRunning(), "scraping status must be cleared after error")
+	assert.Equal(t, database.MediaWriteOperationNone, mockDB.ActiveMediaWriteOperation())
 	mockDB.AssertExpectations(t)
 }
 

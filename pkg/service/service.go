@@ -665,7 +665,9 @@ func startService(
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-			if !resumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+			if resumeStarted {
+				deferMediaWriteRetry(mediaWriteRetryOptimization)
+			} else if checkAndResumeOptimization(db, st.Notifications, indexPauser) {
 				// A failed optimization revealed a corrupt database; rebuild it now
 				// rather than waiting for the next startup.
 				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
@@ -731,7 +733,9 @@ func startService(
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
-	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
+	go watchForCorruptMediaDBRecovery(
+		st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser, scrapePauser,
+	)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
