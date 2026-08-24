@@ -743,6 +743,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | path       | string                                | Yes      | The browsed directory path. Empty string when listing roots.             |
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
 | totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
+| totalDirs  | number                                | Yes      | Total count of immediate child directories in the current directory.     |
 | pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
 
 ##### Browse entry object
@@ -856,6 +857,10 @@ With SNES media under `/configured/SNES` and `/roms/SNES`, this view displays th
         "hasCover": true
       }
     ],
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 100
+    },
     "totalDirs": 1,
     "totalFiles": 1
   }

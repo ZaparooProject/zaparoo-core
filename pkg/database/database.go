@@ -453,7 +453,6 @@ type BrowseCursor struct {
 	TotalDirs  int
 }
 
-// BrowseFilesOptions contains parameters for the BrowseFiles query.
 // BrowseSource is one ordered physical directory contributing to a pathless
 // system-root contents view. Earlier sources have higher overlay priority.
 // IncludeDirs is false for an ancestor route retained only for direct media.
@@ -466,6 +465,7 @@ type BrowseOverlay struct {
 	Sources []BrowseSource
 }
 
+// BrowseFilesOptions contains parameters for the BrowseFiles query.
 type BrowseFilesOptions struct {
 	Cursor     *BrowseCursor
 	Letter     *string
