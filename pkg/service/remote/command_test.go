@@ -22,6 +22,7 @@ package remote
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -29,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,6 +64,103 @@ func TestCommandMapsDisabledKillSwitchToDisabledCode(t *testing.T) {
 	result := m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
 	assert.Equal(t, "failed", result.Status)
 	assert.Equal(t, "disabled", result.ErrorCode)
+}
+
+func TestCommandExecuteSucceeds(t *testing.T) {
+	m := &manager{deps: Deps{
+		RunZapScript: func(
+			context.Context, tokens.Token, playlists.PlaylistController,
+			*gozapscript.ArgExprEnv, bool,
+		) error {
+			return nil
+		},
+	}}
+
+	result := m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+	assert.Equal(t, "succeeded", result.Status)
+}
+
+// TestCommandClassifiesRunZapScriptErrors pins how executeCommand maps every
+// RunZapScript error it recognizes to a stable remote result code; anything
+// unrecognized falls back to a generic execution_failed rather than leaking
+// internal error text over the wire (classifyHandlerError in dispatch.go
+// documents the same "never return handler text" rule for method-backed
+// operations).
+func TestCommandClassifiesRunZapScriptErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err           error
+		name          string
+		wantStatus    string
+		wantErrorCode string
+	}{
+		{name: "launch in progress is busy", err: state.ErrLaunchInProgress, wantStatus: "busy"},
+		{
+			name: "file not found", err: zapscript.ErrFileNotFound,
+			wantStatus: "failed", wantErrorCode: "media_not_found",
+		},
+		{
+			name: "unrecognized error is execution_failed", err: errors.New("launcher crashed"),
+			wantStatus: "failed", wantErrorCode: "execution_failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := &manager{deps: Deps{
+				RunZapScript: func(
+					context.Context, tokens.Token, playlists.PlaylistController,
+					*gozapscript.ArgExprEnv, bool,
+				) error {
+					return tt.err
+				},
+			}}
+
+			result := m.executeCommand(context.Background(), "launch", json.RawMessage(`{"value":"Genesis/Sonic.md"}`))
+			assert.Equal(t, tt.wantStatus, result.Status)
+			assert.Equal(t, tt.wantErrorCode, result.ErrorCode)
+		})
+	}
+}
+
+func TestCommandExecuteRejectsMalformedParams(t *testing.T) {
+	t.Parallel()
+	m := &manager{}
+	result := m.executeCommand(context.Background(), "launch", json.RawMessage(`not json`))
+	assert.Equal(t, "bad_params", result.ErrorCode)
+}
+
+// TestBuildStructuralCommandRejectsEmptyArgument pins that a value which is
+// only a query string (e.g. "?launcher=x") is rejected rather than building
+// a command with an empty launch target.
+func TestBuildStructuralCommandRejectsEmptyArgument(t *testing.T) {
+	t.Parallel()
+	_, err := buildStructuralCommand("launch", "?launcher=x")
+	require.Error(t, err)
+}
+
+// TestBuildStructuralCommandRejectsMalformedAdvancedArgs pins that a
+// duplicated or empty advanced-argument key is rejected outright rather than
+// silently taking the first or last value.
+func TestBuildStructuralCommandRejectsMalformedAdvancedArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "duplicated key", value: "Genesis/Sonic.md?launcher=a&launcher=b"},
+		{name: "empty key", value: "Genesis/Sonic.md?=x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := buildStructuralCommand("launch", tt.value)
+			require.Error(t, err)
+		})
+	}
 }
 
 // TestCommandRejectsURLValueForAllStructuralVerbs pins that none of the

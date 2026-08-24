@@ -118,6 +118,7 @@ type Platform struct {
 	profileData         *profileDataManager
 	launchShortCore     func(string) error
 	launchBasicFile     func(string) error
+	launchCoreAtRBF     func(cores.RBFInfo) error
 	closeConsole        func() error
 	launcherRBFCache    launcherRBFCache
 	lastLauncher        platforms.Launcher
@@ -134,6 +135,7 @@ func NewPlatform() *Platform {
 		fs:              afero.NewOsFs(),
 		launchShortCore: mgls.LaunchShortCore,
 		launchBasicFile: mgls.LaunchBasicFile,
+		launchCoreAtRBF: mgls.LaunchCoreAtRBF,
 	}
 	p.consoleManager = newConsoleManager(p)
 	p.profileData = newProfileDataManager(p.fs)
@@ -845,7 +847,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 // the specific core a launcher maps to (e.g. an alt core) instead of the
 // system's default. The caller (cmdSystem) has already verified launcher
 // belongs to systemID.
-func (*Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *platforms.Launcher) error {
+func (p *Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *platforms.Launcher) error {
 	if !misterCoreBacked(launcher.ID, systemID) {
 		return fmt.Errorf("launcher has no selectable core: %s", launcher.ID)
 	}
@@ -853,7 +855,11 @@ func (*Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, lau
 	if !ok {
 		return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcher.ID, systemID))
 	}
-	if err := mgls.LaunchCoreAtRBF(rbfInfo); err != nil {
+	launch := p.launchCoreAtRBF
+	if launch == nil {
+		launch = mgls.LaunchCoreAtRBF
+	}
+	if err := launch(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
 	return nil

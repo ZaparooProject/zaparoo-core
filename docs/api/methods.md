@@ -4353,8 +4353,8 @@ List all launchers known to the running service. Suitable for populating a UI la
 
 | Key         | Type     | Required | Description                                                                                        |
 | :---------- | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
-| systems     | string[] | No       | Case-sensitive list of system IDs to restrict results to. A missing key or empty list returns every launcher. Values not matching any launcher's system return no launchers for that value, rather than an error, since launcher system IDs can be launchable or virtual systems outside the standard system list. |
-| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`).       |
+| systems     | string[] | No       | Case-insensitive list of system IDs to restrict results to. A missing key or empty list returns every launcher. Values not matching any launcher's system return no launchers for that value, rather than an error, since launcher system IDs can be launchable or virtual systems outside the standard system list. |
+| fuzzySystem | boolean  | No       | Also resolve a system-ID alias to its canonical ID before matching (e.g., `"megadrive"` matches `"Genesis"`). Matching is always case-insensitive regardless of this flag.       |
 
 The unfiltered response can be large on platforms with many launchers (250+ on MiSTer). Pass `systems` to scope the request when looking up a specific system's launchers.
 

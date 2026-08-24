@@ -226,7 +226,7 @@ func isAllowedHTTPRemoteAddr(addr netip.Addr) bool {
 // check used by every configurable Online endpoint (backup, playtime,
 // remote control).
 func IsDefaultOnlineBaseURL(raw string) bool {
-	return raw == "" || strings.EqualFold(raw, DefaultOnlineBaseURL)
+	return raw == "" || strings.EqualFold(strings.TrimRight(raw, "/"), DefaultOnlineBaseURL)
 }
 
 func BackupAuthLookupURL(rawURL string) string {

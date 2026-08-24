@@ -594,25 +594,6 @@ func startService(
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
-	// A separate MethodMap instance from the one api.StartWithReady builds
-	// internally: remote's allowlist (pkg/service/remote/allowlist.go) never
-	// references the pairing methods api.Start registers on its own map
-	// after construction, so the two registries can't diverge in a way that
-	// matters here.
-	remote.Start(st.GetContext(), &remote.Deps{
-		Platform: svc.Platform, Config: svc.Config, State: svc.State, DB: svc.DB,
-		Profiles: svc.Profiles, PlaybackManager: svc.PlaybackManager, UI: svc.UI,
-		ConfirmQueue: svc.ConfirmQueue, PlaylistQueue: svc.PlaylistQueue,
-		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
-		Methods: api.NewMethodMap(),
-		RunZapScript: func(
-			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
-			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
-		) error {
-			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
-		},
-	}, backgroundWG)
-
 	// Recover before resuming persisted media work. A running status may be stale after
 	// a crash, while the sidecar marker remains authoritative and must win.
 	checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
@@ -875,6 +856,28 @@ func startService(
 		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
+
+	// A separate MethodMap instance from the one api.StartWithReady builds
+	// internally: remote's allowlist (pkg/service/remote/allowlist.go) never
+	// references the pairing methods api.Start registers on its own map
+	// after construction, so the two registries can't diverge in a way that
+	// matters here. Deliberately after StartPost: StartPost sets platform
+	// fields (e.g. p.ctx, p.setActiveMedia on MiSTer) that a dispatched
+	// launch or non-hidden mister.script operation reaches into, so the
+	// remote poller must not be able to dispatch anything before they exist.
+	remote.Start(st.GetContext(), &remote.Deps{
+		Platform: svc.Platform, Config: svc.Config, State: svc.State, DB: svc.DB,
+		Profiles: svc.Profiles, PlaybackManager: svc.PlaybackManager, UI: svc.UI,
+		ConfirmQueue: svc.ConfirmQueue, PlaylistQueue: svc.PlaylistQueue,
+		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
+		Methods: api.NewMethodMap(),
+		RunZapScript: func(
+			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
+			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
+		) error {
+			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
+		},
+	}, backgroundWG)
 
 	// A rollback finishes before there is a database to post to and then
 	// re-execs, so this is the first point at which the user can be told about

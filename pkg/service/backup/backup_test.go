@@ -1189,6 +1189,45 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 	assert.Equal(t, "Living Room", *status.Remote.DeviceName)
 }
 
+// TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRefresh
+// pins that SendCapabilityHeartbeat reports the full capability document
+// (unlike SendHeartbeat, it doesn't couple to backup entitlement/refresh) and
+// does not also refresh remote availability, so a caller that only wants
+// liveness/consent advertised does not pay for an extra /v1/device/me round
+// trip.
+func TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRefresh(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	env.Manager.cfg.SetRemoteControl(true)
+	var heartbeatCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat" {
+			heartbeatCalls++
+			var body map[string]any
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			capabilities, ok := body["capabilities"].(map[string]any)
+			if !assert.True(t, ok) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			assert.Contains(t, capabilities, "backup")
+			assert.Contains(t, capabilities, "remote_operations")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	require.NoError(t, env.Manager.cfg.SetRemoteControlBaseURL(server.URL))
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	require.NoError(t, env.Manager.SendCapabilityHeartbeat(context.Background()))
+	assert.Equal(t, 1, heartbeatCalls)
+	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
+}
+
 func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)

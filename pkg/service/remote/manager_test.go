@@ -24,9 +24,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,6 +243,86 @@ func TestWaitClassifiesSlot404(t *testing.T) {
 	assert.Equal(t, "remote_slot_required", httpErr.code)
 }
 
+func TestIsUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isUnauthorized(errUnauthorized))
+	assert.True(t, isUnauthorized(fmt.Errorf("wrapped: %w", errUnauthorized)))
+	assert.True(t, isUnauthorized(&httpError{status: http.StatusUnauthorized}))
+	assert.False(t, isUnauthorized(&httpError{status: http.StatusForbidden}))
+	assert.False(t, isUnauthorized(errors.New("network unreachable")))
+	assert.False(t, isUnauthorized(nil))
+}
+
+// TestJitter pins the backoff jitter contract: the result always falls in
+// [duration/2, duration], and it isn't degenerate (always returning the same
+// endpoint) across repeated calls, since jitter's whole purpose is to spread
+// out retries from many devices instead of retrying in lockstep.
+func TestJitter(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{}
+	assert.Equal(t, time.Millisecond, m.jitter(time.Millisecond), "at or below the floor, jitter is a no-op")
+
+	const duration = 10 * time.Second
+	floor := duration / 2
+	seen := make(map[time.Duration]bool)
+	for range 50 {
+		got := m.jitter(duration)
+		require.GreaterOrEqual(t, got, floor)
+		require.LessOrEqual(t, got, duration)
+		seen[got] = true
+	}
+	assert.Greater(t, len(seen), 1, "jitter must vary across calls, not always return the same value")
+}
+
+func TestSleepWhileEligible(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns after the requested duration", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Instance{}
+		m := &manager{deps: Deps{Config: cfg}}
+		start := time.Now()
+		m.sleepWhileEligible(context.Background(), 50*time.Millisecond, false)
+		assert.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
+	})
+
+	t.Run("returns immediately when context is already cancelled", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Instance{}
+		m := &manager{deps: Deps{Config: cfg}}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		start := time.Now()
+		m.sleepWhileEligible(ctx, time.Minute, false)
+		assert.Less(t, time.Since(start), time.Second)
+	})
+
+	t.Run("returns early when consent is disabled and requireEnabled is set", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Instance{}
+		cfg.SetRemoteControl(false)
+		m := &manager{deps: Deps{Config: cfg}}
+		start := time.Now()
+		m.sleepWhileEligible(context.Background(), time.Minute, true)
+		// Eligibility is checked once per up-to-one-second tick, not
+		// continuously, so this returns after about one tick rather than
+		// instantly, but well short of the full requested minute.
+		assert.Less(t, time.Since(start), 2*time.Second)
+	})
+
+	t.Run("does not return early on disabled consent when requireEnabled is unset", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Instance{}
+		cfg.SetRemoteControl(false)
+		m := &manager{deps: Deps{Config: cfg}}
+		start := time.Now()
+		m.sleepWhileEligible(context.Background(), 50*time.Millisecond, false)
+		assert.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
+	})
+}
+
 func TestWaitCancelsWhenConsentDisabled(t *testing.T) {
 	started := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -262,4 +345,179 @@ func TestWaitCancelsWhenConsentDisabled(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("wait did not cancel after consent was disabled")
 	}
+}
+
+// TestStartRunLoopDispatchesOperationThenStopsOnCancel exercises Start and
+// run together end to end against a real HTTP server: advertise capability,
+// long-poll for work, accept a delivered operation, execute it, and report
+// the result, then confirm the loop actually stops (via wg) once its context
+// is cancelled while blocked in a second, still-outstanding long poll, which
+// is the steady-state shape of the loop for as long as the device stays linked.
+func TestStartRunLoopDispatchesOperationThenStopsOnCancel(t *testing.T) {
+	acceptedExpiry := time.Now().UTC().Add(time.Minute)
+	var acceptedCalls, resultCalls, waitCalls int32
+	params := json.RawMessage(`{"message":"hi"}`)
+	digest := sha256.Sum256(params)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/remote-sessions/wait":
+			if atomic.AddInt32(&waitCalls, 1) == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				envelope := waitEnvelope{
+					Type: "operation_target",
+					Operation: &operationEnvelope{
+						CommandID: "cmd_run", OperationID: "op_run", OperationType: "echo",
+						ProtocolVersion: 1, Params: params,
+						DeadlineAt: time.Now().UTC().Add(time.Minute),
+						Origin:     operationOrigin{Kind: "first_party"},
+					},
+				}
+				data, err := json.Marshal(envelope)
+				if !assert.NoError(t, err) {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(data)
+				return
+			}
+			// Every later poll behaves like a real long poll: it blocks until
+			// the caller's context (run's ctx, cancelled at test teardown)
+			// goes away, rather than returning immediately and spinning.
+			<-r.Context().Done()
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/operations/cmd_run/accepted":
+			atomic.AddInt32(&acceptedCalls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"execution_expires_at":"` + acceptedExpiry.Format(time.RFC3339Nano) + `"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/operations/cmd_run/result":
+			atomic.AddInt32(&resultCalls, 1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.SetRemoteControlBaseURL(server.URL))
+	cfg.SetRemoteControl(true)
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("linux")
+
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	userDB.On("ListUnreportedRemoteCommands", resultReplayBatchLimit).
+		Return([]database.RemoteCommand{}, nil).Once()
+	stored := &database.RemoteCommand{
+		CommandID: "cmd_run", OperationID: "op_run", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: hex.EncodeToString(digest[:]),
+		Origin:     json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Minute), State: "recorded",
+	}
+	userDB.On("ClaimRemoteCommand", mock.Anything).Return(stored, true, nil).Once()
+	userDB.On("TransitionRemoteCommand", "cmd_run", "recorded", "accepted", mock.Anything).
+		Return(true, nil).Once()
+	userDB.On("TransitionRemoteCommand", "cmd_run", "accepted", "executing", mock.Anything).
+		Return(true, nil).Once()
+	userDB.On("StoreRemoteCommandResult", "cmd_run", "executing", "succeeded", mock.Anything, "").
+		Return(true, nil).Once()
+	userDB.On("MarkRemoteCommandResultReported", "cmd_run").Return(nil).Once()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	Start(ctx, &Deps{Platform: platform, Config: cfg, DB: &database.Database{UserDB: userDB}}, &wg)
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&resultCalls) == 1
+	}, 2*time.Second, 10*time.Millisecond, "operation result was never reported")
+	assert.Equal(t, int32(1), acceptedCalls)
+
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run loop did not stop after context cancellation")
+	}
+	userDB.AssertExpectations(t)
+}
+
+// TestRunStopsPromptlyOnCancelWhileDisabled pins that the loop's "not
+// eligible" branch (consent off) never touches the network and still stops
+// cleanly on context cancellation, rather than looping or blocking forever.
+func TestRunStopsPromptlyOnCancelWhileDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("disabled remote control must not make requests, got %s", r.URL.Path)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.deps.Config.SetRemoteControl(false)
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation while disabled")
+	}
+	userDB.AssertExpectations(t)
+}
+
+// TestRunUnauthorizedHeartbeatStopsCleanlyOnCancel pins the credential-
+// rejected branch of the capability heartbeat: it must not panic or spin
+// tightly (markUnlinkedIfSharedEndpoint is a safe no-op here since
+// RemoteControlBaseURL and BackupRemoteBaseURL differ by default), and the
+// loop must still stop cleanly once its context is cancelled while backed off.
+func TestRunUnauthorizedHeartbeatStopsCleanlyOnCancel(t *testing.T) {
+	var heartbeatCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat" {
+			atomic.AddInt32(&heartbeatCalls, 1)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		t.Errorf("unexpected request after unauthorized heartbeat: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&heartbeatCalls) >= 1
+	}, 2*time.Second, 10*time.Millisecond, "heartbeat was never attempted")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation following an unauthorized heartbeat")
+	}
+	userDB.AssertExpectations(t)
 }

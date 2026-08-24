@@ -98,6 +98,16 @@ func TestLaunchersParams_RequiresSystemsFilter(t *testing.T) {
 	assert.NoError(t, launchersParams(json.RawMessage(`{"systems":["SNES"]}`)))
 }
 
+// TestLaunchersParams_RejectsEmptySystemValue pins that the validate tag
+// runs, not just the systems-required check: a non-empty systems array
+// containing an empty string is still invalid, since it can never match a
+// real system ID.
+func TestLaunchersParams_RejectsEmptySystemValue(t *testing.T) {
+	t.Parallel()
+
+	require.Error(t, launchersParams(json.RawMessage(`{"systems":[""]}`)))
+}
+
 func TestStrictParams_RejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 

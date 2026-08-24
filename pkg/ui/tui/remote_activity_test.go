@@ -62,6 +62,23 @@ func TestFormatRemoteActivitySecondary(t *testing.T) {
 	}))
 }
 
+func TestFormatRemoteActivityDetail(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		"Operation: launch\nFrom: first_party\nWhen: 20 Aug 12:00\nOutcome: succeeded",
+		formatRemoteActivityDetail(&models.RemoteActivityEntry{
+			OperationType: "launch", OriginKind: "first_party",
+			CreatedAt: "2026-08-20T12:00:00Z", Status: "succeeded",
+		}))
+	assert.Equal(t,
+		"Operation: launch\nFrom: first_party\nWhen: 20 Aug 12:00\nOutcome: failed\nError: media_not_found",
+		formatRemoteActivityDetail(&models.RemoteActivityEntry{
+			OperationType: "launch", OriginKind: "first_party",
+			CreatedAt: "2026-08-20T12:00:00Z", Status: "failed", ErrorCode: "media_not_found",
+		}))
+}
+
 func TestBuildRemoteActivityPage_ShowsEntries_Integration(t *testing.T) {
 	t.Parallel()
 

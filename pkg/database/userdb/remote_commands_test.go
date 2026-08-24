@@ -150,6 +150,79 @@ func TestListUnreportedRemoteCommandsOrdersOldestFirstAndRespectsLimit(t *testin
 	assert.Equal(t, "cmd_b", limited[1].CommandID)
 }
 
+// TestMarkRemoteCommandResultReported_NotTerminalReturnsError pins that a
+// command still short of "terminal" (no result stored yet) cannot be marked
+// reported: doing so would let a result be treated as delivered before it
+// was ever posted.
+func TestMarkRemoteCommandResultReported_NotTerminalReturnsError(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	command := &database.RemoteCommand{
+		CommandID: "cmd_pending", OperationID: "op_pending", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: "abc", Origin: json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Hour), State: "recorded",
+	}
+	_, _, err := userDB.ClaimRemoteCommand(command)
+	require.NoError(t, err)
+
+	err = userDB.MarkRemoteCommandResultReported("cmd_pending")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not terminal")
+}
+
+// TestStoreRemoteCommandResult_StaleFromStateIsNoOp pins the concurrency
+// contract remote.storeRemoteCommandResultWithRetry relies on: a result
+// write against a fromState the row has already moved past reports
+// changed=false with no error, rather than an error or a forced overwrite,
+// so a superseding concurrent transition is never clobbered.
+func TestStoreRemoteCommandResult_StaleFromStateIsNoOp(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	command := &database.RemoteCommand{
+		CommandID: "cmd_stale", OperationID: "op_stale", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: "abc", Origin: json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Hour), State: "recorded",
+	}
+	_, _, err := userDB.ClaimRemoteCommand(command)
+	require.NoError(t, err)
+
+	// The row is still "recorded", so a result write against "executing"
+	// (as if a concurrent transition had already moved it past this state)
+	// must not match any row.
+	changed, err := userDB.StoreRemoteCommandResult(
+		"cmd_stale", "executing", "succeeded", json.RawMessage(`{}`), "")
+	require.NoError(t, err)
+	assert.False(t, changed)
+}
+
+// TestStoreRemoteCommandResult_PersistsErrorCode pins that a failed
+// operation's error code round-trips through storage, not just its status.
+func TestStoreRemoteCommandResult_PersistsErrorCode(t *testing.T) {
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	command := &database.RemoteCommand{
+		CommandID: "cmd_failed", OperationID: "op_failed", OperationType: "launch",
+		ProtocolVersion: 1, ParamsDigest: "abc", Origin: json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().UTC().Add(time.Hour), State: "recorded",
+	}
+	_, _, err := userDB.ClaimRemoteCommand(command)
+	require.NoError(t, err)
+
+	changed, err := userDB.StoreRemoteCommandResult(
+		"cmd_failed", "recorded", "failed", nil, "media_not_found")
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	recent, err := userDB.ListRecentRemoteCommands(1)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	assert.Equal(t, "failed", recent[0].ResultStatus)
+	assert.Equal(t, "media_not_found", recent[0].ErrorCode)
+}
+
 func TestRemoteCommandLedgerPrunesAfterRetentionCutoff(t *testing.T) {
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()

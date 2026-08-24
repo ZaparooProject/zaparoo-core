@@ -577,8 +577,8 @@ func TestSetCoreAvailability_EmptyCacheFailsOpen(t *testing.T) {
 }
 
 // TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad verifies resolution
-// succeeds and execution reaches the command-interface write, which errors
-// off-device (no /dev/MiSTer_cmd) rather than failing at resolution.
+// picks the expected RBF and hands it to the launch step, which is the fake
+// injected here rather than the real off-device hardware write.
 func TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad(t *testing.T) {
 	withRBFCache(t, []cores.RBFInfo{
 		{
@@ -586,13 +586,17 @@ func TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad(t *testing.T) {
 			ShortName: "SNES", MglName: "_Console/SNES",
 		},
 	})
-
-	p := &Platform{}
+	launchErr := errors.New("no /dev/MiSTer_cmd")
+	var captured cores.RBFInfo
+	p := &Platform{launchCoreAtRBF: func(rbfInfo cores.RBFInfo) error {
+		captured = rbfInfo
+		return launchErr
+	}}
 	err := p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to launch core")
-	assert.NotContains(t, err.Error(), "core not installed")
-	assert.NotContains(t, err.Error(), "no selectable core")
+	require.ErrorIs(t, err, launchErr)
+	assert.Equal(t, "/media/fat/_Console/SNES_20260311.rbf", captured.Path)
 }
 
 func TestLaunchSystemLauncher_AltCoreResolvesThenAttemptsLoad(t *testing.T) {
@@ -603,11 +607,17 @@ func TestLaunchSystemLauncher_AltCoreResolvesThenAttemptsLoad(t *testing.T) {
 		},
 	})
 	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
-
-	p := &Platform{}
+	launchErr := errors.New("no /dev/MiSTer_cmd")
+	var captured cores.RBFInfo
+	p := &Platform{launchCoreAtRBF: func(rbfInfo cores.RBFInfo) error {
+		captured = rbfInfo
+		return launchErr
+	}}
 	err := p.LaunchSystemLauncher(nil, "PSX", &platforms.Launcher{ID: "2XPSX", SystemID: "PSX"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to launch core")
+	require.ErrorIs(t, err, launchErr)
+	assert.Equal(t, "/media/fat/_Other/PSX2XCPU_20240101.rbf", captured.Path)
 }
 
 func TestLaunchSystemLauncher_MissingCore(t *testing.T) {

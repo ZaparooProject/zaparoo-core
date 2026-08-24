@@ -27,6 +27,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,7 +60,8 @@ func TestOperationAcceptExecuteReportLifecycle(t *testing.T) {
 			assert.JSONEq(t, `{"message":"hello"}`, string(result.Result))
 			w.WriteHeader(http.StatusNoContent)
 		default:
-			t.Fatalf("unexpected request path %s", r.URL.Path)
+			t.Errorf("unexpected request path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer server.Close()
@@ -247,6 +249,30 @@ func TestOperationBusyRedeliveryOfInFlightAcceptedNeverFinalizes(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
+// TestFinishOperationPostResultFailureDoesNotMarkReported pins that a
+// finished operation whose result POST fails is never marked reported: the
+// result was durably persisted locally (StoreRemoteCommandResult succeeded),
+// but the server never received it, so it must remain eligible for
+// replayStoredResults to retry later, not be silently dropped.
+func TestFinishOperationPostResultFailureDoesNotMarkReported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/device/operations/cmd_postfail/result", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	userDB := testinghelpers.NewMockUserDBI()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	userDB.On("StoreRemoteCommandResult", "cmd_postfail", "executing", "succeeded", mock.Anything, "").
+		Return(true, nil).Once()
+
+	m.finishOperation(context.Background(), "cmd_postfail", "executing", operationResult{Status: "succeeded"})
+
+	userDB.AssertExpectations(t)
+	userDB.AssertNotCalled(t, "MarkRemoteCommandResultReported", mock.Anything)
+}
+
 // TestFinishOperationRetriesTransientPersistFailureAndSucceeds pins that a
 // StoreRemoteCommandResult write error is retried rather than dropping the
 // already-computed result immediately: two transient failures followed by a
@@ -361,16 +387,22 @@ func TestReplayStoredResultsUsesBatchLimit(t *testing.T) {
 // be stuck behind an arbitrarily long backlog. Five unreported results are
 // replayed, each taking resultPostLatency to post; a concurrent
 // finishOperation call for an unrelated, already-executing command starts
-// partway through the first post. If resultMu is released between items (as
-// opposed to held for the whole loop), the waiting finishOperation call gets
-// it back as soon as the first post finishes and does not have to wait for
-// the other four; the elapsed time it actually takes is only explainable by
-// that per-item release.
+// once the first post completes. The two outcomes are told apart by event
+// order, not a wall-clock threshold: if resultMu is released between items,
+// finishOperation completes while the remaining four posts are still in
+// flight; if it were held for the whole batch, finishOperation could not
+// even attempt its own post until after replayStoredResults had already
+// finished.
 func TestReplayStoredResultsDoesNotBlockConcurrentFinishOperationForWholeBatch(t *testing.T) {
 	const resultPostLatency = 100 * time.Millisecond
+	firstPostDone := make(chan struct{})
+	var posts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(resultPostLatency)
 		w.WriteHeader(http.StatusNoContent)
+		if posts.Add(1) == 1 {
+			close(firstPostDone)
+		}
 	}))
 	defer server.Close()
 	m := newHTTPTestManager(t, server.URL)
@@ -393,19 +425,210 @@ func TestReplayStoredResultsDoesNotBlockConcurrentFinishOperationForWholeBatch(t
 		close(replayDone)
 	}()
 
-	time.Sleep(resultPostLatency / 2)
-	finishStart := time.Now()
-	m.finishOperation(context.Background(), "cmd_live", "executing", operationResult{Status: "succeeded"})
-	finishElapsed := time.Since(finishStart)
+	select {
+	case <-firstPostDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first replay post never completed")
+	}
 
-	// Held-for-the-whole-batch would need ~5*resultPostLatency before
-	// finishOperation even gets a chance at resultMu, plus its own post:
-	// ~550ms. Released between items lets it in right after the first post:
-	// ~150ms. This threshold sits well clear of both.
-	assert.Less(t, finishElapsed, 3*resultPostLatency,
-		"finishOperation must not wait for the whole replay batch, only until resultMu frees up between items")
+	finishDone := make(chan struct{})
+	go func() {
+		m.finishOperation(context.Background(), "cmd_live", "executing", operationResult{Status: "succeeded"})
+		close(finishDone)
+	}()
+
+	select {
+	case <-finishDone:
+		select {
+		case <-replayDone:
+			t.Fatal("finishOperation did not proceed until the whole replay batch finished")
+		default:
+			// The remaining replay posts are still in flight: resultMu was
+			// free for finishOperation to acquire between items.
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("finishOperation did not complete promptly; resultMu appears held for the whole replay batch")
+	}
 
 	<-replayDone
+}
+
+// TestValidateEnvelope pins every rejection reason validateEnvelope enforces
+// before an operation envelope is trusted: a malformed or spoofed envelope
+// must never reach ClaimRemoteCommand or execution.
+func TestValidateEnvelope(t *testing.T) {
+	t.Parallel()
+
+	base := func() operationEnvelope {
+		return operationEnvelope{
+			CommandID: "cmd_1", OperationID: "op_1", OperationType: "echo",
+			ProtocolVersion: protocolVersion, DeadlineAt: time.Now().Add(time.Minute),
+			Origin: operationOrigin{Kind: "first_party"},
+		}
+	}
+
+	tests := []struct {
+		mutate  func(*operationEnvelope)
+		name    string
+		wantErr string
+	}{
+		{
+			name:    "missing command id",
+			mutate:  func(e *operationEnvelope) { e.CommandID = "" },
+			wantErr: "missing remote operation identifier or type",
+		},
+		{
+			name:    "missing operation id",
+			mutate:  func(e *operationEnvelope) { e.OperationID = "" },
+			wantErr: "missing remote operation identifier or type",
+		},
+		{
+			name:    "missing operation type",
+			mutate:  func(e *operationEnvelope) { e.OperationType = "" },
+			wantErr: "missing remote operation identifier or type",
+		},
+		{
+			name:    "command id contains path separator",
+			mutate:  func(e *operationEnvelope) { e.CommandID = "cmd/1" },
+			wantErr: "invalid remote command identifier",
+		},
+		{
+			name:    "command id contains backslash",
+			mutate:  func(e *operationEnvelope) { e.CommandID = "cmd\\1" },
+			wantErr: "invalid remote command identifier",
+		},
+		{
+			name:    "unsupported protocol version",
+			mutate:  func(e *operationEnvelope) { e.ProtocolVersion = protocolVersion + 1 },
+			wantErr: "unsupported protocol version",
+		},
+		{
+			name:    "missing deadline",
+			mutate:  func(e *operationEnvelope) { e.DeadlineAt = time.Time{} },
+			wantErr: "missing remote operation deadline",
+		},
+		{
+			name:    "invalid origin kind",
+			mutate:  func(e *operationEnvelope) { e.Origin = operationOrigin{Kind: "bogus"} },
+			wantErr: "invalid remote operation origin",
+		},
+		{
+			name:    "api_key origin missing key name",
+			mutate:  func(e *operationEnvelope) { e.Origin = operationOrigin{Kind: "api_key"} },
+			wantErr: "API-key origin missing key name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			envelope := base()
+			tt.mutate(&envelope)
+			err := validateEnvelope(&envelope)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+
+	t.Run("valid api_key origin with key name", func(t *testing.T) {
+		t.Parallel()
+		envelope := base()
+		envelope.Origin = operationOrigin{Kind: "api_key", KeyName: "ci-key"}
+		assert.NoError(t, validateEnvelope(&envelope))
+	})
+}
+
+// TestHandleTransitionHTTPError pins how a failed accept/transition HTTP
+// call maps to a local ledger transition: only a definitive "the server no
+// longer knows this command" response (404/410) may move the command out of
+// the caller's state locally, everything else is left for a future retry or
+// redelivery to resolve.
+func TestHandleTransitionHTTPError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err         error
+		name        string
+		wantToState string
+		wantCall    bool
+	}{
+		{name: "not found voids", err: &httpError{status: http.StatusNotFound}, wantCall: true, wantToState: "void"},
+		{name: "gone expires", err: &httpError{status: http.StatusGone}, wantCall: true, wantToState: "expired"},
+		{name: "conflict is left alone", err: &httpError{status: http.StatusConflict}, wantCall: false},
+		{name: "unauthorized is left alone", err: &httpError{status: http.StatusUnauthorized}, wantCall: false},
+		{name: "other status is left alone", err: &httpError{status: http.StatusInternalServerError}, wantCall: false},
+		{name: "non-http error is left alone", err: errors.New("network unreachable"), wantCall: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := &manager{}
+			userDB := testinghelpers.NewMockUserDBI()
+			m.deps.DB = &database.Database{UserDB: userDB}
+			if tt.wantCall {
+				userDB.On("TransitionRemoteCommand", "cmd_x", "recorded", tt.wantToState, (*time.Time)(nil)).
+					Return(true, nil).Once()
+			}
+			m.handleTransitionHTTPError("cmd_x", "recorded", tt.err)
+			userDB.AssertExpectations(t)
+		})
+	}
+}
+
+// TestHandleResultPostError pins that only a definitive "the server no
+// longer knows this command" response (404/410) closes the result out
+// locally (so it stops being replayed forever); any other failure is left
+// for the next replay cycle to retry.
+func TestHandleResultPostError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err      error
+		name     string
+		wantCall bool
+	}{
+		{name: "not found closes out the command", err: &httpError{status: http.StatusNotFound}, wantCall: true},
+		{name: "gone closes out the command", err: &httpError{status: http.StatusGone}, wantCall: true},
+		{name: "other status just logs", err: &httpError{status: http.StatusInternalServerError}, wantCall: false},
+		{name: "non-http error just logs", err: errors.New("network unreachable"), wantCall: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := &manager{}
+			userDB := testinghelpers.NewMockUserDBI()
+			m.deps.DB = &database.Database{UserDB: userDB}
+			if tt.wantCall {
+				userDB.On("MarkRemoteCommandResultReported", "cmd_y").Return(nil).Once()
+			}
+			m.handleResultPostError("cmd_y", tt.err)
+			userDB.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRequireEmptyParams(t *testing.T) {
+	t.Parallel()
+	assert.NoError(t, requireEmptyParams(nil))
+	assert.NoError(t, requireEmptyParams(json.RawMessage(`{}`)))
+	assert.Error(t, requireEmptyParams(json.RawMessage(`{"foo":"bar"}`)))
+}
+
+func TestSucceedResult_ExceedsLimitFails(t *testing.T) {
+	t.Parallel()
+	result := succeedResult(map[string]string{"message": "hi"}, 1)
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, "result_too_large", result.ErrorCode)
+}
+
+func TestExecuteEcho_RejectsUnknownFields(t *testing.T) {
+	t.Parallel()
+	m := &manager{}
+	result := m.executeEcho(context.Background(), "echo", json.RawMessage(`{"message":"hi","extra":"field"}`))
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, "bad_params", result.ErrorCode)
 }
 
 func TestOperationEchoAndUnknownType(t *testing.T) {

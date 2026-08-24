@@ -597,5 +597,6 @@ func TestIsDefaultOnlineBaseURL(t *testing.T) {
 	assert.True(t, IsDefaultOnlineBaseURL(""))
 	assert.True(t, IsDefaultOnlineBaseURL(DefaultOnlineBaseURL))
 	assert.True(t, IsDefaultOnlineBaseURL(strings.ToUpper(DefaultOnlineBaseURL)))
+	assert.True(t, IsDefaultOnlineBaseURL(DefaultOnlineBaseURL+"/"))
 	assert.False(t, IsDefaultOnlineBaseURL("https://self-hosted.example.com"))
 }

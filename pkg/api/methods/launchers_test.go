@@ -421,6 +421,31 @@ func TestHandleLaunchers_SystemsFilter(t *testing.T) {
 	resp, ok = result.(models.LaunchersResponse)
 	require.True(t, ok)
 	assert.Empty(t, resp.Launchers)
+
+	// fuzzySystem resolves a known alias to its canonical system ID before
+	// matching; without it, the same alias value matches nothing.
+	fuzzy := true
+	params, err = json.Marshal(models.LaunchersParams{Systems: &[]string{"MegaDrive"}, FuzzySystem: &fuzzy})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err = HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.LaunchersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Launchers, 1)
+	assert.Equal(t, "retroarch", resp.Launchers[0].ID)
+
+	notFuzzy := false
+	params, err = json.Marshal(models.LaunchersParams{Systems: &[]string{"MegaDrive"}, FuzzySystem: &notFuzzy})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err = HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.LaunchersResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Launchers)
 }
 
 // TestHandleLaunchers_DefaultFlag verifies Default is set when a launcher
