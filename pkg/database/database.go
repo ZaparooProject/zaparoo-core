@@ -389,6 +389,7 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 // BrowseDirectoryResult represents a subdirectory found during browse navigation.
 type BrowseDirectoryResult struct {
 	Name      string
+	Path      string
 	SystemIDs []string
 	FileCount int
 }
@@ -421,6 +422,7 @@ type SingletonAliasCandidate struct {
 // directories returned; 0 means no limit (full listing).
 type BrowseDirectoriesOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	AfterName  string
 	Systems    []systemdefs.System
 	Limit      int
@@ -429,6 +431,7 @@ type BrowseDirectoriesOptions struct {
 // BrowseDirCountOptions contains parameters for the BrowseDirCount query.
 type BrowseDirCountOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Systems    []systemdefs.System
 }
 
@@ -444,16 +447,30 @@ type BrowseCursor struct {
 	SortMode   string
 	Phase      string
 	DirName    string
+	RootView   string
 	LastID     int64
 	TotalFiles int
 	TotalDirs  int
 }
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
+// BrowseSource is one ordered physical directory contributing to a pathless
+// system-root contents view. Earlier sources have higher overlay priority.
+// IncludeDirs is false for an ancestor route retained only for direct media.
+type BrowseSource struct {
+	PathPrefix  string
+	IncludeDirs bool
+}
+
+type BrowseOverlay struct {
+	Sources []BrowseSource
+}
+
 type BrowseFilesOptions struct {
 	Cursor     *BrowseCursor
 	Letter     *string
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Sort       string
 	Systems    []systemdefs.System
 	Tags       []zapscript.TagFilter
@@ -464,6 +481,7 @@ type BrowseFilesOptions struct {
 type BrowseFileCountOptions struct {
 	Letter     *string
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Systems    []systemdefs.System
 	Tags       []zapscript.TagFilter
 }
@@ -473,6 +491,7 @@ type BrowseFileCountOptions struct {
 // exact list a media.browse call would return.
 type BrowseIndexOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Sort       string
 	Systems    []systemdefs.System
 	Tags       []zapscript.TagFilter

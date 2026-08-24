@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,6 +39,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type queryCountingDB struct {
+	sqlQueryable
+	queryCalls int
+}
+
+func (db *queryCountingDB) QueryContext(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (*sql.Rows, error) {
+	db.queryCalls++
+	rows, err := db.sqlQueryable.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("counted query: %w", err)
+	}
+	return rows, nil
+}
 
 func browseTestPath(parts ...string) string {
 	return filepath.ToSlash(filepath.Join(append([]string{string(filepath.Separator)}, parts...)...))
@@ -1460,4 +1479,126 @@ func TestBrowseFiles_SortNameFallback_Integration(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, "mygame", results[0].Name,
 		"SortName='' should fall back to filename-without-extension")
+}
+
+func TestBrowseOverlayFiles_FirstRootWinsByFilesystemName(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	root1 := browseTestDir("configured", "NES")
+	root2 := browseTestDir("default", "NES")
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insert := func(name, path string) database.Media {
+		t.Helper()
+		title, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       slugs.Slugify(nesSystem.GetMediaType(), name+path),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		row, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           path,
+			ParentDir:      filepath.ToSlash(filepath.Dir(path)) + "/",
+			SortName:       name,
+		})
+		require.NoError(t, mediaErr)
+		return row
+	}
+	winner := insert("Configured Copy", root1+"Game.nes")
+	insert("Default Copy", root2+"Game.nes")
+	insert("Inside Folder", root1+"Folder/Inside.nes")
+	insert("Hidden By Folder", root2+"Folder")
+	shadowFile := insert("Shadow File", root1+"Shadow")
+	insert("Hidden Directory Media", root2+"Shadow/Inside.nes")
+	insert("Visible Directory Media", root2+"Visible/Inside.nes")
+	unique := insert("Unique", root2+"Unique.nes")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sources := []database.BrowseSource{
+		{PathPrefix: root1, IncludeDirs: true},
+		{PathPrefix: root2, IncludeDirs: true},
+	}
+	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+		Limit:   10,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	assert.Equal(t,
+		[]int64{winner.DBID, shadowFile.DBID, unique.DBID},
+		[]int64{results[0].MediaID, results[1].MediaID, results[2].MediaID},
+	)
+
+	secondPage, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+		Cursor: &database.BrowseCursor{
+			SortValue: results[1].SortValue,
+			LastID:    results[1].MediaID,
+		},
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, secondPage, 1)
+	assert.Equal(t, unique.DBID, secondPage[0].MediaID)
+
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 2)
+	assert.Equal(t, []string{"Folder", "Visible"}, []string{dirs[0].Name, dirs[1].Name})
+	assert.Equal(t, root1+"Folder", dirs[0].Path)
+	assert.Equal(t, root2+"Visible", dirs[1].Path)
+
+	queryCounter := &queryCountingDB{sqlQueryable: mediaDB.sql.Load()}
+	firstDirPage, err := sqlBrowseOverlayDirectories(ctx, queryCounter, database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+		Limit:   1,
+	})
+	require.NoError(t, err)
+	require.Len(t, firstDirPage, 1)
+	assert.Equal(t, "Folder", firstDirPage[0].Name)
+	assert.Equal(t, 1, queryCounter.queryCalls)
+
+	secondDirPage, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		Overlay:   &database.BrowseOverlay{Sources: sources},
+		Systems:   []systemdefs.System{*nesSystem},
+		AfterName: firstDirPage[0].Name,
+		Limit:     1,
+	})
+	require.NoError(t, err)
+	require.Len(t, secondDirPage, 1)
+	assert.Equal(t, "Visible", secondDirPage[0].Name)
+
+	count, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+
+	index, err := mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, browseIndexSchemeLatin, index.Scheme)
+	assert.Equal(t, 3, index.TotalFiles)
+	require.Len(t, index.Buckets, 3)
+	assert.Equal(t, []string{"C", "S", "U"}, []string{
+		index.Buckets[0].Key, index.Buckets[1].Key, index.Buckets[2].Key,
+	})
 }

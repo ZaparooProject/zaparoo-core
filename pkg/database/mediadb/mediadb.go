@@ -2449,7 +2449,8 @@ func (db *MediaDB) GetMediaCoverStatus(
 
 // BrowseFileCount returns the total number of immediate child files under a path prefix.
 func (db *MediaDB) BrowseFileCount(
-	ctx context.Context, opts database.BrowseFileCountOptions,
+	ctx context.Context,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // interface keeps browse option values consistent
 ) (int, error) {
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
