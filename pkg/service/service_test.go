@@ -1335,6 +1335,31 @@ func TestRecordIndexResumeCheckpoint_ProgressMovedResetsAttempts(t *testing.T) {
 	assert.Equal(t, indexResumeCheckpointPrefix+"SNES", checkpoint)
 }
 
+func TestCheckAndResumeIndexing_LeaseConflictDoesNotConsumeResumeBudget(t *testing.T) {
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	scrapeLease, err := mockMediaDB.AcquireMediaWrite(database.MediaWriteOperationScraping)
+	require.NoError(t, err)
+	defer scrapeLease.Release()
+
+	pl := mocks.NewMockPlatform()
+	st, _ := state.NewState(pl, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	started := checkAndResumeIndexing(
+		pl, nil, &database.Database{MediaDB: mockMediaDB}, st, nil,
+	)
+
+	assert.False(t, started)
+	mockMediaDB.AssertNotCalled(t, "GetLastIndexedSystem")
+	mockMediaDB.AssertNotCalled(t, "IncrementIndexResumeAttempts")
+	assert.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryIndexing)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestCheckAndResumeIndexing_ResetsAttemptsOnCleanState(t *testing.T) {
 	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
 	methods.ClearIndexingStatus()
@@ -1426,6 +1451,28 @@ func TestCheckAndResumeScraping_UnavailableScraperMarksFailed(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCheckAndResumeScraping_WriteConflictPreservesDurableOperation(t *testing.T) {
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	indexLease, err := mockMediaDB.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	require.NoError(t, err)
+	defer indexLease.Release()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertNotCalled(t, "GetScrapingOperation")
+	mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mediadb.IndexingStatusFailed)
+	mockMediaDB.AssertNotCalled(t, "ClearScrapingOperation")
+	assert.Equal(t, database.MediaWriteOperationIndexing, mockMediaDB.ActiveMediaWriteOperation())
+	assert.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryScraping)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	methods.ClearScrapingStatus()
@@ -1472,11 +1519,12 @@ func TestCheckAndResumeOptimization_RunningStatus(t *testing.T) {
 	pauser := syncutil.NewPauser()
 	notifChan := make(chan models.Notification, 1)
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Run(func(args mock.Arguments) {
-		callback, ok := args.Get(0).(func(bool))
-		require.True(t, ok)
-		callback(true)
-	}).Once()
+	mockMediaDB.On("RunBackgroundOptimizationWithLease", mock.Anything, pauser, mock.Anything).
+		Run(func(args mock.Arguments) {
+			callback, ok := args.Get(0).(func(bool))
+			require.True(t, ok)
+			callback(true)
+		}).Return(nil).Once()
 
 	checkAndResumeOptimization(db, notifChan, pauser)
 
@@ -1499,7 +1547,9 @@ func TestCheckAndResumeOptimization_CompletedStatus(t *testing.T) {
 	checkAndResumeOptimization(db, make(chan models.Notification, 1), nil)
 
 	mockMediaDB.AssertExpectations(t)
-	mockMediaDB.AssertNotCalled(t, "RunBackgroundOptimization", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(
+		t, "RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, mock.Anything,
+	)
 }
 
 func TestStartPublishers_NoPublishers(t *testing.T) {
@@ -1577,11 +1627,36 @@ func TestRunMediaDBStartupMaintenance_PassesPauserToTemporaryRepairOptimization(
 	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Once()
+	mockMediaDB.On("RunBackgroundOptimizationWithLease", mock.Anything, pauser, mock.Anything).
+		Return(nil).Once()
 	mockMediaDB.On("BackgroundOperationDone").Once()
 
 	runMediaDBStartupMaintenance(ctx, mockMediaDB, pauser, false)
 
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestRunMediaDBStartupMaintenance_LeaseConflictDefersTemporaryRepair(t *testing.T) {
+	pendingMediaWriteRetries.Store(0)
+	t.Cleanup(func() { pendingMediaWriteRetries.Store(0) })
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	ctx := context.Background()
+	mockMediaDB.On("TrackBackgroundOperation").Once()
+	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Twice()
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Once()
+	scrapeLease, err := mockMediaDB.AcquireMediaWrite(database.MediaWriteOperationScraping)
+	require.NoError(t, err)
+	defer scrapeLease.Release()
+
+	runMediaDBStartupMaintenance(ctx, mockMediaDB, nil, true)
+
+	mockMediaDB.AssertNotCalled(
+		t, "RunBackgroundOptimizationWithLease", mock.Anything, mock.Anything, mock.Anything,
+	)
+	assert.NotZero(t, pendingMediaWriteRetries.Load()&mediaWriteRetryMaintenance)
 	mockMediaDB.AssertExpectations(t)
 }
 

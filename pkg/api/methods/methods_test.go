@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -710,10 +711,11 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 
 func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 	tests := []struct {
-		name          string
-		params        string
-		errorContains string
-		wantError     bool
+		name               string
+		params             string
+		errorContains      string
+		optimizationStatus string
+		wantError          bool
 	}{
 		{
 			name:      "no parameters - all systems",
@@ -731,9 +733,10 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:      "single valid system",
-			params:    `{"systems": ["NES"]}`,
-			wantError: false,
+			name:               "single valid system with stale optimization status",
+			params:             `{"systems": ["NES"]}`,
+			optimizationStatus: mediadb.IndexingStatusRunning,
+			wantError:          false,
 		},
 		{
 			name:      "multiple valid systems",
@@ -766,8 +769,8 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockUserDB := &helpers.MockUserDBI{}
 			mockMediaDB := helpers.NewMockMediaDBI()
 
-			// Mock optimization status check
-			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			// Persisted optimization state is restart intent, not process ownership.
+			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 			mockMediaDB.On("SetOptimizationStatus", mock.Anything).Return(nil).Maybe()
 
 			// Mock additional methods that might be called

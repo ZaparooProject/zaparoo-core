@@ -28,11 +28,39 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCleanMediaOrphansPreservesConflictErrors(t *testing.T) {
+	tests := []struct {
+		legacyErr error
+		operation database.MediaWriteOperation
+	}{
+		{operation: database.MediaWriteOperationIndexing, legacyErr: ErrIndexingInProgress},
+		{operation: database.MediaWriteOperationOptimization, legacyErr: ErrOptimizationInProgress},
+		{operation: database.MediaWriteOperationScraping},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.operation), func(t *testing.T) {
+			mediaDB := &MediaDB{}
+			lease, err := mediaDB.AcquireMediaWrite(tt.operation)
+			require.NoError(t, err)
+			defer lease.Release()
+
+			deleted, err := mediaDB.CleanMediaOrphans(context.Background())
+			assert.Zero(t, deleted)
+			require.ErrorIs(t, err, database.ErrMediaWriteConflict)
+			if tt.legacyErr != nil {
+				require.ErrorIs(t, err, tt.legacyErr)
+			}
+		})
+	}
+}
 
 func TestConcurrentOptimizationPrevention(t *testing.T) {
 	db, mock, err := sqlmock.New()

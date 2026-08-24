@@ -51,6 +51,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -984,6 +985,7 @@ func (m *MockUserDBI) RecoverFromCorruption() (database.RestoreInfo, error) {
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock
+	mediaWriteArbiter     atomic.Pointer[database.MediaWriteArbiter]
 	ScrapeImageSystems    []string
 	TransactionCount      int
 	OperationsOutsideTxn  int
@@ -1919,6 +1921,31 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 // the media status query don't each need to stub it. Tests that care about a
 // full RunBackgroundOptimization pass set Optimizing directly; tests exercising
 // the browse-cache self-heal use BeginBrowseCacheRebuild/EndBrowseCacheRebuild.
+func (m *MockMediaDBI) getMediaWriteArbiter() *database.MediaWriteArbiter {
+	if arbiter := m.mediaWriteArbiter.Load(); arbiter != nil {
+		return arbiter
+	}
+	arbiter := &database.MediaWriteArbiter{}
+	if m.mediaWriteArbiter.CompareAndSwap(nil, arbiter) {
+		return arbiter
+	}
+	return m.mediaWriteArbiter.Load()
+}
+
+func (m *MockMediaDBI) AcquireMediaWrite(
+	operation database.MediaWriteOperation,
+) (*database.MediaWriteLease, error) {
+	lease, err := m.getMediaWriteArbiter().TryAcquire(operation)
+	if err != nil {
+		return nil, fmt.Errorf("mock acquire media database write operation: %w", err)
+	}
+	return lease, nil
+}
+
+func (m *MockMediaDBI) ActiveMediaWriteOperation() database.MediaWriteOperation {
+	return m.getMediaWriteArbiter().Active()
+}
+
 func (m *MockMediaDBI) IsOptimizing() bool {
 	return m.Optimizing || m.BrowseCacheRebuilding
 }
@@ -1931,8 +1958,33 @@ func (m *MockMediaDBI) EndBrowseCacheRebuild() {
 	m.BrowseCacheRebuilding = false
 }
 
-func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
+func (m *MockMediaDBI) RunBackgroundOptimization(
+	statusCallback func(optimizing bool), pauser *syncutil.Pauser,
+) {
+	lease, err := m.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	if err != nil {
+		return
+	}
+	defer lease.Release()
 	m.Called(statusCallback, pauser)
+}
+
+func (m *MockMediaDBI) RunBackgroundOptimizationWithLease(
+	statusCallback func(optimizing bool), pauser *syncutil.Pauser, lease *database.MediaWriteLease,
+) error {
+	if !lease.ValidFor(database.MediaWriteOperationOptimization) {
+		lease.Release()
+		return database.ErrMediaWriteLease
+	}
+	defer lease.Release()
+	args := m.Called(statusCallback, pauser, lease)
+	if len(args) == 0 {
+		return nil
+	}
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock background optimization with lease failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {

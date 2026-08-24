@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -285,14 +286,57 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 	}
 	mediaDB.sql.Store(db)
 
-	// Set optimization as already running
-	mediaDB.isOptimizing.Store(true)
+	// Claim optimization as already running.
+	lease, acquireErr := mediaDB.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	require.NoError(t, acquireErr)
+	defer lease.Release()
 
-	// This should return immediately without doing anything
+	// A second start returns immediately without changing ownership.
 	mediaDB.RunBackgroundOptimization(nil, nil)
+	assert.Equal(t, database.MediaWriteOperationOptimization, mediaDB.ActiveMediaWriteOperation())
+}
 
-	// Verify it's still marked as running
-	assert.True(t, mediaDB.isOptimizing.Load())
+func TestBrowseCacheRebuildReportsOptimizing(t *testing.T) {
+	mediaDB := &MediaDB{}
+	assert.False(t, mediaDB.IsOptimizing())
+
+	mediaDB.BeginBrowseCacheRebuild()
+	assert.True(t, mediaDB.IsOptimizing())
+
+	mediaDB.EndBrowseCacheRebuild()
+	assert.False(t, mediaDB.IsOptimizing())
+}
+
+func TestRunBackgroundOptimizationWithLease_InvalidOperationReleasesLease(t *testing.T) {
+	mediaDB := &MediaDB{}
+	lease, err := mediaDB.AcquireMediaWrite(database.MediaWriteOperationIndexing)
+	require.NoError(t, err)
+
+	err = mediaDB.RunBackgroundOptimizationWithLease(nil, nil, lease)
+	require.ErrorIs(t, err, database.ErrMediaWriteLease)
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
+}
+
+func TestRunBackgroundOptimization_PanicReleasesLease(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	mediaDB := &MediaDB{ctx: context.Background(), clock: clockwork.NewFakeClock()}
+	mediaDB.sql.Store(sqlDB)
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, IndexingStatusRunning).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, IndexingStatusFailed).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mediaDB.RunBackgroundOptimization(func(bool) {
+		panic("injected callback panic")
+	}, nil)
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
+	assert.False(t, mediaDB.IsOptimizing())
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestRunBackgroundOptimization_NilDatabase(t *testing.T) {
@@ -428,6 +472,7 @@ func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) 
 	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	assert.False(t, mediaDB.isOptimizing.Load())
+	assert.Equal(t, database.MediaWriteOperationNone, mediaDB.ActiveMediaWriteOperation())
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

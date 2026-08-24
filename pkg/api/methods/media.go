@@ -508,7 +508,7 @@ func GenerateMediaDB(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
-	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false)
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false, nil)
 }
 
 // GenerateMediaDBRebuild is GenerateMediaDB with a fresh start: the media
@@ -524,7 +524,48 @@ func GenerateMediaDBRebuild(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
-	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, true)
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, true, nil)
+}
+
+// GenerateMediaDBWithLease starts indexing with ownership atomically handed off
+// by another MediaDB operation, such as corruption recovery.
+func GenerateMediaDBWithLease(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	systems []systemdefs.System,
+	db *database.Database,
+	pauser *syncutil.Pauser,
+	lease *database.MediaWriteLease,
+) error {
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false, lease)
+}
+
+func startPostIndexOptimization(
+	mediaDB database.MediaDBI,
+	lease *database.MediaWriteLease,
+	statusCallback func(optimizing bool),
+	pauser *syncutil.Pauser,
+) error {
+	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return fmt.Errorf("get media database write coordinator for optimization handoff: %w", err)
+	}
+	if err := lease.Handoff(database.MediaWriteOperationOptimization); err != nil {
+		return fmt.Errorf("handoff indexing to optimization: %w", err)
+	}
+
+	// Track wrapper before starting goroutine so Close cannot return before
+	// RunBackgroundOptimizationWithLease registers its internal work.
+	mediaDB.TrackBackgroundOperation()
+	go func() {
+		defer mediaDB.BackgroundOperationDone()
+		if err := coordinator.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
+			log.Error().Err(err).Msg("post-index background optimization failed")
+		}
+	}()
+	return nil
 }
 
 func startMediaDBGeneration(
@@ -536,10 +577,29 @@ func startMediaDBGeneration(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 	rebuild bool,
+	lease *database.MediaWriteLease,
 ) error {
-	if err := startIndexingIfNoScrape(); err != nil {
-		return err
+	var err error
+	if lease == nil {
+		lease, err = startIndexing(db.MediaDB)
+		if err != nil {
+			return err
+		}
+	} else {
+		if !lease.ValidFor(database.MediaWriteOperationIndexing) {
+			return database.ErrMediaWriteLease
+		}
+		if !statusInstance.startIfNotRunning() {
+			lease.Release()
+			return models.ClientErrf("indexing already in progress")
+		}
 	}
+	leaseOwned := true
+	defer func() {
+		if leaseOwned {
+			lease.Release()
+		}
+	}()
 
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 		Exists:             mediaDBHasUsableData(db.MediaDB),
@@ -591,7 +651,14 @@ func startMediaDBGeneration(
 	log.Info().Msg("generating media db")
 
 	db.MediaDB.TrackBackgroundOperation()
+	leaseOwned = false
 	go func() {
+		leaseTransferred := false
+		defer func() {
+			if !leaseTransferred {
+				lease.Release()
+			}
+		}()
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
@@ -766,25 +833,21 @@ func startMediaDBGeneration(
 		runtime.GC()
 		debug.FreeOSMemory()
 
-		// Start background optimization with notification callback
-		// Index rebuilds, cache population, ANALYZE, and WAL checkpoint
-		// run as background steps so launches/searches aren't blocked.
-		// Track the optimization operation BEFORE starting the goroutine to prevent a race
-		// where Close() → Wait() could return between this goroutine's Done() and
-		// RunBackgroundOptimization's internal Add(). The wrapper ensures Done() is called
-		// even if RunBackgroundOptimization skips (e.g., already optimizing).
-		db.MediaDB.TrackBackgroundOperation()
-		go func() {
-			defer db.MediaDB.BackgroundOperationDone()
-			db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:     true,
-					Indexing:   false,
-					Optimizing: optimizing,
-					TotalFiles: &total,
-				})
-			}, pauser)
-		}()
+		// Atomically hand indexing ownership to optimization so scraping cannot
+		// enter between completed indexing and post-index maintenance.
+		if handoffErr := startPostIndexOptimization(db.MediaDB, lease, func(optimizing bool) {
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				Optimizing: optimizing,
+				TotalFiles: &total,
+			})
+		}, pauser); handoffErr != nil {
+			log.Error().Err(handoffErr).Msg("failed to hand off indexing to background optimization")
+			statusInstance.clear()
+			return
+		}
+		leaseTransferred = true
 
 		statusInstance.clear()
 		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
@@ -840,23 +903,10 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
-	// Additional validation for selective indexing
-	if isSelectiveIndexing {
-		// Check if optimization is running - this would conflict with selective indexing
-		optimizationStatus, err := env.Database.MediaDB.GetOptimizationStatus()
-		if err != nil {
-			return nil, fmt.Errorf("unable to verify optimization status for selective indexing: %w", err)
-		}
-		if optimizationStatus == "running" {
-			return nil, models.ClientErrf(
-				"selective indexing cannot be performed while database optimization is running",
-			)
-		}
-
-		// Ensure at least one system is specified for selective indexing
-		if len(systems) == 0 {
-			return nil, models.ClientErrf("at least one system must be specified for selective indexing")
-		}
+	// Ensure at least one resolved system is specified for selective indexing.
+	// Process-local lease ownership, not persisted optimization status, decides conflicts.
+	if isSelectiveIndexing && len(systems) == 0 {
+		return nil, models.ClientErrf("at least one system must be specified for selective indexing")
 	}
 
 	// Reconcile with current primary-media state before reporting initial

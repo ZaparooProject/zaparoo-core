@@ -167,6 +167,7 @@ type MediaDB struct {
 	stmtInsertTagType       *sql.Stmt
 	batchInsertMediaTag     *BatchInserter
 	inMemoryTagCache        atomic.Pointer[tagCache]
+	mediaWriteArbiter       atomic.Pointer[database.MediaWriteArbiter]
 	batchInsertTag          *BatchInserter
 	mediaSearchBounds       map[int64]mediaDBIDBounds
 	mediaSearchBoundsLoads  map[int64]*mediaSearchBoundsLoad
@@ -989,6 +990,29 @@ func (db *MediaDB) GetOptimizationStatus() (string, error) {
 // overlapping) a full optimization, and writing the persisted status from both
 // would race two operations over who owns "running". Being process-local also
 // means a crash simply drops the flag rather than wedging a persisted status.
+func (db *MediaDB) getMediaWriteArbiter() *database.MediaWriteArbiter {
+	if arbiter := db.mediaWriteArbiter.Load(); arbiter != nil {
+		return arbiter
+	}
+	arbiter := &database.MediaWriteArbiter{}
+	if db.mediaWriteArbiter.CompareAndSwap(nil, arbiter) {
+		return arbiter
+	}
+	return db.mediaWriteArbiter.Load()
+}
+
+func (db *MediaDB) AcquireMediaWrite(operation database.MediaWriteOperation) (*database.MediaWriteLease, error) {
+	lease, err := db.getMediaWriteArbiter().TryAcquire(operation)
+	if err != nil {
+		return nil, fmt.Errorf("acquire media database write operation: %w", err)
+	}
+	return lease, nil
+}
+
+func (db *MediaDB) ActiveMediaWriteOperation() database.MediaWriteOperation {
+	return db.getMediaWriteArbiter().Active()
+}
+
 func (db *MediaDB) IsOptimizing() bool {
 	return db.isOptimizing.Load() || db.browseCacheRebuilding.Load()
 }
@@ -1533,6 +1557,22 @@ func (db *MediaDB) Vacuum() error {
 // (status running or pending), while a batch transaction is open, or while
 // background optimisation is active, returning a sentinel error in each case.
 func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
+	lease, err := db.AcquireMediaWrite(database.MediaWriteOperationMaintenance)
+	if err != nil {
+		var conflict *database.MediaWriteConflictError
+		if errors.As(err, &conflict) {
+			switch conflict.Active {
+			case database.MediaWriteOperationIndexing:
+				return 0, fmt.Errorf("%w: %w", ErrIndexingInProgress, err)
+			case database.MediaWriteOperationOptimization:
+				return 0, fmt.Errorf("%w: %w", ErrOptimizationInProgress, err)
+			default:
+			}
+		}
+		return 0, err
+	}
+	defer lease.Release()
+
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
@@ -3783,35 +3823,65 @@ func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFull
 // RunBackgroundOptimization performs database optimization operations in the background.
 // This includes creating indexes, running ANALYZE, and vacuuming the database.
 // It can be safely interrupted and resumed later.
-func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
-	if !db.isOptimizing.CompareAndSwap(false, true) {
-		log.Info().Msg("background optimization is already running, skipping")
+func (db *MediaDB) RunBackgroundOptimization(
+	statusCallback func(optimizing bool), pauser *syncutil.Pauser,
+) {
+	lease, err := db.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	if err != nil {
+		log.Info().Err(err).Msg("background optimization deferred")
 		return
 	}
+	if err := db.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
+		log.Error().Err(err).Msg("background optimization failed")
+	}
+}
+
+// RunBackgroundOptimizationWithLease runs optimization using ownership handed
+// off by another operation, such as successful indexing. It always releases lease.
+func notifyOptimizationStatus(statusCallback func(optimizing bool), optimizing bool) {
+	if statusCallback == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("panic recovered in optimization status callback")
+		}
+	}()
+	statusCallback(optimizing)
+}
+
+func (db *MediaDB) RunBackgroundOptimizationWithLease(
+	statusCallback func(optimizing bool), pauser *syncutil.Pauser, lease *database.MediaWriteLease,
+) (runErr error) {
+	if !lease.ValidFor(database.MediaWriteOperationOptimization) {
+		lease.Release()
+		return database.ErrMediaWriteLease
+	}
+
+	db.isOptimizing.Store(true)
 	db.backgroundOps.Add(1)
 	defer func() {
-		// Recover from any panics to prevent crashing the entire service
+		// Recover from any panics to prevent crashing the entire service.
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Msg("panic recovered in background optimization")
-			if statusCallback != nil {
-				statusCallback(false)
-			}
-			// Try to mark optimization as failed so it can be retried
+			// Try to mark optimization as failed so it can be retried.
 			if db.sql.Load() != nil {
 				_ = db.SetOptimizationStatus(IndexingStatusFailed)
 			}
+			runErr = fmt.Errorf("background optimization panic: %v", r)
+			notifyOptimizationStatus(statusCallback, false)
 		}
 		db.isOptimizing.Store(false)
 		db.backgroundOps.Done()
+		lease.Release()
 	}()
 
 	if db.sql.Load() == nil {
 		log.Error().Msg("cannot run background optimization: database not connected")
-		// Notify that optimization has failed
 		if statusCallback != nil {
 			statusCallback(false)
 		}
-		return
+		return ErrNullSQL
 	}
 
 	log.Info().Msg("starting background database optimization")
@@ -3819,11 +3889,10 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// Set status to running
 	if err := db.SetOptimizationStatus(IndexingStatusRunning); err != nil {
 		log.Error().Err(err).Msg("failed to set optimization status to running")
-		// Notify that optimization has failed to start
 		if statusCallback != nil {
 			statusCallback(false)
 		}
-		return
+		return fmt.Errorf("failed to set optimization status to running: %w", err)
 	}
 
 	// Notify that optimization has started
@@ -3948,7 +4017,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			if statusCallback != nil {
 				statusCallback(false)
 			}
-			return
+			return fmt.Errorf("wait to run background optimization: %w", err)
 		}
 
 		log.Info().Msgf("running optimization step: %s", step.name)
@@ -4012,7 +4081,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			if statusCallback != nil {
 				statusCallback(false)
 			}
-			return
+			return stepErr
 		}
 
 		stepMetricsEnd := stepRecorder.Capture(db.ctx, true)
@@ -4025,7 +4094,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// Mark as completed
 	if err := db.SetOptimizationStatus(IndexingStatusCompleted); err != nil {
 		log.Error().Err(err).Msg("failed to set optimization status to completed")
-		return
+		return fmt.Errorf("failed to set optimization status to completed: %w", err)
 	}
 	// Clear optimization step on completion
 	if err := db.SetOptimizationStep(""); err != nil {
@@ -4038,6 +4107,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	}
 
 	log.Info().Msg("background database optimization completed")
+	return nil
 }
 
 // WaitForBackgroundOperations waits for all background operations to complete.
