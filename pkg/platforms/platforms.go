@@ -523,7 +523,9 @@ type Platform interface {
 	ScanHook(*tokens.Token) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
-	// RootDirs returns a list of root folders to scan for media files.
+	// RootDirs returns root folders to scan for media files, ordered from
+	// highest to lowest priority. Consumers resolving duplicate relative names
+	// must prefer the first matching root.
 	RootDirs(*config.Instance) []string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.

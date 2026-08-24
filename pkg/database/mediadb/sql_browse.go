@@ -546,11 +546,22 @@ func splitBrowseSystemIDs(ids string) []string {
 	return uniqueBrowseSystemIDs(strings.Split(ids, ","))
 }
 
+func browseOverlaySources(overlay *database.BrowseOverlay) []database.BrowseSource {
+	if overlay == nil {
+		return nil
+	}
+	return overlay.Sources
+}
+
 func sqlBrowseDirectories(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayDirectories(ctx, db, opts)
+	}
+
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
@@ -575,6 +586,103 @@ func sqlBrowseDirectories(
 		return fallback, nil
 	}
 	return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+}
+
+func sqlBrowseOverlayDirectories(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		matched_dirs AS (
+			SELECT sources.parent_dir,
+				sources.priority,
+				substr(m.Path, length(sources.parent_dir) + 1) AS rest,
+				s.SystemID
+			FROM sources
+			INNER JOIN Media m
+				ON m.Path >= sources.parent_dir
+				AND m.Path < sources.parent_dir || char(1114111)
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE sources.include_dirs = 1 AND m.IsMissing = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+		), directory_candidates AS (
+			SELECT parent_dir,
+				priority,
+				substr(rest, 1, instr(rest, '/') - 1) AS name,
+				COUNT(*) AS file_count,
+				GROUP_CONCAT(DISTINCT SystemID) AS system_ids
+			FROM matched_dirs
+			WHERE instr(rest, '/') > 0
+			GROUP BY parent_dir, priority, name
+		), direct_files AS (
+			SELECT sources.priority,
+				substr(m.Path, length(m.ParentDir) + 1) AS name
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE m.IsMissing = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+		), ranked AS (
+			SELECT directory_candidates.*,
+				ROW_NUMBER() OVER (PARTITION BY name ORDER BY priority ASC) AS source_rank
+			FROM directory_candidates
+			WHERE NOT EXISTS (
+				SELECT 1 FROM direct_files
+				WHERE direct_files.priority < directory_candidates.priority
+					AND direct_files.name = directory_candidates.name
+			)
+		)
+		SELECT name, file_count, system_ids, parent_dir || name
+		FROM ranked
+		WHERE source_rank = 1`
+	if opts.AfterName != "" {
+		query += ` AND name > ?`
+		args = append(args, opts.AfterName)
+	}
+	query += ` ORDER BY name ASC`
+	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
+		query += limitClause
+		args = append(args, limitArgs...)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse overlay directories query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseDirectoryResult
+	for rows.Next() {
+		var result database.BrowseDirectoryResult
+		var systemIDs string
+		if scanErr := rows.Scan(&result.Name, &result.FileCount, &systemIDs, &result.Path); scanErr != nil {
+			return nil, fmt.Errorf("browse overlay directories scan: %w", scanErr)
+		}
+		result.SystemIDs = splitBrowseSystemIDs(systemIDs)
+		results = append(results, result)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("browse overlay directories rows: %w", rowsErr)
+	}
+	return results, nil
 }
 
 func sqlBrowseDirectoriesFromMediaFallback(
@@ -822,18 +930,23 @@ func browsePathPrefixCondition(column, pathPrefix string) (condition string, arg
 	return column + ` LIKE ? || '%'`, []any{pathPrefix}
 }
 
-func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
+func browseFilesFilterCondition(
+	opts *database.BrowseFilesOptions,
+	includeParent bool,
+) (where string, args []any) {
 	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "m.SortName")
 	// Most browse scopes are bounded enough for correlated candidate probes.
 	// Required favorites are exceptionally sparse in production, so drive from
 	// that reverse-index set and probe any remaining filters per candidate.
 	tagClauses, tagArgs := buildBrowseTagFilterSQL(opts.Tags, "m")
 	conditions := make([]string, 0, 3+len(letterClauses)+len(tagClauses))
-	conditions = append(conditions, `m.ParentDir = ?`, `m.IsMissing = 0`)
+	if includeParent {
+		conditions = append(conditions, `m.ParentDir = ?`)
+		args = append(args, opts.PathPrefix)
+	}
+	conditions = append(conditions, `m.IsMissing = 0`)
 	conditions = append(conditions, letterClauses...)
 
-	args = make([]any, 0, 1+len(letterArgs)+len(tagArgs))
-	args = append(args, opts.PathPrefix)
 	args = append(args, letterArgs...)
 	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
 		conditions = append(conditions, systemClause)
@@ -843,6 +956,10 @@ func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, 
 	args = append(args, tagArgs...)
 
 	return strings.Join(conditions, " AND "), args
+}
+
+func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
+	return browseFilesFilterCondition(opts, true)
 }
 
 func browseFilenameExpr() string {
@@ -1017,7 +1134,121 @@ func sqlBrowseFiles(
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayFilesFromMedia(ctx, db, opts)
+	}
 	return sqlBrowseFilesFromMedia(ctx, db, opts)
+}
+
+const overlayHigherPriorityDirectoryCondition = `NOT EXISTS (
+	SELECT 1
+	FROM sources higher
+	INNER JOIN Media descendant ON descendant.IsMissing = 0
+	WHERE higher.priority < sources.priority
+		AND higher.include_dirs = 1
+		AND descendant.ParentDir >= higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/'
+		AND descendant.ParentDir < higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/' || char(1114111)
+)`
+
+func sqlBrowseOverlayFilesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseFilesOptions,
+) ([]database.SearchResultWithCursor, error) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+
+	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		winnerConditions = append(winnerConditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		 ranked AS (
+			SELECT m.DBID,
+				ROW_NUMBER() OVER (
+					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
+					ORDER BY sources.priority ASC, m.DBID ASC
+				) AS source_rank
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + strings.Join(winnerConditions, " AND ") + `
+		)`
+
+	filterOpts := *opts
+	filterOpts.Systems = nil
+	where, filterArgs := browseFilesFilterCondition(&filterOpts, false)
+	args = append(args, filterArgs...)
+	sortMode := opts.Sort
+	sortExpr := "m.SortName"
+	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
+		sortExpr = browseFilenameExpr()
+	}
+	query += ` SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID,
+		mt.DisambiguationTypes, ` + sortExpr + ` AS SortValue
+		FROM ranked
+		INNER JOIN Media m ON m.DBID = ranked.DBID
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		INNER JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+		WHERE ranked.source_rank = 1 AND ` + where
+	if opts.Cursor != nil {
+		op := ">"
+		if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
+			op = "<"
+		}
+		query += ` AND (` + sortExpr + `, m.DBID) ` + op + ` (?, ?)`
+		args = append(args, opts.Cursor.SortValue, opts.Cursor.LastID)
+	}
+	direction := "ASC"
+	if opts.Sort == "name-desc" || opts.Sort == "filename-desc" {
+		direction = "DESC"
+	}
+	query += ` ORDER BY ` + sortExpr + ` ` + direction + `, m.DBID ` + direction + ` LIMIT ?`
+	args = append(args, opts.Limit)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse overlay files query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.SearchResultWithCursor
+	for rows.Next() {
+		var r database.SearchResultWithCursor
+		if scanErr := rows.Scan(
+			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID, &r.DisambiguationTypes, &r.SortValue,
+		); scanErr != nil {
+			return nil, fmt.Errorf("browse overlay files scan: %w", scanErr)
+		}
+		if r.Name == "" {
+			base := filepath.Base(r.Path)
+			if ext := filepath.Ext(base); ext != "" {
+				base = base[:len(base)-len(ext)]
+			}
+			r.Name = base
+		}
+		r.SortMode = sortMode
+		results = append(results, r)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("browse overlay files rows: %w", rowsErr)
+	}
+	if err = fetchAndAttachUtilityTags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse overlay files tags: %w", err)
+	}
+	if err = fetchAndAttachCoverFlags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse overlay files cover flags: %w", err)
+	}
+	if err = attachZapScriptTags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse overlay files disambiguation: %w", err)
+	}
+	return results, nil
 }
 
 func sqlBrowseFilesFromMedia(
@@ -1550,8 +1781,12 @@ func fetchAndAttachUtilityTags(
 func sqlBrowseFileCount(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseFileCountOptions,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (int, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayFileCount(ctx, db, opts)
+	}
+
 	// Letter and tag scopes need row-level predicates absent from compact cache.
 	// Unfiltered directory totals can use v3's parent=self direct-file rows.
 	if opts.Letter == nil && len(opts.Tags) == 0 && browseRouteCacheKey(opts.PathPrefix) != "/" {
@@ -1569,10 +1804,56 @@ func sqlBrowseFileCount(
 	return sqlBrowseFileCountFromMedia(ctx, db, opts)
 }
 
+func sqlBrowseOverlayFileCount(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
+) (int, error) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		winnerConditions = append(winnerConditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+	filterOpts := &database.BrowseFilesOptions{
+		Letter: opts.Letter,
+		Tags:   opts.Tags,
+	}
+	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	args = append(args, filterArgs...)
+	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		ranked AS (
+			SELECT m.DBID,
+				ROW_NUMBER() OVER (
+					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
+					ORDER BY sources.priority ASC, m.DBID ASC
+				) AS source_rank
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + strings.Join(winnerConditions, " AND ") + `
+		)
+		SELECT COUNT(*)
+		FROM ranked
+		INNER JOIN Media m ON m.DBID = ranked.DBID
+		WHERE ranked.source_rank = 1 AND ` + where
+	var count int
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("browse overlay file count: %w", err)
+	}
+	return count, nil
+}
+
 func sqlBrowseDirectFileCountFromCache(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseFileCountOptions,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (count int, cacheUsable bool, err error) {
 	covered, err := sqlBrowseCacheCoversSystems(ctx, db, opts.Systems)
 	if err != nil || !covered {
@@ -1639,7 +1920,7 @@ func sqlBrowseCacheCoversSystems(
 func sqlBrowseFileCountFromMedia(
 	ctx context.Context,
 	db sqlQueryable,
-	opts database.BrowseFileCountOptions,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
 ) (int, error) {
 	where, args := browseFilesBaseCondition(&database.BrowseFilesOptions{
 		PathPrefix: opts.PathPrefix,
@@ -1667,6 +1948,14 @@ func sqlBrowseDirCount(
 	db sqlQueryable,
 	opts database.BrowseDirCountOptions,
 ) (int, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		dirs, overlayErr := sqlBrowseOverlayDirectories(ctx, db, database.BrowseDirectoriesOptions{
+			Overlay: opts.Overlay,
+			Systems: opts.Systems,
+		})
+		return len(dirs), overlayErr
+	}
+
 	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return 0, err
@@ -1784,6 +2073,10 @@ func sqlBrowseIndex(
 	db sqlQueryable,
 	opts *database.BrowseIndexOptions,
 ) (database.BrowseIndexResult, error) {
+	if len(browseOverlaySources(opts.Overlay)) > 0 {
+		return sqlBrowseOverlayIndex(ctx, db, opts)
+	}
+
 	filesOpts := &database.BrowseFilesOptions{
 		PathPrefix: opts.PathPrefix,
 		Sort:       opts.Sort,
@@ -1875,6 +2168,111 @@ func sqlBrowseIndex(
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return database.BrowseIndexResult{}, fmt.Errorf("browse index rows: %w", rowsErr)
+	}
+	return result, nil
+}
+
+func sqlBrowseOverlayIndex(
+	ctx context.Context,
+	db sqlQueryable,
+	opts *database.BrowseIndexOptions,
+) (database.BrowseIndexResult, error) {
+	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
+		total, err := sqlBrowseOverlayFileCount(ctx, db, database.BrowseFileCountOptions{
+			Overlay: opts.Overlay,
+			Systems: opts.Systems,
+			Tags:    opts.Tags,
+		})
+		if err != nil {
+			return database.BrowseIndexResult{}, err
+		}
+		return database.BrowseIndexResult{
+			Scheme:     browseIndexSchemeNone,
+			SortMode:   opts.Sort,
+			TotalFiles: total,
+		}, nil
+	}
+
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args := make([]any, 0, len(sources)+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
+	}
+	winnerConditions := []string{"m.IsMissing = 0", overlayHigherPriorityDirectoryCondition}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		winnerConditions = append(winnerConditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+	filterOpts := &database.BrowseFilesOptions{Tags: opts.Tags}
+	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
+	args = append(args, filterArgs...)
+	desc := opts.Sort == "name-desc"
+	direction := "ASC"
+	if desc {
+		direction = "DESC"
+	}
+	bucketExpr := browseBucketKeyExpr("m.SortName")
+	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+		ranked AS (
+			SELECT m.DBID,
+				ROW_NUMBER() OVER (
+					PARTITION BY substr(m.Path, length(m.ParentDir) + 1)
+					ORDER BY sources.priority ASC, m.DBID ASC
+				) AS source_rank
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE ` + strings.Join(winnerConditions, " AND ") + `
+		), ordered AS (
+			SELECT ` + bucketExpr + ` AS bucket,
+				m.SortName AS sortValue,
+				m.DBID AS dbid,
+				ROW_NUMBER() OVER (ORDER BY m.SortName ` + direction + `, m.DBID ` + direction + `) AS rn
+			FROM ranked
+			INNER JOIN Media m ON m.DBID = ranked.DBID
+			WHERE ranked.source_rank = 1 AND ` + where + `
+		), counts AS (
+			SELECT bucket, COUNT(*) AS n, MIN(rn) AS first_rn FROM ordered GROUP BY bucket
+		)
+		SELECT o.bucket, o.sortValue, o.dbid, c.n, c.first_rn
+		FROM ordered o
+		INNER JOIN counts c ON c.bucket = o.bucket AND c.first_rn = o.rn
+		ORDER BY o.rn`
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := database.BrowseIndexResult{
+		Scheme:   browseIndexSchemeLatin,
+		SortMode: opts.Sort,
+	}
+	for rows.Next() {
+		var bucket, sortValue string
+		var dbid, firstRN int64
+		var count int
+		if scanErr := rows.Scan(&bucket, &sortValue, &dbid, &count, &firstRN); scanErr != nil {
+			return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index scan: %w", scanErr)
+		}
+		cursorID := dbid - 1
+		if desc {
+			cursorID = dbid + 1
+		}
+		result.Buckets = append(result.Buckets, database.BrowseIndexBucket{
+			Key:       bucket,
+			SortValue: sortValue,
+			LastID:    cursorID,
+			Count:     count,
+			Offset:    int(firstRN - 1),
+			AtStart:   len(result.Buckets) == 0,
+		})
+		result.TotalFiles += count
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return database.BrowseIndexResult{}, fmt.Errorf("browse overlay index rows: %w", rowsErr)
 	}
 	return result, nil
 }

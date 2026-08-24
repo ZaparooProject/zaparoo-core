@@ -2737,7 +2737,8 @@ func (m *MockMediaDBI) GetMediaCoverStatus(
 }
 
 func (m *MockMediaDBI) BrowseFileCount(
-	ctx context.Context, opts database.BrowseFileCountOptions,
+	ctx context.Context,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // interface keeps browse option values consistent
 ) (int, error) {
 	args := m.Called(ctx, opts)
 	if count, ok := args.Get(0).(int); ok {
