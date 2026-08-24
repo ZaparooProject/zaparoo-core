@@ -54,6 +54,21 @@ type SystemsParams struct {
 	All  bool      `json:"all,omitempty"`
 }
 
+// LaunchersParams filters the launchers list. Systems is intentionally not
+// validated against known system IDs: launcher system IDs can be launchable
+// or virtual systems outside systemdefs, and an unmatched filter value should
+// return an empty list rather than a validation error.
+type LaunchersParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+}
+
+// RemoteActivityParams requests recent entries from the remote operations
+// ledger. Limit defaults to 20 and is capped at 100.
+type RemoteActivityParams struct {
+	Limit *int `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+}
+
 type MediaIndexParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
@@ -170,6 +185,7 @@ type UpdateSettingsParams struct {
 	Encryption                *bool               `json:"encryption"`
 	BackupRemoteEnabled       *bool               `json:"backupRemoteEnabled"`
 	PlaytimeSyncEnabled       *bool               `json:"playtimeSyncEnabled"`
+	RemoteControlEnabled      *bool               `json:"remoteControlEnabled"`
 	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	BackupRemoteSchedule      *string             `json:"backupRemoteSchedule" validate:"omitempty,oneof=daily weekly manual"`
 	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`

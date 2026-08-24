@@ -994,3 +994,31 @@ func TestConnectReaders_ClosesNonMatchingReaders(t *testing.T) {
 	// The matching reader must be opened.
 	matchingReader.AssertCalled(t, "Open", mock.Anything, mock.Anything, mock.Anything)
 }
+
+// TestReaderManager_OnScanHook_DisabledZapScriptDoesNotDropScan pins that a
+// disabled "run ZapScript" setting is treated as the on_scan hook's original
+// silent no-op, not a hook failure: without this, runHook returns
+// state.ErrRunZapScriptDisabled and readers.go's on_scan call site would
+// drop the scan entirely (never reaching the token queue), even though
+// nothing about the scan itself failed.
+func TestReaderManager_OnScanHook_DisabledZapScriptDoesNotDropScan(t *testing.T) {
+	t.Parallel()
+
+	env := setupReaderManager(t, func(cfg *config.Instance) {
+		require.NoError(t, cfg.LoadTOML(`[readers.scan]
+on_scan = "**echo:on_scan ran"`))
+	})
+	env.st.SetRunZapScript(false)
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "token-a",
+			Text:     "game-a",
+			ScanTime: time.Now(),
+		},
+	})
+
+	tok := env.expectToken(t)
+	assert.Equal(t, "token-a", tok.UID, "scan must still reach the token queue when ZapScript is disabled")
+}

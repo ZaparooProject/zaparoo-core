@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -488,4 +489,113 @@ func TestAPIListen(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestRemoteControlDefaultsDisabled(t *testing.T) {
+	t.Parallel()
+	cfg := &Instance{}
+	assert.False(t, cfg.RemoteControlEnabled())
+}
+
+// TestResetOnlineConsentClearsAllThreeFlags pins that ResetOnlineConsent
+// covers every Online feature's consent flag, not just remote control.
+func TestResetOnlineConsentClearsAllThreeFlags(t *testing.T) {
+	t.Parallel()
+	cfg := &Instance{}
+	cfg.SetRemoteControl(true)
+	cfg.SetBackupRemoteEnabled(true)
+	cfg.SetPlaytimeSync(true)
+	require.True(t, cfg.RemoteControlEnabled())
+	require.True(t, cfg.BackupRemoteEnabled())
+	require.True(t, cfg.PlaytimeSyncEnabled())
+
+	cfg.ResetOnlineConsent()
+
+	assert.False(t, cfg.RemoteControlEnabled())
+	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.False(t, cfg.PlaytimeSyncEnabled())
+}
+
+func TestRemoteControlPersistsInServiceConfig(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
+	require.NoError(t, err)
+	cfg.SetRemoteControl(true)
+	require.NoError(t, cfg.Save())
+	cfg.SetRemoteControl(false)
+	require.NoError(t, cfg.Load())
+	assert.True(t, cfg.RemoteControlEnabled())
+
+	data, err := afero.ReadFile(fs, cfg.cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "[service.remote_control]")
+	assert.NotContains(t, string(data), "[online]")
+}
+
+func TestRemoteControlBaseURL(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultRemoteControlBaseURL, cfg.RemoteControlBaseURL())
+
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://remote.example.com/api/"))
+	assert.Equal(t, "https://remote.example.com/api", cfg.RemoteControlBaseURL())
+	require.Error(t, cfg.SetRemoteControlBaseURL("http://example.com"))
+	assert.Equal(t, "https://remote.example.com/api", cfg.RemoteControlBaseURL())
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://other.example.com"))
+	require.NoError(t, cfg.Load())
+	assert.Equal(t, "https://remote.example.com/api", cfg.RemoteControlBaseURL())
+}
+
+// TestOnlineBaseURLsValidatedOnLoad pins that a hand-edited config.toml
+// containing an invalid base URL (the only way one gets there in practice,
+// since none of the Set*BaseURL validators has a production caller) falls
+// back to the default rather than silently loading unvalidated, and does
+// not fail the whole config load.
+func TestOnlineBaseURLsValidatedOnLoad(t *testing.T) {
+	t.Parallel()
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[backup.remote]
+base_url = "http://evil.example.com"
+
+[playtime]
+base_url = "ftp://not-a-web-url.example.com"
+
+[service.remote_control]
+base_url = "http://public.example.com"
+`))
+	assert.Equal(t, DefaultBackupRemoteBaseURL, cfg.BackupRemoteBaseURL())
+	assert.Equal(t, DefaultPlaytimeBaseURL, cfg.PlaytimeBaseURL())
+	assert.Equal(t, DefaultRemoteControlBaseURL, cfg.RemoteControlBaseURL())
+}
+
+func TestOnlineBaseURLsValidOnLoadArePreserved(t *testing.T) {
+	t.Parallel()
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[backup.remote]
+base_url = "https://custom-backup.example.com"
+
+[playtime]
+base_url = "https://custom-playtime.example.com"
+
+[service.remote_control]
+base_url = "https://custom-remote.example.com"
+`))
+	assert.Equal(t, "https://custom-backup.example.com", cfg.BackupRemoteBaseURL())
+	assert.Equal(t, "https://custom-playtime.example.com", cfg.PlaytimeBaseURL())
+	assert.Equal(t, "https://custom-remote.example.com", cfg.RemoteControlBaseURL())
+}
+
+func TestIsDefaultOnlineBaseURL(t *testing.T) {
+	t.Parallel()
+	assert.True(t, IsDefaultOnlineBaseURL(""))
+	assert.True(t, IsDefaultOnlineBaseURL(DefaultOnlineBaseURL))
+	assert.True(t, IsDefaultOnlineBaseURL(strings.ToUpper(DefaultOnlineBaseURL)))
+	assert.False(t, IsDefaultOnlineBaseURL("https://self-hosted.example.com"))
 }

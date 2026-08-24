@@ -703,10 +703,12 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	debugLogging := true
 	backupRemoteEnabled := true
 	playtimeSyncEnabled := true
+	remoteControlEnabled := true
 	params := models.UpdateSettingsParams{
-		DebugLogging:        &debugLogging,
-		BackupRemoteEnabled: &backupRemoteEnabled,
-		PlaytimeSyncEnabled: &playtimeSyncEnabled,
+		DebugLogging:         &debugLogging,
+		BackupRemoteEnabled:  &backupRemoteEnabled,
+		PlaytimeSyncEnabled:  &playtimeSyncEnabled,
+		RemoteControlEnabled: &remoteControlEnabled,
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -726,6 +728,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	assert.False(t, cfg.DebugLogging(), "non-local rejection must happen before any mutation")
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled(), "consent setting must not change on rejected request")
+	assert.False(t, cfg.RemoteControlEnabled())
 
 	// A remote member client is rejected the same way.
 	env.ClientRole = string(permissions.RoleMember)
@@ -733,6 +736,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.Error(t, err)
 	assert.False(t, cfg.BackupRemoteEnabled())
 	assert.False(t, cfg.PlaytimeSyncEnabled())
+	assert.False(t, cfg.RemoteControlEnabled())
 
 	// A paired admin client is as privileged as a local connection.
 	env.ClientRole = string(permissions.RoleAdmin)
@@ -740,6 +744,7 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.NoError(t, err)
 	assert.True(t, cfg.BackupRemoteEnabled())
 	assert.True(t, cfg.PlaytimeSyncEnabled())
+	assert.True(t, cfg.RemoteControlEnabled())
 }
 
 func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
@@ -1423,6 +1428,10 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, resp.BackupRemoteBaseURL)
 	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
+	require.NotNil(t, resp.PlaytimeBaseURL)
+	assert.Equal(t, config.DefaultPlaytimeBaseURL, *resp.PlaytimeBaseURL)
+	require.NotNil(t, resp.RemoteControlBaseURL)
+	assert.Equal(t, config.DefaultRemoteControlBaseURL, *resp.RemoteControlBaseURL)
 	require.NotNil(t, resp.PlaytimeSyncEnabled)
 	assert.False(t, *resp.PlaytimeSyncEnabled)
 
@@ -1432,7 +1441,37 @@ func TestHandleSettings_BackupRemoteBaseURLGatedToLocal(t *testing.T) {
 	resp, ok = result.(models.SettingsResponse)
 	require.True(t, ok)
 	assert.Nil(t, resp.BackupRemoteBaseURL)
+	assert.Nil(t, resp.PlaytimeBaseURL)
+	assert.Nil(t, resp.RemoteControlBaseURL)
 	assert.Nil(t, resp.PlaytimeSyncEnabled)
+}
+
+// TestHandleSettings_ReportsCustomOnlineEndpoints pins that settings
+// reflects a non-default endpoint for each of the three configurable
+// Online base URLs independently. The TUI's custom-server warning depends
+// on being able to see all three, not just backup's.
+func TestHandleSettings_ReportsCustomOnlineEndpoints(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://custom-remote.example.com"))
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	env := requests.RequestEnv{Platform: mockPlatform, Config: cfg, State: appState, IsLocal: true}
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp.RemoteControlBaseURL)
+	assert.Equal(t, "https://custom-remote.example.com", *resp.RemoteControlBaseURL)
+	require.NotNil(t, resp.BackupRemoteBaseURL)
+	assert.Equal(t, config.DefaultBackupRemoteBaseURL, *resp.BackupRemoteBaseURL)
+	require.NotNil(t, resp.PlaytimeBaseURL)
+	assert.Equal(t, config.DefaultPlaytimeBaseURL, *resp.PlaytimeBaseURL)
 }
 
 func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {

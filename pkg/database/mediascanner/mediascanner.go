@@ -1558,9 +1558,14 @@ func NewNamesIndex(
 				Str("system", systemID).
 				Msg("file collection hit errors; keeping existing missing-media state for this system")
 		}
+		// WaitBounded, not Wait: reconcile holds the open write transaction
+		// (see ReconcileStagedSystem), so honoring a full pause here would
+		// hold it for as long as the pause lasts (a whole gameplay session
+		// under the pause-during-media policy) instead of pacing between
+		// statements.
 		reconcileStats, reconcileErr := db.ReconcileStagedSystem(
 			ctx, systemID, database.ScanReconcileOpts{
-				Yield:          func() error { return pauser.Wait(ctx) },
+				Yield:          func() error { return pauser.WaitBounded(ctx) },
 				IncompleteScan: scanIncomplete,
 			},
 		)

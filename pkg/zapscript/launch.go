@@ -357,10 +357,43 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, nil
 	}
 
+	if launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher); launcherID != "" {
+		return cmdSystemWithLauncher(pl, &env, systemID, launcherID)
+	}
+
 	if err := pl.LaunchSystem(env.Cfg, systemID); err != nil {
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, fmt.Errorf("failed to launch system '%s': %w", systemID, err)
+	}
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, nil
+}
+
+// cmdSystemWithLauncher launches systemID via a specific launcher (e.g. a
+// MiSTer alt core) instead of the platform's default resolution for that
+// system, with no media loaded.
+func cmdSystemWithLauncher(
+	pl platforms.Platform, env *platforms.CmdEnv, systemID, launcherID string,
+) (platforms.CmdResult, error) {
+	launcher := findLauncher(pl, env, launcherID)
+	if launcher == nil {
+		return platforms.CmdResult{}, fmt.Errorf("launcher not found: %s", launcherID)
+	}
+	if !strings.EqualFold(launcher.SystemID, systemID) {
+		return platforms.CmdResult{}, fmt.Errorf(
+			"launcher '%s' does not belong to system '%s'", launcherID, systemID,
+		)
+	}
+	selector, ok := pl.(platforms.SystemLauncherSelector)
+	if !ok {
+		return platforms.CmdResult{}, fmt.Errorf("launcher selection not supported on %s", pl.ID())
+	}
+	if err := selector.LaunchSystemLauncher(env.Cfg, systemID, launcher); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to launch system '%s' with launcher '%s': %w", systemID, launcherID, err)
 	}
 	return platforms.CmdResult{
 		MediaChanged: true,

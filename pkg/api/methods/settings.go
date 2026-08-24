@@ -88,10 +88,16 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		backupRemoteSchedule := env.Config.BackupRemoteSchedule()
 		backupRemoteBaseURL := env.Config.BackupRemoteBaseURL()
 		playtimeSyncEnabled := env.Config.PlaytimeSyncEnabled()
+		playtimeBaseURL := env.Config.PlaytimeBaseURL()
+		remoteControlEnabled := env.Config.RemoteControlEnabled()
+		remoteControlBaseURL := env.Config.RemoteControlBaseURL()
 		resp.BackupRemoteEnabled = &backupRemoteEnabled
 		resp.BackupRemoteSchedule = &backupRemoteSchedule
 		resp.BackupRemoteBaseURL = &backupRemoteBaseURL
 		resp.PlaytimeSyncEnabled = &playtimeSyncEnabled
+		resp.PlaytimeBaseURL = &playtimeBaseURL
+		resp.RemoteControlEnabled = &remoteControlEnabled
+		resp.RemoteControlBaseURL = &remoteControlBaseURL
 	}
 
 	return resp, nil
@@ -145,7 +151,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	}
 
 	if params.BackupRemoteEnabled != nil || params.BackupRemoteSchedule != nil ||
-		params.PlaytimeSyncEnabled != nil {
+		params.PlaytimeSyncEnabled != nil || params.RemoteControlEnabled != nil {
 		if !isLocalOrAdmin(&env) {
 			return nil, models.ClientErrf("online settings require a local or admin client")
 		}
@@ -254,6 +260,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.PlaytimeSyncEnabled != nil {
 		log.Debug().Bool("playtimeSyncEnabled", *params.PlaytimeSyncEnabled).Msg("updating setting")
 		env.Config.SetPlaytimeSync(*params.PlaytimeSyncEnabled)
+	}
+
+	if params.RemoteControlEnabled != nil {
+		log.Debug().Bool("remoteControlEnabled", *params.RemoteControlEnabled).Msg("updating setting")
+		env.Config.SetRemoteControl(*params.RemoteControlEnabled)
 	}
 
 	if params.ReadersScanMode != nil {

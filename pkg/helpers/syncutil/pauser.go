@@ -190,6 +190,17 @@ func (p *Pauser) Resume() {
 	close(p.ch)
 }
 
+// WaitBounded behaves like Wait, except a full pause is treated as the
+// heaviest throttle duty cycle instead of blocking until Resume. Callers that
+// must hold a resource across the wait, such as an open database write
+// transaction, use this instead of Wait: honoring a full pause there would
+// hold that resource for as long as the pause lasts (an entire gameplay
+// session under the pause-during-media policy), rather than just slowing
+// down between statements the way a held transaction can safely tolerate.
+func (p *Pauser) WaitBounded(ctx context.Context) error {
+	return p.waitLoop(ctx, pausedBounded)
+}
+
 // IsPaused reports whether the Pauser is currently in the paused state. A nil
 // receiver reports false.
 func (p *Pauser) IsPaused() bool {
@@ -265,6 +276,29 @@ func (p *Pauser) SetBaselineThrottleQuanta(work, sleep time.Duration) {
 // returns the context error if the context is cancelled while blocked or
 // sleeping. A nil receiver returns nil.
 func (p *Pauser) Wait(ctx context.Context) error {
+	return p.waitLoop(ctx, pausedBlocks)
+}
+
+// pausedWaitMode selects how the shared wait loop treats the paused state.
+type pausedWaitMode int
+
+const (
+	// pausedBlocks waits for Resume (or Throttle) like Wait.
+	pausedBlocks pausedWaitMode = iota
+	// pausedBounded treats a pause as the heaviest throttle duty cycle
+	// instead of blocking, like WaitBounded.
+	pausedBounded
+)
+
+// waitLoop implements Wait and WaitBounded as one state machine so a pause
+// that starts after the caller's state is already known mid-call, not only
+// at entry, is still bounded under pausedBounded. Reading state exactly once
+// per loop iteration under a single lock acquisition, then branching on mode
+// within that same iteration, closes the race a separate "check IsPaused,
+// then call Wait" split leaves open: Pause landing between those two
+// acquisitions would make the delegated Wait call observe the new paused
+// state and block on Resume regardless of the earlier check.
+func (p *Pauser) waitLoop(ctx context.Context, mode pausedWaitMode) error {
 	if p == nil {
 		return nil
 	}
@@ -310,6 +344,21 @@ func (p *Pauser) Wait(ctx context.Context) error {
 				return ctx.Err()
 			}
 		case statePaused:
+			if mode == pausedBounded {
+				_, sleep := quantaForLevel(ThrottleHeavy)
+				timer := time.NewTimer(sleep)
+				select {
+				case <-timer.C:
+					return nil
+				case <-ch:
+					timer.Stop()
+					// State changed; loop to observe the new state.
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				}
+				continue
+			}
 			select {
 			case <-ch:
 				// State changed; loop to observe the new state.

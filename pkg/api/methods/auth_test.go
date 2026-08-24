@@ -382,6 +382,140 @@ func TestSettingsAuthClaim_HappyPath(t *testing.T) {
 	assert.False(t, st.BackupCoordinator().RemoteUnlinked())
 }
 
+// TestSettingsAuthClaim_ResetsAllOnlineConsent pins that a fresh claim,
+// even re-claiming for the same account, resets every Online feature's
+// consent (remote control, cloud backup, play history sync), since it is a
+// new "who is on the other end" event and must be re-approved explicitly
+// rather than silently carrying over.
+func TestSettingsAuthClaim_ResetsAllOnlineConsent(t *testing.T) {
+	// Not parallel: swaps package-level claimClient
+
+	claimServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"bearer": "secret-api-key"}`))
+	}))
+	defer claimServer.Close()
+
+	origClient := claimClient
+	claimClient = claimServer.Client()
+	t.Cleanup(func() { claimClient = origClient })
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	cfg, err := config.NewConfigWithFs(t.TempDir(), config.BaseDefaults, afero.NewMemMapFs())
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
+	})
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+
+	cfg.SetRemoteControl(true)
+	cfg.SetBackupRemoteEnabled(true)
+	cfg.SetPlaytimeSync(true)
+	require.True(t, cfg.RemoteControlEnabled())
+	require.True(t, cfg.BackupRemoteEnabled())
+	require.True(t, cfg.PlaytimeSyncEnabled())
+
+	mockFetchWK := func(string) (*zapscript.WellKnown, error) {
+		return &zapscript.WellKnown{ZapScript: 1, Auth: 1}, nil
+	}
+
+	params := models.SettingsAuthClaimParams{
+		ClaimURL: claimServer.URL + "/claim",
+		Token:    "claim-token-123",
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    st,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
+	require.NoError(t, err)
+
+	assert.False(t, cfg.RemoteControlEnabled())
+	assert.False(t, cfg.BackupRemoteEnabled())
+	assert.False(t, cfg.PlaytimeSyncEnabled())
+}
+
+// TestSettingsAuthClaim_SurfacesConsentResetSaveFailure pins that a failed
+// config.toml write during ResetOnlineConsent in performClaim is reported to
+// the caller rather than swallowed, mirroring the unlink path. Requires a
+// real filesystem so the config file's permission bits can force the write
+// to fail deterministically. The consent reset now runs and persists BEFORE
+// the credential is saved to auth.toml, so a failed save must leave no
+// credential behind either: auth.toml and config.toml are separate files
+// with no shared transaction, and saving the credential anyway would let a
+// restart bring the new credential up paired with the previous owner's
+// still-enabled consent.
+func TestSettingsAuthClaim_SurfacesConsentResetSaveFailure(t *testing.T) {
+	// Not parallel: swaps package-level claimClient
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+
+	claimServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"bearer": "secret-api-key"}`))
+	}))
+	defer claimServer.Close()
+
+	origClient := claimClient
+	claimClient = claimServer.Client()
+	t.Cleanup(func() { claimClient = origClient })
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetBackupRemoteBaseURL(claimServer.URL))
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(), ConfigDir: t.TempDir(),
+	})
+	st, _ := state.NewState(mockPlatform, "test-boot")
+	t.Cleanup(st.StopService)
+
+	cfgPath := filepath.Join(configDir, config.CfgFile)
+	require.NoError(t, os.Chmod(cfgPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o600) })
+
+	mockFetchWK := func(string) (*zapscript.WellKnown, error) {
+		return &zapscript.WellKnown{ZapScript: 1, Auth: 1}, nil
+	}
+
+	params := models.SettingsAuthClaimParams{
+		ClaimURL: claimServer.URL + "/claim",
+		Token:    "claim-token-123",
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    st,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsAuthClaim(env, mockFetchWK)
+	require.Error(t, err)
+
+	assert.False(t, cfg.RemoteControlEnabled(), "in-memory consent must be reset even when the save fails")
+	entry := config.LookupAuth(config.GetAuthCfg(), claimServer.URL)
+	assert.Nil(t, entry, "the credential must not be persisted when the consent-reset save fails")
+}
+
 func TestSettingsAuthClaim_NoRelatedTrust(t *testing.T) {
 	// Not parallel: swaps package-level claimClient
 
@@ -702,6 +836,72 @@ func TestSettingsAuthUnlink_MarksRemoteUnlinked(t *testing.T) {
 	data, err := os.ReadFile(statusPath) //nolint:gosec // test-owned temp path
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"unlinked": true`)
+}
+
+// TestSettingsAuthUnlink_ResetsAllOnlineConsent pins that unlinking clears
+// every Online feature's consent (remote control, cloud backup, play
+// history sync), not just remote control. The credential all three depend
+// on is gone, so none of their consent should silently survive to whatever
+// links next.
+func TestSettingsAuthUnlink_ResetsAllOnlineConsent(t *testing.T) {
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	env := newAuthUnlinkTestEnv(t)
+	require.NoError(t, env.Config.SaveAuthEntry("https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"}))
+	env.Config.SetRemoteControl(true)
+	env.Config.SetBackupRemoteEnabled(true)
+	env.Config.SetPlaytimeSync(true)
+	require.True(t, env.Config.RemoteControlEnabled())
+	require.True(t, env.Config.BackupRemoteEnabled())
+	require.True(t, env.Config.PlaytimeSyncEnabled())
+
+	_, err := HandleSettingsAuthUnlink(env)
+	require.NoError(t, err)
+
+	assert.False(t, env.Config.RemoteControlEnabled())
+	assert.False(t, env.Config.BackupRemoteEnabled())
+	assert.False(t, env.Config.PlaytimeSyncEnabled())
+}
+
+// TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure pins that a failed
+// config.toml write after ResetOnlineConsent is reported to the caller
+// rather than swallowed: the in-memory consent flags are already reset
+// regardless (safe for the rest of this process's life), but if the write
+// never succeeds and the device restarts, a silently-logged failure would
+// mean the old consent state loads back from disk. Requires a real
+// filesystem so the config file's permission bits can be used to force the
+// write to fail deterministically.
+func TestSettingsAuthUnlink_SurfacesConsentResetSaveFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+	// Not parallel: SaveAuthEntry updates the global auth config.
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
+	originalRevoke := revokeRemoteDevice
+	revokeRemoteDevice = func(context.Context, *backupsvc.Manager) error { return nil }
+	t.Cleanup(func() { revokeRemoteDevice = originalRevoke })
+
+	require.NoError(t, cfg.SaveAuthEntry("https://api.zaparoo.com", config.CredentialEntry{Bearer: "t1"}))
+	cfg.SetRemoteControl(true)
+	require.True(t, cfg.RemoteControlEnabled())
+
+	cfgPath := filepath.Join(configDir, config.CfgFile)
+	require.NoError(t, os.Chmod(cfgPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o600) })
+
+	env := requests.RequestEnv{
+		Context: context.Background(), Config: cfg, Platform: mockPlatform, IsLocal: true,
+	}
+	_, err = HandleSettingsAuthUnlink(env)
+	require.Error(t, err)
+
+	assert.False(t, cfg.RemoteControlEnabled(), "in-memory consent must be reset even when the save fails")
 }
 
 func TestSettingsAuthUnlink_RejectsRemoteClients(t *testing.T) {

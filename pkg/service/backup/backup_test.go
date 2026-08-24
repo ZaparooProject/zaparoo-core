@@ -1132,8 +1132,24 @@ func TestManagerNotifyScheduleStaleAddsInboxNotice(t *testing.T) {
 	}
 }
 
+func TestHeartbeatCapabilitiesWithdrawRemoteOperationsWithoutConsent(t *testing.T) {
+	cfg := &config.Instance{}
+	capabilities := heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())
+	assert.Equal(t, 1, capabilities["backup"])
+	assert.NotContains(t, capabilities, "remote_operations")
+
+	cfg.SetRemoteControl(true)
+	assert.Contains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "remote_operations")
+
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://remote.example.com"))
+	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "remote_operations")
+	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "backup")
+	assert.Contains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "remote_operations")
+}
+
 func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
+	env.Manager.cfg.SetRemoteControl(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
@@ -1148,6 +1164,13 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 				return
 			}
 			assert.InDelta(t, 1, capabilities["backup"], 0)
+			remoteOperations, ok := capabilities["remote_operations"].(map[string]any)
+			if !assert.True(t, ok) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			assert.InDelta(t, 1, remoteOperations["version"], 0)
+			assert.Equal(t, true, remoteOperations["enabled"])
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
 			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "Living Room", BackupActive: true})
@@ -1156,6 +1179,7 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	require.NoError(t, env.Manager.cfg.SetRemoteControlBaseURL(server.URL))
 	configureRemoteTestAuth(t, env.Manager, server.URL)
 
 	require.NoError(t, env.Manager.SendHeartbeat(context.Background()))

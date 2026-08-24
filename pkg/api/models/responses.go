@@ -140,8 +140,11 @@ type BrowseIndexResults struct {
 type SettingsResponse struct {
 	BackupRemoteEnabled       *bool              `json:"backupRemoteEnabled,omitempty"`
 	PlaytimeSyncEnabled       *bool              `json:"playtimeSyncEnabled,omitempty"`
+	RemoteControlEnabled      *bool              `json:"remoteControlEnabled,omitempty"`
 	BackupRemoteSchedule      *string            `json:"backupRemoteSchedule,omitempty"`
 	BackupRemoteBaseURL       *string            `json:"backupRemoteBaseUrl,omitempty"`
+	RemoteControlBaseURL      *string            `json:"remoteControlBaseUrl,omitempty"`
+	PlaytimeBaseURL           *string            `json:"playtimeBaseUrl,omitempty"`
 	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
@@ -613,17 +616,68 @@ type MediaTitleParseResponse struct {
 	SlugWordCount int     `json:"slugWordCount"`
 }
 
+// Launcher backend identifiers. Reused by pkg/config for custom launcher
+// definitions, so this is the one place the vocabulary is defined.
+const (
+	LauncherBackendCommand    = "command"
+	LauncherBackendMisterCore = "mister_core"
+)
+
+// LauncherRuntime describes what a launcher actually runs, when the platform
+// knows. It is embedded in Launcher so its fields flatten into the JSON
+// response rather than nesting under a "runtime" key. A zero value (empty
+// Backend) means the platform has nothing to say for this launcher.
+type LauncherRuntime struct {
+	MisterCore *MisterCoreInfo `json:"misterCore,omitempty"`
+	Backend    string          `json:"backend,omitempty"`
+}
+
+// MisterCoreInfo describes the FPGA core a MiSTer launcher loads. Absent
+// when the core is not installed on the SD card; Launcher's Available and
+// AvailabilityReason fields say why.
+type MisterCoreInfo struct {
+	// Name is the RBF short name, e.g. "3DO".
+	Name string `json:"name"`
+	// File is the installed RBF's filename, e.g. "3DO_20250101.rbf". Encodes
+	// the installed core version; absent from Name and MGLPath.
+	File string `json:"file"`
+	// MGLPath is the SD-relative core identity used to launch it, e.g.
+	// "_Console (Dual SDRAM)/3DO". Never an absolute filesystem path.
+	MGLPath string `json:"mglPath"`
+}
+
 type Launcher struct {
+	LauncherRuntime
 	ID                 string   `json:"id"`
 	SystemID           string   `json:"systemId,omitempty"`
 	SystemName         string   `json:"systemName,omitempty"`
 	AvailabilityReason string   `json:"availabilityReason,omitempty"`
 	Groups             []string `json:"groups,omitempty"`
 	Available          bool     `json:"available"`
+	Default            bool     `json:"default,omitempty"`
 }
 
 type LaunchersResponse struct {
 	Launchers []Launcher `json:"launchers"`
+}
+
+// RemoteActivityEntry is one owner-facing row of the remote operations
+// ledger. OriginKind is "first_party" or "api_key"; OriginKeyName is set
+// only for the latter. State reflects the ledger's lifecycle
+// ("executing", "terminal", "void", "expired") for entries that never
+// reached a result.
+type RemoteActivityEntry struct {
+	CreatedAt     string `json:"createdAt"`
+	OperationType string `json:"operationType"`
+	OriginKind    string `json:"originKind"`
+	OriginKeyName string `json:"originKeyName,omitempty"`
+	State         string `json:"state"`
+	Status        string `json:"status,omitempty"`
+	ErrorCode     string `json:"errorCode,omitempty"`
+}
+
+type RemoteActivityResponse struct {
+	Entries []RemoteActivityEntry `json:"entries"`
 }
 
 type ReaderInfo struct {

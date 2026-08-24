@@ -463,6 +463,118 @@ func TestRBFCache_Resolve_NotInCache(t *testing.T) {
 	assert.Contains(t, err.Error(), "Nintendo64")
 }
 
+func TestAltCorePaths_NotRegistered(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	assert.Nil(t, cache.AltCorePaths("NotRegistered"))
+}
+
+func TestAltCorePaths_ReturnsRegisteredOrder(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.RegisterAltCore("Sinden", "Light Gun/Core", "_Sinden/Core")
+	assert.Equal(t, []string{"Light Gun/Core", "_Sinden/Core"}, cache.AltCorePaths("Sinden"))
+}
+
+func TestResolveLauncher_LoadPathOverride(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20260311.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+		{Path: "/media/fat/_Unstable/SNES_20260101.rbf", ShortName: "SNES", MglName: "_Unstable/SNES"},
+	})
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_Unstable/SNES"
+`))
+
+	got, ok := cache.ResolveLauncher(cfg, "SNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Unstable/SNES_20260101.rbf", got.Path)
+}
+
+func TestResolveLauncher_LoadPathInvalidIsAMiss(t *testing.T) {
+	t.Parallel()
+
+	// An explicit but non-resolving load_path must not fall through to the
+	// alt-core or system ID lookups — Resolve treats this as an error, and
+	// ResolveLauncher must treat it as a miss rather than reporting a
+	// different core than the one configured.
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20260311.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_LLAPI/NonExistentCore"
+`))
+
+	_, ok := cache.ResolveLauncher(cfg, "SNES", "SNES")
+	assert.False(t, ok)
+}
+
+func TestResolveLauncher_AltCoreID(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/PSX_20240101.rbf", ShortName: "PSX", MglName: "_Console/PSX"},
+		{Path: "/media/fat/_Other/PSX2XCPU_20240101.rbf", ShortName: "PSX2XCPU", MglName: "_Other/PSX2XCPU"},
+	})
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	got, ok := cache.ResolveLauncher(nil, "2XPSX", "PSX")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Other/PSX2XCPU_20240101.rbf", got.Path)
+}
+
+func TestResolveLauncher_AltCoreFallsBackToSystemID(t *testing.T) {
+	t.Parallel()
+
+	// Mirrors Resolve's real launch-time behavior: an alt core whose own
+	// RBF isn't installed silently falls back to the base system core.
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/PSX_20240101.rbf", ShortName: "PSX", MglName: "_Console/PSX"},
+	})
+
+	got, ok := cache.ResolveLauncher(nil, "2XPSX", "PSX")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Console/PSX_20240101.rbf", got.Path)
+}
+
+func TestResolveLauncher_SystemIDOnly(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/SNES_20260311.rbf", ShortName: "SNES", MglName: "_Console/SNES"},
+	})
+
+	got, ok := cache.ResolveLauncher(nil, "SNES", "SNES")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/SNES", got.MglName)
+}
+
+func TestResolveLauncher_NotInCache(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs(nil)
+
+	_, ok := cache.ResolveLauncher(nil, "Nintendo64", "Nintendo64")
+	assert.False(t, ok)
+}
+
 func TestSplitRBFPath(t *testing.T) {
 	t.Parallel()
 

@@ -467,7 +467,7 @@ func TestNoOpMethods(t *testing.T) {
 	assert.NoError(t, base.GamepadPress("a"))
 
 	result, err := base.ForwardCmd(nil)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, platforms.ErrNotSupported)
 	assert.Empty(t, result)
 
 	path, found := base.LookupMapping(nil)

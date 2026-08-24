@@ -45,6 +45,7 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		{name: "no playlist active", err: zapscript.ErrNoPlaylistActive, expected: true},
 		{name: "launch in progress", err: state.ErrLaunchInProgress, expected: true},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, expected: true},
+		{name: "run zapscript disabled", err: state.ErrRunZapScriptDisabled, expected: true},
 		{
 			name:     "wrapped no playlist active",
 			err:      fmt.Errorf("failed to run zapscript command: %w", zapscript.ErrNoPlaylistActive),

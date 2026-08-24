@@ -369,6 +369,219 @@ func TestRefreshLauncherDependencies(t *testing.T) {
 	}
 }
 
+// withRBFCache swaps cores.GlobalRBFCache for a fresh cache built from rbfs,
+// restoring the original on cleanup. Subtests using it must not run in
+// parallel with each other or with anything else touching the global.
+func withRBFCache(t *testing.T, rbfs []cores.RBFInfo) *cores.RBFCache {
+	t.Helper()
+	oldCache := cores.GlobalRBFCache
+	cache := &cores.RBFCache{}
+	cache.BuildFromRBFs(rbfs)
+	cores.GlobalRBFCache = cache
+	t.Cleanup(func() { cores.GlobalRBFCache = oldCache })
+	return cache
+}
+
+func TestLauncherRuntime_BaseCoreResolved(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+
+	assert.Equal(t, models.LauncherBackendMisterCore, runtime.Backend)
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "SNES", runtime.MisterCore.Name)
+	assert.Equal(t, "SNES_20260311.rbf", runtime.MisterCore.File)
+	assert.Equal(t, "_Console/SNES", runtime.MisterCore.MGLPath)
+}
+
+func TestLauncherRuntime_AltCoreResolved(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Other/PSX2XCPU_20240101.rbf", Filename: "PSX2XCPU_20240101.rbf",
+			ShortName: "PSX2XCPU", MglName: "_Other/PSX2XCPU",
+		},
+	})
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "2XPSX", SystemID: "PSX"})
+
+	assert.Equal(t, models.LauncherBackendMisterCore, runtime.Backend)
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "PSX2XCPU", runtime.MisterCore.Name)
+}
+
+func TestLauncherRuntime_MissingCore(t *testing.T) {
+	withRBFCache(t, nil)
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+
+	assert.Equal(t, models.LauncherBackendMisterCore, runtime.Backend, "still a core-backed launcher")
+	assert.Nil(t, runtime.MisterCore, "core not installed")
+}
+
+func TestLauncherRuntime_NonCoreLauncherIsZeroValue(t *testing.T) {
+	withRBFCache(t, nil)
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(nil, &platforms.Launcher{ID: "Generic", SystemID: "Generic"})
+
+	assert.Equal(t, models.LauncherRuntime{}, runtime)
+}
+
+func TestLauncherRuntime_LoadPathOverrideChangesReportedCore(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+		{
+			Path: "/media/fat/_Unstable/SNES_20260101.rbf", Filename: "SNES_20260101.rbf",
+			ShortName: "SNES", MglName: "_Unstable/SNES",
+		},
+	})
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_Unstable/SNES"
+`))
+
+	p := &Platform{}
+	runtime := p.LauncherRuntime(cfg, &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+
+	require.NotNil(t, runtime.MisterCore)
+	assert.Equal(t, "_Unstable/SNES", runtime.MisterCore.MGLPath)
+}
+
+func TestSetCoreAvailability_ResolvedCoreIsAvailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
+}
+
+func TestSetCoreAvailability_MissingCoreIsUnavailableWithReason(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/NES_20260311.rbf", Filename: "NES_20260311.rbf",
+			ShortName: "NES", MglName: "_Console/NES",
+		},
+	})
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	err := launchers[0].Availability(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "_Console/SNES")
+}
+
+func TestSetCoreAvailability_NonCoreLauncherLeftAlone(t *testing.T) {
+	withRBFCache(t, nil)
+
+	launchers := []platforms.Launcher{{ID: "Generic", SystemID: "Generic"}}
+	setCoreAvailability(launchers)
+	assert.Nil(t, launchers[0].Availability)
+}
+
+func TestSetCoreAvailability_ExistingAvailabilityIsNotOverwritten(t *testing.T) {
+	withRBFCache(t, nil)
+
+	sentinel := errors.New("custom unavailable")
+	launchers := []platforms.Launcher{{
+		ID: "SNES", SystemID: "SNES",
+		Availability: func(*config.Instance) error { return sentinel },
+	}}
+	setCoreAvailability(launchers)
+	require.ErrorIs(t, launchers[0].Availability(nil), sentinel)
+}
+
+func TestSetCoreAvailability_EmptyCacheFailsOpen(t *testing.T) {
+	// An empty RBF cache means the scan hasn't populated yet, not that no
+	// cores are installed — every core-backed launcher must report
+	// available so a boot-time race doesn't collapse the systems list.
+	withRBFCache(t, nil)
+
+	launchers := []platforms.Launcher{{ID: "SNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
+}
+
+// TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad verifies resolution
+// succeeds and execution reaches the command-interface write, which errors
+// off-device (no /dev/MiSTer_cmd) rather than failing at resolution.
+func TestLaunchSystemLauncher_ResolvesCoreThenAttemptsLoad(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+
+	p := &Platform{}
+	err := p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch core")
+	assert.NotContains(t, err.Error(), "core not installed")
+	assert.NotContains(t, err.Error(), "no selectable core")
+}
+
+func TestLaunchSystemLauncher_AltCoreResolvesThenAttemptsLoad(t *testing.T) {
+	cache := withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Other/PSX2XCPU_20240101.rbf", Filename: "PSX2XCPU_20240101.rbf",
+			ShortName: "PSX2XCPU", MglName: "_Other/PSX2XCPU",
+		},
+	})
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	p := &Platform{}
+	err := p.LaunchSystemLauncher(nil, "PSX", &platforms.Launcher{ID: "2XPSX", SystemID: "PSX"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch core")
+}
+
+func TestLaunchSystemLauncher_MissingCore(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/NES_20260311.rbf", Filename: "NES_20260311.rbf",
+			ShortName: "NES", MglName: "_Console/NES",
+		},
+	})
+
+	p := &Platform{}
+	err := p.LaunchSystemLauncher(nil, "SNES", &platforms.Launcher{ID: "SNES", SystemID: "SNES"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "core not installed")
+	assert.Contains(t, err.Error(), "_Console/SNES")
+}
+
+func TestLaunchSystemLauncher_NonCoreLauncher(t *testing.T) {
+	withRBFCache(t, nil)
+
+	p := &Platform{}
+	err := p.LaunchSystemLauncher(nil, "Generic", &platforms.Launcher{ID: "Generic", SystemID: "Generic"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no selectable core")
+}
+
 func TestConfigureTLSRootFallback_ConfiguresDefaultsAndCustomTransports(t *testing.T) {
 	restoreTLSRootFallbackHooks(t)
 

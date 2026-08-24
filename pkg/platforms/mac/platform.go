@@ -228,7 +228,7 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 }
 
 func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
-	return platforms.CmdResult{}, nil
+	return platforms.CmdResult{}, platforms.ErrNotSupported
 }
 
 func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {

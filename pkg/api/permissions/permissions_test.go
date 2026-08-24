@@ -160,4 +160,27 @@ func TestValidRole(t *testing.T) {
 	assert.True(t, ValidRole("member"))
 	assert.False(t, ValidRole(""))
 	assert.False(t, ValidRole("root"))
+	// RoleRemote is assigned only by the device's own remote-operations
+	// dispatcher; a client must never be able to pair as it.
+	assert.False(t, ValidRole("remote"))
+}
+
+// TestGrant_RoleRemoteNeverGainsCapabilities guards the property remote
+// dispatch depends on: RoleRemote is a real, distinct effective role — not
+// an alias for RoleMember — and it grants nothing today or after RoleMember
+// gains capabilities in the future.
+func TestGrant_RoleRemoteNeverGainsCapabilities(t *testing.T) {
+	t.Parallel()
+
+	grant := Grant{Role: RoleRemote}
+	require.Equal(t, RoleRemote, grant.EffectiveRole())
+	assert.NotEqual(t, RoleMember, grant.EffectiveRole())
+	assert.False(t, grant.Has(CapProfilesManage))
+	assert.False(t, grant.Has(CapSettingsWrite))
+	assert.False(t, grant.Has(CapUpdateApply))
+	assert.Empty(t, grant.Capabilities())
+
+	// Local never applies to remote-operation requests, but if it somehow
+	// did, locality still wins — remote dispatch must never set IsLocal.
+	assert.Equal(t, RoleAdmin, Grant{Role: RoleRemote, IsLocal: true}.EffectiveRole())
 }

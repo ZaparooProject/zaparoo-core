@@ -366,6 +366,35 @@ func (c *Instance) applyTOML(data string) error {
 	if c.vals.Playtime.BaseURL == DefaultPlaytimeBaseURL {
 		c.vals.Playtime.BaseURL = ""
 	}
+	if c.vals.Service.RemoteControl.BaseURL == DefaultRemoteControlBaseURL {
+		c.vals.Service.RemoteControl.BaseURL = ""
+	}
+
+	// A base URL only ever reaches config.toml by hand-editing it, since none
+	// of the Set*BaseURL validators have a production caller, so validate
+	// here instead. A bad value falls back to the default rather than
+	// failing the whole config load.
+	if c.vals.Backup.Remote.BaseURL != "" {
+		if err := ValidateBackupRemoteBaseURL(c.vals.Backup.Remote.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Backup.Remote.BaseURL).
+				Msg("invalid backup remote base URL in config, falling back to default")
+			c.vals.Backup.Remote.BaseURL = ""
+		}
+	}
+	if c.vals.Playtime.BaseURL != "" {
+		if err := ValidatePlaytimeBaseURL(c.vals.Playtime.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Playtime.BaseURL).
+				Msg("invalid playtime base URL in config, falling back to default")
+			c.vals.Playtime.BaseURL = ""
+		}
+	}
+	if c.vals.Service.RemoteControl.BaseURL != "" {
+		if err := ValidateRemoteControlBaseURL(c.vals.Service.RemoteControl.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Service.RemoteControl.BaseURL).
+				Msg("invalid remote control base URL in config, falling back to default")
+			c.vals.Service.RemoteControl.BaseURL = ""
+		}
+	}
 
 	c.vals.Launchers.Custom = validateCustomLaunchers(
 		c.vals.Launchers.Custom,

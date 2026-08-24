@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -50,6 +51,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/remote"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -503,7 +505,7 @@ func startService(
 		startMediaReadyProbe(svc, media, gen)
 		if script := cfg.LaunchersOnMediaStart(); script != "" {
 			if hookErr := runHook(svc, "on_media_start", script, nil, nil); hookErr != nil {
-				log.Error().Err(hookErr).Msg("error running on_media_start script")
+				logHookError(hookErr, "on_media_start")
 			}
 		}
 	})
@@ -591,6 +593,25 @@ func startService(
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
+
+	// A separate MethodMap instance from the one api.StartWithReady builds
+	// internally: remote's allowlist (pkg/service/remote/allowlist.go) never
+	// references the pairing methods api.Start registers on its own map
+	// after construction, so the two registries can't diverge in a way that
+	// matters here.
+	remote.Start(st.GetContext(), &remote.Deps{
+		Platform: svc.Platform, Config: svc.Config, State: svc.State, DB: svc.DB,
+		Profiles: svc.Profiles, PlaybackManager: svc.PlaybackManager, UI: svc.UI,
+		ConfirmQueue: svc.ConfirmQueue, PlaylistQueue: svc.PlaylistQueue,
+		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
+		Methods: api.NewMethodMap(),
+		RunZapScript: func(
+			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
+			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
+		) error {
+			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
+		},
+	}, backgroundWG)
 
 	// Recover before resuming persisted media work. A running status may be stale after
 	// a crash, while the sidecar marker remains authoritative and must win.

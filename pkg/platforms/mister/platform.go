@@ -379,6 +379,12 @@ func (p *Platform) StartPost(
 			5*time.Second, 60*time.Second,
 			func(_ context.Context) {
 				cores.GlobalRBFCache.Refresh()
+				// The launcher cache's Available/AvailabilityReason and
+				// LauncherRuntime detail were computed against the RBF
+				// cache as it stood before this rescan; rebuild it so a
+				// core added or removed since boot is reflected without
+				// requiring a manual launchers.refresh call.
+				helpers.GlobalLauncherCache.Refresh(p, cfg)
 			},
 		)
 	}
@@ -830,6 +836,24 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 
 	err = mgls.LaunchCore(cfg, p, system)
 	if err != nil {
+		return fmt.Errorf("failed to launch core: %w", err)
+	}
+	return nil
+}
+
+// LaunchSystemLauncher implements platforms.SystemLauncherSelector, loading
+// the specific core a launcher maps to (e.g. an alt core) instead of the
+// system's default. The caller (cmdSystem) has already verified launcher
+// belongs to systemID.
+func (*Platform) LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *platforms.Launcher) error {
+	if !misterCoreBacked(launcher.ID, systemID) {
+		return fmt.Errorf("launcher has no selectable core: %s", launcher.ID)
+	}
+	rbfInfo, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, launcher.ID, systemID)
+	if !ok {
+		return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcher.ID, systemID))
+	}
+	if err := mgls.LaunchCoreAtRBF(rbfInfo); err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
 	return nil
@@ -1358,6 +1382,75 @@ func (p *Platform) RefreshLauncherDependencies() error {
 	return nil
 }
 
+// misterCoreBacked reports whether a launcher is backed by an FPGA core:
+// either a registered alt core, or its system has a default RBF.
+func misterCoreBacked(launcherID, systemID string) bool {
+	if cores.GlobalRBFCache.AltCorePaths(launcherID) != nil {
+		return true
+	}
+	system, ok := cores.Systems[systemID]
+	return ok && system.RBF != ""
+}
+
+// misterExpectedCorePath names the RBF a core-backed launcher looks for,
+// used to explain an unavailable launcher.
+func misterExpectedCorePath(launcherID, systemID string) string {
+	if paths := cores.GlobalRBFCache.AltCorePaths(launcherID); len(paths) > 0 {
+		return paths[0]
+	}
+	if system, ok := cores.Systems[systemID]; ok {
+		return system.RBF
+	}
+	return systemID
+}
+
+// LauncherRuntime implements platforms.LauncherRuntimeProvider, reporting
+// the FPGA core a launcher loads. It never rescans the filesystem — it only
+// reads whatever the RBF cache currently holds, which Launchers keeps fresh.
+func (*Platform) LauncherRuntime(cfg *config.Instance, l *platforms.Launcher) models.LauncherRuntime {
+	if !misterCoreBacked(l.ID, l.SystemID) {
+		return models.LauncherRuntime{}
+	}
+	runtime := models.LauncherRuntime{Backend: models.LauncherBackendMisterCore}
+	if info, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, l.ID, l.SystemID); ok {
+		runtime.MisterCore = &models.MisterCoreInfo{
+			Name:    info.ShortName,
+			File:    info.Filename,
+			MGLPath: info.MglName,
+		}
+	}
+	return runtime
+}
+
+// setCoreAvailability wires an Availability check onto every core-backed
+// launcher that doesn't already define one, so Available/AvailabilityReason
+// reflect whether the launcher's RBF is actually installed on the SD card.
+// Only called over the built-in launcher set, never over user-configured
+// custom launchers, whose SystemID may coincide with a core-backed system
+// without the launcher itself being core-backed.
+func setCoreAvailability(launchers []platforms.Launcher) {
+	for i := range launchers {
+		l := &launchers[i]
+		if l.Availability != nil || !misterCoreBacked(l.ID, l.SystemID) {
+			continue
+		}
+		launcherID, systemID := l.ID, l.SystemID
+		l.Availability = func(cfg *config.Instance) error {
+			// An empty cache means the RBF scan hasn't populated yet (e.g.
+			// at boot, before the deferred rescan completes), not that no
+			// cores are installed. Fail open rather than reporting every
+			// core-backed launcher unavailable.
+			if systems, _ := cores.GlobalRBFCache.Count(); systems == 0 {
+				return nil
+			}
+			if _, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, launcherID, systemID); ok {
+				return nil
+			}
+			return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcherID, systemID))
+		}
+	}
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Launchers is invoked from many hot paths (token scans, RPC handlers,
 	// indexing). The Refresh fast path stats only the snapshot directories
@@ -1568,6 +1661,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		ls, amiga, neogeo, neogeoMVS,
 		createVideoLauncher(p), createScummVMLauncher(p), createAudioScannerLauncher(),
 	)
+	setCoreAvailability(ls)
 
 	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
 	return append(custom, ls...)

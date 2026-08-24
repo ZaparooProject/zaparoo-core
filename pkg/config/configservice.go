@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	DefaultAPIPort = 7497
-	MinAPIPort     = 1024
-	MaxAPIPort     = 65535
+	DefaultAPIPort              = 7497
+	MinAPIPort                  = 1024
+	MaxAPIPort                  = 65535
+	DefaultRemoteControlBaseURL = DefaultOnlineBaseURL
 )
 
 func isValidAPIPort(port int) bool {
@@ -39,12 +40,13 @@ func isValidAPIPort(port int) bool {
 }
 
 type Service struct {
-	APIPort   *int      `toml:"api_port,omitempty"`
-	Discovery Discovery `toml:"discovery,omitempty"`
-	DeviceID  string    `toml:"device_id"`
-	APIListen string    `toml:"api_listen,omitempty"`
-	OnBoot    string    `toml:"on_boot,omitempty"`
-	OnReady   string    `toml:"on_ready,omitempty"`
+	APIPort       *int          `toml:"api_port,omitempty"`
+	Discovery     Discovery     `toml:"discovery,omitempty"`
+	RemoteControl RemoteControl `toml:"remote_control,omitempty"`
+	DeviceID      string        `toml:"device_id"`
+	APIListen     string        `toml:"api_listen,omitempty"`
+	OnBoot        string        `toml:"on_boot,omitempty"`
+	OnReady       string        `toml:"on_ready,omitempty"`
 	// AllowRun is the list of allowed run patterns.
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
@@ -56,6 +58,11 @@ type Service struct {
 	// connections. True requires paired clients for remote
 	// WebSocket connections; localhost is always exempt.
 	Encryption bool `toml:"encryption,omitempty"`
+}
+
+type RemoteControl struct {
+	Enabled *bool  `toml:"enabled,omitempty"`
+	BaseURL string `toml:"base_url,omitempty"`
 }
 
 type Publishers struct {
@@ -236,4 +243,56 @@ func (c *Instance) SetDiscoveryInstanceName(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Service.Discovery.InstanceName = name
+}
+
+// RemoteControlEnabled reports whether device owner explicitly consented to
+// typed remote operations. Linking an account alone never grants consent.
+func (c *Instance) RemoteControlEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.RemoteControl.Enabled != nil && *c.vals.Service.RemoteControl.Enabled
+}
+
+// SetRemoteControl enables or disables typed remote operations.
+func (c *Instance) SetRemoteControl(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.RemoteControl.Enabled = &enabled
+}
+
+// RemoteControlBaseURL returns API base URL used for remote operations.
+func (c *Instance) RemoteControlBaseURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Service.RemoteControl.BaseURL == "" {
+		return DefaultRemoteControlBaseURL
+	}
+	return c.vals.Service.RemoteControl.BaseURL
+}
+
+// SetRemoteControlBaseURL validates, normalizes, and stores remote operations API base URL.
+func (c *Instance) SetRemoteControlBaseURL(rawURL string) error {
+	if err := ValidateRemoteControlBaseURL(rawURL); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.RemoteControl.BaseURL = normalizeRemoteBaseURL(rawURL)
+	return nil
+}
+
+func ValidateRemoteControlBaseURL(rawURL string) error {
+	return validateRemoteBaseURL(rawURL, "remote control")
+}
+
+// ResetOnlineConsent clears every Online feature's explicit consent flag:
+// remote control, cloud backup, and play history sync. Call this whenever
+// the linked credential changes (a fresh claim, or unlink) since that is a
+// new "who is on the other end" event, and every consent must be
+// re-approved explicitly rather than silently carrying over to whoever
+// holds the credential next.
+func (c *Instance) ResetOnlineConsent() {
+	c.SetRemoteControl(false)
+	c.SetBackupRemoteEnabled(false)
+	c.SetPlaytimeSync(false)
 }

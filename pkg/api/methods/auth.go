@@ -168,6 +168,17 @@ func HandleSettingsAuthUnlink(env requests.RequestEnv) (any, error) {
 
 	backupManager.MarkRemoteUnlinked()
 
+	// Unlinking removes the credential every Online feature depends on, so
+	// none of their consent should silently survive to whatever links next.
+	// The reset already applies in memory regardless of what happens below;
+	// a save failure is reported rather than swallowed so a restart before
+	// the next successful save can't silently bring old consent back, same
+	// as every other config-mutating handler in this package.
+	env.Config.ResetOnlineConsent()
+	if err := env.Config.Save(); err != nil {
+		return nil, fmt.Errorf("failed to persist online consent reset: %w", err)
+	}
+
 	log.Info().Strs("domains", removed).Msg("settings.auth.unlink completed")
 	return models.SettingsAuthUnlinkResponse{Domains: removed}, nil
 }
@@ -252,6 +263,21 @@ func performClaim(
 	bearer, err := redeemClaimToken(ctx, rawClaimURL, token, pl.ID(), cfg.DeviceID())
 	if err != nil {
 		return nil, fmt.Errorf("failed to redeem claim token: %w", err)
+	}
+
+	// A fresh credential, even re-claimed for the same account, is a new
+	// "who is on the other end" event, so every Online feature's consent
+	// must be re-approved explicitly rather than silently carrying over.
+	// This must persist BEFORE the credential below: auth.toml and
+	// config.toml are separate files with no shared transaction, so if the
+	// reset were persisted only after the credential and that later save
+	// failed, a restart could bring the new credential up under the
+	// previous owner's still-enabled consent. Resetting first means a
+	// failed save instead leaves the worst case as no new credential at
+	// all, and the reset already applies in memory regardless.
+	cfg.ResetOnlineConsent()
+	if saveConfigErr := cfg.Save(); saveConfigErr != nil {
+		return nil, fmt.Errorf("failed to persist online consent reset: %w", saveConfigErr)
 	}
 
 	// Persist the credential, tagged with the root that created it so
