@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -141,4 +142,60 @@ func TestMediaWriteArbiterRejectsEmptyOperation(t *testing.T) {
 	assert.Nil(t, lease)
 	require.ErrorIs(t, err, ErrMediaWriteLease)
 	assert.NotErrorIs(t, err, ErrMediaWriteConflict)
+}
+
+type mediaDBWithWriteCoordinator struct {
+	MediaDBI
+	MediaDBWriteCoordinator
+}
+
+type mediaDBWithoutWriteCoordinator struct {
+	MediaDBI
+}
+
+func TestGetMediaDBWriteCoordinator(t *testing.T) {
+	var arbiter MediaWriteArbiter
+	coordinatedDB := &mediaDBWithWriteCoordinator{
+		MediaDBWriteCoordinator: &testMediaWriteCoordinator{arbiter: &arbiter},
+	}
+
+	coordinator, err := GetMediaDBWriteCoordinator(coordinatedDB)
+	require.NoError(t, err)
+	assert.Same(t, coordinatedDB, coordinator)
+
+	coordinator, err = GetMediaDBWriteCoordinator(&mediaDBWithoutWriteCoordinator{})
+	assert.Nil(t, coordinator)
+	require.ErrorIs(t, err, ErrMediaWriteCoordinatorUnavailable)
+}
+
+func TestMediaWriteConflictErrorDescribesAndWrapsConflict(t *testing.T) {
+	var arbiter MediaWriteArbiter
+	lease, err := arbiter.TryAcquire(MediaWriteOperationIndexing)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	_, err = arbiter.TryAcquire(MediaWriteOperationScraping)
+	require.Error(t, err)
+	assert.Equal(t, "media database indexing is in progress", err.Error())
+	require.ErrorIs(t, err, ErrMediaWriteConflict)
+}
+
+type testMediaWriteCoordinator struct {
+	arbiter *MediaWriteArbiter
+}
+
+func (c *testMediaWriteCoordinator) AcquireMediaWrite(
+	operation MediaWriteOperation,
+) (*MediaWriteLease, error) {
+	return c.arbiter.TryAcquire(operation)
+}
+
+func (c *testMediaWriteCoordinator) ActiveMediaWriteOperation() MediaWriteOperation {
+	return c.arbiter.Active()
+}
+
+func (*testMediaWriteCoordinator) RunBackgroundOptimizationWithLease(
+	func(bool), *syncutil.Pauser, *MediaWriteLease,
+) error {
+	return nil
 }

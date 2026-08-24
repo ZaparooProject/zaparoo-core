@@ -296,6 +296,17 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 	assert.Equal(t, database.MediaWriteOperationOptimization, mediaDB.ActiveMediaWriteOperation())
 }
 
+func TestBrowseCacheRebuildReportsOptimizing(t *testing.T) {
+	mediaDB := &MediaDB{}
+	assert.False(t, mediaDB.IsOptimizing())
+
+	mediaDB.BeginBrowseCacheRebuild()
+	assert.True(t, mediaDB.IsOptimizing())
+
+	mediaDB.EndBrowseCacheRebuild()
+	assert.False(t, mediaDB.IsOptimizing())
+}
+
 func TestRunBackgroundOptimizationWithLease_InvalidOperationReleasesLease(t *testing.T) {
 	mediaDB := &MediaDB{}
 	lease, err := mediaDB.AcquireMediaWrite(database.MediaWriteOperationIndexing)
