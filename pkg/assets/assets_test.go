@@ -20,6 +20,7 @@
 package assets
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -70,6 +71,37 @@ func TestGetSystemMetadata_UsesCanonicalCacheEntry(t *testing.T) {
 	got, err := GetSystemMetadata("MegaDrive")
 	require.NoError(t, err)
 	assert.Equal(t, cached, got)
+}
+
+func TestGetSystemMetadata_ConcurrentReadErrorIsShared(t *testing.T) {
+	resetSystemMetadataCache(t)
+
+	readErr := errors.New("metadata read failed")
+	var reads atomic.Int32
+	readSystemMetadataFile = func(string) ([]byte, error) {
+		reads.Add(1)
+		time.Sleep(10 * time.Millisecond)
+		return nil, readErr
+	}
+
+	const callers = 32
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := GetSystemMetadata("MegaDrive")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.ErrorIs(t, err, readErr)
+	}
+	assert.Equal(t, int32(1), reads.Load())
 }
 
 func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
