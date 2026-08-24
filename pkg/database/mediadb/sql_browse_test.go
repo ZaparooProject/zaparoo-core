@@ -1590,6 +1590,23 @@ func TestBrowseOverlayFiles_FirstRootWinsByFilesystemName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
+	dirCount, err := mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, dirCount)
+
+	filenameIndex, err := mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Sort:    "filename-asc",
+		Systems: []systemdefs.System{*nesSystem},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, browseIndexSchemeNone, filenameIndex.Scheme)
+	assert.Equal(t, 3, filenameIndex.TotalFiles)
+	assert.Empty(t, filenameIndex.Buckets)
+
 	index, err := mediaDB.BrowseIndex(ctx, database.BrowseIndexOptions{
 		Overlay: &database.BrowseOverlay{Sources: sources},
 		Systems: []systemdefs.System{*nesSystem},

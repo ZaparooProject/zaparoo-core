@@ -318,6 +318,139 @@ func TestHandleMediaBrowse_RootContentsUsesOrderedPhysicalSources(t *testing.T) 
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaBrowse_RootContentsPaginatesDirectories(t *testing.T) {
+	t.Parallel()
+
+	root := browseTestAbsPath("roms")
+	route := filepath.ToSlash(filepath.Join(root, "SNES"))
+	source := database.BrowseSource{PathPrefix: route + "/", IncludeDirs: true}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
+	})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{}, true, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything, mock.Anything).
+		Return(map[string]database.BrowseRouteCount{
+			route: {Path: route, FileCount: 3, SystemIDs: []string{"SNES"}},
+		}, nil)
+	directoryOpts := mock.MatchedBy(func(opts database.BrowseDirectoriesOptions) bool {
+		return opts.Overlay != nil && assert.Equal(t, []database.BrowseSource{source}, opts.Overlay.Sources) &&
+			opts.Limit == 2
+	})
+	mockMediaDB.On("BrowseDirectories", mock.Anything, directoryOpts).Return([]database.BrowseDirectoryResult{
+		{Name: "Action", Path: route + "/Action", FileCount: 100, SystemIDs: []string{"SNES"}},
+		{Name: "RPG", Path: route + "/RPG", FileCount: 100, SystemIDs: []string{"SNES"}},
+	}, nil)
+	mockMediaDB.On("BrowseDirCount", mock.Anything, mock.Anything).Return(2, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, mock.Anything).Return(1, nil)
+
+	systems := []string{"SNES"}
+	maxResults := 1
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Systems:    &systems,
+		RootView:   stringPtr(browseRootViewContents),
+		MaxResults: &maxResults,
+	})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+	res, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, res.Entries, 1)
+	require.NotNil(t, res.Pagination)
+	assert.True(t, res.Pagination.HasNextPage)
+	require.NotNil(t, res.Pagination.NextCursor)
+
+	cursor, err := decodeBrowseCursor(*res.Pagination.NextCursor)
+	require.NoError(t, err)
+	require.NotNil(t, cursor)
+	assert.Equal(t, browsePhaseDirs, cursor.Phase)
+	assert.Equal(t, "Action", cursor.DirName)
+	assert.Equal(t, browseRootViewContents, cursor.RootView)
+	assert.Equal(t, 2, cursor.TotalDirs)
+	assert.Equal(t, 1, cursor.TotalFiles)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_RootContentsTransitionsFromDirectoriesToFiles(t *testing.T) {
+	t.Parallel()
+
+	root := browseTestAbsPath("roms")
+	route := filepath.ToSlash(filepath.Join(root, "SNES"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
+	})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{}, true, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything, mock.Anything).
+		Return(map[string]database.BrowseRouteCount{
+			route: {Path: route, FileCount: 2, SystemIDs: []string{"SNES"}},
+		}, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, mock.Anything).
+		Return([]database.BrowseDirectoryResult{
+			{Name: "Action", Path: route + "/Action", FileCount: 100, SystemIDs: []string{"SNES"}},
+		}, nil).Once()
+	mockMediaDB.On("BrowseDirCount", mock.Anything, mock.Anything).Return(1, nil).Once()
+	mockMediaDB.On("BrowseFileCount", mock.Anything, mock.Anything).Return(1, nil).Once()
+	mockMediaDB.On("BrowseFiles", mock.Anything, mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+		return opts.Cursor == nil && opts.Limit == 2 && opts.Overlay != nil
+	})).Return([]database.SearchResultWithCursor{
+		{MediaID: 9, SystemID: "SNES", Name: "Game", Path: route + "/Game.sfc"},
+	}, nil).Once()
+
+	systems := []string{"SNES"}
+	maxResults := 1
+	firstEnv := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Systems:    &systems,
+		RootView:   stringPtr(browseRootViewContents),
+		MaxResults: &maxResults,
+	})
+	firstResult, err := HandleMediaBrowse(firstEnv)
+	require.NoError(t, err)
+	firstPage, ok := firstResult.(models.BrowseResults)
+	require.True(t, ok)
+	require.NotNil(t, firstPage.Pagination)
+	require.NotNil(t, firstPage.Pagination.NextCursor)
+
+	transitionCursor, err := decodeBrowseCursor(*firstPage.Pagination.NextCursor)
+	require.NoError(t, err)
+	require.NotNil(t, transitionCursor)
+	assert.Equal(t, browsePhaseFiles, transitionCursor.Phase)
+	assert.Zero(t, transitionCursor.LastID)
+	assert.Equal(t, browseRootViewContents, transitionCursor.RootView)
+
+	secondEnv := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Systems:    &systems,
+		RootView:   stringPtr(browseRootViewContents),
+		MaxResults: &maxResults,
+		Cursor:     firstPage.Pagination.NextCursor,
+	})
+	secondResult, err := HandleMediaBrowse(secondEnv)
+	require.NoError(t, err)
+	secondPage, ok := secondResult.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, secondPage.Entries, 1)
+	assert.Equal(t, "Game", secondPage.Entries[0].Name)
+	assert.Equal(t, 1, secondPage.TotalDirs)
+	assert.Equal(t, 1, secondPage.TotalFiles)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	t.Parallel()
 
