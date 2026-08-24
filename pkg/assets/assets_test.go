@@ -24,7 +24,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,11 +34,25 @@ func resetSystemMetadataCache(t *testing.T) {
 	systemMetadataCache = sync.Map{}
 	systemMetadataLoads = sync.Map{}
 	readSystemMetadataFile = Systems.ReadFile
+	notifySystemMetadataLoad = nil
 	t.Cleanup(func() {
 		systemMetadataCache = sync.Map{}
 		systemMetadataLoads = sync.Map{}
 		readSystemMetadataFile = Systems.ReadFile
+		notifySystemMetadataLoad = nil
 	})
+}
+
+func gateSystemMetadataLoads(callers int) func() {
+	entered := make(chan struct{}, callers)
+	notifySystemMetadataLoad = func() {
+		entered <- struct{}{}
+	}
+	return func() {
+		for range callers {
+			<-entered
+		}
+	}
 }
 
 func TestGetSystemMetadata_CanonicalAndAlias(t *testing.T) {
@@ -77,14 +90,15 @@ func TestGetSystemMetadata_ConcurrentReadErrorIsShared(t *testing.T) {
 	resetSystemMetadataCache(t)
 
 	readErr := errors.New("metadata read failed")
+	const callers = 32
+	waitForCallers := gateSystemMetadataLoads(callers)
 	var reads atomic.Int32
 	readSystemMetadataFile = func(string) ([]byte, error) {
 		reads.Add(1)
-		time.Sleep(10 * time.Millisecond)
+		waitForCallers()
 		return nil, readErr
 	}
 
-	const callers = 32
 	errs := make(chan error, callers)
 	var wg sync.WaitGroup
 	for range callers {
@@ -107,14 +121,15 @@ func TestGetSystemMetadata_ConcurrentReadErrorIsShared(t *testing.T) {
 func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	resetSystemMetadataCache(t)
 
+	const callers = 32
+	waitForCallers := gateSystemMetadataLoads(callers)
 	var reads atomic.Int32
 	readSystemMetadataFile = func(name string) ([]byte, error) {
 		reads.Add(1)
-		time.Sleep(10 * time.Millisecond)
+		waitForCallers()
 		return Systems.ReadFile(name)
 	}
 
-	const callers = 32
 	results := make(chan SystemMetadata, callers)
 	errs := make(chan error, callers)
 	var wg sync.WaitGroup
@@ -137,5 +152,10 @@ func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	for metadata := range results {
 		assert.Equal(t, "Genesis", metadata.ID)
 	}
+	assert.Equal(t, int32(1), reads.Load())
+
+	lateMetadata, err := GetSystemMetadata("MegaDrive")
+	require.NoError(t, err)
+	assert.Equal(t, "Genesis", lateMetadata.ID)
 	assert.Equal(t, int32(1), reads.Load())
 }

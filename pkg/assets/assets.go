@@ -75,9 +75,10 @@ type systemMetadataLoad struct {
 }
 
 var (
-	systemMetadataCache    sync.Map
-	systemMetadataLoads    sync.Map
-	readSystemMetadataFile = Systems.ReadFile
+	systemMetadataCache      sync.Map
+	systemMetadataLoads      sync.Map
+	readSystemMetadataFile   = Systems.ReadFile
+	notifySystemMetadataLoad func()
 )
 
 func GetSystemMetadata(system string) (SystemMetadata, error) {
@@ -98,6 +99,9 @@ func GetSystemMetadata(system string) (SystemMetadata, error) {
 		metadata: &SystemMetadata{},
 	}
 	actual, loaded := systemMetadataLoads.LoadOrStore(system, pending)
+	if notifySystemMetadataLoad != nil {
+		notifySystemMetadataLoad()
+	}
 	if loaded {
 		shared, ok := actual.(*systemMetadataLoad)
 		if !ok {
