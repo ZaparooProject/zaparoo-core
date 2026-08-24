@@ -313,7 +313,8 @@ func sqlUpdateMediaHistoryIdentityAndPath(
 		WHERE DBID = ?
 		  AND (
 		    MediaIdentityPolicyVersion < ? OR
-		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '')
+		    (MediaIdentityPolicyVersion = ? AND MediaIdentity = '') OR
+		    MediaPath <> ?
 		  );
 	`,
 		path,
@@ -325,6 +326,7 @@ func sqlUpdateMediaHistoryIdentityAndPath(
 		dbid,
 		identity.PolicyVersion,
 		identity.PolicyVersion,
+		path,
 	)
 	if err != nil {
 		return false, fmt.Errorf("failed to execute media history identity and path update: %w", err)

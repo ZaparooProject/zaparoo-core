@@ -343,6 +343,7 @@ func TestSqlUpdateMediaHistoryIdentityAndPath(t *testing.T) {
 				int64(40),
 				identity.PolicyVersion,
 				identity.PolicyVersion,
+				canonicalPath,
 			)
 			if tt.execErr != nil {
 				expectation.WillReturnError(tt.execErr)
