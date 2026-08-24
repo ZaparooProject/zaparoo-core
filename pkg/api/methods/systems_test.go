@@ -187,6 +187,30 @@ func TestHandleSystems_TaggedReturnsMatchingCounts(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleSystems_WhitespaceOnlyTagsUseUnfilteredBehavior(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	expectUntaggedSystemMediaCounts(mockMediaDB, []database.SystemMediaCount{{SystemID: "NES", Count: 3}}, nil)
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "snes", SystemID: "SNES"}})
+
+	result, err := HandleSystems(requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"tags":["   "]}`),
+	})
+	require.NoError(t, err)
+
+	response, ok := result.(models.SystemsResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"NES", "SNES"}, systemResponseIDs(response))
+	assert.Equal(t, map[string]int{"NES": 3, "SNES": 0}, systemResponseMediaCounts(response))
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleSystems_TaggedRejectsInvalidTag(t *testing.T) {
 	t.Parallel()
 

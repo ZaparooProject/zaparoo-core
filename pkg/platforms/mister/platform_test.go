@@ -22,6 +22,7 @@
 package mister
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -39,6 +40,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,6 +143,55 @@ func TestResourceTopologyManager_RetriesFailedMMCAffinityUpdate(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("resource topology manager did not stop after cancellation")
 	}
+}
+
+func TestResourceTopologyManager_PersistentMMCAffinityFailureWarnsOnce(t *testing.T) {
+	oldLogger := log.Logger
+	var logs bytes.Buffer
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = oldLogger })
+
+	coreCalls := make(chan bool, 4)
+	irqCalls := make(chan bool, 4)
+	ticks := make(chan time.Time, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runResourceTopologyManager(ctx, ticks, resourceTopologyHooks{
+			leaseActive: func() (bool, error) { return true, nil },
+			setCoreAffinity: func(active bool) error {
+				coreCalls <- active
+				return nil
+			},
+			setMMCAffinity: func(active bool) error {
+				irqCalls <- active
+				if active {
+					return errors.New("MMC affinity update failed")
+				}
+				return nil
+			},
+		})
+		close(done)
+	}()
+
+	for attempt := range 3 {
+		require.True(t, <-coreCalls)
+		require.True(t, <-irqCalls)
+		if attempt < 2 {
+			ticks <- time.Now()
+		}
+	}
+	cancel()
+	require.False(t, <-coreCalls)
+	require.False(t, <-irqCalls)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("resource topology manager did not stop after cancellation")
+	}
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "failed to apply MiSTer MMC IRQ affinity"))
 }
 
 func TestResourceTopologyManager_RestoresIRQAfterCoreRestoreFailure(t *testing.T) {

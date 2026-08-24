@@ -392,6 +392,60 @@ func TestHandleMedia_PersistedIndexingStatusShowsPreparingResume(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMedia_CorruptDatabaseShowsRecoveryState(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB := &helpers.MockUserDBI{}
+	mockPlatform := mocks.NewMockPlatform()
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	testState.SetMediaDBRecoveryActive(true)
+
+	ClearIndexingStatus()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusFailed, nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+
+	db := &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB}
+	env := requests.RequestEnv{Context: context.Background(), Database: db, State: testState}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok, "result should be MediaResponse")
+
+	assert.True(t, response.Database.Indexing)
+	assert.False(t, response.Database.Optimizing)
+	assert.False(t, response.Database.Exists)
+	require.NotNil(t, response.Database.CurrentStepDisplay)
+	assert.Equal(t, recoveringMediaDatabaseDisplay, *response.Database.CurrentStepDisplay)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMedia_CorruptDatabaseWithoutActiveRecoveryShowsTerminalState(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB := &helpers.MockUserDBI{}
+	mockPlatform := mocks.NewMockPlatform()
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	ClearIndexingStatus()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusFailed, nil)
+
+	db := &database.Database{MediaDB: mockMediaDB, UserDB: mockUserDB}
+	env := requests.RequestEnv{Context: context.Background(), Database: db, State: testState}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+	response, ok := result.(models.MediaResponse)
+	require.True(t, ok, "result should be MediaResponse")
+
+	assert.False(t, response.Database.Indexing)
+	assert.False(t, response.Database.Optimizing)
+	assert.False(t, response.Database.Exists)
+	require.NotNil(t, response.Database.CurrentStepDisplay)
+	assert.Equal(t, mediaDatabaseRecoveryRequiredDisplay, *response.Database.CurrentStepDisplay)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestGenerateMediaDB_NotifiesPreparingBeforeOptimizationPreflightFailure(t *testing.T) {
 	ClearIndexingStatus()
 	t.Cleanup(ClearIndexingStatus)

@@ -83,8 +83,10 @@ func TestHandleCancellation(t *testing.T) {
 			assert.Equal(t, tt.expectedReturnValue, result)
 
 			if tt.expectedContextError {
-				require.Error(t, err)
-				assert.Equal(t, context.Canceled, err)
+				require.ErrorIs(t, err, context.Canceled)
+				if tt.setIndexingStatusError != nil {
+					require.ErrorIs(t, err, tt.setIndexingStatusError)
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -160,8 +162,13 @@ func TestHandleCancellationWithRollback(t *testing.T) {
 			assert.Equal(t, tt.expectedReturnValue, result)
 
 			if tt.expectedContextError {
-				require.Error(t, err)
-				assert.Equal(t, context.Canceled, err)
+				require.ErrorIs(t, err, context.Canceled)
+				if tt.rollbackError != nil {
+					require.ErrorIs(t, err, tt.rollbackError)
+				}
+				if tt.setIndexingStatusError != nil {
+					require.ErrorIs(t, err, tt.setIndexingStatusError)
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -175,7 +182,7 @@ func TestHandleCancellationWithRollback(t *testing.T) {
 func TestCancellationHelpers_ErrorLogging(t *testing.T) {
 	t.Parallel()
 
-	// This test verifies that errors are logged but don't prevent cancellation completion
+	// Cleanup errors remain wrapped without hiding cancellation.
 
 	// Create cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -186,11 +193,12 @@ func TestCancellationHelpers_ErrorLogging(t *testing.T) {
 		statusError := errors.New("failed to set status")
 		mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCancelled).Return(statusError)
 
-		// Should complete successfully despite status error
+		// Cancellation and status failure both remain classifiable.
 		result, err := handleCancellation(ctx, mockDB, "test message")
 
 		assert.Equal(t, 0, result)
-		assert.Equal(t, context.Canceled, err)
+		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, statusError)
 		mockDB.AssertExpectations(t)
 	})
 
@@ -202,11 +210,13 @@ func TestCancellationHelpers_ErrorLogging(t *testing.T) {
 		mockDB.On("RollbackTransaction").Return(rollbackError)
 		mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCancelled).Return(statusError)
 
-		// Should complete successfully despite both errors
+		// Cancellation and both cleanup failures remain classifiable.
 		result, err := handleCancellationWithRollback(ctx, mockDB, "test message")
 
 		assert.Equal(t, 0, result)
-		assert.Equal(t, context.Canceled, err)
+		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, rollbackError)
+		require.ErrorIs(t, err, statusError)
 		mockDB.AssertExpectations(t)
 	})
 }

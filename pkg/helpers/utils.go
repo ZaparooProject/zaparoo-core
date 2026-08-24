@@ -291,6 +291,9 @@ func ListZip(filePath string) ([]string, error) {
 // ListZipWithYield lists ZIP filenames while allowing long central-directory
 // reads and parsing to yield cooperatively or stop on context cancellation.
 func ListZipWithYield(ctx context.Context, filePath string, yield func() error) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(filePath) //nolint:gosec // G304: caller-controlled path, same as archive/zip.OpenReader
 	if err != nil {
 		return nil, fmt.Errorf("failed to open zip file: %w", err)

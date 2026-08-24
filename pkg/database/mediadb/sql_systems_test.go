@@ -191,6 +191,22 @@ func TestSystemMediaCounts_CacheIsIsolatedAndInvalidated(t *testing.T) {
 	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, refreshed)
 }
 
+func TestSystemMediaCounts_CacheInvalidatedOnRecreate(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertSystemWithMedia(t, mediaDB, "NES", "Game", filepath.Join("roms", "nes", "game.nes"))
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 1}}, counts)
+
+	require.NoError(t, mediaDB.Recreate(false))
+	counts, err = mediaDB.SystemMediaCounts(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, counts)
+}
+
 func TestRandomGameWithQuery_BroadSystemsUsesBrowseCounts(t *testing.T) {
 	t.Parallel()
 

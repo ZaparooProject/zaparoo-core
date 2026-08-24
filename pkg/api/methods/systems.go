@@ -53,6 +53,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		if err != nil {
 			return nil, models.ClientErrf("failed to parse tag filters: %w", err)
 		}
+		tagged = len(tagFilters) > 0
 	}
 
 	countsStarted := time.Now()

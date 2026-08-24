@@ -45,6 +45,31 @@ func TestPauser_WaitBlocksWhenPaused(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestPauser_WaitForPacingAppliesBoundedSleepWhenPaused(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Millisecond, 20*time.Millisecond)
+	p.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	require.NoError(t, p.WaitForPacing(ctx))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.NoError(t, ctx.Err())
+}
+
+func TestPauser_WaitForPacingPausedSleepHonorsCancellation(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Millisecond, time.Hour)
+	p.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	require.ErrorIs(t, p.WaitForPacing(ctx), context.DeadlineExceeded)
+}
+
 func TestPauser_WaitUnblocksOnResume(t *testing.T) {
 	p := NewPauser()
 	p.Pause()

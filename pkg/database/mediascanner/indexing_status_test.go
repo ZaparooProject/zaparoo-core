@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -85,12 +86,11 @@ func TestNoteIndexingCorruption(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestFinalizeIndexingError_PreservesTerminalStates(t *testing.T) {
+func TestFinalizeIndexingError_PreservesNonErrorsAndExistingCorruption(t *testing.T) {
 	t.Parallel()
 
 	for name, terminalErr := range map[string]error{
 		"nil":                 nil,
-		"cancelled":           context.Canceled,
 		"deadline":            context.DeadlineExceeded,
 		"preexisting corrupt": errors.New(mediaDatabaseCorruptMessage),
 	} {
@@ -104,6 +104,17 @@ func TestFinalizeIndexingError_PreservesTerminalStates(t *testing.T) {
 	}
 }
 
+func TestFinalizeIndexingError_MarksCancellation(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCancelled).Return(nil).Once()
+
+	finalizeIndexingError(mockDB, context.Canceled)
+
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "MarkCorrupt", mock.Anything)
+}
+
 func TestFinalizeIndexingError_MarksFailure(t *testing.T) {
 	t.Parallel()
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -112,6 +123,24 @@ func TestFinalizeIndexingError_MarksFailure(t *testing.T) {
 	finalizeIndexingError(mockDB, errors.New("indexing failed"))
 
 	mockDB.AssertExpectations(t)
+}
+
+func TestFinalizeIndexingError_CorruptionWinsOverCancellation(t *testing.T) {
+	t.Parallel()
+	mockDB := testhelpers.NewMockMediaDBI()
+	corruptErr := sqlite3.Error{Code: sqlite3.ErrCorrupt}
+	terminalErr := errors.Join(context.Canceled, fmt.Errorf("cleanup failed: %w", corruptErr))
+	mockDB.On("IntegrityReport").Return([]string{"Page 7: malformed"})
+	mockDB.On("MarkCorrupt", mock.MatchedBy(func(reason string) bool {
+		return database.IsCorruptionError(errors.New(reason))
+	})).Return()
+	mockDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil)
+	mockDB.On("SetLastIndexedSystem", "").Return(nil)
+
+	finalizeIndexingError(mockDB, terminalErr)
+
+	mockDB.AssertExpectations(t)
+	mockDB.AssertNotCalled(t, "SetIndexingStatus", mediadb.IndexingStatusFailed)
 }
 
 func TestFinalizeIndexingError_MarksGenericCorruptionAfterRollback(t *testing.T) {

@@ -20,7 +20,9 @@
 package assets
 
 import (
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,9 +32,27 @@ import (
 func resetSystemMetadataCache(t *testing.T) {
 	t.Helper()
 	systemMetadataCache = sync.Map{}
+	systemMetadataLoads = sync.Map{}
+	readSystemMetadataFile = Systems.ReadFile
+	notifySystemMetadataLoad = nil
 	t.Cleanup(func() {
 		systemMetadataCache = sync.Map{}
+		systemMetadataLoads = sync.Map{}
+		readSystemMetadataFile = Systems.ReadFile
+		notifySystemMetadataLoad = nil
 	})
+}
+
+func gateSystemMetadataLoads(callers int) func() {
+	entered := make(chan struct{}, callers)
+	notifySystemMetadataLoad = func() {
+		entered <- struct{}{}
+	}
+	return func() {
+		for range callers {
+			<-entered
+		}
+	}
 }
 
 func TestGetSystemMetadata_CanonicalAndAlias(t *testing.T) {
@@ -66,10 +86,50 @@ func TestGetSystemMetadata_UsesCanonicalCacheEntry(t *testing.T) {
 	assert.Equal(t, cached, got)
 }
 
+func TestGetSystemMetadata_ConcurrentReadErrorIsShared(t *testing.T) {
+	resetSystemMetadataCache(t)
+
+	readErr := errors.New("metadata read failed")
+	const callers = 32
+	waitForCallers := gateSystemMetadataLoads(callers)
+	var reads atomic.Int32
+	readSystemMetadataFile = func(string) ([]byte, error) {
+		reads.Add(1)
+		waitForCallers()
+		return nil, readErr
+	}
+
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := GetSystemMetadata("MegaDrive")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.ErrorIs(t, err, readErr)
+	}
+	assert.Equal(t, int32(1), reads.Load())
+}
+
 func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	resetSystemMetadataCache(t)
 
 	const callers = 32
+	waitForCallers := gateSystemMetadataLoads(callers)
+	var reads atomic.Int32
+	readSystemMetadataFile = func(name string) ([]byte, error) {
+		reads.Add(1)
+		waitForCallers()
+		return Systems.ReadFile(name)
+	}
+
 	results := make(chan SystemMetadata, callers)
 	errs := make(chan error, callers)
 	var wg sync.WaitGroup
@@ -92,4 +152,10 @@ func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	for metadata := range results {
 		assert.Equal(t, "Genesis", metadata.ID)
 	}
+	assert.Equal(t, int32(1), reads.Load())
+
+	lateMetadata, err := GetSystemMetadata("MegaDrive")
+	require.NoError(t, err)
+	assert.Equal(t, "Genesis", lateMetadata.ID)
+	assert.Equal(t, int32(1), reads.Load())
 }
