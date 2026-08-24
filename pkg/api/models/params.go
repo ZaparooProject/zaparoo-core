@@ -42,6 +42,7 @@ type BrowseParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
 	Path        *string   `json:"path,omitempty"`
+	RootView    *string   `json:"rootView,omitempty" validate:"omitempty,oneof=routes contents"`
 	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
 	Cursor      *string   `json:"cursor,omitempty"`
 	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`

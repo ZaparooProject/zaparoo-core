@@ -22,6 +22,7 @@ package assets
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -67,11 +68,20 @@ type SystemMetadata struct {
 	Manufacturer string `json:"manufacturer"`
 }
 
-var systemMetadataCache sync.Map
+type systemMetadataLoad struct {
+	err      error
+	done     chan struct{}
+	metadata *SystemMetadata
+}
+
+var (
+	systemMetadataCache      sync.Map
+	systemMetadataLoads      sync.Map
+	readSystemMetadataFile   = Systems.ReadFile
+	notifySystemMetadataLoad func()
+)
 
 func GetSystemMetadata(system string) (SystemMetadata, error) {
-	var metadata SystemMetadata
-
 	// Resolve any aliases to the canonical system ID
 	// This ensures backward compatibility when systems are renamed (e.g., Music → MusicTrack)
 	resolvedSystem, err := systemdefs.LookupSystem(system)
@@ -84,18 +94,43 @@ func GetSystemMetadata(system string) (SystemMetadata, error) {
 		}
 	}
 
-	data, err := Systems.ReadFile("systems/" + system + ".json")
-	if err != nil {
-		return metadata, fmt.Errorf("failed to read system metadata file: %w", err)
+	pending := &systemMetadataLoad{
+		done:     make(chan struct{}),
+		metadata: &SystemMetadata{},
+	}
+	actual, loaded := systemMetadataLoads.LoadOrStore(system, pending)
+	if notifySystemMetadataLoad != nil {
+		notifySystemMetadataLoad()
+	}
+	if loaded {
+		shared, ok := actual.(*systemMetadataLoad)
+		if !ok {
+			return SystemMetadata{}, errors.New("invalid system metadata load state")
+		}
+		<-shared.done
+		return *shared.metadata, shared.err
+	}
+	defer func() {
+		close(pending.done)
+		systemMetadataLoads.Delete(system)
+	}()
+
+	if cached, ok := systemMetadataCache.Load(system); ok {
+		if cachedMetadata, valid := cached.(SystemMetadata); valid {
+			*pending.metadata = cachedMetadata
+			return *pending.metadata, nil
+		}
 	}
 
-	err = json.Unmarshal(data, &metadata)
-	if err != nil {
-		return metadata, fmt.Errorf("failed to unmarshal system metadata: %w", err)
+	data, readErr := readSystemMetadataFile("systems/" + system + ".json")
+	if readErr != nil {
+		pending.err = fmt.Errorf("failed to read system metadata file: %w", readErr)
+		return *pending.metadata, pending.err
 	}
-	cached, _ := systemMetadataCache.LoadOrStore(system, metadata)
-	if cachedMetadata, valid := cached.(SystemMetadata); valid {
-		return cachedMetadata, nil
+	if unmarshalErr := json.Unmarshal(data, pending.metadata); unmarshalErr != nil {
+		pending.err = fmt.Errorf("failed to unmarshal system metadata: %w", unmarshalErr)
+		return *pending.metadata, pending.err
 	}
-	return metadata, nil
+	systemMetadataCache.Store(system, *pending.metadata)
+	return *pending.metadata, nil
 }

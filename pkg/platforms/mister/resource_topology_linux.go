@@ -35,6 +35,22 @@ type resourceTopologyHooks struct {
 	setMMCAffinity  func(bool) error
 }
 
+type recurringWarning struct {
+	lastError string
+}
+
+func (w *recurringWarning) report(err error, message string) {
+	if err.Error() == w.lastError {
+		return
+	}
+	w.lastError = err.Error()
+	log.Warn().Err(err).Msg(message)
+}
+
+func (w *recurringWarning) reset() {
+	w.lastError = ""
+}
+
 // StartResourceTopologyManager keeps CPU0 available to the software frontend
 // only while frontend holds its kernel-backed activity lease. The lease is
 // released automatically on exit or forced termination, so Core restarts and
@@ -58,30 +74,25 @@ func runResourceTopologyManager(
 ) {
 	initialized := false
 	lastActive := false
-	// Each failure kind logs at Warn only the first time or when the error
-	// text changes; an identical repeat drops to Debug. Hooks are retried
-	// every tick regardless (no backoff: instant recovery matters more than
-	// a saved retry here), but a persistent failure would otherwise Warn-log
-	// once a second forever.
-	var leaseFailure, coreFailure, mmcFailure loggedFailure
+	var leaseWarning, coreWarning, irqWarning recurringWarning
 	for {
 		active, err := hooks.leaseActive()
 		if err != nil {
-			leaseFailure.log(err, "failed to read MiSTer frontend resource lease")
+			leaseWarning.report(err, "failed to read MiSTer frontend resource lease")
 		} else {
-			leaseFailure.clear()
+			leaseWarning.reset()
 			// Reapply process affinity every pass so threads created after a
 			// transition inherit or receive the current topology.
 			if affinityErr := hooks.setCoreAffinity(active); affinityErr != nil {
-				coreFailure.log(affinityErr, "failed to apply MiSTer Core CPU affinity")
+				coreWarning.report(affinityErr, "failed to apply MiSTer Core CPU affinity")
 			} else {
-				coreFailure.clear()
+				coreWarning.reset()
 			}
 			if !initialized || active != lastActive {
 				if irqErr := hooks.setMMCAffinity(active); irqErr != nil {
-					mmcFailure.log(irqErr, "failed to apply MiSTer MMC IRQ affinity")
+					irqWarning.report(irqErr, "failed to apply MiSTer MMC IRQ affinity")
 				} else {
-					mmcFailure.clear()
+					irqWarning.reset()
 					if active {
 						log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
 					} else {
@@ -105,29 +116,6 @@ func runResourceTopologyManager(
 		case <-ticks:
 		}
 	}
-}
-
-// loggedFailure suppresses repeat Warn logging of the same persistent
-// failure on a tight retry loop: the first occurrence of a given error (or
-// a change from the last one) logs at Warn, identical repeats log at Debug
-// so the information isn't lost, just demoted, and clear resets it so a
-// future occurrence after a successful pass logs at Warn again.
-type loggedFailure struct {
-	last string
-}
-
-func (f *loggedFailure) log(err error, msg string) {
-	current := err.Error()
-	if current == f.last {
-		log.Debug().Err(err).Msg(msg)
-		return
-	}
-	f.last = current
-	log.Warn().Err(err).Msg(msg)
-}
-
-func (f *loggedFailure) clear() {
-	f.last = ""
 }
 
 func frontendResourceLeaseActive() (bool, error) {

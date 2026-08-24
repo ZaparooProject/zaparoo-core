@@ -281,6 +281,7 @@ func TestBeginTransactionReportsPragmaFailureAndDiscardsConnection(t *testing.T)
 
 	err = mediaDB.BeginTransaction(false)
 	require.ErrorContains(t, err, "failed to set writer connection temp_store")
+	require.NotErrorIs(t, err, sql.ErrConnDone)
 	assert.Nil(t, mediaDB.tx)
 	assert.Nil(t, mediaDB.txConn)
 	assert.Zero(t, sqlDB.Stats().InUse)

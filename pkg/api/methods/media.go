@@ -60,6 +60,8 @@ const (
 	preparingMediaDatabaseUpdateDisplay       = "Preparing media database update"
 	preparingResumeMediaDatabaseUpdateDisplay = "Preparing to resume media database update"
 	preparingDatabaseOptimizationDisplay      = "Preparing database optimization"
+	recoveringMediaDatabaseDisplay            = "Recovering media database"
+	mediaDatabaseRecoveryRequiredDisplay      = "Media database recovery required"
 	preparingMediaScrapeDisplay               = "Preparing media scrape"
 )
 
@@ -712,16 +714,25 @@ func startMediaDBGeneration(
 			})
 		}, pauser)
 		if err != nil {
-			// A cancelled or failed run may still leave a usable database
-			// (a prior index, or systems committed before the interruption).
-			if errors.Is(err, context.Canceled) {
+			// Corruption transitions directly into recovery. Do not publish a
+			// stopped state between failed indexing and the recovery watcher.
+			switch {
+			case database.IsCorruptionError(err):
+				log.Error().Err(err).Msg("media database corruption detected during indexing; awaiting recovery")
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:             false,
+					Indexing:           true,
+					CurrentStepDisplay: ptrString(recoveringMediaDatabaseDisplay),
+					TotalFiles:         &total,
+				})
+			case errors.Is(err, context.Canceled):
 				log.Info().Msg("media indexing was cancelled")
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
 				})
-			} else {
+			default:
 				log.Error().Err(err).Msg("error generating media db")
 				// TODO: error notification to client
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
@@ -1324,6 +1335,17 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		systemsTotal := max(status.totalSteps-1, 0)
 		resp.Database.SystemsCompleted = &systemsCompleted
 		resp.Database.SystemsTotal = &systemsTotal
+	case persistedIndexingStatus == mediadb.IndexingStatusCorrupt || env.Database.MediaDB.IsMarkedCorrupt():
+		resp.Database.Optimizing = false
+		resp.Database.Paused = paused
+		resp.Database.Throttled = throttled
+		resp.Database.Exists = false
+		resp.Database.Indexing = env.State != nil && env.State.MediaDBRecoveryActive()
+		if resp.Database.Indexing {
+			resp.Database.CurrentStepDisplay = ptrString(recoveringMediaDatabaseDisplay)
+		} else {
+			resp.Database.CurrentStepDisplay = ptrString(mediaDatabaseRecoveryRequiredDisplay)
+		}
 	case isPersistentMediaWorkStatus(persistedIndexingStatus):
 		resp.Database.Indexing = true
 		resp.Database.Optimizing = false

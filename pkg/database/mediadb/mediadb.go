@@ -485,6 +485,8 @@ func (db *MediaDB) Open() error {
 	clearCoverAvailabilityCache()
 	clearImagePropertyTagCache()
 	clearPrefixPolicyCache()
+	db.systemMediaCountsCache.Store(nil)
+	db.systemMediaCountsGen.Add(1)
 	db.clearMediaSearchBounds()
 
 	if !exists {
@@ -686,15 +688,13 @@ func (db *MediaDB) closeWriterConn(conn *sql.Conn) error {
 	defer cancel()
 	resetErr := applyConnPragmas(cleanupCtx, conn, defaultConnCacheSize, defaultConnTempStore)
 	if resetErr != nil {
+		// Returning ErrBadConn from Raw closes and discards the physical
+		// connection. A later Conn.Close would only report sql.ErrConnDone.
 		discardErr := conn.Raw(func(any) error { return driver.ErrBadConn })
-		if errors.Is(discardErr, driver.ErrBadConn) {
+		if errors.Is(discardErr, driver.ErrBadConn) || errors.Is(discardErr, sql.ErrConnDone) {
 			discardErr = nil
 		}
-		closeErr := conn.Close()
-		if closeErr != nil {
-			closeErr = fmt.Errorf("failed to close writer connection: %w", closeErr)
-		}
-		return errors.Join(resetErr, discardErr, closeErr)
+		return errors.Join(resetErr, discardErr)
 	}
 	if err := conn.Close(); err != nil {
 		return fmt.Errorf("failed to close writer connection: %w", err)
@@ -2449,7 +2449,8 @@ func (db *MediaDB) GetMediaCoverStatus(
 
 // BrowseFileCount returns the total number of immediate child files under a path prefix.
 func (db *MediaDB) BrowseFileCount(
-	ctx context.Context, opts database.BrowseFileCountOptions,
+	ctx context.Context,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // interface keeps browse option values consistent
 ) (int, error) {
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL

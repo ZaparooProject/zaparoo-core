@@ -45,6 +45,31 @@ func TestPauser_WaitBlocksWhenPaused(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestPauser_WaitForPacingAppliesBoundedSleepWhenPaused(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Millisecond, 20*time.Millisecond)
+	p.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	require.NoError(t, p.WaitForPacing(ctx))
+	assert.GreaterOrEqual(t, time.Since(start), 15*time.Millisecond)
+	assert.NoError(t, ctx.Err())
+}
+
+func TestPauser_WaitForPacingPausedSleepHonorsCancellation(t *testing.T) {
+	p := NewPauser()
+	p.SetThrottleQuanta(time.Millisecond, time.Hour)
+	p.Pause()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	require.ErrorIs(t, p.WaitForPacing(ctx), context.DeadlineExceeded)
+}
+
 func TestPauser_WaitUnblocksOnResume(t *testing.T) {
 	p := NewPauser()
 	p.Pause()
@@ -77,60 +102,27 @@ func TestPauser_WaitReturnsCancelledContext(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestPauser_WaitBoundedReturnsImmediatelyWhenNotPaused(t *testing.T) {
+func TestPauser_WaitForPacingReturnsImmediatelyWhenNotPaused(t *testing.T) {
 	p := NewPauser()
-	err := p.WaitBounded(context.Background())
+	err := p.WaitForPacing(context.Background())
 	assert.NoError(t, err)
 }
 
-// TestPauser_WaitBoundedNeverBlocksIndefinitelyWhenPaused pins the fix for a
-// caller that must hold a resource across the wait (e.g. an open database
-// write transaction): unlike Wait, WaitBounded must return on its own within
-// the heaviest throttle duty cycle even though Resume is never called,
-// instead of blocking until Resume for as long as the pause lasts.
-func TestPauser_WaitBoundedNeverBlocksIndefinitelyWhenPaused(t *testing.T) {
-	p := NewPauser()
-	p.Pause()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- p.WaitBounded(context.Background())
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("WaitBounded blocked past the bounded duty cycle without Resume")
-	}
-}
-
-func TestPauser_WaitBoundedReturnsCancelledContextWhilePaused(t *testing.T) {
-	p := NewPauser()
-	p.Pause()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := p.WaitBounded(ctx)
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
-// TestPauser_WaitBoundedBoundsRaceAgainstConcurrentPause pins a race where an
-// earlier WaitBounded read the pauser as not paused, then Pause landed before
-// the wait actually observed state: if that read and the wait are two
+// TestPauser_WaitForPacingBoundsRaceAgainstConcurrentPause pins a race where
+// an earlier WaitForPacing read the pauser as not paused, then Pause landed
+// before the wait actually observed state: if that read and the wait are two
 // separate lock acquisitions, the wait can still take the blocking branch and
 // never return since Resume is never called here. Racing many fresh pausers
 // gives the scheduler many chances to land Pause inside that window; every
 // call must still return within the bounded duty cycle regardless.
-func TestPauser_WaitBoundedBoundsRaceAgainstConcurrentPause(t *testing.T) {
+func TestPauser_WaitForPacingBoundsRaceAgainstConcurrentPause(t *testing.T) {
 	const iterations = 50
 	for i := range iterations {
 		p := NewPauser()
 
 		done := make(chan error, 1)
 		go func() {
-			done <- p.WaitBounded(context.Background())
+			done <- p.WaitForPacing(context.Background())
 		}()
 		go p.Pause()
 
@@ -138,7 +130,7 @@ func TestPauser_WaitBoundedBoundsRaceAgainstConcurrentPause(t *testing.T) {
 		case err := <-done:
 			require.NoError(t, err)
 		case <-time.After(2 * time.Second):
-			t.Fatalf("WaitBounded blocked past its bounded duty cycle on iteration %d", i)
+			t.Fatalf("WaitForPacing blocked past its bounded duty cycle on iteration %d", i)
 		}
 	}
 }

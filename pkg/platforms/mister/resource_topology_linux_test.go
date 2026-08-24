@@ -43,38 +43,36 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-func TestLoggedFailureLogsFirstOccurrenceAtWarnAndRepeatsAtDebug(t *testing.T) {
+func TestRecurringWarningReportsFirstOccurrenceOnlyOnRepeat(t *testing.T) {
 	buf := captureLogs(t)
 
-	var failure loggedFailure
+	var warning recurringWarning
 	err := errors.New("boom")
-	failure.log(err, "widget failed")
-	failure.log(err, "widget failed")
-	failure.log(err, "widget failed")
+	warning.report(err, "widget failed")
+	warning.report(err, "widget failed")
+	warning.report(err, "widget failed")
 
 	assert.Equal(t, 1, strings.Count(buf.String(), `"level":"warn"`))
-	assert.Equal(t, 2, strings.Count(buf.String(), `"level":"debug"`))
 }
 
-func TestLoggedFailureReLogsAtWarnAfterClear(t *testing.T) {
+func TestRecurringWarningReWarnsAfterReset(t *testing.T) {
 	buf := captureLogs(t)
 
-	var failure loggedFailure
+	var warning recurringWarning
 	err := errors.New("boom")
-	failure.log(err, "widget failed")
-	failure.clear()
-	failure.log(err, "widget failed")
+	warning.report(err, "widget failed")
+	warning.reset()
+	warning.report(err, "widget failed")
 
 	assert.Equal(t, 2, strings.Count(buf.String(), `"level":"warn"`))
-	assert.Zero(t, strings.Count(buf.String(), `"level":"debug"`))
 }
 
-func TestLoggedFailureReLogsAtWarnWhenErrorTextChanges(t *testing.T) {
+func TestRecurringWarningReWarnsWhenErrorTextChanges(t *testing.T) {
 	buf := captureLogs(t)
 
-	var failure loggedFailure
-	failure.log(errors.New("boom"), "widget failed")
-	failure.log(errors.New("bang"), "widget failed")
+	var warning recurringWarning
+	warning.report(errors.New("boom"), "widget failed")
+	warning.report(errors.New("bang"), "widget failed")
 
 	assert.Equal(t, 2, strings.Count(buf.String(), `"level":"warn"`))
 }
@@ -117,13 +115,12 @@ func TestRunResourceTopologyManagerSuppressesRepeatWarnLogsForPersistentFailure(
 	// One call happens immediately on entry, plus one per consumed tick.
 	assert.Equal(t, tickCount+1, leaseCalls)
 	assert.Equal(t, 1, strings.Count(buf.String(), `"level":"warn"`))
-	assert.Equal(t, tickCount, strings.Count(buf.String(), `"level":"debug"`))
 }
 
 // TestRunResourceTopologyManagerReWarnsAfterRecoveryAndFailureAgain pins that
 // suppression is per persistent-failure streak, not permanent: a transient
 // failure that clears on success and then recurs must Warn-log again rather
-// than staying silently demoted to Debug forever.
+// than staying silently suppressed forever.
 func TestRunResourceTopologyManagerReWarnsAfterRecoveryAndFailureAgain(t *testing.T) {
 	buf := captureLogs(t)
 
@@ -155,9 +152,7 @@ func TestRunResourceTopologyManagerReWarnsAfterRecoveryAndFailureAgain(t *testin
 	<-done
 
 	assert.Equal(t, len(sequence), call)
-	// First failure streak (calls 1-2): one Warn, one Debug repeat.
-	// Success (call 3) clears it. Second failure streak (calls 4-5): a
-	// fresh Warn, one more Debug repeat.
+	// First failure streak (calls 1-2): one Warn. Success (call 3) resets it.
+	// Second failure streak (calls 4-5): a fresh Warn.
 	assert.Equal(t, 2, strings.Count(buf.String(), `"level":"warn"`))
-	assert.Equal(t, 2, strings.Count(buf.String(), `"level":"debug"`))
 }

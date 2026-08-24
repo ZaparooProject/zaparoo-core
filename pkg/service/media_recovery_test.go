@@ -125,6 +125,8 @@ func TestCheckAndRecoverCorruptMediaDB_RecreateFailureFinishesNotification(t *te
 	require.NoError(t, json.Unmarshal(started.Params, &startedStatus))
 	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
 	assert.True(t, startedStatus.Indexing)
+	require.NotNil(t, startedStatus.CurrentStepDisplay)
+	assert.Equal(t, "Recovering media database", *startedStatus.CurrentStepDisplay)
 	assert.False(t, finishedStatus.Indexing)
 	assert.False(t, finishedStatus.Exists)
 }
@@ -165,6 +167,8 @@ func TestCheckAndRecoverCorruptMediaDB_ReindexFailureFinishesNotification(t *tes
 	require.NoError(t, json.Unmarshal(finished.Params, &finishedStatus))
 	assert.True(t, generateCalled)
 	assert.True(t, startedStatus.Indexing)
+	require.NotNil(t, startedStatus.CurrentStepDisplay)
+	assert.Equal(t, "Recovering media database", *startedStatus.CurrentStepDisplay)
 	assert.False(t, finishedStatus.Indexing)
 	assert.False(t, finishedStatus.Exists)
 	mockDB.AssertExpectations(t)
@@ -239,14 +243,37 @@ func TestCheckAndRecoverCorruptMediaDB_StopsRecoveryLoop(t *testing.T) {
 		mediaDBRecoveryLimitReported.Store(false)
 	})
 
+	st, ns := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(st.StopService)
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("IsMarkedCorrupt").Return(true)
 	mockDB.On("HasBackgroundOperations").Return(false)
-	mockDB.On("BeginRecovery").Return().Twice()
+	mockDB.On("BeginRecovery").Run(func(mock.Arguments) {
+		assert.True(t, st.MediaDBRecoveryActive())
+	}).Return().Twice()
 	mockDB.On("EndRecovery").Return().Twice()
+	mockDB.On("GetLastGenerated").Return(time.Time{}, nil).Twice()
+	mockDB.On("HasAnyMedia").Return(false, nil).Twice()
 
-	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
-	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, nil, nil)
+	assertTerminalNotification := func() {
+		t.Helper()
+		select {
+		case notification := <-ns:
+			var status models.IndexingStatusResponse
+			require.NoError(t, json.Unmarshal(notification.Params, &status))
+			assert.False(t, status.Indexing)
+			assert.False(t, status.Exists)
+		case <-time.After(time.Second):
+			t.Fatal("recovery limit did not publish a terminal media indexing notification")
+		}
+	}
+
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, st, nil)
+	assert.False(t, st.MediaDBRecoveryActive())
+	assertTerminalNotification()
+	checkAndRecoverCorruptMediaDB(nil, nil, &database.Database{MediaDB: mockDB}, st, nil)
+	assert.False(t, st.MediaDBRecoveryActive())
+	assertTerminalNotification()
 
 	mockDB.AssertNotCalled(t, "IntegrityReport")
 	mockDB.AssertNotCalled(t, "Recreate", mock.Anything)

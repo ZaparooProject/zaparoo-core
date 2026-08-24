@@ -1423,7 +1423,7 @@ func TestListZipWithYield_StopsWhenCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := ListZipWithYield(ctx, "testdata/test.zip", nil)
+	_, err := ListZipWithYield(ctx, "testdata/nonexistent.zip", nil)
 	require.ErrorIs(t, err, context.Canceled)
 }
 

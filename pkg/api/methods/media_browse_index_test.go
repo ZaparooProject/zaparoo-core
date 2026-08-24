@@ -163,6 +163,67 @@ func TestHandleMediaBrowseIndex_VirtualPath(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaBrowseIndex_RootContentsUsesOverlayScope(t *testing.T) {
+	t.Parallel()
+
+	root1 := browseTestAbsPath("configured")
+	root2 := browseTestAbsPath("default")
+	route1 := filepath.ToSlash(filepath.Join(root1, "SNES"))
+	route2 := filepath.ToSlash(filepath.Join(root2, "SNES"))
+	wantSources := []database.BrowseSource{
+		{PathPrefix: route1 + "/", IncludeDirs: true},
+		{PathPrefix: route2 + "/", IncludeDirs: true},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{root1, root2})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
+	})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{}, true, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything, mock.Anything).
+		Return(map[string]database.BrowseRouteCount{
+			route1: {Path: route1, FileCount: 1, SystemIDs: []string{"SNES"}},
+			route2: {Path: route2, FileCount: 1, SystemIDs: []string{"SNES"}},
+		}, nil)
+	mockMediaDB.On("BrowseIndex", mock.Anything, mock.MatchedBy(func(opts database.BrowseIndexOptions) bool {
+		return opts.Overlay != nil && assert.Equal(t, wantSources, opts.Overlay.Sources) &&
+			len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES"
+	})).Return(database.BrowseIndexResult{
+		Scheme:     "latin",
+		SortMode:   "name-asc",
+		TotalFiles: 2,
+		Buckets: []database.BrowseIndexBucket{
+			{Key: "A", AtStart: true, Count: 1},
+			{Key: "B", SortValue: "Beta", LastID: 7, Count: 1, Offset: 1},
+		},
+	}, nil)
+
+	systems := []string{"SNES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Systems:  &systems,
+		RootView: stringPtr(browseRootViewContents),
+	})
+	result, err := HandleMediaBrowseIndex(env)
+	require.NoError(t, err)
+	res, ok := result.(models.BrowseIndexResults)
+	require.True(t, ok)
+	require.Len(t, res.Groups, 2)
+
+	cursor, err := decodeBrowseCursor(res.Groups[1].Cursor)
+	require.NoError(t, err)
+	require.NotNil(t, cursor)
+	assert.Equal(t, browseRootViewContents, cursor.RootView)
+	assert.Equal(t, int64(7), cursor.LastID)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaBrowseIndex_RootReturnsNoRail(t *testing.T) {
 	t.Parallel()
 
