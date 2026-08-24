@@ -100,6 +100,7 @@ type State struct {
 	restorePendingRestart bool
 	runZapScript          bool
 	backgroundAutoPaused  bool
+	mediaDBRecoveryActive bool
 	stopService           bool
 }
 
@@ -135,6 +136,28 @@ func (s *State) BackupCoordinator() *backupcoordinator.Coordinator {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.backupCoordinator
+}
+
+// SetMediaDBRecoveryActive records whether automatic media database recovery
+// currently owns the recovery workflow.
+func (s *State) SetMediaDBRecoveryActive(active bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mediaDBRecoveryActive = active
+}
+
+// MediaDBRecoveryActive reports whether automatic media database recovery is
+// currently running.
+func (s *State) MediaDBRecoveryActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mediaDBRecoveryActive
 }
 
 // SetUIEvents stores the process-wide UI event service.

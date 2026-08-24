@@ -308,6 +308,11 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 		return
 	}
 
+	if st != nil {
+		st.SetMediaDBRecoveryActive(true)
+		defer st.SetMediaDBRecoveryActive(false)
+	}
+
 	// Close the race between the active-work check and Recreate: once this gate is
 	// held, new tracked work waits until the replacement database is ready. Release
 	// it before starting the reindex: GenerateMediaDB registers that work through
@@ -329,15 +334,18 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 				"Safely shut down, check free space, and replace or reimage the storage device before trying again.",
 				inboxservice.CategoryMediaDBCorruptionRecoveryLimit)
 		}
+		finishMediaDBRecoveryNotification(st, db.MediaDB)
 		return
 	}
 
 	log.Error().Int32("recovery_attempt", attempt).Strs("integrity", db.MediaDB.IntegrityReport()).
 		Msg("media database is corrupt; rebuilding from scratch")
 	if st != nil {
+		display := "Recovering media database"
 		notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
-			Exists:   false,
-			Indexing: true,
+			Exists:             false,
+			Indexing:           true,
+			CurrentStepDisplay: &display,
 		})
 	}
 

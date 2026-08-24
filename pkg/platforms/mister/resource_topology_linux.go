@@ -35,6 +35,22 @@ type resourceTopologyHooks struct {
 	setMMCAffinity  func(bool) error
 }
 
+type recurringWarning struct {
+	lastError string
+}
+
+func (w *recurringWarning) report(err error, message string) {
+	if err.Error() == w.lastError {
+		return
+	}
+	w.lastError = err.Error()
+	log.Warn().Err(err).Msg(message)
+}
+
+func (w *recurringWarning) reset() {
+	w.lastError = ""
+}
+
 // StartResourceTopologyManager keeps CPU0 available to the software frontend
 // only while frontend holds its kernel-backed activity lease. The lease is
 // released automatically on exit or forced termination, so Core restarts and
@@ -58,20 +74,25 @@ func runResourceTopologyManager(
 ) {
 	initialized := false
 	lastActive := false
+	var leaseWarning, coreWarning, irqWarning recurringWarning
 	for {
 		active, err := hooks.leaseActive()
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to read MiSTer frontend resource lease")
+			leaseWarning.report(err, "failed to read MiSTer frontend resource lease")
 		} else {
+			leaseWarning.reset()
 			// Reapply process affinity every pass so threads created after a
 			// transition inherit or receive the current topology.
 			if affinityErr := hooks.setCoreAffinity(active); affinityErr != nil {
-				log.Warn().Err(affinityErr).Msg("failed to apply MiSTer Core CPU affinity")
+				coreWarning.report(affinityErr, "failed to apply MiSTer Core CPU affinity")
+			} else {
+				coreWarning.reset()
 			}
 			if !initialized || active != lastActive {
 				if irqErr := hooks.setMMCAffinity(active); irqErr != nil {
-					log.Warn().Err(irqErr).Msg("failed to apply MiSTer MMC IRQ affinity")
+					irqWarning.report(irqErr, "failed to apply MiSTer MMC IRQ affinity")
 				} else {
+					irqWarning.reset()
 					if active {
 						log.Info().Msg("MiSTer frontend active: Core and MMC assigned to CPU1")
 					} else {

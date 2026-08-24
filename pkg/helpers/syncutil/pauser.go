@@ -265,6 +265,17 @@ func (p *Pauser) SetBaselineThrottleQuanta(work, sleep time.Duration) {
 // returns the context error if the context is cancelled while blocked or
 // sleeping. A nil receiver returns nil.
 func (p *Pauser) Wait(ctx context.Context) error {
+	return p.applyState(ctx, true)
+}
+
+// WaitForPacing applies baseline and explicit throttle pacing without blocking
+// for a full pause. Use it while a transaction or other resource must be
+// released before the caller can safely honor Pause with Wait.
+func (p *Pauser) WaitForPacing(ctx context.Context) error {
+	return p.applyState(ctx, false)
+}
+
+func (p *Pauser) applyState(ctx context.Context, blockWhilePaused bool) error {
 	if p == nil {
 		return nil
 	}
@@ -283,6 +294,10 @@ func (p *Pauser) Wait(ctx context.Context) error {
 		baselineSleep := baselineSleepForElapsed(
 			baselineElapsed, p.baselineWorkQuantum, p.baselineSleep,
 		)
+		pacingSleep := sleepQuantum
+		if baselineEnabled {
+			pacingSleep = max(pacingSleep, baselineSleep)
+		}
 		baselineExpired := state == stateRunning && baselineEnabled &&
 			baselineElapsed >= p.baselineWorkQuantum
 		p.mu.Unlock()
@@ -310,6 +325,19 @@ func (p *Pauser) Wait(ctx context.Context) error {
 				return ctx.Err()
 			}
 		case statePaused:
+			if !blockWhilePaused {
+				timer := time.NewTimer(pacingSleep)
+				select {
+				case <-timer.C:
+					return nil
+				case <-ch:
+					timer.Stop()
+					continue
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				}
+			}
 			select {
 			case <-ch:
 				// State changed; loop to observe the new state.
