@@ -888,6 +888,10 @@ type UserDBI interface {
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	UpdateMediaHistoryIdentity(dbid int64, identity *MediaIdentity) (bool, error)
+	// UpdateMediaHistoryIdentityAndPath is UpdateMediaHistoryIdentity plus a
+	// MediaPath correction, for backfilling legacy rows recorded under a
+	// non-path external identifier (e.g. a MiSTer arcade set name).
+	UpdateMediaHistoryIdentityAndPath(dbid int64, path string, identity *MediaIdentity) (bool, error)
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
 	GetDistinctMediaHistory(

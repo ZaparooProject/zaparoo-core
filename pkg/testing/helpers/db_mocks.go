@@ -369,6 +369,17 @@ func (m *MockUserDBI) UpdateMediaHistoryIdentity(dbid int64, identity *database.
 	return updated, nil
 }
 
+func (m *MockUserDBI) UpdateMediaHistoryIdentityAndPath(
+	dbid int64, path string, identity *database.MediaIdentity,
+) (bool, error) {
+	args := m.Called(dbid, path, identity)
+	updated := args.Bool(0)
+	if err := args.Error(1); err != nil {
+		return updated, fmt.Errorf("mock UserDBI update media history identity and path failed: %w", err)
+	}
+	return updated, nil
+}
+
 func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
 	args := m.Called(dbid, endTime, playTime)
 	if err := args.Error(0); err != nil {

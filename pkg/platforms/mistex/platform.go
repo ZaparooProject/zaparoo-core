@@ -117,7 +117,7 @@ func (p *Platform) StartPost(
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
-	_ *idle.Scheduler,
+	scheduler *idle.Scheduler,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
@@ -165,6 +165,21 @@ func (p *Platform) StartPost(
 			log.Info().Msgf("arcade database has %d entries", len(m))
 		}
 	}()
+
+	// One-time cleanup: resolve legacy MediaHistory rows recorded under a
+	// bare arcade set name (from before the tracker could canonicalize
+	// externally detected arcade launches) to their real .mra path and
+	// identity. Track the task through the idle scheduler so shutdown waits
+	// for cancellation before closing the databases.
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "arcade-history-backfill",
+			5*time.Second, 300*time.Second,
+			func(ctx context.Context) { tracker.RunArcadeHistoryBackfill(ctx, db, tr) },
+		)
+	} else {
+		log.Debug().Msg("no idle scheduler; skipping arcade history backfill")
+	}
 
 	return nil
 }

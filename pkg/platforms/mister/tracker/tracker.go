@@ -51,6 +51,14 @@ type NameMapping struct {
 	ArcadeName string
 }
 
+// arcadeResolution caches one set name's resolution outcome so a core that
+// stays active (or is re-entered) doesn't re-run the MediaDB search and MRA
+// parses on every LoadCore call.
+type arcadeResolution struct {
+	path string
+	ok   bool
+}
+
 type Tracker struct {
 	pl               platforms.Platform
 	setActiveMedia   func(*models.ActiveMedia)
@@ -58,6 +66,7 @@ type Tracker struct {
 	serviceCtx       context.Context
 	activeMedia      func() *models.ActiveMedia
 	db               *database.Database
+	arcadeResolved   map[string]arcadeResolution
 	ActiveSystemName string
 	ActiveSystem     string
 	ActiveGameID     string
@@ -154,6 +163,9 @@ func (tr *Tracker) ReloadNameMap() {
 	nameMap := generateNameMap(tr.pl)
 	log.Info().Int("count", len(nameMap)).Msg("reloaded name mappings")
 	tr.NameMap = nameMap
+	// Set-name to MRA-path resolutions may change along with the name map
+	// (an ArcadeDatabase.csv update can add or rename entries).
+	tr.arcadeResolved = nil
 }
 
 func (tr *Tracker) LookupCoreName(name string) *NameMapping {
@@ -185,6 +197,27 @@ func (tr *Tracker) LookupCoreName(name string) *NameMapping {
 	}
 
 	return nil
+}
+
+// ResolveExternalMediaPath maps a legacy MediaHistory row's set-name-only
+// MediaPath back to its canonical indexed .mra path, for the arcade history
+// backfill task (arcade_history_backfill.go).
+func (tr *Tracker) ResolveExternalMediaPath(ctx context.Context, systemID, value string) (string, bool) {
+	if systemID != ArcadeSystem || value == "" {
+		return "", false
+	}
+	if tr.db == nil || tr.db.MediaDB == nil {
+		return "", false
+	}
+
+	tr.mu.Lock()
+	mapping := tr.LookupCoreName(value)
+	tr.mu.Unlock()
+	if mapping == nil || mapping.ArcadeName == "" {
+		return "", false
+	}
+
+	return ResolveArcadeSetName(ctx, tr.db.MediaDB, value, mapping.ArcadeName)
 }
 
 func (tr *Tracker) stopCore() bool {
@@ -248,16 +281,27 @@ func (tr *Tracker) LoadCore() {
 	// set arcade core details
 	if result := tr.LookupCoreName(coreName); result != nil && result.ArcadeName != "" {
 		log.Info().Str("arcade_game", result.ArcadeName).Str("setname", result.CoreName).Msg("arcade game detected")
-		err := activegame.SetActiveGame(result.CoreName)
+
+		mraPath, name := tr.resolveArcadeGame(result.CoreName, result.ArcadeName)
+		activeGamePath := result.CoreName
+		if mraPath != "" {
+			activeGamePath = mraPath
+		}
+		err := activegame.SetActiveGame(activeGamePath)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
 		}
 
-		tr.ActiveGameID = coreName
-		tr.ActiveGameName = result.ArcadeName
-		tr.ActiveGamePath = "" // no way to find mra path from CORENAME
+		tr.ActiveGameName = name
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
+		if mraPath != "" {
+			tr.ActiveGameID = fmt.Sprintf("%s/%s", ArcadeSystem, filepath.Base(mraPath))
+			tr.ActiveGamePath = mraPath
+		} else {
+			tr.ActiveGameID = coreName
+			tr.ActiveGamePath = "" // no way to find mra path from CORENAME
+		}
 
 		// Check if this arcade game was recently launched via card scan
 		// If so, suppress duplicate notification
@@ -270,14 +314,71 @@ func (tr *Tracker) LoadCore() {
 			}
 		}
 
+		// Don't overwrite a more authoritative observation of the same game:
+		// a Zaparoo launch or a resolved FILESELECT event may already have
+		// published this canonical .mra path before CORENAME caught up.
+		if mraPath != "" {
+			if active := tr.activeMedia(); active != nil &&
+				active.SystemID == ArcadeSystem && active.Path == mraPath {
+				return
+			}
+		}
+
 		tr.setActiveMedia(models.NewActiveMedia(
 			tr.ActiveSystem,
 			tr.ActiveSystemName,
-			coreName,
+			activeGamePath,
 			tr.ActiveGameName,
 			"", // LauncherID unknown when tracking MiSTer core changes
 		))
 	}
+}
+
+// resolveArcadeGame resolves an externally detected arcade core's set name to
+// its canonical indexed .mra path and display name. On resolution or lookup
+// failure it falls back to the raw set name and the ArcadeDatabase.csv name,
+// matching prior behaviour.
+func (tr *Tracker) resolveArcadeGame(setName, arcadeName string) (mraPath, name string) {
+	name = arcadeName
+	path, ok := tr.lookupArcadeSetPath(setName, arcadeName)
+	if !ok {
+		return "", name
+	}
+
+	if tr.db != nil && tr.db.MediaDB != nil {
+		systems := []systemdefs.System{{ID: ArcadeSystem}}
+		ctx, cancel := tr.mediaLookupContext()
+		results, searchErr := tr.db.MediaDB.SearchMediaPathExact(ctx, systems, path)
+		cancel()
+		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
+			name = results[0].Name
+		}
+	}
+	return path, name
+}
+
+// lookupArcadeSetPath resolves and caches setName's canonical .mra path for
+// the lifetime of the Tracker, or until ReloadNameMap clears the cache.
+// Failed resolutions are retried because MediaDB may still be indexing.
+func (tr *Tracker) lookupArcadeSetPath(setName, arcadeName string) (string, bool) {
+	if cached, found := tr.arcadeResolved[setName]; found {
+		return cached.path, cached.ok
+	}
+
+	var path string
+	var ok bool
+	if tr.db != nil && tr.db.MediaDB != nil {
+		ctx, cancel := tr.mediaLookupContext()
+		path, ok = ResolveArcadeSetName(ctx, tr.db.MediaDB, setName, arcadeName)
+		cancel()
+	}
+	if ok {
+		if tr.arcadeResolved == nil {
+			tr.arcadeResolved = make(map[string]arcadeResolution)
+		}
+		tr.arcadeResolved[setName] = arcadeResolution{path: path, ok: true}
+	}
+	return path, ok
 }
 
 func (tr *Tracker) stopGame() {
@@ -412,10 +513,12 @@ func (tr *Tracker) StopAll() {
 	tr.stopGame()
 }
 
-// resolveRecentGamePath mirrors MiSTer's relative-path root selection. Main
-// stores 0 for SD and nonzero for USB in config/device.bin; USB uses the first
-// available /media/usb0-3 root containing the recent file.
-func resolveRecentGamePath(path string, storageSelection []byte, exists func(string) bool) string {
+// resolveStorageRelativePath mirrors MiSTer's relative-path root selection.
+// Main stores 0 for SD and nonzero for USB in config/device.bin; USB uses the
+// first available /media/usb0-3 root containing the path. Used both for
+// recent-file entries and for the file selector's FULLPATH, which is
+// relative to the active storage root while browsing.
+func resolveStorageRelativePath(path string, storageSelection []byte, exists func(string) bool) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}
@@ -449,7 +552,7 @@ func recentGamePath(filename string, storageSelection []byte) (string, error) {
 	newest := recents[0]
 	if !strings.HasSuffix(filename, "cores_recent.cfg") {
 		path := filepath.Join(newest.Directory, newest.Name)
-		return resolveRecentGamePath(path, storageSelection, func(candidate string) bool {
+		return resolveStorageRelativePath(path, storageSelection, func(candidate string) bool {
 			_, statErr := os.Stat(candidate)
 			return statErr == nil
 		}), nil
@@ -483,37 +586,223 @@ func loadRecent(filename string) error {
 	return nil
 }
 
-// selectedFullPath returns the selected file only after MiSTer publishes
-// FILESELECT=selected. FULLPATH also changes while the user browses, so it is
-// not a launch signal by itself.
-func selectedFullPath(statusData, pathData []byte) (string, error) {
-	if strings.TrimSpace(string(statusData)) != "selected" {
-		return "", nil
-	}
-	path := strings.TrimSpace(string(pathData))
-	if path == "" {
-		return "", errors.New("selected full path is empty")
-	}
-	return path, nil
+// fileSelection is one settled MiSTer native file-selector event: the
+// FILESELECT/FULLPATH/CURRENTPATH trio read together after the selection has
+// stopped changing.
+type fileSelection struct {
+	Status      string
+	FullPath    string
+	CurrentPath string
 }
 
-func loadFileSelection() {
-	statusData, err := os.ReadFile(misterconfig.FileSelectFile)
+func trimTrackerFileContent(data []byte) string {
+	return strings.TrimSpace(strings.Trim(string(data), "\x00"))
+}
+
+// readFileSelectionFrom reads MiSTer's file-selector status trio. FULLPATH
+// and CURRENTPATH are only read once FILESELECT says "selected" - while
+// browsing they hold in-progress state, and MakeFile truncates before
+// writing, so reading them unconditionally risks catching a torn write.
+func readFileSelectionFrom(statusFile, fullPathFile, currentPathFile string) (fileSelection, error) {
+	statusData, err := os.ReadFile(statusFile) // #nosec G304 -- caller passes trusted MiSTer status file paths
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to read MiSTer file selection status")
+		return fileSelection{}, fmt.Errorf("failed to read file selection status: %w", err)
+	}
+	sel := fileSelection{Status: trimTrackerFileContent(statusData)}
+	if sel.Status != "selected" {
+		return sel, nil
+	}
+
+	fullPathData, err := os.ReadFile(fullPathFile) // #nosec G304 -- caller passes trusted MiSTer status file paths
+	if err != nil {
+		return fileSelection{}, fmt.Errorf("failed to read selected full path: %w", err)
+	}
+	// #nosec G304 -- caller passes trusted MiSTer status file paths
+	currentPathData, err := os.ReadFile(currentPathFile)
+	if err != nil {
+		return fileSelection{}, fmt.Errorf("failed to read selected current path: %w", err)
+	}
+	sel.FullPath = trimTrackerFileContent(fullPathData)
+	sel.CurrentPath = trimTrackerFileContent(currentPathData)
+	return sel, nil
+}
+
+// stripExt mirrors the extension stripping MiSTer's get_display_name
+// (file_io.cpp) applies to CURRENTPATH for .mra/.mgl/.rbf files and cores
+// with a single declared extension.
+func stripExt(name string) string {
+	ext := filepath.Ext(name)
+	if ext == "" {
+		return name
+	}
+	return name[:len(name)-len(ext)]
+}
+
+// matchesSelectionName reports whether entryName is the file MiSTer recorded
+// as CURRENTPATH, either verbatim (MGL-driven launches write the full
+// basename) or with its extension stripped (the interactive file selector's
+// altname).
+func matchesSelectionName(entryName, current string) bool {
+	return strings.EqualFold(entryName, current) || strings.EqualFold(stripExt(entryName), current)
+}
+
+// resolveDirEntry finds the single directory entry matching current. An
+// extension-stripped match is only used when it is unambiguous - MiSTer's
+// altname can't otherwise be told apart from a same-named entry with a
+// different extension.
+func resolveDirEntry(entries []os.DirEntry, current string) (string, bool) {
+	for _, e := range entries {
+		if strings.EqualFold(e.Name(), current) {
+			return e.Name(), true
+		}
+	}
+	match, count := "", 0
+	for _, e := range entries {
+		if strings.EqualFold(stripExt(e.Name()), current) {
+			match = e.Name()
+			count++
+		}
+	}
+	if count == 1 {
+		return match, true
+	}
+	return "", false
+}
+
+// composeSelectedPath resolves one settled file-selection event to the
+// concrete path MiSTer launched. sel.FullPath is either an absolute file
+// path (MGL launches, Zaparoo's own writeCurrentPath) or, for the
+// interactive file selector, the browsed directory relative to the active
+// storage root; sel.CurrentPath is the selected entry's display name. A
+// selection this can't confidently resolve (ambiguous match, a name rewritten
+// by names.txt/NeoGeo translation tables, a stale mid-write read) reports
+// ok=false rather than guessing.
+func composeSelectedPath(
+	sel fileSelection,
+	storageSelection []byte,
+	stat func(string) (os.FileInfo, error),
+	readDir func(string) ([]os.DirEntry, error),
+) (path string, ok bool) {
+	if sel.Status != "selected" {
+		return "", false
+	}
+	current := sel.CurrentPath
+	if current == "" || current == ".." {
+		return "", false
+	}
+	if sel.FullPath == "" {
+		return "", false
+	}
+
+	base := resolveStorageRelativePath(sel.FullPath, storageSelection, func(candidate string) bool {
+		_, statErr := stat(candidate)
+		return statErr == nil
+	})
+
+	info, err := stat(base)
+	if err != nil {
+		return "", false
+	}
+	if !info.IsDir() {
+		if !matchesSelectionName(filepath.Base(base), current) {
+			return "", false
+		}
+		return base, true
+	}
+
+	entries, err := readDir(base)
+	if err != nil {
+		return "", false
+	}
+	name, found := resolveDirEntry(entries, current)
+	if !found {
+		return "", false
+	}
+	selected := filepath.Join(base, name)
+
+	selectedInfo, err := stat(selected)
+	if err != nil {
+		return "", false
+	}
+	if !selectedInfo.IsDir() {
+		return selected, true
+	}
+
+	// A disc-style folder holding exactly one file (MiSTer's
+	// MENU_GENERIC_FILE_SELECTED) launches that file directly; a folder with
+	// several files (e.g. a NeoGeo folder set) launches as the directory.
+	innerEntries, err := readDir(selected)
+	if err != nil {
+		return selected, true
+	}
+	onlyFile, fileCount := "", 0
+	for _, e := range innerEntries {
+		if e.IsDir() {
+			continue
+		}
+		fileCount++
+		onlyFile = e.Name()
+	}
+	if fileCount == 1 {
+		return filepath.Join(selected, onlyFile), true
+	}
+	return selected, true
+}
+
+// isSystemOrMenuPath rejects MiSTer's own configuration, script, and core
+// selections so they are never recorded as a launched game: Scripts/, the
+// config folder, linux/, and the file types MiSTer's menu itself opens
+// (cores, filters, presets, scripts, MiSTer.ini variants).
+func isSystemOrMenuPath(path string) bool {
+	if helpers.PathHasPrefix(path, misterconfig.ScriptsDir) ||
+		helpers.PathHasPrefix(path, misterconfig.CoreConfigFolder) ||
+		helpers.PathHasPrefix(path, misterconfig.LinuxDir) {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".rbf", ".ini", ".cfg", ".txt", ".sh":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasSystemLauncher reports whether any launcher in the list identifies a
+// known system, i.e. is a real media launcher rather than MiSTer's generic
+// core/RBF catch-all (which has no SystemID).
+func hasSystemLauncher(launchers []platforms.Launcher) bool {
+	for i := range launchers {
+		if launchers[i].SystemID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// loadFileSelection reads a settled native MiSTer file-selection event and,
+// if it resolves to a trackable game, records it the same way a Zaparoo
+// launch does.
+func (tr *Tracker) loadFileSelection() {
+	sel, err := readFileSelectionFrom(
+		misterconfig.FileSelectFile, misterconfig.FullPathFile, misterconfig.CurrentPathFile,
+	)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to read MiSTer file selection")
 		return
 	}
-	if strings.TrimSpace(string(statusData)) != "selected" {
+
+	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))
+	path, ok := composeSelectedPath(sel, storageSelection, os.Stat, os.ReadDir)
+	if !ok {
 		return
 	}
-	pathData, err := os.ReadFile(misterconfig.FullPathFile)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to read selected MiSTer full path")
+
+	if isSystemOrMenuPath(path) {
+		log.Debug().Str("path", path).Msg("ignoring MiSTer system/menu file selection")
 		return
 	}
-	path, err := selectedFullPath(statusData, pathData)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to process MiSTer file selection")
+	if launchers := helpers.PathToLaunchers(tr.cfg, tr.pl, path); !hasSystemLauncher(launchers) {
+		log.Debug().Str("path", path).Msg("ignoring MiSTer file selection with no matching launcher")
 		return
 	}
 
@@ -566,9 +855,9 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					tr.loadGame()
 				case event.Name == misterconfig.FileSelectFile:
 					// MakeFile truncates before writing the new status. Wait for
-					// FILESELECT and FULLPATH to contain the same selection without
-					// blocking delivery of later watcher events.
-					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), loadFileSelection)
+					// FILESELECT, FULLPATH, and CURRENTPATH to settle as one event
+					// without blocking delivery of later watcher events.
+					dispatchTrackerFileLoad(time.After(trackerFileSettleDelay), tr.loadFileSelection)
 				case trackerRecentFileChanged(event.Name):
 					// MiSTer truncates and rewrites binary recent files. Let the
 					// write settle before reading the first complete record without
