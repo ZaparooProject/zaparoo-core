@@ -267,8 +267,8 @@ func TestApplyRetention_KeepsNewestPerChannel(t *testing.T) {
 	t.Parallel()
 
 	tags := []string{
-		"v2.10.0", "v2.11.0-beta1", "v2.11.0", "v2.12.0-beta1",
-		"v2.12.0", "v2.13.0-beta1", "v2.13.0",
+		"v2.10.0", "v2.11.0-beta.1", "v2.11.0", "v2.12.0-beta.1",
+		"v2.12.0", "v2.13.0-beta.1", "v2.13.0",
 	}
 	channels := []string{
 		channelStable, channelBeta, channelStable, channelBeta,
@@ -278,8 +278,8 @@ func TestApplyRetention_KeepsNewestPerChannel(t *testing.T) {
 
 	dropped := applyRetention(m, 2, 1, 0)
 
-	assert.Equal(t, []string{"v2.10.0", "v2.11.0", "v2.11.0-beta1", "v2.12.0-beta1"}, dropped)
-	assert.Equal(t, []string{"v2.12.0", "v2.13.0-beta1", "v2.13.0"}, tagsOf(m),
+	assert.Equal(t, []string{"v2.10.0", "v2.11.0", "v2.11.0-beta.1", "v2.12.0-beta.1"}, dropped)
+	assert.Equal(t, []string{"v2.12.0", "v2.13.0-beta.1", "v2.13.0"}, tagsOf(m),
 		"surviving releases keep their original order")
 }
 
@@ -287,7 +287,7 @@ func TestApplyRetention_TruncatesSupersededNotes(t *testing.T) {
 	t.Parallel()
 
 	m := newTestManifest(t,
-		[]string{"v2.16.0", "v2.16.1", "v2.17.0-beta1"},
+		[]string{"v2.16.0", "v2.16.1", "v2.17.0-beta.1"},
 		[]string{channelStable, channelStable, channelBeta},
 	)
 	long := strings.Repeat("a", 4000)
@@ -301,7 +301,7 @@ func TestApplyRetention_TruncatesSupersededNotes(t *testing.T) {
 	assert.Len(t, findRelease(m, "v2.16.0").ReleaseNotes, 100+len(notesTruncationMarker))
 	assert.Equal(t, long, findRelease(m, "v2.16.1").ReleaseNotes,
 		"the newest stable release keeps its full notes")
-	assert.Equal(t, long, findRelease(m, "v2.17.0-beta1").ReleaseNotes,
+	assert.Equal(t, long, findRelease(m, "v2.17.0-beta.1").ReleaseNotes,
 		"the newest beta release keeps its full notes")
 }
 

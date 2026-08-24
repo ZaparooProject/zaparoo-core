@@ -60,7 +60,7 @@ tasks:
     vars:
       BUILD_DIR: '{{.BUILD_DIR | default "_build/packages/batocera"}}'
       TEMPLATE_DIR: '{{.TEMPLATE_DIR | default "scripts/batocera/template"}}'
-      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta.1 -> 2.8.0_beta.1)
       PKG_VERSION: '{{.VERSION | replace "-" "_"}}'
       PACKAGE_NAME: zaparoo-core-{{.PKG_VERSION}}-1-{{.PKG_ARCH}}
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
@@ -110,7 +110,7 @@ tasks:
     vars:
       TEMPLATE_DIR: scripts/batocera/template
       BUILD_DIR: _build/packages/batocera
-      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta.1 -> 2.8.0_beta.1)
       PKG_VERSION: '{{.APP_VERSION | replace "-" "_"}}'
       PACKAGE_NAME: zaparoo-core-{{.PKG_VERSION}}-1-any
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
@@ -152,7 +152,7 @@ tasks:
     vars:
       TEMPLATE_DIR: scripts/batocera/template
       BUILD_DIR: _build/packages/batocera
-      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta.1 -> 2.8.0_beta.1)
       PKG_VERSION: '{{.APP_VERSION | replace "-" "_"}}'
       PACKAGE_NAME: zaparoo-core-{{.PKG_VERSION}}-1-any
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
@@ -205,7 +205,7 @@ tasks:
     desc: Build universal package and deploy to Batocera system
     vars:
       BATOCERA_HOST: '{{.BATOCERA_HOST | default "root@${BATOCERA_IP}"}}'
-      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta.1 -> 2.8.0_beta.1)
       PKG_VERSION: '{{.APP_VERSION | replace "-" "_"}}'
     cmds:
       - task: package-any
