@@ -2569,6 +2569,10 @@ func TestDirectoryWalkWorkers_ConstrainedOrRestricted(t *testing.T) {
 	paused := syncutil.NewPauser()
 	paused.Pause()
 	assert.Equal(t, 1, directoryWalkWorkers(false, paused), "paused pauser")
+
+	baseline := syncutil.NewPauser()
+	baseline.SetBaselineThrottle(syncutil.ThrottleBackground)
+	assert.Equal(t, 1, directoryWalkWorkers(false, baseline), "baseline-paced pauser")
 }
 
 // TestGetFiles_PausedPauserInterruptsWalk verifies GetFiles periodically

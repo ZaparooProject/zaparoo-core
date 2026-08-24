@@ -21,7 +21,9 @@ package assets
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,8 +32,12 @@ import (
 func resetSystemMetadataCache(t *testing.T) {
 	t.Helper()
 	systemMetadataCache = sync.Map{}
+	systemMetadataLoads = sync.Map{}
+	readSystemMetadataFile = Systems.ReadFile
 	t.Cleanup(func() {
 		systemMetadataCache = sync.Map{}
+		systemMetadataLoads = sync.Map{}
+		readSystemMetadataFile = Systems.ReadFile
 	})
 }
 
@@ -69,6 +75,13 @@ func TestGetSystemMetadata_UsesCanonicalCacheEntry(t *testing.T) {
 func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	resetSystemMetadataCache(t)
 
+	var reads atomic.Int32
+	readSystemMetadataFile = func(name string) ([]byte, error) {
+		reads.Add(1)
+		time.Sleep(10 * time.Millisecond)
+		return Systems.ReadFile(name)
+	}
+
 	const callers = 32
 	results := make(chan SystemMetadata, callers)
 	errs := make(chan error, callers)
@@ -92,4 +105,5 @@ func TestGetSystemMetadata_ConcurrentCalls(t *testing.T) {
 	for metadata := range results {
 		assert.Equal(t, "Genesis", metadata.ID)
 	}
+	assert.Equal(t, int32(1), reads.Load())
 }

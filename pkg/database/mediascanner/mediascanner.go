@@ -602,7 +602,7 @@ func filterRunnableSystems(
 }
 
 func directoryWalkWorkers(resourceConstrained bool, pauser *syncutil.Pauser) int {
-	if resourceConstrained || pauser.IsThrottled() || pauser.IsPaused() {
+	if resourceConstrained || pauser.HasBaselineThrottle() || pauser.IsThrottled() || pauser.IsPaused() {
 		return 1
 	}
 	return 0
