@@ -2508,7 +2508,7 @@ An object:
 
 List systems currently indexed or supported by an available launcher on the running platform. Virtual systems are also included.
 
-Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index.
+Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index. On MiSTer, a launcher whose FPGA core isn't installed on the SD card counts as unavailable, so without `all` the system list reflects only systems you can currently launch. See [launchers](#launchers) to check which core a launcher needs.
 
 Responses include an exact non-missing `mediaCount` for each system when the media database count query succeeds. Supported systems with no indexed media have `mediaCount: 0`. The field is omitted if counts are unavailable, preserving compatibility with older clients and database-error fallback behavior.
 
@@ -4351,22 +4351,40 @@ List all launchers known to the running service. Suitable for populating a UI la
 
 #### Parameters
 
-None.
+| Key         | Type     | Required | Description                                                                                        |
+| :---------- | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| systems     | string[] | No       | Case-insensitive list of system IDs to restrict results to. A missing key or empty list returns every launcher. Values not matching any launcher's system return no launchers for that value, rather than an error, since launcher system IDs can be launchable or virtual systems outside the standard system list. |
+| fuzzySystem | boolean  | No       | Also resolve a system-ID alias to its canonical ID before matching (e.g., `"megadrive"` matches `"Genesis"`). Matching is always case-insensitive regardless of this flag.       |
+
+The unfiltered response can be large on platforms with many launchers (250+ on MiSTer). Pass `systems` to scope the request when looking up a specific system's launchers.
 
 #### Result
 
 | Key       | Type                                  | Required | Description                  |
 | :-------- | :------------------------------------ | :------- | :--------------------------- |
-| launchers | [Launcher](#launcher-object)[] | Yes      | All cached launchers, sorted by `systemId` then `id`. |
+| launchers | [Launcher](#launcher-object)[] | Yes      | Matching cached launchers, sorted by `systemId` then `id`. |
 
 ##### Launcher object
 
-| Key        | Type     | Required | Description                                                                                            |
-| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
-| id         | string   | Yes      | Unique launcher identifier.                                                                            |
-| systemId   | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
-| systemName | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
-| groups     | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+| Key                 | Type     | Required | Description                                                                                            |
+| :------------------ | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
+| id                  | string   | Yes      | Unique launcher identifier.                                                                            |
+| systemId            | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
+| systemName          | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
+| groups              | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+| available           | boolean  | Yes      | Whether this launcher's runtime dependencies are currently satisfied.                                  |
+| availabilityReason  | string   | No       | Why the launcher is unavailable. Omitted when `available` is `true`.                                   |
+| default             | boolean  | No       | Whether this launcher is the configured default for its system (`systemDefaults.launcher`, matched by launcher ID or by any of `groups`). Omitted (implicitly `false`) otherwise.                                    |
+| backend             | string   | No       | What kind of thing this launcher runs. Currently only `mister_core` is emitted. Omitted when the platform has nothing to say about this launcher. Clients must ignore backend values they don't recognize. |
+| misterCore          | [MisterCoreInfo](#mistercoreinfo-object) | No | Present when `backend` is `mister_core` and the core is installed. Absent when the core isn't installed; `available` and `availabilityReason` say why. |
+
+##### MisterCoreInfo object
+
+| Key     | Type   | Required | Description                                                                                     |
+| :------ | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| name    | string | Yes      | RBF short name, e.g. `"3DO"`.                                                                     |
+| file    | string | Yes      | Installed RBF filename, e.g. `"3DO_20250101.rbf"`. Identifies the installed core version.         |
+| mglPath | string | Yes      | SD-relative core identity used to launch it, e.g. `"_Console (Dual SDRAM)/3DO"`. Never an absolute filesystem path. |
 
 #### Example
 
@@ -4376,7 +4394,10 @@ None.
 {
   "jsonrpc": "2.0",
   "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
-  "method": "launchers"
+  "method": "launchers",
+  "params": {
+    "systems": ["3DO"]
+  }
 }
 ```
 
@@ -4389,16 +4410,25 @@ None.
   "result": {
     "launchers": [
       {
-        "id": "retroarch",
-        "systemId": "Genesis",
-        "systemName": "Genesis",
-        "groups": ["libretro"]
+        "id": "3DO",
+        "systemId": "3DO",
+        "systemName": "3DO",
+        "available": true,
+        "default": true,
+        "backend": "mister_core",
+        "misterCore": {
+          "name": "3DO",
+          "file": "3DO_20250101.rbf",
+          "mglPath": "_Console/3DO"
+        }
       },
       {
-        "id": "snes9x",
-        "systemId": "SNES",
-        "systemName": "Super Nintendo",
-        "groups": ["libretro"]
+        "id": "DualRAM3DO",
+        "systemId": "3DO",
+        "systemName": "3DO",
+        "available": false,
+        "availabilityReason": "core not installed: _Console (Dual SDRAM)/3DO",
+        "backend": "mister_core"
       }
     ]
   }

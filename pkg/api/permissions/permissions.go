@@ -58,9 +58,18 @@ const (
 	// with PIN) but none of the capabilities that could weaken another
 	// person's limits.
 	RoleMember Role = "member"
+	// RoleRemote is assigned only by the device's own remote-operations
+	// dispatcher, never by pairing (it is deliberately excluded from
+	// ValidRole). It grants nothing today and never inherits whatever
+	// RoleMember grows into later — the capability an allowlisted remote
+	// operation runs with must always be visible in roleCapabilities, not
+	// borrowed from a role that can change independently.
+	RoleRemote Role = "remote"
 )
 
-// ValidRole reports whether s is a recognized role name.
+// ValidRole reports whether s is a recognized pairing role name. RoleRemote
+// is intentionally excluded: it is not a role a client can pair as, only one
+// the device assigns internally to remote-operation requests.
 func ValidRole(s string) bool {
 	return s == string(RoleAdmin) || s == string(RoleMember)
 }
@@ -108,6 +117,7 @@ var roleCapabilities = map[Role]map[Capability]bool{
 		CapUpdateApply:    true,
 	},
 	RoleMember: {},
+	RoleRemote: {},
 }
 
 // Grant describes the authority of a single request.
@@ -125,13 +135,18 @@ type Grant struct {
 // EffectiveRole resolves the request's role: local connections and
 // unpaired remote requests are admin (see the package doc for why), a
 // paired identity uses its stored role (unknown values degrade to
-// member), and a voluntary session downgrade to member always wins.
+// member), RoleRemote passes through unchanged (it never has more
+// authority than its own always-empty capability set), and a voluntary
+// session downgrade to member always wins.
 func (g Grant) EffectiveRole() Role {
 	role := RoleAdmin
 	if !g.IsLocal && g.Role != "" {
-		if g.Role == RoleAdmin {
+		switch g.Role {
+		case RoleAdmin:
 			role = RoleAdmin
-		} else {
+		case RoleRemote:
+			role = RoleRemote
+		default:
 			// Member, or an unrecognized role: least privilege.
 			role = RoleMember
 		}

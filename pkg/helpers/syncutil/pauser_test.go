@@ -102,6 +102,39 @@ func TestPauser_WaitReturnsCancelledContext(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+func TestPauser_WaitForPacingReturnsImmediatelyWhenNotPaused(t *testing.T) {
+	p := NewPauser()
+	err := p.WaitForPacing(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestPauser_WaitForPacingBoundsRaceAgainstConcurrentPause pins a race where
+// an earlier WaitForPacing read the pauser as not paused, then Pause landed
+// before the wait actually observed state: if that read and the wait are two
+// separate lock acquisitions, the wait can still take the blocking branch and
+// never return since Resume is never called here. Racing many fresh pausers
+// gives the scheduler many chances to land Pause inside that window; every
+// call must still return within the bounded duty cycle regardless.
+func TestPauser_WaitForPacingBoundsRaceAgainstConcurrentPause(t *testing.T) {
+	const iterations = 50
+	for i := range iterations {
+		p := NewPauser()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- p.WaitForPacing(context.Background())
+		}()
+		go p.Pause()
+
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("WaitForPacing blocked past its bounded duty cycle on iteration %d", i)
+		}
+	}
+}
+
 func TestPauser_PauseIsIdempotent(t *testing.T) {
 	p := NewPauser()
 	p.Pause()

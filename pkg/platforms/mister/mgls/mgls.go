@@ -350,7 +350,17 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 	if err != nil {
 		return fmt.Errorf("resolving core RBF: %w", err)
 	}
-	path := rbfInfo.Path
+	return loadCoreAtPath(rbfInfo.Path)
+}
+
+// LaunchCoreAtRBF loads an already-resolved RBF directly, bypassing system-ID
+// based resolution. Used when a caller has picked a specific launcher/alt core
+// rather than the system's default.
+func LaunchCoreAtRBF(rbfInfo cores.RBFInfo) error {
+	return loadCoreAtPath(rbfInfo.Path)
+}
+
+func loadCoreAtPath(path string) error {
 	validationErr := validateLoadCorePath(path)
 	if validationErr != nil {
 		return validationErr

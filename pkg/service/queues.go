@@ -95,7 +95,8 @@ func isExpectedLaunchError(err error) bool {
 	return errors.Is(err, zapscript.ErrFileNotFound) ||
 		errors.Is(err, zapscript.ErrNoPlaylistActive) ||
 		errors.Is(err, state.ErrLaunchInProgress) ||
-		errors.Is(err, systemdefs.ErrUnknownSystem)
+		errors.Is(err, systemdefs.ErrUnknownSystem) ||
+		errors.Is(err, state.ErrRunZapScriptDisabled)
 }
 
 func runTokenZapScript(
@@ -125,23 +126,27 @@ func runTokenZapScriptWithContext(
 ) error {
 	if !svc.State.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
-		return nil
+		return state.ErrRunZapScriptDisabled
 	}
 
 	originToken := token
-	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
-	if hasMapping {
-		log.Info().Msgf("found mapping: %s", mappedValue)
-		token.Text = mappedValue
+	cmds := token.Commands
+	if len(cmds) == 0 {
+		mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
+		if hasMapping {
+			log.Info().Msgf("found mapping: %s", mappedValue)
+			token.Text = mappedValue
+		}
+
+		reader := gozapscript.NewParser(token.Text)
+		script, err := reader.ParseScript()
+		if err != nil {
+			return fmt.Errorf("failed to parse script: %w", err)
+		}
+		cmds = script.Cmds
 	}
 
-	reader := gozapscript.NewParser(token.Text)
-	script, err := reader.ParseScript()
-	if err != nil {
-		return fmt.Errorf("failed to parse script: %w", err)
-	}
-
-	log.Info().Msgf("running script (%d cmds)", len(script.Cmds))
+	log.Info().Msgf("running script (%d cmds)", len(cmds))
 
 	currentPrimary := plsc.Active
 	currentBackground := plsc.Background
@@ -159,7 +164,6 @@ func runTokenZapScriptWithContext(
 		plsc.HoldToken = nil
 	}
 
-	cmds := script.Cmds
 	for i := 0; i < len(cmds); i++ {
 		cmd := cmds[i]
 
@@ -180,7 +184,7 @@ func runTokenZapScriptWithContext(
 			launching := buildLaunchingContext(cmd)
 			hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, launching)
 			hookErr := runTokenZapScriptWithContext(runCtx, svc, hookToken, hookPlsc, &hookEnv, true)
-			if hookErr != nil {
+			if hookErrorBlocks(hookErr) {
 				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
 			}
 		}
@@ -220,7 +224,7 @@ func runTokenZapScriptWithContext(
 			},
 			token,
 			cmd,
-			len(script.Cmds),
+			len(cmds),
 			i,
 			svc.DB,
 			zapscript.RunCommandOptions{
@@ -429,7 +433,12 @@ func launchPlaylistMedia(
 	}
 
 	err := runTokenZapScript(svc, t, plsc, nil, false)
-	if err != nil {
+	// ErrRunZapScriptDisabled already logged its own Warn inside
+	// runTokenZapScriptWithContext; treat it as the prior silent-no-op
+	// success, not a launch failure, so a disabled setting doesn't play a
+	// fail sound or record a failed history entry.
+	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
+	if err != nil && !disabled {
 		if isExpectedLaunchError(err) {
 			log.Warn().Err(err).Msgf("error launching token")
 		} else {
@@ -463,7 +472,7 @@ func launchPlaylistMedia(
 		MonotonicStart: monotonicStart,
 		CreatedAt:      now,
 	}
-	he.Success = err == nil
+	he.Success = err == nil || disabled
 	err = svc.DB.UserDB.AddHistory(&he)
 	if err != nil {
 		log.Error().Err(err).Msgf("error adding history")
@@ -743,20 +752,23 @@ func processTokenQueue(
 				}
 
 				err = runTokenZapScript(svc, t, plsc, nil, false)
-				if err != nil {
+				// ErrRunZapScriptDisabled already logged its own Warn inside
+				// runTokenZapScriptWithContext; treat it as the prior
+				// silent-no-op success, not a launch failure, so a disabled
+				// setting doesn't play a fail sound or record a failed
+				// history entry.
+				disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
+				if err != nil && !disabled {
 					if isExpectedLaunchError(err) {
 						log.Warn().Err(err).Msgf("error launching token")
 					} else {
 						log.Error().Err(err).Msgf("error launching token")
 					}
-				}
-
-				if err != nil {
 					path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 					helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 				}
 
-				he.Success = err == nil
+				he.Success = err == nil || disabled
 				err = svc.DB.UserDB.AddHistory(&he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")

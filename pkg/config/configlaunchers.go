@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
@@ -68,8 +69,11 @@ type LaunchersDefault struct {
 const (
 	CustomLauncherKindLauncher      = "launcher"
 	CustomLauncherKindVirtualSystem = "virtual_system"
-	CustomLauncherBackendCommand    = "command"
-	CustomLauncherBackendMisterCore = "mister_core"
+	// CustomLauncherBackendCommand and CustomLauncherBackendMisterCore alias
+	// the shared backend vocabulary in pkg/api/models so config and the API
+	// response never drift apart.
+	CustomLauncherBackendCommand    = models.LauncherBackendCommand
+	CustomLauncherBackendMisterCore = models.LauncherBackendMisterCore
 )
 
 type LaunchersCustom struct {

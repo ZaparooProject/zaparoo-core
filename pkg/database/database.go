@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -836,6 +837,28 @@ type ScanReconcileStats struct {
 }
 
 // JournalMode represents SQLite journal mode
+// RemoteCommand is one durable typed-operation ledger entry. State changes
+// are persisted before side effects so a crash can never cause re-execution.
+//
+//nolint:govet // Field grouping follows persisted lifecycle semantics.
+type RemoteCommand struct {
+	DeadlineAt         time.Time
+	ExecutionExpiresAt *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Origin             json.RawMessage
+	Result             json.RawMessage
+	CommandID          string
+	OperationID        string
+	OperationType      string
+	ParamsDigest       string
+	State              string
+	ResultStatus       string
+	ErrorCode          string
+	ProtocolVersion    int
+	ResultReported     bool
+}
+
 type JournalMode string
 
 // Journal mode constants
@@ -924,6 +947,15 @@ type UserDBI interface {
 	SetDeviceState(key, value string) error
 	GetDeviceState(key string) (string, bool, error)
 	DeleteDeviceState(key string) error
+	ClaimRemoteCommand(command *RemoteCommand) (*RemoteCommand, bool, error)
+	TransitionRemoteCommand(commandID, fromState, toState string, executionExpiresAt *time.Time) (bool, error)
+	StoreRemoteCommandResult(
+		commandID, fromState, status string, result json.RawMessage, errorCode string,
+	) (bool, error)
+	MarkRemoteCommandResultReported(commandID string) error
+	ListUnreportedRemoteCommands(limit int) ([]RemoteCommand, error)
+	ListRecentRemoteCommands(limit int) ([]RemoteCommand, error)
+	PruneRemoteCommands(before time.Time) (int64, error)
 	Backup(reason string, manual bool) (BackupInfo, error)
 	BackupForUpdate(targetVersion string) (BackupInfo, func() error, error)
 	BackupForTransfer(ctx context.Context, reason string) (BackupInfo, func() error, error)

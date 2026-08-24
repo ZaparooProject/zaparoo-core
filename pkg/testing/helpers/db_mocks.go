@@ -47,6 +47,7 @@ package helpers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -771,6 +772,77 @@ func (m *MockUserDBI) DeleteDeviceState(key string) error {
 		return fmt.Errorf("mock UserDBI delete device state failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockUserDBI) ClaimRemoteCommand(
+	command *database.RemoteCommand,
+) (*database.RemoteCommand, bool, error) {
+	args := m.Called(command)
+	stored, ok := args.Get(0).(*database.RemoteCommand)
+	if !ok && args.Get(0) != nil {
+		return nil, false, errors.New("mock UserDBI claim remote command returned invalid command")
+	}
+	if err := args.Error(2); err != nil {
+		return stored, args.Bool(1), fmt.Errorf("mock UserDBI claim remote command failed: %w", err)
+	}
+	return stored, args.Bool(1), nil
+}
+
+func (m *MockUserDBI) TransitionRemoteCommand(
+	commandID, fromState, toState string, executionExpiresAt *time.Time,
+) (bool, error) {
+	args := m.Called(commandID, fromState, toState, executionExpiresAt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserDBI) StoreRemoteCommandResult(
+	commandID, fromState, status string, result json.RawMessage, errorCode string,
+) (bool, error) {
+	args := m.Called(commandID, fromState, status, result, errorCode)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserDBI) MarkRemoteCommandResultReported(commandID string) error {
+	if err := m.Called(commandID).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI mark remote command result reported failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ListUnreportedRemoteCommands(limit int) ([]database.RemoteCommand, error) {
+	args := m.Called(limit)
+	commands, ok := args.Get(0).([]database.RemoteCommand)
+	if !ok && args.Get(0) != nil {
+		return nil, errors.New("mock UserDBI list unreported remote commands returned invalid list")
+	}
+	if err := args.Error(1); err != nil {
+		return commands, fmt.Errorf("mock UserDBI list unreported remote commands failed: %w", err)
+	}
+	return commands, nil
+}
+
+func (m *MockUserDBI) ListRecentRemoteCommands(limit int) ([]database.RemoteCommand, error) {
+	args := m.Called(limit)
+	commands, ok := args.Get(0).([]database.RemoteCommand)
+	if !ok && args.Get(0) != nil {
+		return nil, errors.New("mock UserDBI list recent remote commands returned invalid list")
+	}
+	if err := args.Error(1); err != nil {
+		return commands, fmt.Errorf("mock UserDBI list recent remote commands failed: %w", err)
+	}
+	return commands, nil
+}
+
+func (m *MockUserDBI) PruneRemoteCommands(before time.Time) (int64, error) {
+	args := m.Called(before)
+	removed, ok := args.Get(0).(int64)
+	if !ok {
+		return 0, errors.New("mock UserDBI prune remote commands returned invalid count")
+	}
+	if err := args.Error(1); err != nil {
+		return removed, fmt.Errorf("mock UserDBI prune remote commands failed: %w", err)
+	}
+	return removed, nil
 }
 
 func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, error) {

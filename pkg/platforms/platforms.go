@@ -477,6 +477,25 @@ type LauncherRefreshProvider interface {
 	RefreshLauncherDependencies() error
 }
 
+// LauncherRuntimeProvider is optionally implemented by platforms that can
+// describe what a launcher actually runs — an FPGA core, a libretro core, an
+// executable. Implementations must be read-only and cheap: they are called
+// once per launcher per request and must not touch the filesystem or trigger
+// a rescan. A zero models.LauncherRuntime means the platform has nothing to
+// say about that launcher.
+type LauncherRuntimeProvider interface {
+	LauncherRuntime(cfg *config.Instance, l *Launcher) models.LauncherRuntime
+}
+
+// SystemLauncherSelector is optionally implemented by platforms where a
+// system can run under more than one launcher (e.g. a MiSTer alt core) and a
+// caller needs to pick which one, with no media loaded. Callers must verify
+// launcher.SystemID matches systemID before calling; implementations are not
+// required to check it themselves.
+type SystemLauncherSelector interface {
+	LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *Launcher) error
+}
+
 // TrackedProcessWaiter is optionally implemented by platforms that coordinate
 // process waiting with StopActiveLauncher. Exactly one caller must reap a process.
 type TrackedProcessWaiter interface {

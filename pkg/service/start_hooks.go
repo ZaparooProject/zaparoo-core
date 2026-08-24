@@ -69,6 +69,17 @@ func runServiceHook(svc *ServiceContext, hookName, script string, firstBootStart
 	return runTokenZapScript(svc, t, plsc, &env, false)
 }
 
+// logHookError logs a hook-launch failure at the level its cause deserves:
+// expected conditions (ZapScript disabled, launch already in progress, and
+// similar) at Warn, everything else at Error.
+func logHookError(err error, hookName string) {
+	if isExpectedLaunchError(err) {
+		log.Warn().Err(err).Msgf("skipped %s script", hookName)
+		return
+	}
+	log.Error().Err(err).Msgf("error running %s script", hookName)
+}
+
 func runConfiguredServiceHooks(svc *ServiceContext) {
 	firstBootStart, err := isFirstServiceStartForBoot(svc.Platform)
 	if err != nil {
@@ -83,7 +94,7 @@ func runConfiguredServiceHooks(svc *ServiceContext) {
 		switch {
 		case firstBootStart:
 			if err = runServiceHook(svc, "on_boot", script, firstBootStart); err != nil {
-				log.Error().Err(err).Msg("error running on_boot script")
+				logHookError(err, "on_boot")
 			}
 		default:
 			log.Debug().Msg("skipping on_boot: already ran during this boot")
@@ -93,7 +104,7 @@ func runConfiguredServiceHooks(svc *ServiceContext) {
 	if script := svc.Config.ServiceOnReady(); script != "" {
 		waitForServiceReady(svc)
 		if err := runServiceHook(svc, "on_ready", script, firstBootStart); err != nil {
-			log.Error().Err(err).Msg("error running on_ready script")
+			logHookError(err, "on_ready")
 		}
 	}
 }

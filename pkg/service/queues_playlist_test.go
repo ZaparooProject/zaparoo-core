@@ -256,6 +256,39 @@ func TestRunTokenZapScript_NoPlaylistClearForNonMediaCommand(t *testing.T) {
 	}
 }
 
+// TestLaunchPlaylistMedia_DisabledRunZapScriptDoesNotPlayFailSoundOrRecordFailure
+// pins that a disabled "run ZapScript" setting is treated as the prior
+// silent-no-op success, not a launch failure: runTokenZapScriptWithContext
+// returns state.ErrRunZapScriptDisabled (rather than nil) so remote
+// operations can report a distinct "disabled" result, but that must not
+// leak into physical/playlist launches as a fail sound plus a failed
+// history entry.
+func TestLaunchPlaylistMedia_DisabledRunZapScriptDoesNotPlayFailSoundOrRecordFailure(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	svc.Config.SetAudioFeedback(true)
+	svc.State.SetRunZapScript(false)
+
+	mockUserDB, ok := svc.DB.UserDB.(*testhelpers.MockUserDBI)
+	require.True(t, ok)
+	var recorded *database.HistoryEntry
+	mockUserDB.On("AddHistory", mock.Anything).Run(func(args mock.Arguments) {
+		recorded, ok = args.Get(0).(*database.HistoryEntry)
+		require.True(t, ok)
+	}).Return(nil).Once()
+
+	mockPlayer := mocks.NewMockPlayer()
+
+	launchPlaylistMedia(svc, makeServicePlaylist(), mockPlayer)
+
+	require.NotNil(t, recorded)
+	assert.True(t, recorded.Success, "a disabled RunZapScript setting must record success, not a failure")
+	mockPlayer.AssertNotCalled(t, "PlayBytes", mock.Anything)
+	mockPlayer.AssertNotCalled(t, "PlayFile", mock.Anything)
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestHandlePlaylist_BackgroundSlotUpdatesBackgroundStateOnly(t *testing.T) {
 	t.Parallel()
 

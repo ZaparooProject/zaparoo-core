@@ -288,7 +288,7 @@ func runBeforeExitHook(
 			}
 
 			if err := runHook(svc, "before_exit", defaults.BeforeExit, nil, nil); err != nil {
-				log.Error().Err(err).Msg("error running before_exit script")
+				logHookError(err, "before_exit")
 			}
 
 			break
@@ -633,15 +633,14 @@ preprocessing:
 			}
 			activeRemovalHook.cancel()
 			activeRemovalHook = nil
-			if hookResult.err != nil {
-				if errors.Is(hookResult.err, context.Canceled) {
-					log.Debug().Msg("on_remove hook cancelled")
-				} else {
-					log.Warn().Err(hookResult.err).Msg("on_remove hook blocked exit, media will keep running")
-				}
-				continue preprocessing
+			switch {
+			case !hookErrorBlocks(hookResult.err):
+				scheduleHoldRemoval(&hookResult.token)
+			case errors.Is(hookResult.err, context.Canceled):
+				log.Debug().Msg("on_remove hook cancelled")
+			default:
+				log.Warn().Err(hookResult.err).Msg("on_remove hook blocked exit, media will keep running")
 			}
-			scheduleHoldRemoval(&hookResult.token)
 			continue preprocessing
 		case stoken := <-svc.LaunchSoftwareQueue:
 			// A token has launched primary software and now owns hold-mode exit.
@@ -854,7 +853,7 @@ preprocessing:
 					Value: scan.Text,
 					Data:  scan.Data,
 				}
-				if err := runHook(svc, "on_scan", onScanScript, scanned, nil); err != nil {
+				if err := runHook(svc, "on_scan", onScanScript, scanned, nil); hookErrorBlocks(err) {
 					log.Warn().Err(err).Msg("on_scan hook blocked token processing")
 					continue preprocessing
 				}
@@ -1006,7 +1005,7 @@ preprocessing:
 					)
 					continue preprocessing
 				}
-				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
+				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); hookErrorBlocks(err) {
 					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
 					continue preprocessing
 				}

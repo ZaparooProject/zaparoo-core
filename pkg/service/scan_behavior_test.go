@@ -509,6 +509,30 @@ func TestScanBehavior_HoldImmediate_RemovalClosesGame(t *testing.T) {
 	env.waitForStop(t)
 }
 
+// TestScanBehavior_HoldImmediate_OnRemoveDisabledZapScriptStillClosesGame pins
+// that a disabled "run ZapScript" setting is treated as the on_remove hook's
+// prior silent no-op, not a hook failure: without hookErrorBlocks excluding
+// the sentinel, readers.go's on_remove call site would treat it as a real
+// hook failure and leave the game running on removal.
+func TestScanBehavior_HoldImmediate_OnRemoveDisabledZapScriptStillClosesGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = "**echo:should not run"`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	// Disable only after the game is running, since this also gates the
+	// launch command itself, not just the on_remove hook under test.
+	env.st.SetRunZapScript(false)
+
+	env.sendRemoval()
+	env.waitForStop(t)
+}
+
 func TestScanBehavior_HoldImmediate_FastRemovalClosesAfterLaunchOwnershipArrives(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 0)
@@ -620,6 +644,34 @@ on_remove = '**delay:10||**input.keyboard:{escape}'`))
 	env.sendRemoval()
 	require.Equal(t, "{escape}", env.waitForKeyboard(t))
 	env.waitForStop(t)
+}
+
+// TestScanBehavior_HoldDelayedOnRemove_DisabledZapScriptStillClosesGame pins
+// the same fix as the immediate on_remove variant, for the delayed hook path
+// consumed via removalHookResults: a disabled "run ZapScript" setting must
+// not block the exit, and since the whole hook script (including its delay
+// command) never runs when disabled, the keyboard command it would have sent
+// must not fire either.
+func TestScanBehavior_HoldDelayedOnRemove_DisabledZapScriptStillClosesGame(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+	require.NoError(t, env.cfg.LoadTOML(`[readers.scan]
+mode = "hold"
+on_remove = '**delay:10||**input.keyboard:{escape}'`))
+
+	env.sendGameScan("game1", env.gamePath("game.rom"))
+	env.waitForLaunch(t)
+	env.waitForSoftwareToken(t)
+
+	env.st.SetRunZapScript(false)
+
+	env.sendRemoval()
+	env.waitForStop(t)
+	select {
+	case key := <-env.keyboardCh:
+		t.Fatalf("unexpected keyboard command from a hook that should not have run: %s", key)
+	case <-time.After(noEventWait):
+	}
 }
 
 func TestScanBehavior_HoldDelayed_RemovalClosesAfterDelay(t *testing.T) {

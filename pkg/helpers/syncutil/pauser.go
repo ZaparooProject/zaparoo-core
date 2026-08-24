@@ -275,6 +275,13 @@ func (p *Pauser) WaitForPacing(ctx context.Context) error {
 	return p.applyState(ctx, false)
 }
 
+// applyState is the shared state machine behind Wait and WaitForPacing.
+// Reading state exactly once per loop iteration under a single lock
+// acquisition, then branching on blockWhilePaused within that same
+// iteration, avoids a race a separate "check IsPaused, then call Wait" split
+// would leave open: Pause landing between those two acquisitions would make
+// a delegated Wait call observe the new paused state and block on Resume
+// regardless of the earlier check.
 func (p *Pauser) applyState(ctx context.Context, blockWhilePaused bool) error {
 	if p == nil {
 		return nil

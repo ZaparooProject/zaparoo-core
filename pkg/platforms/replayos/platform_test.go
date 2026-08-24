@@ -401,10 +401,10 @@ func TestPlatform_TrivialReturns(t *testing.T) {
 		assert.False(t, ok)
 	})
 
-	t.Run("ForwardCmd returns zero value", func(t *testing.T) {
+	t.Run("ForwardCmd returns ErrNotSupported", func(t *testing.T) {
 		t.Parallel()
 		result, err := p.ForwardCmd(nil)
-		require.NoError(t, err)
+		require.ErrorIs(t, err, platforms.ErrNotSupported)
 		assert.Equal(t, platforms.CmdResult{}, result)
 	})
 

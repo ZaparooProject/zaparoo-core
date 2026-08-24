@@ -529,6 +529,50 @@ func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 	return RBFInfo{}, false
 }
 
+// AltCorePaths returns the RBF paths registered for an alt core launcher, in
+// the order they are tried at resolution time. Returns nil when launcherID is
+// not a registered alt core.
+func (c *RBFCache) AltCorePaths(launcherID string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	paths, ok := c.byLauncherID[launcherID]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), paths...)
+}
+
+// ResolveLauncher reports the RBF a launcher would use if launched now. It
+// mirrors Resolve's precedence exactly, including its fallback: config
+// load_path override, then registered alt-core paths, then the system's
+// default core — an alt core whose own RBF isn't installed silently falls
+// back to the system's base core at launch time, and this must report the
+// same thing Resolve would, not a more conservative answer. cfg may be nil,
+// which skips the load_path check. Unlike Resolve it never errors — a total
+// miss simply reports false, since callers use this to describe launcher
+// state rather than to launch.
+func (c *RBFCache) ResolveLauncher(cfg *config.Instance, launcherID, systemID string) (RBFInfo, bool) {
+	key := launcherID
+	if key == "" {
+		key = systemID
+	}
+
+	if cfg != nil {
+		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
+			return c.GetByMglPath(lp)
+		}
+	}
+
+	if launcherID != "" {
+		if rbfInfo, ok := c.GetByLauncherID(launcherID); ok {
+			return rbfInfo, true
+		}
+	}
+
+	return c.GetBySystemID(systemID)
+}
+
 func (c *RBFCache) relatedCandidates(rbfPath string) []string {
 	canonicalDir, shortName := splitRBFPath(rbfPath)
 	if shortName == "" {

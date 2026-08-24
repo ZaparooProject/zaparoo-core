@@ -450,9 +450,18 @@ func RunCommand(
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
 
-	linkValue, err := checkZapLink(cfg, pl, db, cmd)
-	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", err)
+	// Remote-sourced commands are already fully-formed, pre-validated
+	// structural commands built server-side (see pkg/service/remote). There
+	// is nothing for a ZapLink to legitimately resolve here, and letting one
+	// substitute in server-fetched ZapScript would bypass the remote
+	// operation allowlist entirely.
+	linkValue := ""
+	if token.Source != tokens.SourceRemote {
+		var linkErr error
+		linkValue, linkErr = checkZapLink(cfg, pl, db, cmd)
+		if linkErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
+		}
 	}
 	if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
@@ -498,7 +507,7 @@ func RunCommand(
 	}
 
 	if when, ok := cmd.AdvArgs.GetWhen(); ok && !helpers.IsTruthy(when) {
-		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
+		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd.Name)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,
 			NewCommands: newCmds,

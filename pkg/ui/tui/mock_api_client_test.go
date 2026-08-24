@@ -201,6 +201,23 @@ func (m *MockSettingsService) Unlink(ctx context.Context) error {
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
 
+func (m *MockSettingsService) GetRemoteActivity(ctx context.Context) (*models.RemoteActivityResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	activity, ok := args.Get(0).(*models.RemoteActivityResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return activity, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SetupGetRemoteActivity configures the mock to return remote activity entries.
+func (m *MockSettingsService) SetupGetRemoteActivity(activity *models.RemoteActivityResponse) {
+	m.On("GetRemoteActivity", mock.Anything).Return(activity, nil)
+}
+
 // GetSystems mocks fetching systems.
 func (m *MockSettingsService) GetSystems(ctx context.Context) ([]models.System, error) {
 	args := m.Called(ctx)

@@ -69,6 +69,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from History;
 	delete from Mappings;
 	delete from Clients;
+	delete from RemoteCommands;
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)

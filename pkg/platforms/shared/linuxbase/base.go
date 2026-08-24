@@ -455,9 +455,9 @@ func (*Base) Screenshot() (*platforms.ScreenshotResult, error) {
 	return nil, platforms.ErrNotSupported
 }
 
-// ForwardCmd returns an empty result (no command forwarding on Linux platforms).
+// ForwardCmd is not supported on generic Linux platforms (no command forwarding).
 func (*Base) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
-	return platforms.CmdResult{}, nil
+	return platforms.CmdResult{}, platforms.ErrNotSupported
 }
 
 // LookupMapping returns false (no token mappings on Linux platforms).

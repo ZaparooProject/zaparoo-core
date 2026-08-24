@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -38,21 +37,38 @@ type onlinePageData struct {
 	settings *models.SettingsResponse
 }
 
+// customBaseURLHost returns the display host for a non-default Online base
+// URL value, or "" when it is empty or the official default. Falls back to
+// the raw value if it doesn't parse as a URL.
+func customBaseURLHost(value string) string {
+	if config.IsDefaultOnlineBaseURL(value) {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return value
+	}
+	return parsed.Host
+}
+
 // onlineServerHost returns the backup server host to display when a custom
 // server is configured, or "" when using the official default.
 func onlineServerHost(settings *models.SettingsResponse) string {
 	if settings == nil || settings.BackupRemoteBaseURL == nil {
 		return ""
 	}
-	base := *settings.BackupRemoteBaseURL
-	if base == "" || strings.EqualFold(base, config.DefaultBackupRemoteBaseURL) {
+	return customBaseURLHost(*settings.BackupRemoteBaseURL)
+}
+
+// customEndpointWarning returns a warning-styled note to prepend to a
+// feature's description when its endpoint is non-default (host != ""), or
+// "" otherwise.
+func customEndpointWarning(host string) string {
+	if host == "" {
 		return ""
 	}
-	parsed, err := url.Parse(base)
-	if err != nil || parsed.Host == "" {
-		return base
-	}
-	return parsed.Host
+	t := CurrentTheme()
+	return fmt.Sprintf("[%s]Custom server: %s.[-] ", t.WarningColorName, host)
 }
 
 // buildOnlineSettingsMenu loads account status in the background, then shows
@@ -103,6 +119,25 @@ func renderOnlineSettingsMenu(
 	status := data.status
 	serverHost := onlineServerHost(data.settings)
 
+	remoteControlHost, playtimeHost, backupHost := "", "", ""
+	if data.settings != nil {
+		if data.settings.RemoteControlBaseURL != nil {
+			remoteControlHost = customBaseURLHost(*data.settings.RemoteControlBaseURL)
+		}
+		if data.settings.PlaytimeBaseURL != nil {
+			playtimeHost = customBaseURLHost(*data.settings.PlaytimeBaseURL)
+		}
+		if data.settings.BackupRemoteBaseURL != nil {
+			backupHost = customBaseURLHost(*data.settings.BackupRemoteBaseURL)
+		}
+	}
+	if remoteControlHost != "" || playtimeHost != "" || backupHost != "" {
+		frame.SetInfoText(fmt.Sprintf(
+			"[%s]One or more Zaparoo Online endpoints are set to a custom server. Review below.[-]",
+			CurrentTheme().WarningColorName,
+		))
+	}
+
 	menu.AddHeader("Account")
 	if status.Remote.Linked {
 		addOnlineAccountItems(svc, pages, app, menu, status, serverHost, rebuild)
@@ -120,6 +155,32 @@ func renderOnlineSettingsMenu(
 	}
 
 	menu.AddHeader("Features")
+	remoteControlEnabled := false
+	if data.settings != nil && data.settings.RemoteControlEnabled != nil {
+		remoteControlEnabled = *data.settings.RemoteControlEnabled
+	}
+	remoteControlDesc := "Allow your linked Zaparoo Online account to send approved commands to this device"
+	if !status.Remote.Linked {
+		remoteControlDesc = "Allow approved remote commands after this device is linked to Zaparoo Online"
+	}
+	remoteControlDesc = customEndpointWarning(remoteControlHost) + remoteControlDesc
+	menu.AddToggle("Remote control", remoteControlDesc, &remoteControlEnabled, func(value bool) {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		if err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{RemoteControlEnabled: &value}); err != nil {
+			remoteControlEnabled = !value
+			menu.refreshAllItems(menu.GetCurrentItem())
+			log.Warn().Err(err).Msg("error updating remote control setting")
+			ShowErrorModal(pages, app, "Failed to save remote control setting", func() {
+				app.SetFocus(menu.List)
+			})
+		}
+	})
+	menu.AddNavAction("Remote control activity",
+		"See what a linked account's remote commands have done on this device", func() {
+			buildRemoteActivityPage(svc, pages, app, rebuild)
+		})
+
 	playtimeSyncEnabled := false
 	if data.settings != nil && data.settings.PlaytimeSyncEnabled != nil {
 		playtimeSyncEnabled = *data.settings.PlaytimeSyncEnabled
@@ -128,6 +189,7 @@ func renderOnlineSettingsMenu(
 	if !status.Remote.Linked {
 		playtimeSyncDesc = "Upload play history when this device is linked to Zaparoo Online"
 	}
+	playtimeSyncDesc = customEndpointWarning(playtimeHost) + playtimeSyncDesc
 	menu.AddToggle("Play history sync", playtimeSyncDesc, &playtimeSyncEnabled, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
@@ -142,8 +204,9 @@ func renderOnlineSettingsMenu(
 	})
 	cloudDesc := "Create, restore, and schedule cloud backups of this device"
 	if !status.Remote.Linked {
-		cloudDesc = "Keep this device backed up to the cloud — included with Zaparoo Warp"
+		cloudDesc = "Keep this device backed up to the cloud, included with Zaparoo Warp"
 	}
+	cloudDesc = customEndpointWarning(backupHost) + cloudDesc
 	menu.AddNavAction("Cloud backup", cloudDesc, func() {
 		buildBackupSettingsMenu(svc, pages, app, rebuild)
 	})

@@ -145,3 +145,14 @@ func (m *MockAPIClient) SetupSearchMediaResponse(results *models.SearchResults) 
 func (m *MockAPIClient) SetupSearchMediaError(err error) {
 	m.On("Call", mock.Anything, models.MethodMediaSearch, mock.Anything).Return("", err)
 }
+
+// SetupRemoteActivityResponse configures the mock to return a remote activity response.
+func (m *MockAPIClient) SetupRemoteActivityResponse(activity *models.RemoteActivityResponse) {
+	data, _ := json.Marshal(activity)
+	m.On("Call", mock.Anything, models.MethodRemoteActivity, "").Return(string(data), nil)
+}
+
+// SetupRemoteActivityError configures the mock to return an error for remote activity.
+func (m *MockAPIClient) SetupRemoteActivityError(err error) {
+	m.On("Call", mock.Anything, models.MethodRemoteActivity, "").Return("", err)
+}

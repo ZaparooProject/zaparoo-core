@@ -115,6 +115,11 @@ type SettingsService interface {
 	// Unlink removes the stored Zaparoo Online credentials.
 	Unlink(ctx context.Context) error
 
+	// GetRemoteActivity fetches recent entries from the remote operations
+	// ledger, as an owner-facing audit trail of what a linked account's
+	// remote commands have actually done.
+	GetRemoteActivity(ctx context.Context) (*models.RemoteActivityResponse, error)
+
 	// GetSystems fetches available systems from the API.
 	GetSystems(ctx context.Context) ([]models.System, error)
 
@@ -376,6 +381,20 @@ func (s *DefaultSettingsService) Unlink(ctx context.Context) error {
 		return fmt.Errorf("failed to unlink: %w", err)
 	}
 	return nil
+}
+
+// GetRemoteActivity fetches recent entries from the remote operations
+// ledger.
+func (s *DefaultSettingsService) GetRemoteActivity(ctx context.Context) (*models.RemoteActivityResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodRemoteActivity, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get remote activity: %w", err)
+	}
+	var activity models.RemoteActivityResponse
+	if err := json.Unmarshal([]byte(resp), &activity); err != nil {
+		return nil, fmt.Errorf("failed to parse remote activity: %w", err)
+	}
+	return &activity, nil
 }
 
 // GetSystems fetches available systems from the API.

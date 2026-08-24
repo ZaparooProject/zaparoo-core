@@ -358,6 +358,9 @@ func sanitizeTransferBackup(parent context.Context, path string) (err error) {
 	if _, err = transferDB.ExecContext(ctx, "DELETE FROM Clients"); err != nil {
 		return fmt.Errorf("failed to remove clients from transfer backup: %w", err)
 	}
+	if _, err = transferDB.ExecContext(ctx, "DELETE FROM RemoteCommands"); err != nil {
+		return fmt.Errorf("failed to remove remote command ledger from transfer backup: %w", err)
+	}
 	if _, err = transferDB.ExecContext(ctx, "VACUUM"); err != nil {
 		return fmt.Errorf("failed to compact transfer backup: %w", err)
 	}
