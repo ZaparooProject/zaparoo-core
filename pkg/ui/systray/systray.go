@@ -124,7 +124,7 @@ func systrayOnReady(
 						notify("Error opening launchers directory.")
 					}
 				case <-mReloadConfig.ClickedCh:
-					_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
+					err := reloadCore(cfg)
 					if err != nil {
 						log.Error().Err(err).Msg("failed to reload config")
 						notify("Error reloading Core config.")
@@ -150,6 +150,21 @@ func systrayOnReady(
 			}
 		}()
 	}
+}
+
+// reloadCore reloads settings and mappings, then reloads the custom launcher
+// files and rebuilds the launcher cache. Both calls are needed: settings.reload
+// does not read the launchers directory, so editing a custom launcher TOML has
+// no effect until launchers.refresh runs.
+func reloadCore(cfg *config.Instance) error {
+	ctx := context.Background()
+	if _, err := client.LocalClient(ctx, cfg, models.MethodSettingsReload, ""); err != nil {
+		return fmt.Errorf("reload settings: %w", err)
+	}
+	if _, err := client.LocalClient(ctx, cfg, models.MethodLaunchersRefresh, ""); err != nil {
+		return fmt.Errorf("refresh launchers: %w", err)
+	}
+	return nil
 }
 
 func Run(
