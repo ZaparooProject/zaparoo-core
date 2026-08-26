@@ -132,7 +132,9 @@ block_commands = ["write"]
 func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
 	t.Parallel()
 
-	svc, _, _ := setupNextActionTestEnv(t)
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).
+		Return([]platforms.Launcher{{ID: "3do-dualram", SystemID: "3do"}})
 	parser := gozapscript.NewParser("**launch?launcher=3do-dualram")
 	script, err := parser.ParseScript()
 	require.NoError(t, err)
@@ -145,6 +147,42 @@ func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
 	require.NotNil(t, pending)
 	assert.Equal(t, "3do-dualram", pending.LauncherID)
 	assert.Equal(t, "source", pending.Source.UID)
+}
+
+func TestHandleNextActionPreflight_ArmsLaunchOverrideCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).
+		Return([]platforms.Launcher{{ID: "Winamp_Main", SystemID: ""}})
+	parser := gozapscript.NewParser("**launch?launcher=winamp_main")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**launch?launcher=winamp_main", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionArmed, result)
+	pending := svc.State.GetPendingLaunchOverride()
+	require.NotNil(t, pending)
+	assert.Equal(t, "winamp_main", pending.LauncherID)
+}
+
+func TestHandleNextActionPreflight_RejectsUnknownLaunchOverride(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).
+		Return([]platforms.Launcher{{ID: "3do-dualram", SystemID: "3do"}})
+	parser := gozapscript.NewParser("**launch?launcher=Winamp_Main")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**launch?launcher=Winamp_Main", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionInvalid, result)
+	assert.Nil(t, svc.State.GetPendingLaunchOverride())
 }
 
 func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
