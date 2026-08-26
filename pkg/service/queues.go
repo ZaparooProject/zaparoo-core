@@ -200,8 +200,13 @@ func runTokenZapScriptWithContext(
 
 		if shouldApplyLaunchOverride(&token, inHookContext, cmd.Name) {
 			if pending := svc.State.ConsumePendingLaunchOverride(); pending != nil {
-				log.Info().Str("launcher", pending.LauncherID).Msg("applying one-shot launch override")
-				cmd.AdvArgs = cmd.AdvArgs.With(gozapscript.KeyLauncher, pending.LauncherID)
+				if launchOverrideExpired(pending.CreatedAt) {
+					log.Warn().Str("launcher", pending.LauncherID).
+						Msg("discarding expired one-shot launch override")
+				} else {
+					log.Info().Str("launcher", pending.LauncherID).Msg("applying one-shot launch override")
+					cmd.AdvArgs = cmd.AdvArgs.With(gozapscript.KeyLauncher, pending.LauncherID)
+				}
 			}
 		}
 

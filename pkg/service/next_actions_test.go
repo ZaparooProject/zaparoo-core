@@ -217,6 +217,35 @@ func TestRunTokenZapScript_AppliesPendingLaunchOverride(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestRunTokenZapScript_DiscardsExpiredPendingLaunchOverride(t *testing.T) {
+	t.Parallel()
+
+	svc, mockPlatform, cfg := setupNextActionTestEnv(t)
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	path := filepath.Join(t.TempDir(), "game.chd")
+	mockPlatform.On("LaunchMedia", cfg, path,
+		(*platforms.Launcher)(nil),
+		svc.DB,
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.ActiveMediaPublisher != nil
+		})).Return(nil).Once()
+
+	svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
+		LauncherID: "3do-dualram",
+		Source:     tokens.Token{UID: "source"},
+		CreatedAt:  time.Now().Add(-launchOverrideTTL - time.Minute),
+	})
+
+	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)}
+	token := tokens.Token{Text: "**launch:" + path, ScanTime: time.Now(), Source: tokens.SourceReader}
+	err := runTokenZapScript(svc, token, plsc, nil, false)
+
+	require.NoError(t, err)
+	assert.Nil(t, svc.State.GetPendingLaunchOverride())
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestRunTokenZapScript_PlaylistDoesNotConsumePendingOverride(t *testing.T) {
 	t.Parallel()
 

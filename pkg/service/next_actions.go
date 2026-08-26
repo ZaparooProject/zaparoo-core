@@ -39,6 +39,11 @@ const (
 	nextActionInvalid
 )
 
+// launchOverrideTTL bounds how long an armed one-shot launcher override waits
+// for its next card. Without it, an override armed and then forgotten silently
+// rewrites a launch hours later.
+const launchOverrideTTL = 5 * time.Minute
+
 func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script *gozapscript.Script) nextActionResult {
 	if !svc.State.RunZapScriptEnabled() {
 		return nextActionNone
@@ -130,6 +135,10 @@ func hasNonLauncherAdvArg(args gozapscript.AdvArgs) bool {
 		return true
 	})
 	return hasNonLauncher
+}
+
+func launchOverrideExpired(createdAt time.Time) bool {
+	return !createdAt.IsZero() && time.Since(createdAt) > launchOverrideTTL
 }
 
 func shouldApplyLaunchOverride(token *tokens.Token, inHookContext bool, cmdName string) bool {
