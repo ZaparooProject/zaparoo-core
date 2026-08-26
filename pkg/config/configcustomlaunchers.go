@@ -165,6 +165,12 @@ func validateCustomLauncher(entry *LaunchersCustom) error {
 		}
 	}
 
+	// Write the resolved values back so consumers read canonical fields rather
+	// than re-deriving them. Omitting backend while setting execute is legal,
+	// and code that compared the raw field skipped those entries entirely.
+	entry.Kind = kind
+	entry.Backend = backend
+
 	return nil
 }
 

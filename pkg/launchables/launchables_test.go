@@ -126,6 +126,31 @@ execute = "echo tools"
 	assert.Equal(t, uuid.NewSHA1(ZaparooLaunchableNamespace, []byte("command:tools")), entry.ID)
 }
 
+func TestLaunchablesReturnsCommandVirtualSystemWithImpliedBackend(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.custom]]
+id = "Winamp_Main"
+kind = "virtual_system"
+name = "Winamp"
+category = "Computer"
+execute = "winamp.exe"
+`))
+	platform := mocks.NewMockPlatform()
+	platform.On("Launchers", cfg).Return([]platforms.Launcher{{ID: "Winamp_Main", Launch: testLaunch()}})
+
+	defs := Launchables(cfg, platform)
+
+	require.Len(t, defs, 1)
+	entry, ok := defs[0].(VirtualSystem)
+	require.True(t, ok)
+	assert.Equal(t, "Winamp", entry.Name)
+	assert.Equal(t, "Computer", entry.Category)
+	// Identity matches the explicit-backend form, so both spellings of the same
+	// launcher keep the same app display settings and artwork.
+	assert.Equal(t, uuid.NewSHA1(ZaparooLaunchableNamespace, []byte("command:winamp_main")), entry.ID)
+}
+
 func TestLaunchablesReturnsNilForPlatformsWithoutDefinitions(t *testing.T) {
 	platform := mocks.NewMockPlatform()
 

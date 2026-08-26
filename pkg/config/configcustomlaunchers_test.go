@@ -41,6 +41,33 @@ func TestValidateCustomLauncher_MisterVirtualSystem(t *testing.T) {
 	assert.Equal(t, "Other", entry.Category)
 }
 
+func TestValidateCustomLauncher_NormalizesImpliedKindAndBackend(t *testing.T) {
+	entry := LaunchersCustom{
+		ID:      "Winamp_Main",
+		Kind:    CustomLauncherKindVirtualSystem,
+		Name:    "Winamp",
+		Execute: "winamp.exe",
+	}
+
+	require.NoError(t, validateCustomLauncher(&entry))
+	assert.Equal(t, CustomLauncherKindVirtualSystem, entry.Kind)
+	assert.Equal(t, CustomLauncherBackendCommand, entry.Backend)
+	assert.Equal(t, "Other", entry.Category)
+}
+
+func TestValidateCustomLauncher_NormalizesOmittedKind(t *testing.T) {
+	entry := LaunchersCustom{
+		ID:       "WinampMedia",
+		System:   "MusicTrack",
+		FileExts: []string{".m3u"},
+		Execute:  "winamp.exe \"[[media_path]]\"",
+	}
+
+	require.NoError(t, validateCustomLauncher(&entry))
+	assert.Equal(t, CustomLauncherKindLauncher, entry.Kind)
+	assert.Equal(t, CustomLauncherBackendCommand, entry.Backend)
+}
+
 func TestValidateCustomLauncher_RejectsInvalidCommonFields(t *testing.T) {
 	tests := []struct {
 		name  string
