@@ -305,7 +305,7 @@ func buildSlugSearchCacheForSystems(ctx context.Context, db *sql.DB, systemIDs [
 	}
 
 	if len(coverage) == 0 {
-		finalizeCache(cache)
+		finalizeFragment(cache)
 		return cache, nil
 	}
 
@@ -398,6 +398,33 @@ func buildSlugSearchCacheForSystems(ctx context.Context, db *sql.DB, systemIDs [
 // finalizeCache sorts entries by system, builds system ranges, and builds the
 // trigram index. Called after raw data population by both production and test paths.
 func finalizeCache(cache *SlugSearchCache) {
+	finalizeCacheEntries(cache, true)
+}
+
+// finalizeFragment finalizes a selective refresh fragment without building its
+// trigram index.
+//
+// mergeSlugSearchCaches folds the fragment's trigrams into a new delta layer
+// derived from the merged cache's own slug data and the base's frequency cap; it
+// never reads the fragment's CSR arrays. Building them would allocate five
+// trigramCount-sized arrays (~850KB) and make three passes over the slug data on
+// every per-system refresh, all discarded. The one path that returns a fragment
+// directly — an empty base — builds the index there via ensureTrigramIndex.
+func finalizeFragment(cache *SlugSearchCache) {
+	finalizeCacheEntries(cache, false)
+}
+
+// ensureTrigramIndex builds the CSR index for a cache finalized without one.
+// Caches with no entries are left alone, matching finalizeCacheEntries, which
+// also skips the index for them.
+func ensureTrigramIndex(cache *SlugSearchCache) {
+	if cache.entryCount == 0 || cache.trigramOffsets != nil {
+		return
+	}
+	buildTrigramIndex(cache)
+}
+
+func finalizeCacheEntries(cache *SlugSearchCache, withTrigramIndex bool) {
 	if cache.coveredSystems == nil && !cache.complete {
 		cache.coveredSystems = make(map[string]struct{})
 	}
@@ -428,7 +455,9 @@ func finalizeCache(cache *SlugSearchCache) {
 
 	sortCacheBySystem(cache)
 	cache.systemRanges = buildSystemRanges(cache.systemDBIDs, cache.entryCount)
-	buildTrigramIndex(cache)
+	if withTrigramIndex {
+		buildTrigramIndex(cache)
+	}
 
 	cache.slugData = slices.Clip(cache.slugData)
 	cache.slugOffsets = slices.Clip(cache.slugOffsets)
@@ -562,6 +591,9 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 		return base
 	}
 	if replacement.complete || base == nil {
+		// The fragment becomes the published cache, so it needs its own CSR
+		// index; every other path folds it into a delta layer instead.
+		ensureTrigramIndex(replacement)
 		return replacement
 	}
 
@@ -665,6 +697,9 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 
 	merged.liveEntries = computeLiveEntries(merged.droppedRanges, merged.entryCount)
 	merged.trigramDeltas = appendTrigramDelta(base.trigramDeltas, merged, blockStart)
+	if len(merged.trigramDeltas) > maxTrigramDeltaLayers {
+		compactTrigramDeltas(merged)
+	}
 	return merged
 }
 
@@ -704,6 +739,42 @@ func appendTrigramDelta(existing []trigramDelta, merged *SlugSearchCache, blockS
 	layers = append(layers, existing...)
 	layers = append(layers, delta)
 	return layers
+}
+
+// maxTrigramDeltaLayers bounds how many delta layers a cache carries before the
+// CSR index is rebuilt to absorb them.
+//
+// Layers only exist mid-index: every per-system refresh appends one, and the
+// end-of-run full rebuild starts from none. Both postingListSize and
+// combinedPostingList walk every layer per trigram, so an unbounded count makes
+// search slower the longer an index runs — which works directly against the
+// reason progressive indexing keeps search available at all.
+//
+// The bound is a straight trade, measured at 130 systems / 208k entries.
+// Unbounded, the layers cost ~32us of fixed overhead per search (~75% of a
+// selective query's total time) and ~8MB of heap, because holding 688k postings
+// as 130 maps costs roughly 3x holding them as one array. One compaction is a
+// full CSR rebuild: ~37ms on x86, slower on MiSTer. 32 keeps both costs at about
+// a quarter of the unbounded worst case for ~4 rebuilds across a 131-system run.
+const maxTrigramDeltaLayers = 32
+
+// compactTrigramDeltas folds every delta layer back into a freshly built CSR
+// index, so subsequent lookups touch one array instead of walking N maps.
+//
+// Race-safe with already-published caches: buildTrigramIndex assigns new slices
+// rather than mutating in place, so a cache still held by a reader keeps the
+// arrays it was published with. Rebuilding also recomputes trigramCapped
+// against the current entry count, which delta layers cannot do — they inherit
+// whatever cap the CSR was built with.
+func compactTrigramDeltas(cache *SlugSearchCache) {
+	if cache.entryCount == 0 {
+		return
+	}
+	cache.trigramOffsets = nil
+	cache.trigramPostings = nil
+	cache.trigramCapped = nil
+	buildTrigramIndex(cache)
+	cache.trigramDeltas = nil
 }
 
 // sortCacheBySystem reorders all parallel arrays so entries are grouped by

@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -830,4 +831,97 @@ func BenchmarkSlugSearchCacheBuild_FromDB(b *testing.B) {
 			cleanup()
 		})
 	}
+}
+
+// TestCompactTrigramDeltas_PreservesSearchResults is the correctness gate for
+// folding delta layers into the CSR index. Compaction rebuilds the trigram
+// index over a cache that also carries tombstoned entries from earlier
+// refreshes, and it recomputes the frequency cap against the current entry
+// count rather than the count the original CSR was built with — either could
+// silently change which entries a query returns.
+func TestCompactTrigramDeltas_PreservesSearchResults(t *testing.T) {
+	t.Parallel()
+
+	type entry = struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}
+
+	systems := map[int64]string{1: "SNES", 2: "NES", 3: "Genesis"}
+	base := buildTestCache([]entry{
+		{slug: "super-mario-world", secSlug: "mario-world", titleDBID: 10, systemDBID: 1},
+		{slug: "super-metroid", titleDBID: 11, systemDBID: 1},
+		{slug: "super-mario-bros", secSlug: "mario-bros", titleDBID: 20, systemDBID: 2},
+		{slug: "the-legend-of-zelda", titleDBID: 21, systemDBID: 2},
+	}, systems)
+	base.complete = true
+
+	// Refresh two systems so the cache carries both tombstoned base entries and
+	// several delta layers, then a third that was never in the base.
+	cache := base
+	for _, refresh := range []struct {
+		systemID   string
+		entries    []entry
+		systemDBID int64
+	}{
+		{systemID: "SNES", systemDBID: 1, entries: []entry{
+			{slug: "super-mario-world", secSlug: "mario-world", titleDBID: 10, systemDBID: 1},
+			{slug: "super-mario-kart", titleDBID: 12, systemDBID: 1},
+		}},
+		{systemID: "NES", systemDBID: 2, entries: []entry{
+			{slug: "super-mario-bros", secSlug: "mario-bros", titleDBID: 20, systemDBID: 2},
+		}},
+		{systemID: "Genesis", systemDBID: 3, entries: []entry{
+			{slug: "sonic-the-hedgehog", titleDBID: 30, systemDBID: 3},
+			{slug: "super-hang-on", titleDBID: 31, systemDBID: 3},
+		}},
+	} {
+		fragment := buildTestCache(refresh.entries, map[int64]string{refresh.systemDBID: refresh.systemID})
+		fragment.coveredSystems = map[string]struct{}{refresh.systemID: {}}
+		cache = cache.withoutSystems([]string{refresh.systemID})
+		cache = mergeSlugSearchCaches(cache, fragment)
+	}
+	require.NotEmpty(t, cache.trigramDeltas, "setup must leave delta layers to compact")
+
+	queries := map[string][][][]byte{
+		"matches across systems": {{[]byte("super")}},
+		"matches one title":      {{[]byte("metroid")}},
+		"matches secondary slug": {{[]byte("mario-world")}},
+		"matches replaced entry": {{[]byte("mario-kart")}},
+		"matches nothing":        {{[]byte("castlevania")}},
+		"two required fragments": {{[]byte("super")}, {[]byte("mario")}},
+		"system never in base":   {{[]byte("hedgehog")}},
+	}
+	scopes := map[string][]int64{
+		"all systems": nil,
+		"SNES only":   {1},
+		"NES+Genesis": {2, 3},
+	}
+
+	before := make(map[string][]int64)
+	for queryName, query := range queries {
+		for scopeName, scope := range scopes {
+			got := cache.Search(scope, query)
+			sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+			before[queryName+"/"+scopeName] = got
+		}
+	}
+
+	compactTrigramDeltas(cache)
+	require.Empty(t, cache.trigramDeltas, "compaction must clear delta layers")
+
+	for queryName, query := range queries {
+		for scopeName, scope := range scopes {
+			got := cache.Search(scope, query)
+			sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+			assert.Equal(t, before[queryName+"/"+scopeName], got,
+				"compaction changed results for %s / %s", queryName, scopeName)
+		}
+	}
+
+	// Guard against the whole comparison passing vacuously on empty results.
+	assert.NotEmpty(t, cache.Search(nil, [][][]byte{{[]byte("super")}}),
+		"query fixture must actually match entries")
 }
