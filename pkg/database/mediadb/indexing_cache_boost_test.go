@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,6 +199,39 @@ func TestWALAutoCheckpointAppliesToPoolAndWriter(t *testing.T) {
 
 	mediaDB.SetWALAutoCheckpoint(defaultWALAutoCheckpoint)
 	assertPooledValues(defaultWALAutoCheckpoint)
+}
+
+// TestWALAutoCheckpointZeroDisablesRatherThanFallingBackToDefault covers the
+// bug fixed alongside #1279's indexing-checkpoint changes: pages=0 (disable
+// automatic checkpointing entirely, what indexing now requests) must persist
+// as 0, not be treated as "never configured" and silently fall back to
+// SQLite's default of 1000 — which is exactly what walAutoCheckpointPages did
+// before walAutoCheckpointSet was added, since it used pages<=0 to mean unset.
+func TestWALAutoCheckpointZeroDisablesRatherThanFallingBackToDefault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+	sqlDB.SetMaxOpenConns(2)
+
+	// Before any explicit call, a fresh MediaDB reports SQLite's own default.
+	assert.Equal(t, defaultWALAutoCheckpoint, mediaDB.walAutoCheckpointPages())
+
+	mediaDB.SetWALAutoCheckpoint(0)
+	assert.Equal(t, 0, mediaDB.walAutoCheckpointPages(), "explicit 0 must not fall back to the default")
+
+	conn, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	var pooledValue int
+	require.NoError(t, conn.QueryRowContext(ctx, "PRAGMA wal_autocheckpoint").Scan(&pooledValue))
+	assert.Equal(t, 0, pooledValue)
+	require.NoError(t, conn.Close())
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	var writerValue int
+	require.NoError(t, mediaDB.tx.QueryRowContext(ctx, "PRAGMA wal_autocheckpoint").Scan(&writerValue))
+	assert.Equal(t, 0, writerValue, "a writer connection opened after disabling must also see 0, not the default")
+	require.NoError(t, mediaDB.RollbackTransaction())
 }
 
 func TestIndexingPragmaRestoreWithUnlimitedPool(t *testing.T) {
@@ -398,4 +432,169 @@ func TestCloseRollsBackAndReleasesWriterConnection(t *testing.T) {
 	assert.Nil(t, mediaDB.tx)
 	assert.Nil(t, mediaDB.txConn)
 	assert.False(t, mediaDB.inTransaction)
+}
+
+// TestOptimizationBoostAppliesWhileAnotherCallerHoldsAConnection reproduces the
+// round 8 failure of #1279.
+//
+// Post-index optimization begins seconds after indexing ends, while the app is
+// still polling. At baseMaxOpenConns (2) that leaves one free slot, and
+// drainPooledConns wants every slot, so the drain timed out and the entire
+// optimization ran at the 8MB default — visible only as dbCacheSize on the step
+// metrics long afterwards.
+//
+// ensureIndexingCacheBoostApplied is what makes this survivable: it reads the
+// pragma back through the pool — the same way the optimization steps get their
+// connection — and retries when the drain did not reach it.
+func TestOptimizationBoostAppliesWhileAnotherCallerHoldsAConnection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+
+	// Stand in for the app's polling: hold a connection across the boost, then
+	// release it the way a short query would, so the retry has something to work
+	// with. Holding it forever would test a situation that does not occur.
+	held, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	releaseOnce := sync.OnceFunc(func() { _ = held.Close() })
+	defer releaseOnce()
+	go func() {
+		time.Sleep(connectionAcquireTimeout / 2)
+		releaseOnce()
+	}()
+
+	// The order RunBackgroundOptimizationWithLease uses: cap first, so the drain
+	// covers the slot the boost adds rather than leaving it to be opened later
+	// from the DSN at the default cache size.
+	mediaDB.SetIndexingConnBoost(true)
+	mediaDB.SetIndexingCacheSize(true)
+	mediaDB.ensureIndexingCacheBoostApplied()
+	t.Cleanup(func() {
+		mediaDB.SetIndexingConnBoost(false)
+		mediaDB.SetIndexingCacheSize(false)
+	})
+
+	// Read the pragma back the way the optimization steps do — through the pool,
+	// on whichever connection it hands out.
+	cacheSize, tempStore := readPragmas(ctx, t, sqlDB)
+	assert.Equal(t, -32768, cacheSize,
+		"optimization must run at the boosted cache size even when another caller "+
+			"held a pooled connection; round 8 silently ran the whole phase at -8192")
+	assert.Equal(t, tempStoreMemory, tempStore,
+		"temp_store must reach the pooled connection alongside cache_size")
+}
+
+// TestOptimizationBoostVerificationDetectsMissingPragma covers the check itself:
+// it must notice an unboosted pool rather than trusting that the drain worked.
+func TestOptimizationBoostVerificationDetectsMissingPragma(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+
+	// Boost state is on, but no pragma has been pushed to any connection.
+	mediaDB.indexingCacheBoost.Store(true)
+	t.Cleanup(func() { mediaDB.SetIndexingCacheSize(false) })
+
+	wantCacheSize, _ := mediaDB.connPragmaValues()
+	require.Equal(t, "-32768", wantCacheSize)
+	assert.False(t, mediaDB.pooledCacheSizeMatches(sqlDB, wantCacheSize),
+		"verification must report a pool that never received the pragma; "+
+			"silently returning true here is what made the round 8 failure invisible")
+
+	// And the repair path must fix exactly that.
+	mediaDB.ensureIndexingCacheBoostApplied()
+	cacheSize, _ := readPragmas(ctx, t, sqlDB)
+	assert.Equal(t, -32768, cacheSize, "the retry must apply the pragma it found missing")
+}
+
+// TestConnectionOpenedAfterBoostCarriesBoostedPragmas covers the second, silent
+// half of the same bug: the pragmas reaching every connection that exists is not
+// enough if the boost then permits another one to be opened.
+//
+// Applying the cache size before raising the connection cap sized the drain
+// against the narrow cap, so the extra slot was later filled straight from the
+// DSN at -8192 with nothing left to configure it. That connection then served
+// optimization steps and their dbCacheSize metric, which is what the device logs
+// reported for three rounds while the drain itself had succeeded.
+func TestConnectionOpenedAfterBoostCarriesBoostedPragmas(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+
+	// The order RunBackgroundOptimizationWithLease uses.
+	mediaDB.SetIndexingConnBoost(true)
+	mediaDB.SetIndexingCacheSize(true)
+	t.Cleanup(func() {
+		mediaDB.SetIndexingConnBoost(false)
+		mediaDB.SetIndexingCacheSize(false)
+	})
+
+	// Hold every slot at once so each one has to be a distinct physical
+	// connection, including any the boost newly permitted.
+	held := make([]*sql.Conn, 0, indexingMaxOpenConns)
+	for range indexingMaxOpenConns {
+		conn, err := sqlDB.Conn(ctx)
+		require.NoError(t, err)
+		held = append(held, conn)
+	}
+	t.Cleanup(func() {
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+	})
+
+	for i, conn := range held {
+		var cacheSize int
+		require.NoError(t, conn.QueryRowContext(ctx, "PRAGMA cache_size").Scan(&cacheSize))
+		assert.Equal(t, -32768, cacheSize,
+			"pooled connection %d must carry the boosted cache size; a connection opened "+
+				"after the boost is born from the DSN at -8192 unless the cap was raised "+
+				"before the pragmas were applied (see #1279)", i)
+	}
+}
+
+// TestPooledCacheSizeMatchesRejectsPartiallyBoostedPool pins the verification
+// contract: a partially-boosted pool must not verify as applied.
+//
+// The previous implementation was a single pool query, which returns an
+// arbitrary connection. On the mixed pool below it answered correctly or
+// incorrectly depending on which connection the pool happened to hand out — a
+// coin flip, not a check. That nondeterminism is the bug: round 9 logged the
+// boost as applied and every optimization step then reported -8192. Draining
+// the pool makes the answer deterministic, which is what this pins.
+func TestPooledCacheSizeMatchesRejectsPartiallyBoostedPool(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mediaDB := openIndexingCacheTestDB(ctx, t)
+	sqlDB := mediaDB.sql.Load()
+
+	// Boost the flag but deliberately configure only ONE connection, leaving the
+	// rest of the pool at the DSN default.
+	mediaDB.indexingCacheBoost.Store(true)
+	t.Cleanup(func() { mediaDB.indexingCacheBoost.Store(false) })
+
+	conn, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "PRAGMA cache_size = -32768")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	// Force a second physical connection to exist so the pool is genuinely mixed.
+	first, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	second, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+	require.NoError(t, second.Close())
+
+	// Repeat: a single-sample check would only be caught on the runs where it
+	// happened to pick the unboosted connection.
+	for range 8 {
+		assert.False(t, mediaDB.pooledCacheSizeMatches(sqlDB, "-32768"),
+			"a pool where only some connections are boosted must NOT verify as applied; "+
+				"a check that answers by luck is worse than no check")
+	}
 }

@@ -183,6 +183,7 @@ func runMaintenanceFailureIndex(
 	}
 
 	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
 	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	platform.On("RootDirs", mock.Anything).Return([]string{})
 
@@ -236,6 +237,7 @@ func TestNewNamesIndex_EarlyAnalyzeCorruptionAbortsRun(t *testing.T) {
 	db.MediaDB = wrapped
 
 	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
 	platform.On("Launchers", mock.Anything).Return([]platforms.Launcher{{
 		ID:                 "nes-test",
 		SystemID:           "NES",
@@ -309,12 +311,63 @@ func TestRefreshMidScanCaches_PropagatesCorruptionFromEveryPhase(t *testing.T) {
 				}
 			}
 
-			err := refreshMidScanCaches(context.Background(), db, []string{"NES"})
+			// populateTagsCache=true so all three phases run; this test is about
+			// corruption propagation, not about when the tags phase is skipped.
+			err := refreshMidScanCaches(context.Background(), db, []string{"NES"}, true)
 			require.Error(t, err)
 			assert.True(t, database.IsCorruptionError(err))
 			db.AssertExpectations(t)
 		})
 	}
+}
+
+// TestRefreshMidScanCaches_SkipsTagsCacheWhenItWouldNotSurvive covers #1279: on a
+// run large enough that every commit invalidates all systems, SystemTagsCache is
+// dropped wholesale by the next commit, so populating it per system is wasted
+// work. The slug search and browse caches are scoped per system and survive, so
+// they must still run either way.
+func TestRefreshMidScanCaches_SkipsTagsCacheWhenItWouldNotSurvive(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name              string
+		populateTagsCache bool
+	}{
+		{name: "skips tags cache on all-systems runs", populateTagsCache: false},
+		{name: "populates tags cache on selective runs", populateTagsCache: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &testhelpers.MockMediaDBI{}
+			db.On("RefreshSlugSearchCacheForSystems", mock.Anything, []string{"NES"}).Return(nil).Once()
+			db.On("PopulateBrowseCacheForSystems", mock.Anything, []string{"NES"}).Return(nil).Once()
+			if tc.populateTagsCache {
+				db.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Once()
+			}
+
+			err := refreshMidScanCaches(context.Background(), db, []string{"NES"}, tc.populateTagsCache)
+			require.NoError(t, err)
+			if !tc.populateTagsCache {
+				db.AssertNotCalled(t, "PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything)
+			}
+			db.AssertExpectations(t)
+		})
+	}
+}
+
+// TestMidScanSystemTagsCacheSurvivesCommit_MatchesInvalidationScope guards the
+// pairing between the predicate and invalidationScopeForSystemIDs: if the
+// selective-invalidation threshold moves, the mid-scan skip must move with it or
+// it starts skipping populations that would in fact have survived.
+func TestMidScanSystemTagsCacheSurvivesCommit_MatchesInvalidationScope(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, mediadb.MidScanSystemTagsCacheSurvivesCommit(0), "no systems invalidates all")
+	assert.True(t, mediadb.MidScanSystemTagsCacheSurvivesCommit(1))
+	assert.True(t, mediadb.MidScanSystemTagsCacheSurvivesCommit(32), "at the threshold, still selective")
+	assert.False(t, mediadb.MidScanSystemTagsCacheSurvivesCommit(33), "past the threshold, all systems")
+	assert.False(t, mediadb.MidScanSystemTagsCacheSurvivesCommit(131), "a full MiSTer library")
 }
 
 func TestBestEffortMaintenanceError_PreservesWrappedCorruption(t *testing.T) {

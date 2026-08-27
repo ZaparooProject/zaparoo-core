@@ -3370,6 +3370,108 @@ func TestPopulateBrowseCacheForSystems_IncrementalRefresh_Integration(t *testing
 	assert.Equal(t, 2, rootDirs[0].FileCount)
 }
 
+// browseCacheDirShape describes every cached dir by path rather than DBID, so
+// two caches built with different DBID assignments stay comparable.
+func browseCacheDirShape(t *testing.T, mediaDB *MediaDB) map[string]string {
+	t.Helper()
+
+	rows, err := mediaDB.sql.Load().QueryContext(context.Background(), `
+		SELECT d.Path, COALESCE(p.Path, ''), d.Name, d.IsVirtual
+		FROM BrowseDirs d
+		LEFT JOIN BrowseDirs p ON p.DBID = d.ParentDirDBID`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	shape := make(map[string]string)
+	for rows.Next() {
+		var dirPath, parentPath, name string
+		var isVirtual bool
+		require.NoError(t, rows.Scan(&dirPath, &parentPath, &name, &isVirtual))
+		shape[dirPath] = fmt.Sprintf("parent=%s name=%s virtual=%t", parentPath, name, isVirtual)
+	}
+	require.NoError(t, rows.Err())
+	return shape
+}
+
+// browseCacheCountShape keys counts by dir paths and SystemID for the same
+// reason as browseCacheDirShape.
+func browseCacheCountShape(t *testing.T, mediaDB *MediaDB) map[string]int {
+	t.Helper()
+
+	rows, err := mediaDB.sql.Load().QueryContext(context.Background(), `
+		SELECT p.Path, c.Path, s.SystemID, bc.FileCount
+		FROM BrowseDirCounts bc
+		JOIN BrowseDirs p ON p.DBID = bc.ParentDirDBID
+		JOIN BrowseDirs c ON c.DBID = bc.ChildDirDBID
+		JOIN Systems s ON s.DBID = bc.SystemDBID`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	shape := make(map[string]int)
+	for rows.Next() {
+		var parentPath, childPath, systemID string
+		var count int
+		require.NoError(t, rows.Scan(&parentPath, &childPath, &systemID, &count))
+		shape[parentPath+"|"+childPath+"|"+systemID] = count
+	}
+	require.NoError(t, rows.Err())
+	return shape
+}
+
+// TestPopulateBrowseCacheForSystems_MatchesFullRebuild_Integration pins the
+// per-system refresh against the full rebuild, which is the ground truth for
+// the cache's shape.
+//
+// The refresh resolves already-persisted dirs one path at a time instead of
+// loading BrowseDirs whole. A lookup that failed to find a shared dir would
+// mint a second DBID for it and split that dir's counts across two rows —
+// invisible to a DBID-keyed assertion, which is why both shapes are keyed by
+// path.
+func TestPopulateBrowseCacheForSystems_MatchesFullRebuild_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	// Shared ancestors, differing depths, one dir shared by two systems, and a
+	// virtual scheme — the shapes ensureDir resolves differently.
+	media := []struct {
+		systemID string
+		title    string
+		path     string
+	}{
+		{systemID: "SNES", title: "Super RPG", path: "/roms/snes/super-rpg.sfc"},
+		{systemID: "SNES", title: "Deep Quest", path: "/roms/snes/hacks/translated/deep-quest.sfc"},
+		{systemID: "NES", title: "Mario", path: "/roms/nes/mario.nes"},
+		{systemID: "NES", title: "Shared Cart", path: "/roms/multi/shared-cart.nes"},
+		{systemID: "Genesis", title: "Sonic", path: "/roms/multi/sonic.md"},
+		{systemID: "Genesis", title: "Streamed", path: "steam://run/12345"},
+	}
+	for _, m := range media {
+		sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: m.systemID, Name: m.systemID})
+		require.NoError(t, err)
+		insertSystemMedia(t, mediaDB, sys, m.title, m.path)
+	}
+
+	// One system at a time, exactly as a running index refreshes them.
+	for _, systemID := range []string{"SNES", "NES", "Genesis"} {
+		require.NoError(t, mediaDB.PopulateBrowseCacheForSystems(ctx, []string{systemID}))
+	}
+	incrementalDirs := browseCacheDirShape(t, mediaDB)
+	incrementalCounts := browseCacheCountShape(t, mediaDB)
+	require.NotEmpty(t, incrementalDirs)
+	require.NotEmpty(t, incrementalCounts)
+
+	require.NoError(t, mediaDB.PopulateBrowseCache(ctx))
+	assert.Equal(t, browseCacheDirShape(t, mediaDB), incrementalDirs,
+		"per-system refresh must build the same dirs as a full rebuild")
+	assert.Equal(t, browseCacheCountShape(t, mediaDB), incrementalCounts,
+		"per-system refresh must build the same counts as a full rebuild")
+}
+
 func TestBrowseFileCount_PartialCacheFallsBackForIncompleteCoverage_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

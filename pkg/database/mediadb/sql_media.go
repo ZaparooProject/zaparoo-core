@@ -198,12 +198,12 @@ func sqlGetMissingMediaCount(ctx context.Context, db *sql.DB) (int, error) {
 // Single-table query on Media: this runs once per system over every media row,
 // and no caller reads TitleSlug, so the MediaTitles join would only add a
 // per-row B-tree probe. SystemID is filled from the argument. Ordering by Path
-// lets SQLite stream from media_system_path_idx instead of filtering by system
-// and then building a temp sort by DBID for large systems.
+// lets SQLite stream from the UNIQUE(SystemDBID, Path) index instead of
+// filtering by system and then building a temp sort by DBID for large systems.
 func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
 	query := `
 		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.IsMissing
-		FROM Media m INDEXED BY media_system_path_idx
+		FROM Media m INDEXED BY sqlite_autoindex_Media_1
 		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 		ORDER BY m.Path
 	`

@@ -42,6 +42,8 @@ var ErrNullSQL = errors.New("UserDB is not connected")
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
 	"&_cache_size=-512&_mmap_size=0"
 
+const userPageSize = 4096 // SQLite's compiled default; not set in sqliteConnParams
+
 const (
 	// connDrainTimeout bounds the wait for in-flight queries before an
 	// operation that replaces the database files gives up.
@@ -138,6 +140,7 @@ func (db *UserDB) openSQLConnection(dbPath string) (*sql.DB, error) {
 			log.Warn().Err(err).Msg("failed to enable user database cell size checks; continuing without")
 		}
 	}
+	database.LogEffectivePragmasForDB(db.ctx, sqlInstance, "user", database.SynchronousFull, userPageSize)
 	return sqlInstance, nil
 }
 

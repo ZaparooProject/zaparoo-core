@@ -2528,32 +2528,27 @@ func TestBatchCommitLimit_ShrinksWhenThrottledOrPaused(t *testing.T) {
 	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(paused), "paused pauser")
 }
 
-func TestConfigureIndexingPragmas_BaselinePacingRestoresOnReturn(t *testing.T) {
+// TestConfigureIndexingPragmas_DisablesWALAutoCheckpointAndRestoresOnReturn
+// covers both the disable and the restore-on-early-return, on every platform
+// (not just resource-constrained ones) — see configureIndexingPragmas's
+// comment for why this is now unconditional.
+func TestConfigureIndexingPragmas_DisablesWALAutoCheckpointAndRestoresOnReturn(t *testing.T) {
 	t.Parallel()
 
 	db := &recordingIndexingPragmaDB{}
 	earlyErr := errors.New("stop indexing early")
 	err := func() error {
-		cleanup := configureIndexingPragmas(db, true)
+		cleanup := configureIndexingPragmas(db)
 		defer cleanup()
 		return earlyErr
 	}()
 	require.ErrorIs(t, err, earlyErr)
 	assert.Equal(t, []string{
 		"cache:true",
-		fmt.Sprintf("wal:%d", constrainedWALAutoCheckpoint),
+		fmt.Sprintf("wal:%d", disabledWALAutoCheckpoint),
 		fmt.Sprintf("wal:%d", defaultWALAutoCheckpoint),
 		"cache:false",
 	}, db.calls)
-}
-
-func TestConfigureIndexingPragmas_UnpacedSkipsWAL(t *testing.T) {
-	t.Parallel()
-
-	db := &recordingIndexingPragmaDB{}
-	cleanup := configureIndexingPragmas(db, false)
-	cleanup()
-	assert.Equal(t, []string{"cache:true", "cache:false"}, db.calls)
 }
 
 func TestDirectoryWalkWorkers_ConstrainedOrRestricted(t *testing.T) {

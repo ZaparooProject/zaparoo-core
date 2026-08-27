@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -142,6 +143,70 @@ func TestReconcileStagedSystem_FullScanInsertsTitlesMediaAndTags(t *testing.T) {
 	assert.False(t, byPath[gamePath].IsMissing)
 }
 
+// TestReconcileStagedSystem_FreshSystemMatchesFullPath is the correctness gate
+// for #1279's fresh-system fast path. Indexing an empty database skips the steps
+// that reconcile against pre-existing rows, on the argument that they are
+// provably no-ops there. This proves it by outcome: index a set of paths into a
+// fresh database, then index the identical set into a database that already
+// holds them (so every step runs), and require the resulting media, titles,
+// missing flags and tag links to be identical. A skip that was not actually a
+// no-op would show up as a difference here.
+func TestReconcileStagedSystem_FreshSystemMatchesFullPath(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Super Game (USA) (Rev 2).sfc")),
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Super Game (Japan).sfc")),
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Other Game (Europe) [!].sfc")),
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Solo Title (World).sfc")),
+	}
+
+	// Keyed by path, not DBID: DBIDs legitimately differ between the two
+	// databases, the media and tags they describe must not.
+	snapshot := func(t *testing.T, db *mediadb.MediaDB) (map[string]bool, map[string][]string) {
+		t.Helper()
+		media := map[string]bool{}
+		tagsByPath := map[string][]string{}
+		for path, row := range mediaDBIDsBySystem(t, db, "SNES") {
+			media[path] = row.IsMissing
+			tagList, err := db.GetMediaTagsByMediaDBID(context.Background(), row.DBID)
+			require.NoError(t, err)
+			names := make([]string, 0, len(tagList))
+			for _, tag := range tagList {
+				names = append(names, tag.Type+":"+tag.Tag)
+			}
+			sort.Strings(names)
+			tagsByPath[path] = names
+		}
+		return media, tagsByPath
+	}
+
+	freshDB, freshCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(freshCleanup)
+	freshStats := scantest.IndexMediaPaths(t, freshDB, "SNES", paths...)
+	freshMedia, freshTags := snapshot(t, freshDB)
+
+	fullDB, fullCleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(fullCleanup)
+	// Seed first so the second pass finds an existing Systems row and therefore
+	// runs every step, including the ones the fresh path skips.
+	scantest.IndexMediaPaths(t, fullDB, "SNES", paths...)
+	fullStats := scantest.IndexMediaPaths(t, fullDB, "SNES", paths...)
+	fullMedia, fullTags := snapshot(t, fullDB)
+
+	assert.Equal(t, freshMedia, fullMedia, "media rows and missing flags must match")
+	assert.Equal(t, freshTags, fullTags, "tag links must match")
+
+	// The skipped steps are exactly the ones that report pre-existing-state
+	// changes, so both runs must report none of them.
+	assert.Equal(t, int64(0), freshStats.MediaMissing)
+	assert.Equal(t, int64(0), freshStats.TitlesRenamed)
+	assert.Equal(t, int64(0), freshStats.TagLinksDeleted)
+	assert.Equal(t, int64(0), fullStats.MediaMissing)
+	assert.Equal(t, int64(0), fullStats.TitlesRenamed)
+	assert.Equal(t, int64(0), fullStats.TagLinksDeleted)
+}
+
 func TestReconcileStagedSystem_IdempotentRescanIsNoOp(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
@@ -157,21 +222,42 @@ func TestReconcileStagedSystem_IdempotentRescanIsNoOp(t *testing.T) {
 	assert.Equal(t, int64(0), stats.TouchedTitles)
 }
 
+// TestReconcileStagedSystem_YieldsBetweenSQLSteps checks reconcile paces between
+// its set-based SQL steps. It counts a fresh system and a re-index separately
+// because #1279 made a fresh system skip the steps that reconcile against
+// pre-existing rows, which necessarily removes their yields too. Fewer yields on
+// a fresh reconcile is the intended consequence, not a pacing regression: there
+// are fewer statements to pace between. The re-index count is the one that must
+// stay high, since that is the long path.
 func TestReconcileStagedSystem_YieldsBetweenSQLSteps(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
-	yields := 0
 	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+
+	freshYields := 0
 	scantest.IndexMediaPathsWithOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{
 		Yield: func() error {
-			yields++
+			freshYields++
 			return nil
 		},
 	}, gamePath)
 
-	assert.GreaterOrEqual(t, yields, 10, "reconcile should pace between set-based SQL steps")
+	rescanYields := 0
+	scantest.IndexMediaPathsWithOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{
+		Yield: func() error {
+			rescanYields++
+			return nil
+		},
+	}, gamePath)
+
+	assert.GreaterOrEqual(t, freshYields, 5,
+		"a fresh reconcile should still pace between the steps it does run")
+	assert.GreaterOrEqual(t, rescanYields, 10,
+		"a re-index runs every step and should pace between them")
+	assert.Greater(t, rescanYields, freshYields,
+		"a fresh system skips pre-existing-state steps, so it should yield fewer times")
 }
 
 func TestReconcileStagedSystem_PropagatesYieldError(t *testing.T) {

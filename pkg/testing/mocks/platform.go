@@ -67,10 +67,17 @@ func (m *MockPlatform) SetPowerStatus(status power.Status) {
 	m.powerStatus = &status
 }
 
-// ID returns the unique ID of this platform
+// ID returns the unique ID of this platform. Unstubbed it returns "" rather
+// than panicking: it is read by diagnostics that run on paths a test may not be
+// exercising deliberately, and an incomplete mock should not fail those.
 func (m *MockPlatform) ID() string {
-	args := m.Called()
-	return args.String(0)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "ID" {
+			args := m.Called()
+			return args.String(0)
+		}
+	}
+	return ""
 }
 
 // StartPre runs any necessary platform setup BEFORE the main service has started running

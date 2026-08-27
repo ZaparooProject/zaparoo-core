@@ -617,7 +617,7 @@ func getMediaIDsForTagDBIDs(
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
 	query := selectClause + `
-		FROM Media m INDEXED BY media_system_path_idx
+		FROM Media m INDEXED BY sqlite_autoindex_Media_1
 		CROSS JOIN MediaTags mt
 		WHERE m.SystemDBID = ?
 		  AND mt.MediaDBID = m.DBID
