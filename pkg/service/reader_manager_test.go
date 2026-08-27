@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -208,6 +209,43 @@ func (env *readerManagerEnv) expectNotification(t *testing.T, method string) {
 			t.Fatalf("timed out waiting for %s notification", method)
 		}
 	}
+}
+
+// waitForUI polls the UI service until its state matches, or fails with desc.
+//
+// expectNoToken is not a synchronisation point: it proves only that nothing was
+// launched within noTokenWait, not that the reader manager has staged the scan
+// and published its UI event. Reading env.ui.State() straight after it raced the
+// manager, and `go test -race ./pkg/...` caught it — the launch-guard tests
+// failed on an empty event list while passing on their own. Polling costs a
+// passing test nothing: it returns as soon as the state matches.
+func (env *readerManagerEnv) waitForUI(
+	t *testing.T,
+	desc string,
+	matches func(models.UIStateResponse) bool,
+) models.UIStateResponse {
+	t.Helper()
+	deadline := time.Now().Add(tokenTimeout)
+	var snapshot models.UIStateResponse
+	for {
+		snapshot = env.ui.State()
+		if matches(snapshot) {
+			return snapshot
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s; last UI state: %+v", desc, snapshot)
+			return snapshot
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// waitForUIEvents waits for the UI to be holding exactly want events.
+func (env *readerManagerEnv) waitForUIEvents(t *testing.T, want int) models.UIStateResponse {
+	t.Helper()
+	return env.waitForUI(t, fmt.Sprintf("%d UI event(s)", want), func(snapshot models.UIStateResponse) bool {
+		return len(snapshot.Events) == want
+	})
 }
 
 func (env *readerManagerEnv) expectUIState(
@@ -1215,8 +1253,7 @@ func TestReaderManager_LaunchGuard_OpensGlobalConfirmEvent(t *testing.T) {
 	})
 	env.expectNoToken(t)
 
-	uiState := env.ui.State()
-	require.Len(t, uiState.Events, 1)
+	uiState := env.waitForUIEvents(t, 1)
 	event := uiState.Events[0]
 	assert.Equal(t, models.UIEventKindConfirm, event.Kind)
 	assert.Equal(t, "Change game?", event.Title)
@@ -1236,8 +1273,7 @@ func TestReaderManager_LaunchGuard_UsesUIDWhenTokenTextIsEmpty(t *testing.T) {
 	})
 	env.expectNoToken(t)
 
-	uiState := env.ui.State()
-	require.Len(t, uiState.Events, 1)
+	uiState := env.waitForUIEvents(t, 1)
 	assert.Equal(t, "card-without-text", uiState.Events[0].Message)
 }
 
@@ -1258,7 +1294,7 @@ func TestReaderManager_LaunchGuard_DoesNotRenderConfirmOnHost(t *testing.T) {
 	})
 	env.expectNoToken(t)
 
-	require.Len(t, env.ui.State().Events, 1)
+	env.waitForUIEvents(t, 1)
 	assert.Equal(t, int32(0), renderer.presented.Load())
 }
 
@@ -1274,7 +1310,7 @@ func TestReaderManager_LaunchGuard_UIConfirmAndDismiss(t *testing.T) {
 		})
 		env.expectNoToken(t)
 
-		event := env.ui.State().Events[0]
+		event := env.waitForUIEvents(t, 1).Events[0]
 		require.NoError(t, env.ui.Respond(event.ID, models.UIResponseActionConfirm, ""))
 		assert.Equal(t, "card-a", env.expectToken(t).UID)
 	})
@@ -1288,7 +1324,7 @@ func TestReaderManager_LaunchGuard_UIConfirmAndDismiss(t *testing.T) {
 		})
 		env.expectNoToken(t)
 
-		event := env.ui.State().Events[0]
+		event := env.waitForUIEvents(t, 1).Events[0]
 		require.NoError(t, env.ui.Respond(event.ID, models.UIResponseActionDismiss, ""))
 		result := make(chan error, 1)
 		env.confirmQueue <- result
@@ -1306,7 +1342,7 @@ func TestReaderManager_LaunchGuard_MediaStopCancelsGlobalEvent(t *testing.T) {
 		Token:  &tokens.Token{UID: "card-a", Text: "**launch.system:snes", ScanTime: time.Now()},
 	})
 	env.expectNoToken(t)
-	require.Len(t, env.ui.State().Events, 1)
+	env.waitForUIEvents(t, 1)
 
 	env.st.SetActiveMedia(nil)
 	uiState := env.expectUIState(t, func(snapshot models.UIStateResponse) bool {
@@ -1330,16 +1366,15 @@ func TestReaderManager_LaunchGuard_DelayResetUpdatesSameEvent(t *testing.T) {
 
 	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
 	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
-	original := env.ui.State()
-	require.Len(t, original.Events, 1)
+	original := env.waitForUIEvents(t, 1)
 
 	fakeClock.Advance(time.Second)
 	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
 	env.expectNoToken(t)
-	updated := env.ui.State()
-	require.Len(t, updated.Events, 1)
+	updated := env.waitForUI(t, "the staged event to be revised", func(snapshot models.UIStateResponse) bool {
+		return len(snapshot.Events) == 1 && snapshot.Revision > original.Revision
+	})
 	assert.Equal(t, original.Events[0].ID, updated.Events[0].ID)
-	assert.Greater(t, updated.Revision, original.Revision)
 	require.NotNil(t, updated.Events[0].ExpiresAt)
 	assert.WithinDuration(
 		t, fakeClock.Now().Add(15*time.Second), *updated.Events[0].ExpiresAt, time.Microsecond,

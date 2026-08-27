@@ -78,10 +78,14 @@ type trigramDelta map[uint32][]uint32
 // publishes a compact cache. All fields are immutable after publication via
 // the atomic pointer; writers build a new struct (sharing arrays) and swap.
 type SlugSearchCache struct {
-	systemDBIDToID  map[int64]string
-	systemIDToDBID  map[string]int64
-	systemRanges    map[int64][2]int
-	coveredSystems  map[string]struct{}
+	systemDBIDToID map[int64]string
+	systemIDToDBID map[string]int64
+	systemRanges   map[int64][2]int
+	coveredSystems map[string]struct{}
+	// droppedSystems are systems withoutSystems removed, as opposed to ones
+	// that never had rows. Their data still exists in SQL, so a search naming
+	// one must fall back rather than read this cache and report nothing.
+	droppedSystems  map[string]struct{}
 	secSlugOffsets  []uint32
 	slugOffsets     []uint32
 	secSlugData     []byte
@@ -96,6 +100,12 @@ type SlugSearchCache struct {
 	liveEntries     [][2]int
 	entryCount      int
 	complete        bool
+	// derivedFromComplete marks a cache that descends from one covering the
+	// whole library. It is the difference between "this system has no rows"
+	// and "this system has not been built yet", which coveredSystems alone
+	// cannot express — see CanServeSystems. Not persisted: a cache written to
+	// disk is either complete or rebuilt on load.
+	derivedFromComplete bool
 }
 
 // hasMidScanState reports whether the cache carries tombstones or trigram
@@ -492,6 +502,42 @@ func sortedCoveredSystems(covered map[string]struct{}) []string {
 	return ids
 }
 
+// PartitionServableSystems splits requested systems into those this cache can
+// answer and those a caller must still reach SQL for.
+//
+// Only meaningful on a cache that once covered the whole library: there an
+// unknown system genuinely has no rows, while a dropped one is mid-reindex and
+// its rows are still in SQL. A search spanning both can then serve the bulk
+// from memory and scope its SQL to the handful actually in flight, instead of
+// falling back wholesale — which on the #1279 device meant every library-wide
+// search ran eight grouped LIKE queries across 293 systems and timed out.
+//
+// Returns ok=false when the split does not apply and the caller should keep
+// its existing all-or-nothing behaviour.
+func (c *SlugSearchCache) PartitionServableSystems(systemIDs []string) (cached, viaSQL []string, ok bool) {
+	if c == nil || c.complete || !c.derivedFromComplete || len(systemIDs) == 0 {
+		return nil, nil, false
+	}
+	for _, systemID := range systemIDs {
+		if _, dropped := c.droppedSystems[systemID]; dropped {
+			viaSQL = append(viaSQL, systemID)
+			continue
+		}
+		if _, covered := c.coveredSystems[systemID]; covered {
+			cached = append(cached, systemID)
+			continue
+		}
+		if _, known := c.systemIDToDBID[systemID]; !known {
+			// No rows anywhere; contributes nothing to either side.
+			continue
+		}
+		// Known to the cache but neither covered nor dropped: unexpected, so
+		// fall back rather than guess.
+		return nil, nil, false
+	}
+	return cached, viaSQL, true
+}
+
 func (c *SlugSearchCache) CanServeSystems(systemIDs []string) bool {
 	if c == nil {
 		return false
@@ -503,9 +549,33 @@ func (c *SlugSearchCache) CanServeSystems(systemIDs []string) bool {
 		return false
 	}
 	for _, systemID := range systemIDs {
-		if _, ok := c.coveredSystems[systemID]; !ok {
+		if _, ok := c.coveredSystems[systemID]; ok {
+			continue
+		}
+		// A system the cache has never held entries for contributes no
+		// results, so it cannot make the answer wrong — but only once the
+		// cache is known to account for the whole library. Without this a
+		// library-wide search is unservable for the entire duration of an
+		// index: a client asks for every system Zaparoo knows about (293 on
+		// the #1279 device) while the database holds rows for far fewer (106),
+		// so the systems that simply have no media veto the cache and every
+		// search falls back to the grouped SQL LIKE path.
+		//
+		// The system currently being re-indexed is also absent here, and is
+		// likewise treated as contributing nothing until its refresh lands.
+		// Its rows are mid-rewrite, so a moment of no results for that one
+		// system is the intended degradation.
+		if _, dropped := c.droppedSystems[systemID]; dropped {
+			// Removed for re-indexing. Its rows are still in SQL, so the
+			// caller must fall back or it would silently report no results.
 			return false
 		}
+		if c.derivedFromComplete {
+			if _, known := c.systemIDToDBID[systemID]; !known {
+				continue
+			}
+		}
+		return false
 	}
 	return true
 }
@@ -542,6 +612,16 @@ func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
 		systemIDToDBID:  make(map[string]int64, len(c.systemIDToDBID)),
 		systemRanges:    make(map[int64][2]int, len(c.systemRanges)),
 		coveredSystems:  make(map[string]struct{}),
+		// Removing systems loses full coverage, but not the knowledge that
+		// every other system in the library is accounted for.
+		derivedFromComplete: c.complete || c.derivedFromComplete,
+		droppedSystems:      make(map[string]struct{}, len(c.droppedSystems)+len(remove)),
+	}
+	for systemID := range c.droppedSystems {
+		trimmed.droppedSystems[systemID] = struct{}{}
+	}
+	for systemID := range remove {
+		trimmed.droppedSystems[systemID] = struct{}{}
 	}
 
 	if c.complete {
@@ -609,22 +689,24 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 	}
 
 	merged := &SlugSearchCache{
-		slugData:        base.slugData,
-		slugOffsets:     base.slugOffsets,
-		secSlugData:     base.secSlugData,
-		secSlugOffsets:  base.secSlugOffsets,
-		titleDBIDs:      base.titleDBIDs,
-		systemDBIDs:     base.systemDBIDs,
-		trigramOffsets:  base.trigramOffsets,
-		trigramPostings: base.trigramPostings,
-		trigramCapped:   base.trigramCapped,
-		entryCount:      base.entryCount,
-		droppedRanges:   base.droppedRanges,
-		liveEntries:     nil, // recomputed below with the new entryCount
-		complete:        base.complete,
-		systemDBIDToID:  make(map[int64]string, len(base.systemDBIDToID)+len(replacement.systemDBIDToID)),
-		systemIDToDBID:  make(map[string]int64, len(base.systemIDToDBID)+len(replacement.systemIDToDBID)),
-		systemRanges:    make(map[int64][2]int, len(base.systemRanges)+len(replacement.systemRanges)),
+		slugData:            base.slugData,
+		slugOffsets:         base.slugOffsets,
+		secSlugData:         base.secSlugData,
+		secSlugOffsets:      base.secSlugOffsets,
+		titleDBIDs:          base.titleDBIDs,
+		systemDBIDs:         base.systemDBIDs,
+		trigramOffsets:      base.trigramOffsets,
+		trigramPostings:     base.trigramPostings,
+		trigramCapped:       base.trigramCapped,
+		entryCount:          base.entryCount,
+		droppedRanges:       base.droppedRanges,
+		liveEntries:         nil, // recomputed below with the new entryCount
+		complete:            base.complete,
+		derivedFromComplete: base.derivedFromComplete,
+		droppedSystems:      mergeDroppedSystems(base.droppedSystems, replacement.coveredSystems),
+		systemDBIDToID:      make(map[int64]string, len(base.systemDBIDToID)+len(replacement.systemDBIDToID)),
+		systemIDToDBID:      make(map[string]int64, len(base.systemIDToDBID)+len(replacement.systemIDToDBID)),
+		systemRanges:        make(map[int64][2]int, len(base.systemRanges)+len(replacement.systemRanges)),
 	}
 
 	if merged.complete {
@@ -1556,6 +1638,28 @@ func (db *MediaDB) RebuildSlugSearchCache() error {
 	return nil
 }
 
+// SlugSearchCacheCoverageForTesting reports whether an in-memory slug search
+// cache is currently loaded and, if so, how many systems it holds entries for
+// and whether it still accounts for the whole library. Tests outside this
+// package use it to assert the cache survives an indexing run; nothing in
+// production reads it.
+func (db *MediaDB) SlugSearchCacheCoverageForTesting() (loaded bool, systems int, libraryWide bool) {
+	cache := db.slugSearchCache.Load()
+	if cache == nil {
+		return false, 0, false
+	}
+	return true, len(cache.systemRanges), cache.complete || cache.derivedFromComplete
+}
+
+// CanServeSystemsFromSlugCacheForTesting reports whether a search naming the
+// given systems could be answered from the in-memory slug search cache. Tests
+// outside this package use it to assert coverage during an indexing run;
+// nothing in production reads it.
+func (db *MediaDB) CanServeSystemsFromSlugCacheForTesting(systemIDs []string) bool {
+	cache := db.slugSearchCache.Load()
+	return cache != nil && cache.CanServeSystems(systemIDs)
+}
+
 func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
 	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql.Load(), systemIDs)
 	if err != nil {
@@ -1572,4 +1676,23 @@ func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemI
 		Bool("complete", refreshed.complete).
 		Msg("slug search cache refreshed for systems")
 	return nil
+}
+
+// mergeDroppedSystems clears systems from the dropped set as their refreshed
+// entries are folded back in.
+func mergeDroppedSystems(dropped, refreshed map[string]struct{}) map[string]struct{} {
+	if len(dropped) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(dropped))
+	for systemID := range dropped {
+		if _, back := refreshed[systemID]; back {
+			continue
+		}
+		out[systemID] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

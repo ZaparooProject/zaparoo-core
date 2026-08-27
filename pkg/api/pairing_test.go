@@ -42,7 +42,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/schollz/pake/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -657,10 +656,7 @@ func TestHTTPHandlers_FullFlow(t *testing.T) {
 //
 // Not t.Parallel — mutates the global zerolog logger to capture output.
 func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
-	var buf logCapture
-	originalLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
-	t.Cleanup(func() { log.Logger = originalLogger })
+	buf := captureLogs(t, zerolog.WarnLevel)
 
 	h := newPairingHarness(t)
 	pin, _, err := h.mgr.StartPairing("member")
@@ -735,10 +731,7 @@ func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
 //
 // Not t.Parallel — mutates the global zerolog logger.
 func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
-	var buf logCapture
-	originalLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
-	t.Cleanup(func() { log.Logger = originalLogger })
+	buf := captureLogs(t, zerolog.WarnLevel)
 
 	h := newPairingHarness(t, WithPairingMaxAttempts(1))
 	pin, _, err := h.mgr.StartPairing("member")

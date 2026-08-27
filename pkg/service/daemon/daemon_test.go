@@ -1234,13 +1234,48 @@ func TestWaitForServicePidFile_FailsWhenProcessExits(t *testing.T) {
 	assert.Contains(t, err.Error(), "exited before writing pidfile")
 }
 
-func TestStart_FailsWhenServiceWritesPidfileThenExits(t *testing.T) {
+// TestWaitForServicePidFile_FailsWhenProcessExitsAfterWritingPidfile covers the
+// branch where the pidfile holds the expected PID but that process is already
+// gone — a service that got far enough to announce itself and then died.
+//
+// It is driven at this level rather than through Start because Start races the
+// process's death: it polls, and a poll that lands while the doomed process is
+// still alive sees a live matching PID and reports the service ready. Reaping
+// the process first and writing the pidfile afterwards makes the state the
+// branch describes, without depending on scheduling.
+func TestWaitForServicePidFile_FailsWhenProcessExitsAfterWritingPidfile(t *testing.T) {
 	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
-	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
-	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$$\" > %q\nexit 0\n", pidFile)
-	t.Setenv(config.AppEnv, writeFakeServiceScriptWithBody(t, script))
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
+	require.NoError(t, process.Start())
+	pid := process.Process.Pid
+	// Reap so the PID is fully released; see the sibling test for why a zombie
+	// would still look alive.
+	require.NoError(t, process.Wait())
+
+	require.NoError(t, os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600))
+
+	err := svc.waitForServicePidFile(pid, time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited after writing pidfile")
+}
+
+// TestStart_FailsWhenServiceExitsDuringStartup is the end-to-end counterpart:
+// a service process that dies during startup must surface as a Start error
+// rather than a successful launch.
+//
+// The fake service exits without writing a pidfile, which is the one startup
+// death Start can detect deterministically. Whether the poll observes the exit
+// immediately or the wait runs to its deadline, neither outcome is ready, so
+// there is no scheduling window in which this passes for the wrong reason.
+func TestStart_FailsWhenServiceExitsDuringStartup(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	t.Setenv(config.AppEnv, writeFakeServiceScriptWithBody(t, "#!/bin/sh\nexit 0\n"))
 
 	err := svc.Start()
 	require.Error(t, err)

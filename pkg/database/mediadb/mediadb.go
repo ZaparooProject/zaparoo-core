@@ -237,18 +237,53 @@ func (db *MediaDB) conn() sqlQueryable {
 	return db.sql.Load()
 }
 
+// readConn returns the pool handle for a read that must not wait on the writer.
+//
+// sqlMu exists to guard db.tx and the batch inserters — the fields conn() reads
+// — not the connection handle, which is an atomic pointer swapped without the
+// mutex by Recreate (see the Conn invariant in pkg/database/conn.go). A read
+// that goes straight to the pool therefore gains nothing from RLock, and pays
+// for it: CommitTransactionWithOptions holds sqlMu exclusively for the whole
+// commit, and Go's RWMutex is writer-preferring, so every such read queued
+// behind it for the commit's full duration.
+//
+// Measured on the #1279 device mid-index: a media.scrape.status call starting
+// at 13:25:44 took 25,030 ms, and the C64 batch commit that started at the same
+// second took 25,123 ms — the read was blocked for exactly the commit. With the
+// API timeout at 30 s that left no headroom. Browse already reads this way
+// (beginBrowse), so this only brings the metadata reads into line with it.
+//
+// Racing a Recreate is the documented behaviour of Conn: the reader sees either
+// the old handle, which fails cleanly with "database is closed", or the new one.
+func (db *MediaDB) readConn() (*sql.DB, error) {
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlDB, nil
+}
+
 // invalidationScope describes what data was changed to determine cache invalidation scope
 type invalidationScope struct {
 	SystemIDs               []string
 	AllSystems              bool
 	PreserveSlugSearchCache bool
+	PreserveTagCache        bool
 	UtilityTagDBIDsChanged  bool
 	MediaRowsChanged        bool
 }
 
 // invalidateCaches handles all cache invalidation in one place.
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
-	db.inMemoryTagCache.Store(nil)
+	// Rebuilding the tag list aggregates every MediaTags and MediaTitleTags
+	// row (731,332 on the #1279 device) into ~25,000 tags. That is affordable
+	// once after a commit, but indexing commits per batch, so media.tags then
+	// pays it on every call and exceeded the 30s API timeout on device. During
+	// indexing the last-good list is served instead and the end-of-run rebuild
+	// republishes it — the same trade already made for the slug search cache.
+	if !scope.PreserveTagCache {
+		db.inMemoryTagCache.Store(nil)
+	}
 	db.systemMediaCountsCache.Store(nil)
 	db.systemMediaCountsGen.Add(1)
 	if scope.MediaRowsChanged {
@@ -262,10 +297,22 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 		db.utilityTagCacheDirty = false
 	}
 	switch {
+	case scope.PreserveSlugSearchCache:
+		// An indexing run publishes each system's new entries as it commits
+		// (refreshMidScanCaches), so the commit itself must leave the cache
+		// alone — in both scopes. Removing the systems here instead makes a
+		// search that names them unservable from memory, and a library-wide
+		// search names every system, so the whole request drops onto the
+		// grouped SQL LIKE path for as long as the run lasts. Measured on the
+		// #1279 device mid-index: 242 ms for a query across 28 covered systems
+		// against 27,205 ms for the same query across all of them.
+		//
+		// Nothing is served wrongly in the meantime. The cache only nominates
+		// candidate title IDs and the rows come from a live query, so entries
+		// whose rows have gone return nothing; only files added since the last
+		// run are missing, and only until their system commits.
 	case scope.AllSystems:
-		if !scope.PreserveSlugSearchCache {
-			db.slugSearchCache.Store(nil)
-		}
+		db.slugSearchCache.Store(nil)
 	case len(scope.SystemIDs) > 0:
 		if cache := db.slugSearchCache.Load(); cache != nil {
 			db.slugSearchCache.Store(cache.withoutSystems(scope.SystemIDs))
@@ -1181,12 +1228,11 @@ func (db *MediaDB) UpdateLastGenerated() error {
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return time.Time{}, ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return time.Time{}, err
 	}
-	return sqlGetLastGenerated(db.ctx, db.sql.Load())
+	return sqlGetLastGenerated(db.ctx, sqlDB)
 }
 
 func (db *MediaDB) SetOptimizationStatus(status string) error {
@@ -1199,12 +1245,11 @@ func (db *MediaDB) SetOptimizationStatus(status string) error {
 }
 
 func (db *MediaDB) GetOptimizationStatus() (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
-	return sqlGetOptimizationStatus(db.ctx, db.sql.Load())
+	return sqlGetOptimizationStatus(db.ctx, sqlDB)
 }
 
 // IsOptimizing reports whether the database is currently undergoing any
@@ -1267,24 +1312,22 @@ func (db *MediaDB) SetOptimizationStep(step string) error {
 }
 
 func (db *MediaDB) GetOptimizationStep() (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
-	return sqlGetOptimizationStep(db.ctx, db.sql.Load())
+	return sqlGetOptimizationStep(db.ctx, sqlDB)
 }
 
 // GetIndexResumeAttempts returns the number of consecutive automatic resume
 // attempts that found no durable indexing progress since the previous resume.
 // It resets to zero once indexing reaches a clean state or the resume checkpoint moves.
 func (db *MediaDB) GetIndexResumeAttempts() (int, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return 0, ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return 0, err
 	}
-	return sqlGetIndexResumeAttempts(db.ctx, db.sql.Load())
+	return sqlGetIndexResumeAttempts(db.ctx, sqlDB)
 }
 
 // IncrementIndexResumeAttempts bumps the no-progress resume-attempt counter and
@@ -1322,12 +1365,11 @@ func (db *MediaDB) ResetIndexResumeAttempts() error {
 // GetIndexResumeCheckpoint returns the durable indexing checkpoint observed at
 // the previous auto-resume. A changed checkpoint proves the index made progress.
 func (db *MediaDB) GetIndexResumeCheckpoint() (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
-	return sqlGetIndexResumeCheckpoint(db.ctx, db.sql.Load())
+	return sqlGetIndexResumeCheckpoint(db.ctx, sqlDB)
 }
 
 // SetIndexResumeCheckpoint stores the durable indexing checkpoint observed at
@@ -1351,12 +1393,11 @@ func (db *MediaDB) SetIndexingStatus(status string) error {
 }
 
 func (db *MediaDB) GetIndexingStatus() (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
-	return sqlGetIndexingStatus(db.ctx, db.sql.Load())
+	return sqlGetIndexingStatus(db.ctx, sqlDB)
 }
 
 // QuickCheck runs PRAGMA quick_check(1) and reports whether the database passes.
@@ -1365,13 +1406,12 @@ func (db *MediaDB) GetIndexingStatus() (string, error) {
 // is cheap enough to confirm suspected corruption before acting on it. Returns
 // ok=true only when SQLite reports the single sentinel row "ok".
 func (db *MediaDB) QuickCheck() (bool, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return false, ErrNullSQL
+	sqlDB, connErr := db.readConn()
+	if connErr != nil {
+		return false, connErr
 	}
 
-	rows, err := db.sql.Load().QueryContext(db.ctx, "PRAGMA quick_check(1)")
+	rows, err := sqlDB.QueryContext(db.ctx, "PRAGMA quick_check(1)")
 	if err != nil {
 		return false, fmt.Errorf("quick_check query failed: %w", err)
 	}
@@ -1430,12 +1470,11 @@ func (db *MediaDB) NoteCorruption(err error) bool {
 // corruption fingerprint in the logs — which are uploadable via the support bundle — when
 // the database file itself cannot be retrieved. A healthy database returns a single "ok" row.
 func (db *MediaDB) IntegrityReport() []string {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
+	sqlDB, err := db.readConn()
+	if err != nil {
 		return []string{"integrity check unavailable: database not connected"}
 	}
-	return database.IntegrityReport(db.ctx, db.sql.Load(), database.DefaultIntegrityReportRows)
+	return database.IntegrityReport(db.ctx, sqlDB, database.DefaultIntegrityReportRows)
 }
 
 // Recreate discards the database file and reopens a fresh one. The main file and
@@ -1550,12 +1589,11 @@ func (db *MediaDB) SetScrapingStatus(status string) error {
 }
 
 func (db *MediaDB) GetScrapingStatus() (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
-	return sqlGetScrapingStatus(db.ctx, db.sql.Load())
+	return sqlGetScrapingStatus(db.ctx, sqlDB)
 }
 
 func (db *MediaDB) SetScrapingOperation(operation database.ScrapingOperation) error {
@@ -1568,12 +1606,11 @@ func (db *MediaDB) SetScrapingOperation(operation database.ScrapingOperation) er
 }
 
 func (db *MediaDB) GetScrapingOperation() (database.ScrapingOperation, bool, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return database.ScrapingOperation{}, false, ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return database.ScrapingOperation{}, false, err
 	}
-	return sqlGetScrapingOperation(db.ctx, db.sql.Load())
+	return sqlGetScrapingOperation(db.ctx, sqlDB)
 }
 
 func (db *MediaDB) ClearScrapingOperation() error {
@@ -1595,12 +1632,11 @@ func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 }
 
 func (db *MediaDB) GetLastIndexedSystem() (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
-	return sqlGetLastIndexedSystem(db.ctx, db.sql.Load())
+	return sqlGetLastIndexedSystem(db.ctx, sqlDB)
 }
 
 // RecomputeTitleDisambiguation recomputes the stored disambiguating tag types
@@ -1631,12 +1667,11 @@ func (db *MediaDB) RecomputeSystemDisambiguation(ctx context.Context, systemDBID
 // IndexGeneration returns the monotonic counter that's bumped on every
 // successful indexing run. Returns 0 if no indexing has completed yet.
 func (db *MediaDB) IndexGeneration() (int64, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return 0, ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return 0, err
 	}
-	return sqlGetIndexGeneration(db.ctx, db.sql.Load())
+	return sqlGetIndexGeneration(db.ctx, sqlDB)
 }
 
 // BumpIndexGeneration increments the index generation counter and returns
@@ -1664,12 +1699,11 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 }
 
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return nil, ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return nil, err
 	}
-	return sqlGetIndexingSystems(db.ctx, db.sql.Load())
+	return sqlGetIndexingSystems(db.ctx, sqlDB)
 }
 
 func (db *MediaDB) SetIndexingPlanSystems(systemIDs []string) error {
@@ -1682,12 +1716,11 @@ func (db *MediaDB) SetIndexingPlanSystems(systemIDs []string) error {
 }
 
 func (db *MediaDB) GetIndexingPlanSystems() ([]string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-	if db.sql.Load() == nil {
-		return nil, ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return nil, err
 	}
-	return sqlGetIndexingPlanSystems(db.ctx, db.sql.Load())
+	return sqlGetIndexingPlanSystems(db.ctx, sqlDB)
 }
 
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
@@ -1799,6 +1832,9 @@ func (db *MediaDB) applySchemaReadyFixups() {
 	}
 }
 
+// Vacuum keeps sqlMu, unlike the metadata reads that moved to readConn: it
+// rewrites the whole database rather than reading it, and no client request
+// reaches it, so there is nothing to gain by letting it overlap a commit.
 func (db *MediaDB) Vacuum() error {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
@@ -2573,6 +2609,7 @@ func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOpti
 	case indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending:
 		scope = db.cacheInvalidationScopeForCommittedTransaction()
 		scope.PreserveSlugSearchCache = true
+		scope.PreserveTagCache = true
 		indexingBatchCommit = true
 	default:
 		scope = db.cacheInvalidationScopeForCommittedTransaction()
@@ -2655,6 +2692,8 @@ func (*MediaDB) CreateIndexes() error {
 	return nil
 }
 
+// Analyze keeps sqlMu for the same reason as Vacuum: it writes planner
+// statistics and sits off the client request path.
 func (db *MediaDB) Analyze() error {
 	db.sqlMu.RLock()
 	defer db.sqlMu.RUnlock()
@@ -2773,64 +2812,75 @@ func (db *MediaDB) WALCheckpoint() error {
 // BrowseDirectories returns distinct immediate subdirectory names under the given path prefix.
 // Browse call timing thresholds. Above the first a call is reported at info so
 // it survives the default log level; above the second it is a warn.
-const (
+// Vars, not consts, only so tests can lower them; production never mutates.
+var (
 	browseTimingLogThreshold  = 250 * time.Millisecond
 	browseTimingWarnThreshold = 5 * time.Second
 )
 
-// poolWaitSample captures database/sql's cumulative connection-wait counters.
+// browseCall pins one pooled connection for the duration of a browse request
+// and records how long it took to get one.
 //
-// These are POOL-WIDE totals, not per-caller: a delta across one browse call
-// includes time other goroutines spent blocked in the same window. That is
-// still the measurement needed here, because the open question is whether a
-// slow browse is executing SQL or queued behind the indexing writer for a
-// connection, and the logs cannot currently tell those apart. A near-zero
-// delta rules contention out; a large one says the pool was saturated, without
-// attributing the wait to this specific call.
-type poolWaitSample struct {
-	waitCount    int64
-	waitDuration time.Duration
+// Two reasons it acquires explicitly rather than handing sqlBrowse* the pool.
+// First attribution: a browse blocked waiting for a connection and one running
+// expensive SQL are indistinguishable in the logs otherwise, and pool-wide
+// wait counters cannot separate this caller's wait from any other goroutine's.
+// Second cost: a single browse request issues several statements, and against
+// the pool each one queues for a connection independently — a browse was
+// observed making dozens of acquisitions while the pool sat saturated. One
+// connection for the whole request replaces those with a single wait, and the
+// statements then see a consistent snapshot as a side benefit.
+type browseCall struct {
+	started time.Time
+	conn    *sql.Conn
+	op      string
+	wait    time.Duration
+	routes  int
 }
 
-func samplePoolWait(sqlDB *sql.DB) poolWaitSample {
+// beginBrowse acquires the request's connection. The caller must always call
+// finish, including on error, so the connection is released.
+func (db *MediaDB) beginBrowse(ctx context.Context, op string, routes int) (*browseCall, error) {
+	sqlDB := db.sql.Load()
 	if sqlDB == nil {
-		return poolWaitSample{}
+		return nil, ErrNullSQL
 	}
-	stats := sqlDB.Stats()
-	return poolWaitSample{waitCount: stats.WaitCount, waitDuration: stats.WaitDuration}
+	started := time.Now()
+	conn, err := sqlDB.Conn(ctx)
+	wait := time.Since(started)
+	if err != nil {
+		return nil, fmt.Errorf("browse %s: failed to acquire connection after %v: %w", op, wait, err)
+	}
+	return &browseCall{conn: conn, op: op, routes: routes, started: started, wait: wait}, nil
 }
 
-// logBrowseTiming splits a browse call's wall time into time the pool spent
-// handing out connections and time spent doing work. Browse is the one
-// foreground path that runs concurrently with indexing, so this is where the
-// distinction decides whether to fix the query or the concurrency.
-func (db *MediaDB) logBrowseTiming(op string, routes int, started time.Time, before poolWaitSample) {
-	elapsed := time.Since(started)
+func (c *browseCall) finish(db *MediaDB) {
+	if err := c.conn.Close(); err != nil {
+		log.Warn().Err(err).Str("op", c.op).Msg("failed to release browse connection")
+	}
+	elapsed := time.Since(c.started)
 	if elapsed < browseTimingLogThreshold {
 		return
 	}
 	sqlDB := db.sql.Load()
-	after := samplePoolWait(sqlDB)
-	connWait := after.waitDuration - before.waitDuration
-
 	event := log.Info()
 	if elapsed > browseTimingWarnThreshold {
 		event = log.Warn()
 	}
 	event = logPoolStats(event, sqlDB)
 	event = event.
-		Str("op", op).
+		Str("op", c.op).
 		Dur("elapsed", elapsed).
-		Dur("poolConnWait", connWait).
-		Int64("poolConnWaitCount", after.waitCount-before.waitCount).
-		Dur("nonWait", elapsed-connWait).
+		// connWait is this call's own queueing time, measured across its single
+		// acquisition, so work is always elapsed minus it and never negative.
+		Dur("connWait", c.wait).
+		Dur("work", elapsed-c.wait).
+		Bool("boosted", db.indexingCacheBoost.Load())
+	if c.routes > 0 {
 		// The overlay query joins Media once per source route and re-checks
 		// higher-priority routes per candidate row, so cost rises faster than
-		// route count. On the same line as the wait so the two are comparable
-		// without matching timestamps across log entries.
-		Bool("boosted", db.indexingCacheBoost.Load())
-	if routes > 0 {
-		event = event.Int("routes", routes)
+		// route count does. Reported here so the two are comparable on one line.
+		event = event.Int("routes", c.routes)
 	}
 	event.Msg("browse call timing")
 }
@@ -2841,11 +2891,12 @@ func (db *MediaDB) BrowseDirectories(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	started, wait := time.Now(), samplePoolWait(db.sql.Load())
-	defer func() {
-		db.logBrowseTiming("browse directories", len(browseOverlaySources(opts.Overlay)), started, wait)
-	}()
-	results, err := sqlBrowseDirectories(ctx, db.sql.Load(), opts)
+	call, err := db.beginBrowse(ctx, "browse directories", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return nil, err
+	}
+	defer call.finish(db)
+	results, err := sqlBrowseDirectories(ctx, call.conn, opts)
 	db.NoteCorruption(err)
 	return results, err
 }
@@ -2859,9 +2910,12 @@ func (db *MediaDB) BrowseFiles(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	started, wait := time.Now(), samplePoolWait(db.sql.Load())
-	defer func() { db.logBrowseTiming("browse files", len(browseOverlaySources(opts.Overlay)), started, wait) }()
-	results, err := sqlBrowseFiles(ctx, db.sql.Load(), opts)
+	call, err := db.beginBrowse(ctx, "browse files", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return nil, err
+	}
+	defer call.finish(db)
+	results, err := sqlBrowseFiles(ctx, call.conn, opts)
 	db.NoteCorruption(err)
 	return results, err
 }
@@ -2897,11 +2951,12 @@ func (db *MediaDB) BrowseFileCount(
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
-	started, wait := time.Now(), samplePoolWait(db.sql.Load())
-	defer func() {
-		db.logBrowseTiming("browse file count", len(browseOverlaySources(opts.Overlay)), started, wait)
-	}()
-	return sqlBrowseFileCount(ctx, db.sql.Load(), opts)
+	call, err := db.beginBrowse(ctx, "browse file count", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return 0, err
+	}
+	defer call.finish(db)
+	return sqlBrowseFileCount(ctx, call.conn, opts)
 }
 
 // BrowseDirCount returns the total number of immediate child directories under a path prefix.
@@ -2927,7 +2982,12 @@ func (db *MediaDB) BrowseIndex(
 	if db.sql.Load() == nil {
 		return database.BrowseIndexResult{}, ErrNullSQL
 	}
-	return sqlBrowseIndex(ctx, db.sql.Load(), &opts)
+	call, err := db.beginBrowse(ctx, "browse index", len(browseOverlaySources(opts.Overlay)))
+	if err != nil {
+		return database.BrowseIndexResult{}, err
+	}
+	defer call.finish(db)
+	return sqlBrowseIndex(ctx, call.conn, &opts)
 }
 
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
@@ -2949,9 +3009,12 @@ func (db *MediaDB) BrowseRootCounts(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	started, wait := time.Now(), samplePoolWait(db.sql.Load())
-	defer func() { db.logBrowseTiming("browse root counts", len(rootDirs), started, wait) }()
-	return sqlBrowseRootCounts(ctx, db.sql.Load(), rootDirs)
+	call, err := db.beginBrowse(ctx, "browse root counts", len(rootDirs))
+	if err != nil {
+		return nil, err
+	}
+	defer call.finish(db)
+	return sqlBrowseRootCounts(ctx, call.conn, rootDirs)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
@@ -2961,9 +3024,12 @@ func (db *MediaDB) BrowseRouteCounts(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
-	started, wait := time.Now(), samplePoolWait(db.sql.Load())
-	defer func() { db.logBrowseTiming("browse route counts", 0, started, wait) }()
-	return sqlBrowseRouteCounts(ctx, db.sql.Load(), opts)
+	call, err := db.beginBrowse(ctx, "browse route counts", 0)
+	if err != nil {
+		return nil, err
+	}
+	defer call.finish(db)
+	return sqlBrowseRouteCounts(ctx, call.conn, opts)
 }
 
 // BrowseSystemRootCandidates returns, in two batched queries, the immediate
@@ -2976,11 +3042,12 @@ func (db *MediaDB) BrowseSystemRootCandidates(
 	if db.sql.Load() == nil {
 		return database.BrowseSystemRootCandidates{}, false, ErrNullSQL
 	}
-	started, wait := time.Now(), samplePoolWait(db.sql.Load())
-	defer func() {
-		db.logBrowseTiming("browse system root candidates", len(opts.Roots), started, wait)
-	}()
-	return sqlBrowseSystemRootCandidates(ctx, db.sql.Load(), opts)
+	call, err := db.beginBrowse(ctx, "browse system root candidates", len(opts.Roots))
+	if err != nil {
+		return database.BrowseSystemRootCandidates{}, false, err
+	}
+	defer call.finish(db)
+	return sqlBrowseSystemRootCandidates(ctx, call.conn, opts)
 }
 
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
@@ -3200,6 +3267,21 @@ func (db *MediaDB) SearchMediaWithFilters(
 			Int("maxQueryParams", sqliteMaxParams).
 			Str("sort", filters.Sort).
 			Msg("media search cache candidates exceed SQLite parameter budget")
+	}
+
+	// A cache that covered the whole library and is only missing the systems
+	// currently being re-indexed does not need a wholesale fallback: serve the
+	// covered systems from memory and scope the SQL to the few in flight. On
+	// the #1279 device the alternative was eight grouped LIKE queries across
+	// 293 systems for every search, every one of which hit the API timeout.
+	if cacheableGroups && !cacheReady {
+		if cached, viaSQL, ok := cache.PartitionServableSystems(systemIDs); ok && len(cached) > 0 {
+			log.Debug().
+				Int("cachedSystems", len(cached)).
+				Int("sqlSystems", len(viaSQL)).
+				Msg("media search splitting between cache and scoped SQL")
+			return db.searchSplitAcrossCacheAndSQL(ctx, cached, viaSQL, qWords, filters)
+		}
 	}
 
 	// Search each media type separately so one type's normalization does not
@@ -4684,24 +4766,20 @@ func (db *MediaDB) BackgroundOperationDone() {
 
 // GetLaunchCommandForMedia generates a title-based launch command for the given media.
 func (db *MediaDB) GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-
-	if db.sql.Load() == nil {
-		return "", ErrNullSQL
+	sqlDB, err := db.readConn()
+	if err != nil {
+		return "", err
 	}
 
-	return sqlGetLaunchCommandForMedia(ctx, db.sql.Load(), systemID, path)
+	return sqlGetLaunchCommandForMedia(ctx, sqlDB, systemID, path)
 }
 
 // CheckForDuplicateMediaTitles returns any MediaTitle records that have duplicate (SystemDBID, Slug) combinations.
 // Used in tests to validate data integrity after selective updates.
 func (db *MediaDB) CheckForDuplicateMediaTitles() ([]string, error) {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
-
-	if db.sql.Load() == nil {
-		return nil, ErrNullSQL
+	sqlDB, connErr := db.readConn()
+	if connErr != nil {
+		return nil, connErr
 	}
 
 	query := `
@@ -4711,7 +4789,7 @@ func (db *MediaDB) CheckForDuplicateMediaTitles() ([]string, error) {
 		HAVING cnt > 1
 	`
 
-	rows, err := db.sql.Load().QueryContext(db.ctx, query)
+	rows, err := sqlDB.QueryContext(db.ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query duplicate media titles: %w", err)
 	}

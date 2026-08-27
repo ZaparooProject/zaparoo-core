@@ -509,12 +509,17 @@ func TestNewNamesIndex_CorruptExistingTagsMarksDatabaseCorrupt(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
 	mockMediaDB.On("SetIndexingSystems", []string{"NES"}).Return(nil).Once()
+	// The run is marked before it seeds, so that seeding commit invalidates
+	// caches as an indexing commit rather than an ordinary write.
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Once()
 	mockMediaDB.On("SeedCanonicalTagDefinitions", mock.Anything).
 		Return(sqlite3.Error{Code: sqlite3.ErrCorrupt}).Once()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
+	// Twice: a fresh run clears the resume marker before it marks itself
+	// running, and the corruption handler clears it again on the way out.
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Twice()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
 		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)

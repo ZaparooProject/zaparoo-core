@@ -71,9 +71,17 @@ func newRebuildTestEnv(t *testing.T, mockMediaDB *helpers.MockMediaDBI, params s
 
 // waitForIndexingFinished polls until the background indexing goroutine started
 // by HandleGenerateMedia has cleared the in-process indexing status.
+// indexingFinishedTimeout guards against a background goroutine that never
+// finishes; it is not a claim about how fast one should be. The work behind it
+// recreates a SQLite database and runs migrations, which under
+// `go test -race ./pkg/...` can take several seconds on a loaded machine — the
+// previous 5s deadline failed there while passing on its own. Polling returns as
+// soon as indexing clears, so a generous deadline costs a passing test nothing.
+const indexingFinishedTimeout = 30 * time.Second
+
 func waitForIndexingFinished(t *testing.T) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(indexingFinishedTimeout)
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {

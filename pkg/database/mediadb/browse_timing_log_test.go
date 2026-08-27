@@ -20,11 +20,13 @@
 package mediadb
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -66,48 +68,129 @@ func captureBrowseTiming(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// TestLogBrowseTiming_SplitsWaitFromWork is the guard for the attribution this
-// line exists to provide. A browse that is slow because it queued for a pooled
-// connection and one that is slow because its SQL is expensive look identical
-// in the logs otherwise, which is exactly the ambiguity that made a live
-// media.browse timeout un-diagnosable.
-func TestLogBrowseTiming_SplitsWaitFromWork(t *testing.T) {
+// browseTimingNumeric reads a numeric field off a captured timing line.
+func browseTimingNumeric(t *testing.T, fields map[string]any, key string) float64 {
+	t.Helper()
+	v, ok := fields[key].(float64)
+	require.True(t, ok, "%q must be numeric, got %T", key, fields[key])
+	return v
+}
+
+// TestLogBrowseTiming_ReportsRealPoolContention drives a real BrowseFiles call
+// through the instrumented entry point with the pool deliberately saturated,
+// and asserts the reported wait actually reflects it.
+//
+// This is the assertion the line exists for. A browse blocked waiting for a
+// pooled connection and a browse executing expensive SQL are indistinguishable
+// in the logs without it, which is what made a live media.browse timeout
+// un-diagnosable. Asserting only that elapsed == nonWait + poolConnWait would
+// pass trivially when poolConnWait is zero, so the contended and uncontended
+// cases are compared against each other instead.
+func TestLogBrowseTiming_ReportsRealPoolContention(t *testing.T) {
 	mediaDB, cleanup := setupBrowsePlanTestDB(t)
 	t.Cleanup(cleanup)
+	parentDir := seedBrowsePlanTestDB(t, mediaDB, 50)
+
+	sqlDB := mediaDB.sql.Load()
+	// One connection, so a second caller must block until the first releases.
+	sqlDB.SetMaxOpenConns(1)
+
+	const holdFor = 400 * time.Millisecond
+	browse := func() map[string]any {
+		var fields map[string]any
+		out := captureBrowseTiming(t, func() {
+			_, err := mediaDB.BrowseFiles(context.Background(),
+				&database.BrowseFilesOptions{PathPrefix: parentDir, Limit: 10})
+			require.NoError(t, err)
+		})
+		f, found := browseTimingLine(t, out)
+		if found {
+			fields = f
+		}
+		return fields
+	}
+
+	// Contended: hold the only connection, start the browse, release after a
+	// known delay. The browse cannot begin work until the hold ends.
+	hog, err := sqlDB.Conn(context.Background())
+	require.NoError(t, err)
+
+	done := make(chan map[string]any, 1)
+	go func() { done <- browse() }()
+
+	time.Sleep(holdFor)
+	require.NoError(t, hog.Close())
+
+	contended := <-done
+	require.NotNil(t, contended, "a browse blocked for %v must be over the reporting threshold", holdFor)
+
+	waitMS := browseTimingNumeric(t, contended, "connWait")
+	elapsedMS := browseTimingNumeric(t, contended, "elapsed")
+	workMS := browseTimingNumeric(t, contended, "work")
+
+	assert.Greater(t, waitMS, float64(holdFor.Milliseconds())*0.5,
+		"connWait must reflect the ~%v spent queued for the only connection; "+
+			"got %.1f ms, so the instrumentation is not measuring contention at all", holdFor, waitMS)
+	assert.Less(t, workMS, waitMS,
+		"a browse that spent most of its time queued must attribute more to wait than to work")
+	assert.InDelta(t, elapsedMS, workMS+waitMS, 1.0,
+		"wait and work must account for the whole elapsed time")
+
+	// Uncontended: the same query with the pool free must not report a
+	// comparable wait, or the field would be meaningless as a signal.
+	if uncontended := browse(); uncontended != nil {
+		assert.Less(t, browseTimingNumeric(t, uncontended, "connWait"), waitMS*0.5,
+			"an uncontended browse must not report a wait like the contended one")
+	}
+}
+
+// TestLogBrowseTiming_CarriesRouteCount pins the route count on the line. Route
+// count is the suspected cost multiplier for the overlay query, and having it
+// beside the wait is what allows the two to be compared without matching
+// timestamps across separate log entries.
+func TestLogBrowseTiming_CarriesRouteCount(t *testing.T) {
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	t.Cleanup(cleanup)
+	parentDir := seedBrowsePlanTestDB(t, mediaDB, 50)
+
+	// Two overlay sources, so the line must report routes=2.
+	overlay := &database.BrowseOverlay{Sources: []database.BrowseSource{
+		{PathPrefix: parentDir, IncludeDirs: true},
+		{PathPrefix: parentDir, IncludeDirs: false},
+	}}
+
+	// A 50-row browse finishes well under the production threshold on a
+	// desktop, so lower it rather than contriving a slow query.
+	origThreshold := browseTimingLogThreshold
+	browseTimingLogThreshold = 0
+	t.Cleanup(func() { browseTimingLogThreshold = origThreshold })
 
 	out := captureBrowseTiming(t, func() {
-		// Backdate the start so the call is over the reporting threshold
-		// without the test having to sleep for it.
-		started := time.Now().Add(-2 * browseTimingLogThreshold)
-		mediaDB.logBrowseTiming("browse files", 21, started, samplePoolWait(mediaDB.sql.Load()))
+		_, err := mediaDB.BrowseFiles(context.Background(),
+			&database.BrowseFilesOptions{PathPrefix: parentDir, Overlay: overlay, Limit: 50})
+		require.NoError(t, err)
 	})
-
 	fields, found := browseTimingLine(t, out)
-	require.True(t, found, "a call over the threshold must be reported; output:\n%s", out)
+	require.True(t, found, "with the threshold at zero every browse must log; output:\n%s", out)
 
-	for _, key := range []string{"op", "elapsed", "poolConnWait", "poolConnWaitCount", "nonWait", "routes"} {
+	for _, key := range []string{"op", "elapsed", "connWait", "work", "routes"} {
 		assert.Contains(t, fields, key, "timing line must carry %q", key)
 	}
 	assert.Equal(t, "browse files", fields["op"])
-	assert.InDelta(t, 21.0, fields["routes"], 0.001, "route count is the suspected cost multiplier")
-
-	numeric := func(key string) float64 {
-		v, ok := fields[key].(float64)
-		require.True(t, ok, "%q must be numeric, got %T", key, fields[key])
-		return v
-	}
-	assert.InDelta(t, numeric("elapsed"), numeric("nonWait")+numeric("poolConnWait"), 0.001,
-		"wait and work must account for the whole elapsed time, or the split means nothing")
+	assert.InDelta(t, 2.0, browseTimingNumeric(t, fields, "routes"), 0.001)
 }
 
 // TestLogBrowseTiming_QuietBelowThreshold keeps the line off the hot path: a
-// browse served from cache runs many times per second and must not log.
+// browse served quickly runs many times per second and must not log.
 func TestLogBrowseTiming_QuietBelowThreshold(t *testing.T) {
 	mediaDB, cleanup := setupBrowsePlanTestDB(t)
 	t.Cleanup(cleanup)
+	parentDir := seedBrowsePlanTestDB(t, mediaDB, 5)
 
 	out := captureBrowseTiming(t, func() {
-		mediaDB.logBrowseTiming("browse files", 2, time.Now(), samplePoolWait(mediaDB.sql.Load()))
+		_, err := mediaDB.BrowseFiles(context.Background(),
+			&database.BrowseFilesOptions{PathPrefix: parentDir, Limit: 5})
+		require.NoError(t, err)
 	})
 
 	_, found := browseTimingLine(t, out)

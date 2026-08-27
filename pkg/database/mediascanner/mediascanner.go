@@ -316,10 +316,6 @@ type PathResult struct {
 	System systemdefs.System
 }
 
-type slugSearchCacheDropper interface {
-	DropSlugSearchCacheForSystems(systemIDs []string)
-}
-
 type indexingPlanStore interface {
 	SetIndexingPlanSystems(systemIDs []string) error
 	GetIndexingPlanSystems() ([]string, error)
@@ -1288,6 +1284,35 @@ func NewNamesIndex(
 	}
 	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
 
+	// Clear the resume marker before the status says a run is under way, so a
+	// crash in between cannot make the next boot resume from the previous run's
+	// last system.
+	if !shouldResume {
+		if setErr := bestEffortMaintenanceError(
+			db.SetLastIndexedSystem(""), "failed to clear last indexed system",
+		); setErr != nil {
+			return 0, setErr
+		}
+	}
+
+	// Mark the run before it commits anything. MediaDB picks its cache
+	// invalidation scope on every commit by reading this status: a commit made
+	// while it still reads "completed" is an ordinary write, so it drops the
+	// whole in-memory slug search cache and the tag list, while a commit made
+	// during a run keeps both and lets the scanner invalidate per system as it
+	// goes.
+	//
+	// SeedCanonicalTags commits, so with the status written after it the first
+	// commit of every run threw both caches away. On the #1279 device that left
+	// media.search on the grouped SQL LIKE path and made media.tags re-aggregate
+	// 731,332 rows per call, and both hit the 30s API timeout.
+	if setErr := bestEffortMaintenanceError(
+		db.SetIndexingStatus(mediadb.IndexingStatusRunning),
+		"failed to set indexing status to running",
+	); setErr != nil {
+		return 0, setErr
+	}
+
 	// Ensure the canonical tag vocabulary exists before any system reconciles
 	// against it. Set-based: no existing rows are read into memory.
 	if err = SeedCanonicalTags(ctx, db); err != nil {
@@ -1301,20 +1326,6 @@ func NewNamesIndex(
 	}
 
 	logPhaseMetrics("seed_canonical_tags")
-
-	if setErr := bestEffortMaintenanceError(
-		db.SetIndexingStatus(mediadb.IndexingStatusRunning),
-		"failed to set indexing status to running",
-	); setErr != nil {
-		return 0, setErr
-	}
-	if !shouldResume {
-		if setErr := bestEffortMaintenanceError(
-			db.SetLastIndexedSystem(""), "failed to clear last indexed system",
-		); setErr != nil {
-			return 0, setErr
-		}
-	}
 
 	// Build sorted system list as the single loop driver. This covers all three
 	// previous sources: sysPathIDs (systems with paths), launcher-specific
@@ -1454,9 +1465,21 @@ func NewNamesIndex(
 			continue
 		}
 
-		if dropper, ok := db.(slugSearchCacheDropper); ok {
-			dropper.DropSlugSearchCacheForSystems([]string{systemID})
-		}
+		// The slug search cache deliberately keeps this system's previous
+		// entries while it is rescanned; refreshMidScanCaches replaces them
+		// once the system commits. Nothing is served wrongly in the meantime:
+		// the cache only nominates candidate title IDs, and the rows come from
+		// a live query, so entries whose rows have gone simply return nothing.
+		// Only files added since the last run are missing, and only until this
+		// system finishes.
+		//
+		// Evicting up front instead cost far more than it protected. A search
+		// naming an evicted system cannot be answered from memory, so a
+		// library-wide search — which names every system — fell back to the
+		// grouped SQL LIKE path for whichever systems were in flight. Measured
+		// on the #1279 device mid-index, the same query took 242 ms across 28
+		// covered systems and 27,205 ms across all of them; the difference was
+		// entirely the fallback for the four in flight.
 
 		// Drop any staged rows a crashed run left behind (a mid-system commit
 		// makes staged rows durable); this system re-stages from scratch.

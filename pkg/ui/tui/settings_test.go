@@ -92,7 +92,7 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	})
 
 	// Verify settings page is shown
-	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), "Settings title should appear")
+	require.True(t, runner.WaitForText("Settings", uiSettleTimeout), "Settings title should appear")
 
 	// Verify menu items are visible
 	assert.True(t, runner.ContainsText("Readers"), "Readers menu item should be visible")
@@ -128,7 +128,7 @@ func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
 		BuildSettingsMainMenuWithService(cfg, mockSvc, pages, runner.App(), nil, nil, "", "")
 	})
 
-	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Settings", uiSettleTimeout))
 
 	// Navigate down through menu items
 	runner.Screen().InjectArrowDown()
@@ -174,7 +174,7 @@ func TestBuildSettingsMainMenu_EscapeGoesBack_Integration(t *testing.T) {
 		BuildSettingsMainMenuWithService(cfg, mockSvc, pages, runner.App(), nil, rebuildMainPage, "", "")
 	})
 
-	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Settings", uiSettleTimeout))
 
 	rebuildDone := make(chan struct{}, 1)
 	go func() {
@@ -189,7 +189,7 @@ func TestBuildSettingsMainMenu_EscapeGoesBack_Integration(t *testing.T) {
 	runner.Draw()
 
 	// Should have called rebuild
-	assert.True(t, runner.WaitForSignal(rebuildDone, 100*time.Millisecond), "Should have called rebuildMainPage")
+	assert.True(t, runner.WaitForSignal(rebuildDone, uiSettleTimeout), "Should have called rebuildMainPage")
 }
 
 func TestBuildAudioSettingsMenu_Integration(t *testing.T) {
@@ -215,7 +215,7 @@ func TestBuildAudioSettingsMenu_Integration(t *testing.T) {
 	})
 
 	// Verify audio page is shown
-	require.True(t, runner.WaitForText("Audio", 100*time.Millisecond), "Audio title should appear")
+	require.True(t, runner.WaitForText("Audio", uiSettleTimeout), "Audio title should appear")
 
 	// Verify toggle is visible
 	assert.True(t, runner.ContainsText("Audio feedback"), "Audio feedback toggle should be visible")
@@ -242,7 +242,7 @@ func TestBuildAudioSettingsMenu_Toggle_Integration(t *testing.T) {
 		buildAudioSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Audio", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Audio", uiSettleTimeout))
 
 	// Toggle by pressing Enter
 	runner.Screen().InjectEnter()
@@ -250,7 +250,7 @@ func TestBuildAudioSettingsMenu_Toggle_Integration(t *testing.T) {
 
 	// Wait for UpdateSettings to be called using the mock's signal channel
 	called := mockSvc.UpdateSettingsCalled()
-	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "UpdateSettings should be called")
+	assert.True(t, runner.WaitForSignal(called, uiSettleTimeout), "UpdateSettings should be called")
 }
 
 func TestBuildAudioSettingsMenu_Error_Integration(t *testing.T) {
@@ -275,7 +275,7 @@ func TestBuildAudioSettingsMenu_Error_Integration(t *testing.T) {
 	})
 
 	// Should show error modal
-	require.True(t, runner.WaitForText("Failed", 100*time.Millisecond), "Error modal should appear")
+	require.True(t, runner.WaitForText("Failed", uiSettleTimeout), "Error modal should appear")
 }
 
 func TestBuildReadersSettingsMenu_Integration(t *testing.T) {
@@ -302,7 +302,7 @@ func TestBuildReadersSettingsMenu_Integration(t *testing.T) {
 		buildReadersSettingsMenu(cfg, mockSvc, pages, runner.App(), nil)
 	})
 
-	require.True(t, runner.WaitForText("Readers", 100*time.Millisecond), "Readers title should appear")
+	require.True(t, runner.WaitForText("Readers", uiSettleTimeout), "Readers title should appear")
 
 	// Verify menu items
 	assert.True(t, runner.ContainsText("Auto-detect"), "Auto-detect toggle should be visible")
@@ -333,7 +333,7 @@ func TestBuildReadersSettingsMenu_ScanModeOptions(t *testing.T) {
 		buildReadersSettingsMenu(cfg, mockSvc, pages, runner.App(), nil)
 	})
 
-	require.True(t, runner.WaitForText("Readers", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Readers", uiSettleTimeout))
 
 	// Verify scan mode displays Tap
 	assert.True(t, runner.ContainsText("Tap"), "Tap mode should be visible")
@@ -361,7 +361,7 @@ func TestBuildReaderEditPage_DownFromEnabledFocusesButtonBar(t *testing.T) {
 		buildReaderEditPage(cfg, mockSvc, pages, runner.App(), mockPlatform, &configuredReaders, 0)
 	})
 
-	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), "Reader edit page should appear")
+	require.True(t, runner.WaitForText("Settings", uiSettleTimeout), "Reader edit page should appear")
 
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
@@ -399,7 +399,7 @@ func TestBuildAdvancedSettingsMenu_Integration(t *testing.T) {
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond), "Advanced title should appear")
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout), "Advanced title should appear")
 
 	// Verify menu items
 	assert.True(t, runner.ContainsText("Ignore systems"), "Ignore systems should be visible")
@@ -438,7 +438,7 @@ func TestBuildAdvancedSettingsMenu_ReloadCore_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
-	require.True(t, runner.WaitForText("Reload Core", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Reload Core", uiSettleTimeout))
 
 	runner.SimulateArrowDown()
 	enterDone := make(chan struct{})
@@ -469,7 +469,7 @@ func TestBuildAdvancedSettingsMenu_ReloadCore_Integration(t *testing.T) {
 		t.Fatal("reload action did not return")
 	}
 
-	require.True(t, runner.WaitForText("Core reloaded", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Core reloaded", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "ReloadCore", mock.Anything)
 }
 
@@ -488,12 +488,12 @@ func TestBuildAdvancedSettingsMenu_ReloadCoreError_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
-	require.True(t, runner.WaitForText("Reload Core", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Reload Core", uiSettleTimeout))
 
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
 
-	require.True(t, runner.WaitForText("Failed to reload Core", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Failed to reload Core", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "ReloadCore", mock.Anything)
 }
 
@@ -518,7 +518,7 @@ func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) 
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout))
 
 	// Navigate to debug logging (third item)
 	runner.Screen().InjectArrowDown()
@@ -531,7 +531,7 @@ func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) 
 
 	// Wait for UpdateSettings to be called using the mock's signal channel
 	called := mockSvc.UpdateSettingsCalled()
-	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "UpdateSettings should be called")
+	assert.True(t, runner.WaitForSignal(called, uiSettleTimeout), "UpdateSettings should be called")
 }
 
 func TestBuildAboutPage_Integration(t *testing.T) {
@@ -552,7 +552,7 @@ func TestBuildAboutPage_Integration(t *testing.T) {
 		buildAboutPage(pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("About", 100*time.Millisecond), "About title should appear")
+	require.True(t, runner.WaitForText("About", uiSettleTimeout), "About title should appear")
 
 	// Verify content
 	assert.True(t, runner.ContainsText("Zaparoo Core"), "Should show Zaparoo Core")
@@ -578,7 +578,7 @@ func TestBuildAboutPage_BackNavigation_Integration(t *testing.T) {
 		buildAboutPage(pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("About", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("About", uiSettleTimeout))
 
 	// Helper to check current page
 	getFrontPage := func() string {
@@ -595,7 +595,7 @@ func TestBuildAboutPage_BackNavigation_Integration(t *testing.T) {
 
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return getFrontPage() == PageSettingsMain
-	}, 100*time.Millisecond), "Should navigate back to settings main")
+	}, uiSettleTimeout), "Should navigate back to settings main")
 }
 
 func TestExitDelayLabels(t *testing.T) {
@@ -806,7 +806,7 @@ func TestBuildBackupSettingsMenu_FastFetchSkipsLoader_Integration(t *testing.T) 
 
 	// An instant fetch renders the page directly, well inside the grace
 	// period, so the loading frame never appears.
-	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Back up now", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Loading backup status..."))
 }
 
@@ -824,7 +824,7 @@ func TestBuildBackupSettingsMenu_UnlinkedShowsCloudLinkPointer_Integration(t *te
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Back up now", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Local"))
 	assert.True(t, runner.ContainsText("Cloud"))
 	assert.True(t, runner.ContainsText("View backups"))
@@ -849,7 +849,7 @@ func TestBuildBackupSettingsMenu_CloudControlsVisibleWhenLinked_Integration(t *t
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Local"))
 	assert.True(t, runner.ContainsText("Cloud"))
 	assert.True(t, runner.ContainsText("Schedule"))
@@ -872,7 +872,7 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 	runner.QueueUpdateDraw(func() {
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout))
 
 	// Navigate from local "Back up now" to the cloud toggle and flip it.
 	runner.SimulateArrowDown()
@@ -890,7 +890,7 @@ func TestBuildBackupSettingsMenu_ToggleWritesBackupRemoteEnabled_Integration(t *
 			}
 		}
 		return false
-	}, 100*time.Millisecond), "toggle should write BackupRemoteEnabled")
+	}, uiSettleTimeout), "toggle should write BackupRemoteEnabled")
 }
 
 func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(t *testing.T) {
@@ -912,7 +912,7 @@ func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("View backups"), "restore must remain available")
 	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
 	// Back up now. Four downs land on the cloud upload action.
@@ -920,12 +920,12 @@ func TestBuildBackupSettingsMenu_UnavailableWarpStillAttemptsUpload_Integration(
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
-	require.True(t, runner.WaitForText("Warp is required", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Warp is required", uiSettleTimeout))
 	// The cached "unavailable" value is only a hint: pressing the action
 	// must still attempt the upload, whose fresh server-side check is
 	// authoritative (a just-activated subscription works immediately).
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("requires an active Zaparoo Warp subscription", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("requires an active Zaparoo Warp subscription", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "RunRemoteBackup", mock.Anything)
 }
 
@@ -947,13 +947,13 @@ func TestBuildBackupSettingsMenu_BackupNowCallsService_Integration(t *testing.T)
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Back up now", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Creating backup", 500*time.Millisecond))
-	require.True(t, runner.WaitForText("Elapsed:", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Creating backup", uiSettleTimeout))
+	require.True(t, runner.WaitForText("Elapsed:", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Hide"), "progress modal must not offer a Hide button")
 	release <- time.Now()
-	require.True(t, runner.WaitForText("Backup created", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Backup created", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "CreateBackup", mock.Anything)
 }
 
@@ -973,9 +973,9 @@ func TestBuildBackupSettingsMenu_BackupErrorShowsSafeGuidance_Integration(t *tes
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Back up now", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Back up now", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Stop active media", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Stop active media", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("/private/path"))
 }
 
@@ -1000,7 +1000,7 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 		buildBackupSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Automatic backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout))
 	// Local: Back up now, View backups; Cloud: Automatic backup, Schedule,
 	// Back up now. Four downs land on the cloud upload action.
 	runner.SimulateArrowDown()
@@ -1008,7 +1008,7 @@ func TestBuildBackupSettingsMenu_RemoteBackupNowCallsService_Integration(t *test
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("This device is already backed up.", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("This device is already backed up.", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Cloud backup"))
 	assert.False(t, runner.ContainsText("Cloud backup created"))
 	assert.True(t, runner.ContainsText("Snapshot: 2026-07-10 12:00:00 UTC"))
@@ -1041,7 +1041,7 @@ func TestWaitForCoreRestart_DownThenUp_Integration(t *testing.T) {
 			10*time.Millisecond, time.Minute, time.Minute, func() { close(done) })
 	})
 
-	require.True(t, runner.WaitForText("Core is restarting.", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Core is restarting.", uiSettleTimeout))
 	releaseFirstPoll <- struct{}{}
 	require.True(t, runner.WaitForText("Core restarted", time.Second))
 	assert.False(t, runner.ContainsText("Core is restarting."))
@@ -1099,7 +1099,7 @@ func TestBuildBackupListPage_DisplaysBackups_Integration(t *testing.T) {
 		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", uiSettleTimeout))
 	pageName, primitive := pages.GetFrontPage()
 	require.Equal(t, PageSettingsBackupList, pageName)
 	frame, ok := primitive.(*PageFrame)
@@ -1143,14 +1143,14 @@ func TestBuildBackupListPage_SelectShowsDetailsModal_Integration(t *testing.T) {
 		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Backup details", 100*time.Millisecond))
-	require.True(t, runner.WaitForText("Size: 2 KB", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Backup details", uiSettleTimeout))
+	require.True(t, runner.WaitForText("Size: 2 KB", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Payload integrity"))
-	require.True(t, runner.WaitForText("Manifest:", 100*time.Millisecond))
-	require.True(t, runner.WaitForText("Zaparoo", 100*time.Millisecond), runner.GetScreenText())
-	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), runner.GetScreenText())
+	require.True(t, runner.WaitForText("Manifest:", uiSettleTimeout))
+	require.True(t, runner.WaitForText("Zaparoo", uiSettleTimeout), runner.GetScreenText())
+	require.True(t, runner.WaitForText("Settings", uiSettleTimeout), runner.GetScreenText())
 }
 
 func TestBuildBackupListPage_InspectFailureDisablesRestore_Integration(t *testing.T) {
@@ -1174,10 +1174,10 @@ func TestBuildBackupListPage_InspectFailureDisablesRestore_Integration(t *testin
 		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Unable", 500*time.Millisecond), runner.GetScreenText())
-	require.True(t, runner.WaitForText("disabled", 100*time.Millisecond), runner.GetScreenText())
+	require.True(t, runner.WaitForText("Unable", uiSettleTimeout), runner.GetScreenText())
+	require.True(t, runner.WaitForText("disabled", uiSettleTimeout), runner.GetScreenText())
 	mockSvc.AssertNotCalled(t, "RestoreBackup", mock.Anything, backupName)
 }
 
@@ -1210,14 +1210,14 @@ func TestBackupDetailsModal_DeleteCallsService_Integration(t *testing.T) {
 		buildBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Local backup 2026-06-24 15:04:05 UTC", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Backup details", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Backup details", uiSettleTimeout))
 	runner.SimulateTab()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Delete Local backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Delete Local backup", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Backup deleted", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Backup deleted", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "DeleteBackup", mock.Anything, backupName)
 }
 
@@ -1238,10 +1238,10 @@ func TestShowBackupRestoreConfirm_CallsService_Integration(t *testing.T) {
 		showBackupRestoreConfirm(mockSvc, pages, runner.App(), focus, backupName, nil)
 	})
 
-	require.True(t, runner.WaitForText("Restore Local backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Restore Local backup", uiSettleTimeout))
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	require.True(t, runner.WaitForText("Backup restored", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Backup restored", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "RestoreBackup", mock.Anything, backupName)
 }
 
@@ -1266,7 +1266,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingVisible_Integration(t *testing.
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond), "Advanced title should appear")
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout), "Advanced title should appear")
 
 	// Verify error reporting toggle is visible
 	assert.True(t, runner.ContainsText("Error reporting"), "Error reporting toggle should be visible")
@@ -1293,7 +1293,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingShowsConfirmModal_Integration(t
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout))
 
 	// Navigate to error reporting (fourth item)
 	runner.SimulateArrowDown() // to reload Core
@@ -1304,7 +1304,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingShowsConfirmModal_Integration(t
 	runner.SimulateEnter()
 
 	// Should show confirmation modal with Sentry mention
-	assert.True(t, runner.WaitForText("Sentry", 100*time.Millisecond),
+	assert.True(t, runner.WaitForText("Sentry", uiSettleTimeout),
 		"Confirmation modal should mention Sentry")
 }
 
@@ -1329,7 +1329,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingCancelDoesNotEnable_Integration
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout))
 
 	// Navigate to error reporting
 	runner.SimulateArrowDown() // to reload Core
@@ -1338,7 +1338,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingCancelDoesNotEnable_Integration
 
 	// Toggle error reporting - shows modal
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Sentry", 100*time.Millisecond), "Modal should appear")
+	require.True(t, runner.WaitForText("Sentry", uiSettleTimeout), "Modal should appear")
 
 	// Press Escape to cancel
 	runner.SimulateEscape()
@@ -1373,7 +1373,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingConfirmEnables_Integration(t *t
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout))
 
 	// Navigate to error reporting
 	runner.SimulateArrowDown() // to reload Core
@@ -1382,18 +1382,18 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingConfirmEnables_Integration(t *t
 
 	// Toggle error reporting - shows modal
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Sentry", 100*time.Millisecond), "Modal should appear")
+	require.True(t, runner.WaitForText("Sentry", uiSettleTimeout), "Modal should appear")
 
 	// Press Enter to confirm (Yes is the default focused button)
 	runner.SimulateEnter()
 
 	// Wait for UpdateSettings to be called
 	called := mockSvc.UpdateSettingsCalled()
-	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond),
+	assert.True(t, runner.WaitForSignal(called, uiSettleTimeout),
 		"UpdateSettings should be called when user confirms")
 
 	// Verify the toggle is now visually checked
-	assert.True(t, runner.WaitForText("[*]", 100*time.Millisecond),
+	assert.True(t, runner.WaitForText("[*]", uiSettleTimeout),
 		"Toggle should show as checked after confirming")
 }
 
@@ -1418,7 +1418,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingDisableNoConfirm_Integration(t 
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Advanced", uiSettleTimeout))
 
 	// Navigate to error reporting
 	runner.SimulateArrowDown() // to reload Core
@@ -1430,7 +1430,7 @@ func TestBuildAdvancedSettingsMenu_ErrorReportingDisableNoConfirm_Integration(t 
 
 	// UpdateSettings should be called immediately (no confirm modal for disable)
 	called := mockSvc.UpdateSettingsCalled()
-	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond),
+	assert.True(t, runner.WaitForSignal(called, uiSettleTimeout),
 		"UpdateSettings should be called immediately when disabling")
 
 	// Verify no modal appeared (no "Sentry" text visible)
@@ -1531,7 +1531,7 @@ func TestRemoteBackupListPage_GroupsSources_Integration(t *testing.T) {
 		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Living Room (this device)", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Living Room (this device)", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Old MiSTer (unlinked)"))
 	assert.True(t, runner.ContainsText("2 backups"), "current device merges the legacy snapshot")
 	assert.True(t, runner.ContainsText("1 backup"))
@@ -1539,7 +1539,7 @@ func TestRemoteBackupListPage_GroupsSources_Integration(t *testing.T) {
 
 	// Open the first of multiple groups to exercise its captured callback.
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 14:00:00 UTC", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 14:00:00 UTC", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Cloud backup 2026-07-10 13:00:00 UTC"))
 	assert.False(t, runner.ContainsText("Cloud backup 2026-07-10 12:00:00 UTC"))
 	assert.False(t, runner.ContainsText("Old MiSTer (unlinked)"))
@@ -1559,7 +1559,7 @@ func TestRemoteBackupListPage_Empty_Integration(t *testing.T) {
 		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("(no cloud backups found)", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("(no cloud backups found)", uiSettleTimeout))
 }
 
 func TestRemoteBackupSnapshotsPage_ShowsTypeAndSize_Integration(t *testing.T) {
@@ -1581,10 +1581,10 @@ func TestRemoteBackupSnapshotsPage_ShowsTypeAndSize_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("This device", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("This device", uiSettleTimeout))
 
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 13:00:00 UTC", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 13:00:00 UTC", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Cloud backup 2026-07-10 12:00:00 UTC"))
 	assert.True(t, runner.ContainsText("Manual"))
 	assert.True(t, runner.ContainsText("Scheduled"))
@@ -1619,12 +1619,12 @@ func TestRemoteBackupSnapshotsPage_IncompatibleCannotRestore_Integration(t *test
 	runner.QueueUpdateDraw(func() {
 		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("This device", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("This device", uiSettleTimeout))
 
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("requires newer Core", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("requires newer Core", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Incompatible backup", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Incompatible backup", uiSettleTimeout))
 	runner.SimulateEnter()
 	mockSvc.AssertNotCalled(t, "RestoreRemoteBackup", mock.Anything, mock.Anything)
 }
@@ -1646,13 +1646,13 @@ func TestRemoteBackupRestoreConfirm_WordingAndRestore_Integration(t *testing.T) 
 	runner.QueueUpdateDraw(func() {
 		buildRemoteBackupListPage(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Old MiSTer (unlinked)", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Old MiSTer (unlinked)", uiSettleTimeout))
 
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 12:00:00 UTC", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Cloud backup 2026-07-10 12:00:00 UTC", uiSettleTimeout))
 	runner.SimulateEnter()
 
-	require.True(t, runner.WaitForText("Restore backup from Old MiSTer (unlinked)?", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Restore backup from Old MiSTer (unlinked)?", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Snapshot: 2026-07-10 12:00:00 UTC"))
 	assert.True(t, runner.ContainsText("Overwrites: Zaparoo, Saves"))
 	assert.True(t, runner.ContainsText("The source backup is not changed."))
@@ -1716,7 +1716,7 @@ func TestStartAuthLinkFlow_SuccessMentionsCloudBackups_Integration(t *testing.T)
 	runner.QueueUpdateDraw(func() {
 		startAuthLinkFlow(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("ABCD-1234", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("ABCD-1234", uiSettleTimeout))
 
 	// The poll loop ticks every 2 seconds before observing approval.
 	require.True(t, runner.WaitForText("Device linked", 5*time.Second))

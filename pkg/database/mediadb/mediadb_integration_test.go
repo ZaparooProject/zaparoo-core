@@ -3029,10 +3029,18 @@ func TestMediaDB_CommitTransaction_IndexingPreservesLastGoodSlugCache_Integratio
 
 	insertGame(nesSystem, "Super Mario Bros Redux", filepath.Join("roms", "nes", "smb-redux.nes"))
 
+	// The commit leaves the cache alone, including for the system being
+	// indexed. Its entries are replaced when the scanner refreshes that system
+	// after the commit; removing them here would make any search naming it
+	// unservable from memory, and a library-wide search names every system.
+	// Serving them meanwhile is safe: the cache only nominates candidate title
+	// IDs and the rows come from a live query, so the newly inserted title is
+	// simply not offered yet.
 	cache = mediaDB.slugSearchCache.Load()
 	require.NotNil(t, cache)
-	assert.False(t, cache.complete)
-	assert.False(t, cache.CanServeSystems([]string{nesSystem.ID}))
+	assert.True(t, cache.complete)
+	assert.True(t, cache.CanServeSystems([]string{nesSystem.ID}),
+		"the system being indexed must stay servable from the cache")
 	assert.True(t, cache.CanServeSystems([]string{snesSystem.ID}))
 	_, found = mediaDB.GetCachedStats(context.Background(), statsQuery)
 	assert.False(t, found, "indexing commits should invalidate stale MediaCountCache while preserving slug cache")

@@ -21,7 +21,6 @@ package tui
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -100,7 +99,7 @@ func TestBuildRemoteActivityPage_ShowsEntries_Integration(t *testing.T) {
 		buildRemoteActivityPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("launch", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("launch", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("20 Aug 12:00"))
 }
 
@@ -118,7 +117,7 @@ func TestBuildRemoteActivityPage_EmptyShowsPlaceholder_Integration(t *testing.T)
 		buildRemoteActivityPage(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("no remote activity yet", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("no remote activity yet", uiSettleTimeout))
 }
 
 func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_Integration(t *testing.T) {
@@ -136,7 +135,7 @@ func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_In
 	runner.QueueUpdateDraw(func() {
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Remote control activity", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Remote control activity", uiSettleTimeout))
 
 	// Account, Warp, Unlink account, Remote control, then Remote control activity.
 	runner.SimulateArrowDown()
@@ -145,6 +144,6 @@ func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_In
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
 
-	require.True(t, runner.WaitForText("no remote activity yet", 500*time.Millisecond),
+	require.True(t, runner.WaitForText("no remote activity yet", uiSettleTimeout),
 		"selecting Remote control activity should open the activity page")
 }

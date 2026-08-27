@@ -81,6 +81,65 @@ func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.D
 	return false
 }
 
+// waitNotificationTimeout is the budget these tests hand to WaitNotification.
+//
+// It has to comfortably exceed a loopback dial rather than just the wait:
+// WaitNotification reuses the caller's timeout as its dial deadline
+// (dialTimeout = timeout), so a budget close to the dial cost surfaces a dial
+// i/o timeout instead of the timeout error under test. Under
+// `go test -race ./pkg/...` a loopback dial was observed past 100 ms, which is
+// what made the 100 ms variants of these tests flaky.
+const waitNotificationTimeout = 2 * time.Second
+
+type waitNotificationResult struct {
+	err    error
+	params string
+}
+
+// waitNotificationInBackground starts WaitNotification and hands back its
+// result, so the test body can wait for the client's session to register before
+// broadcasting. Melody delivers only to sessions that are already connected, so
+// a broadcast sent before the client arrives is dropped and the caller waits out
+// its whole timeout for a notification that no longer exists.
+func waitNotificationInBackground(
+	ctx context.Context, cfg *config.Instance, id string,
+) <-chan waitNotificationResult {
+	ch := make(chan waitNotificationResult, 1)
+	go func() {
+		params, err := WaitNotification(ctx, waitNotificationTimeout, cfg, id)
+		ch <- waitNotificationResult{params: params, err: err}
+	}()
+	return ch
+}
+
+// broadcastAfterSessionReady blocks until the client's websocket session is
+// registered, then broadcasts each payload in order.
+func broadcastAfterSessionReady(
+	t *testing.T, server *helpers.WebSocketTestServer, payloads ...map[string]any,
+) {
+	t.Helper()
+	require.True(t, waitForWebSocketSession(server, waitNotificationTimeout),
+		"websocket session never registered; a broadcast now would be dropped")
+	for _, payload := range payloads {
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		require.NoError(t, server.Melody.Broadcast(data))
+	}
+}
+
+// awaitNotification returns the background WaitNotification result, failing the
+// test rather than hanging if it never arrives.
+func awaitNotification(t *testing.T, resultCh <-chan waitNotificationResult) waitNotificationResult {
+	t.Helper()
+	select {
+	case result := <-resultCh:
+		return result
+	case <-time.After(waitNotificationTimeout):
+		t.Fatal("WaitNotification did not complete")
+		return waitNotificationResult{}
+	}
+}
+
 type recordingTimer struct {
 	clockwork.Timer
 	stopped bool
@@ -402,23 +461,18 @@ func TestWaitNotification_ReceivesNotification(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	// Send notification after connection is established
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		notification := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "tokens.added",
-			"params":  map[string]any{"token": "test123"},
-		}
-		data, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(data)
-	}()
+	resultCh := waitNotificationInBackground(context.Background(), cfg, "tokens.added")
+	broadcastAfterSessionReady(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tokens.added",
+		"params":  map[string]any{"token": "test123"},
+	})
 
-	result, err := WaitNotification(context.Background(), time.Second, cfg, "tokens.added")
-	require.NoError(t, err)
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
 
 	var params map[string]any
-	err = json.Unmarshal([]byte(result), &params)
+	err := json.Unmarshal([]byte(result.params), &params)
 	require.NoError(t, err)
 	assert.Equal(t, "test123", params["token"])
 }
@@ -432,33 +486,26 @@ func TestWaitNotification_IgnoresWrongMethod(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-
-		// Send wrong notification first
-		wrongNotification := map[string]any{
+	resultCh := waitNotificationInBackground(context.Background(), cfg, "tokens.added")
+	broadcastAfterSessionReady(t, server,
+		// Wrong notification first; it must be skipped.
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.removed",
 			"params":  map[string]any{"wrong": true},
-		}
-		wrongData, _ := json.Marshal(wrongNotification)
-		_ = server.Melody.Broadcast(wrongData)
-
-		// Then send correct notification
-		correctNotification := map[string]any{
+		},
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.added",
 			"params":  map[string]any{"correct": true},
-		}
-		correctData, _ := json.Marshal(correctNotification)
-		_ = server.Melody.Broadcast(correctData)
-	}()
+		},
+	)
 
-	result, err := WaitNotification(context.Background(), time.Second, cfg, "tokens.added")
-	require.NoError(t, err)
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
 
 	var params map[string]any
-	err = json.Unmarshal([]byte(result), &params)
+	err := json.Unmarshal([]byte(result.params), &params)
 	require.NoError(t, err)
 	assert.True(t, params["correct"].(bool))
 }
@@ -472,34 +519,27 @@ func TestWaitNotification_IgnoresRequestObjects(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-
-		// Send a request object (has ID) - should be ignored
-		request := map[string]any{
+	resultCh := waitNotificationInBackground(context.Background(), cfg, "tokens.added")
+	broadcastAfterSessionReady(t, server,
+		// A request object (it has an ID) must be ignored.
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.added",
 			"params":  map[string]any{"from_request": true},
 			"id":      "some-id",
-		}
-		requestData, _ := json.Marshal(request)
-		_ = server.Melody.Broadcast(requestData)
-
-		// Send a true notification (no ID)
-		notification := map[string]any{
+		},
+		map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "tokens.added",
 			"params":  map[string]any{"from_notification": true},
-		}
-		notificationData, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(notificationData)
-	}()
+		},
+	)
 
-	result, err := WaitNotification(context.Background(), time.Second, cfg, "tokens.added")
-	require.NoError(t, err)
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
 
 	var params map[string]any
-	err = json.Unmarshal([]byte(result), &params)
+	err := json.Unmarshal([]byte(result.params), &params)
 	require.NoError(t, err)
 	assert.True(t, params["from_notification"].(bool))
 }
@@ -513,8 +553,9 @@ func TestWaitNotification_Timeout(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	// Don't send any notification, let it timeout
-	_, err := WaitNotification(context.Background(), 100*time.Millisecond, cfg, "tokens.added")
+	// Don't send any notification, let it timeout. The budget must stay well
+	// above the dial cost — see waitNotificationTimeout.
+	_, err := WaitNotification(context.Background(), waitNotificationTimeout, cfg, "tokens.added")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrRequestTimeout)
 }
@@ -531,14 +572,17 @@ func TestWaitNotification_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	// Cancel only once the client is connected. Cancelling during the dial
+	// fails it instead, which reports a wrapped context error rather than
+	// ErrRequestCancelled.
+	resultCh := waitNotificationInBackground(ctx, cfg, "tokens.added")
+	require.True(t, waitForWebSocketSession(server, waitNotificationTimeout),
+		"websocket session never registered")
+	cancel()
 
-	_, err := WaitNotification(ctx, time.Second, cfg, "tokens.added")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRequestCancelled)
+	result := awaitNotification(t, resultCh)
+	require.Error(t, result.err)
+	assert.ErrorIs(t, result.err, ErrRequestCancelled)
 }
 
 func TestWaitNotifications_ReceivesAnyOfMultiple(t *testing.T) {
@@ -669,14 +713,29 @@ func TestWaitNotifications_Timeout(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
-	_, _, err := WaitNotifications(
-		context.Background(),
-		100*time.Millisecond,
-		cfg,
-		"tokens.added",
-	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRequestTimeout)
+	// Drive the timeout off a fake clock rather than a short real budget. The
+	// dial deadline is the same value the wait uses, so a budget small enough to
+	// keep the test quick was being consumed by the loopback dial instead,
+	// surfacing a dial i/o timeout rather than ErrRequestTimeout.
+	fakeClock := clockwork.NewFakeClock()
+	resultCh := make(chan waitNotificationsResult, 1)
+	go func() {
+		method, params, err := waitNotificationsWithClock(
+			context.Background(), waitNotificationTimeout, cfg, fakeClock, "tokens.added")
+		resultCh <- waitNotificationsResult{method: method, params: params, err: err}
+	}()
+
+	blockCtx, blockCancel := context.WithTimeout(context.Background(), waitNotificationTimeout)
+	defer blockCancel()
+	require.NoError(t, fakeClock.BlockUntilContext(blockCtx, 1), "timeout timer was never armed")
+	fakeClock.Advance(waitNotificationTimeout)
+
+	select {
+	case result := <-resultCh:
+		require.ErrorIs(t, result.err, ErrRequestTimeout)
+	case <-time.After(waitNotificationTimeout):
+		t.Fatal("WaitNotifications did not complete after the timeout fired")
+	}
 }
 
 func TestWaitNotifications_ContextCancellation(t *testing.T) {
@@ -719,7 +778,29 @@ func TestWaitNotifications_IntentionalCloseIsJoinedAndTraceLogged(t *testing.T) 
 	zlog.Logger = zerolog.New(&logs).Level(zerolog.TraceLevel)
 	t.Cleanup(func() { zlog.Logger = originalLogger })
 
-	_, _, err := WaitNotifications(context.Background(), 20*time.Millisecond, cfg, "tokens.added")
+	// Fake clock for the same reason as TestWaitNotifications_Timeout: a real
+	// budget short enough to keep this quick can be eaten by the dial, which
+	// fails before any of the close/log behaviour under test happens.
+	fakeClock := clockwork.NewFakeClock()
+	resultCh := make(chan waitNotificationsResult, 1)
+	go func() {
+		method, params, waitErr := waitNotificationsWithClock(
+			context.Background(), waitNotificationTimeout, cfg, fakeClock, "tokens.added")
+		resultCh <- waitNotificationsResult{method: method, params: params, err: waitErr}
+	}()
+
+	blockCtx, blockCancel := context.WithTimeout(context.Background(), waitNotificationTimeout)
+	defer blockCancel()
+	require.NoError(t, fakeClock.BlockUntilContext(blockCtx, 1), "timeout timer was never armed")
+	fakeClock.Advance(waitNotificationTimeout)
+
+	var err error
+	select {
+	case result := <-resultCh:
+		err = result.err
+	case <-time.After(waitNotificationTimeout):
+		t.Fatal("WaitNotifications did not complete after the timeout fired")
+	}
 	require.ErrorIs(t, err, ErrRequestTimeout)
 
 	lines := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))
@@ -936,21 +1017,22 @@ func TestLocalAPIClient_WaitNotification(t *testing.T) {
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
 
+	client := NewLocalAPIClient(cfg)
+	resultCh := make(chan waitNotificationResult, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		notification := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "tokens.added",
-			"params":  map[string]any{"token": "abc"},
-		}
-		data, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(data)
+		params, err := client.WaitNotification(context.Background(), waitNotificationTimeout, "tokens.added")
+		resultCh <- waitNotificationResult{params: params, err: err}
 	}()
 
-	client := NewLocalAPIClient(cfg)
-	result, err := client.WaitNotification(context.Background(), time.Second, "tokens.added")
-	require.NoError(t, err)
-	assert.Contains(t, result, "abc")
+	broadcastAfterSessionReady(t, server, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tokens.added",
+		"params":  map[string]any{"token": "abc"},
+	})
+
+	result := awaitNotification(t, resultCh)
+	require.NoError(t, result.err)
+	assert.Contains(t, result.params, "abc")
 }
 
 func TestNewLocalAPIClient(t *testing.T) {

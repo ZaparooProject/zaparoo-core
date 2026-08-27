@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -31,7 +32,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +66,80 @@ func (c *logCapture) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.buf.String()
+}
+
+// logRedirector is the writer behind the package's global logger. It is
+// installed once by TestMain and never replaced, so tests can capture log
+// output by swapping where it points instead of by assigning log.Logger.
+//
+// Assigning log.Logger is a data race and the race detector caught it: a
+// dispatcher goroutine belonging to another test was reading the global logger
+// in log.Debug() while TestHandlePairFinish_AuditLogsHMACMismatch wrote it.
+// Guarding the capture buffer, which this package already did, does not help —
+// the unguarded state is the Logger value itself. Websocket dispatcher
+// goroutines outlive the test that started them, so no amount of test ordering
+// removes the overlap.
+//
+// Implementing zerolog.LevelWriter keeps per-test level filtering exact without
+// parsing the JSON back out.
+type logRedirector struct {
+	target   *logCapture
+	fallback io.Writer
+	mu       syncutil.Mutex
+	level    zerolog.Level
+}
+
+func (r *logRedirector) Write(p []byte) (int, error) {
+	return r.WriteLevel(zerolog.NoLevel, p)
+}
+
+func (r *logRedirector) WriteLevel(level zerolog.Level, p []byte) (int, error) {
+	r.mu.Lock()
+	target, minLevel, fallback := r.target, r.level, r.fallback
+	r.mu.Unlock()
+
+	if target == nil {
+		if fallback == nil {
+			return len(p), nil
+		}
+		n, err := fallback.Write(p)
+		if err != nil {
+			return n, fmt.Errorf("write log fallback: %w", err)
+		}
+		return n, nil
+	}
+	if level != zerolog.NoLevel && level < minLevel {
+		return len(p), nil
+	}
+	return target.Write(p)
+}
+
+func (r *logRedirector) attach(target *logCapture, level zerolog.Level) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.target = target
+	r.level = level
+}
+
+func (r *logRedirector) detach() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.target = nil
+	r.level = zerolog.TraceLevel
+}
+
+// captureLogs routes global log output into a fresh buffer for the duration of
+// the test, filtered to level and above.
+//
+// Tests using it need not be sequential: other tests' goroutines keep logging
+// into the same buffer, which is why logCapture is synchronized and why
+// assertions here look for the lines they want rather than counting them.
+func captureLogs(t *testing.T, level zerolog.Level) *logCapture {
+	t.Helper()
+	buf := &logCapture{}
+	testLogRedirector.attach(buf, level)
+	t.Cleanup(testLogRedirector.detach)
+	return buf
 }
 
 func TestLogSafeResponse(t *testing.T) {
@@ -104,15 +178,10 @@ func TestLogSafeResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture log output
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+			buf := captureLogs(t, zerolog.DebugLevel)
 
 			// Test the function
 			logSafeResponse(tt.result)
-
-			// Restore original logger
-			log.Logger = originalLogger
 
 			logOutput := buf.String()
 
@@ -171,10 +240,7 @@ func TestLogSafeResponse_BatchRedaction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-			defer func() { log.Logger = originalLogger }()
+			buf := captureLogs(t, zerolog.DebugLevel)
 
 			logSafeResponse(tt.result)
 
@@ -196,10 +262,7 @@ func TestLogSafeResponse_DefaultOmitsBody(t *testing.T) {
 		Blob   string `json:"blob"`
 	}
 
-	var buf logCapture
-	originalLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-	defer func() { log.Logger = originalLogger }()
+	buf := captureLogs(t, zerolog.DebugLevel)
 
 	logSafeResponse(secretShape{Marker: "should-not-appear", Blob: "AAAABASE64=="})
 
@@ -278,10 +341,7 @@ func TestHandleResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-			defer func() { log.Logger = originalLogger }()
+			buf := captureLogs(t, zerolog.DebugLevel)
 
 			require.NoError(t, handleResponse(tt.resp))
 
@@ -329,15 +389,10 @@ func TestLogSafeRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture log output
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+			buf := captureLogs(t, zerolog.DebugLevel)
 
 			// Test the function
 			logSafeRequest(&tt.request)
-
-			// Restore original logger
-			log.Logger = originalLogger
 
 			logOutput := buf.String()
 
@@ -350,10 +405,7 @@ func TestLogSafeRequest(t *testing.T) {
 }
 
 func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
-	var buf logCapture
-	originalLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-	defer func() { log.Logger = originalLogger }()
+	buf := captureLogs(t, zerolog.DebugLevel)
 
 	logSafeRequest(&models.RequestObject{
 		JSONRPC: "2.0",
@@ -370,10 +422,7 @@ func TestLogSafeRequest_AuthClaimParamsRedacted(t *testing.T) {
 }
 
 func TestLogSafeResponse_AuthLinkCodesRedacted(t *testing.T) {
-	var buf logCapture
-	originalLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-	defer func() { log.Logger = originalLogger }()
+	buf := captureLogs(t, zerolog.DebugLevel)
 
 	logSafeResponse(models.AuthLinkStatusResponse{
 		Status:                  models.AuthLinkStatusPending,
@@ -419,13 +468,9 @@ func TestLogWSWriteError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf)
+			buf := captureLogs(t, zerolog.TraceLevel)
 
 			logWSWriteError(tt.err, "test message")
-
-			log.Logger = originalLogger
 
 			logOutput := buf.String()
 			assert.Contains(t, logOutput, tt.expectLevel)
