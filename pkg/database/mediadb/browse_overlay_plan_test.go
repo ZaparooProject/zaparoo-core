@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"path"
 	"strings"
 	"testing"
 
@@ -139,4 +140,80 @@ func seedAnalysisLimitedStats(ctx context.Context, t *testing.T, mediaDB *MediaD
 	// The planner caches sqlite_stat1 per connection; force a reload.
 	_, err = sqlDB.ExecContext(ctx, "ANALYZE sqlite_master")
 	require.NoError(t, err)
+}
+
+// TestBrowseOverlayDirectoriesPlan_UsesCacheIndexes pins the plan of the
+// cache-backed merged directory listing.
+//
+// The cost this change removes is a Media prefix range scan per route
+// (m.Path >= parent_dir ...), which reads every row beneath the route. The
+// replacement must reach BrowseDirCounts by ParentDirDBID and touch Media only
+// for the direct-file shadow check, which is a ParentDir equality lookup.
+// Asserting the plan rather than a duration: at fixture scale either shape
+// finishes instantly, but the wrong one shows up in the plan immediately.
+func TestBrowseOverlayDirectoriesPlan_UsesCacheIndexes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := setupBrowsePlanTestDB(t)
+	defer cleanup()
+
+	parentDir := seedBrowsePlanTestDB(t, mediaDB, 200)
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	seedAnalysisLimitedStats(ctx, t, mediaDB)
+
+	root := path.Dir(strings.TrimSuffix(parentDir, "/")) + "/"
+	sources := []database.BrowseSource{
+		{PathPrefix: root, IncludeDirs: true},
+		{PathPrefix: parentDir, IncludeDirs: true},
+	}
+	opts := database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+	}
+	parentIDs, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, nil)
+	require.NoError(t, err)
+	require.True(t, usable, "the fixture must leave the cache serving this listing")
+
+	mediaQuery, mediaArgs := browseOverlayDirectoriesMediaQuery(opts)
+	mediaPlan := browseQueryPlan(ctx, t, mediaDB, mediaQuery, mediaArgs)
+	t.Logf("fallback EXPLAIN QUERY PLAN:\n%s", mediaPlan)
+	// Pinning the fallback's shape first is what gives the assertion below its
+	// meaning: "Path>" is the range scan over every row beneath a route, and
+	// asserting its absence only says something because it is present here.
+	require.Contains(t, mediaPlan, "Path>",
+		"the fallback is expected to range-scan Media by path; plan:\n%s", mediaPlan)
+
+	query, args := browseOverlayDirectoriesCacheQuery(opts, sources, parentIDs)
+	plan := browseQueryPlan(ctx, t, mediaDB, query, args)
+	t.Logf("cache EXPLAIN QUERY PLAN:\n%s", plan)
+
+	assert.Contains(t, plan, "BrowseDirCounts",
+		"the candidate directories must come from the browse cache; plan:\n%s", plan)
+	assert.NotContains(t, plan, "Path>",
+		"a Path range scan means the listing is still reading every media row "+
+			"beneath each route, which is the cost this path exists to avoid; plan:\n%s", plan)
+	assert.Contains(t, plan, "ParentDir=?",
+		"Media may still be read for the direct-file shadow check, but only as an "+
+			"equality lookup on ParentDir; plan:\n%s", plan)
+}
+
+// browseQueryPlan returns the joined EXPLAIN QUERY PLAN lines for a statement.
+func browseQueryPlan(
+	ctx context.Context, t *testing.T, mediaDB *MediaDB, query string, args []any,
+) string {
+	t.Helper()
+
+	rows, err := mediaDB.sql.Load().QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var lines []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		lines = append(lines, detail)
+	}
+	require.NoError(t, rows.Err())
+	return strings.Join(lines, "\n")
 }

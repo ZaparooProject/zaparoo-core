@@ -519,6 +519,14 @@ func browseSystemRootContents(
 	}
 	sources, virtualEntries := systemRootContentsSources(env, rootEntries)
 	overlay := &database.BrowseOverlay{Sources: sources}
+	// The merged root is the launcher's first screen for every system, but it was
+	// the only browse path emitting no per-query timing, so a slow one showed up
+	// only as an anonymous mediadb "browse call timing" line. Report the first
+	// route as the path: the rest are on the same line via routes.
+	overlayPath := ""
+	if len(sources) > 0 {
+		overlayPath = sources[0].PathPrefix
+	}
 	if cursor != nil {
 		virtualEntries = nil
 	}
@@ -537,20 +545,24 @@ func browseSystemRootContents(
 		if cursor != nil {
 			afterName = cursor.DirName
 		}
+		started := time.Now()
 		dirs, dirsErr := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
 			Overlay:   overlay,
 			AfterName: afterName,
 			Systems:   systems,
 			Limit:     maxResults + 1,
 		})
+		logBrowseTiming("root_contents_directories", overlayPath, started, len(dirs))
 		if dirsErr != nil {
 			return nil, fmt.Errorf("error browsing system root contents directories: %w", dirsErr)
 		}
 		if cursor == nil {
+			started = time.Now()
 			totalDirs, err = env.Database.MediaDB.BrowseDirCount(env.Context, database.BrowseDirCountOptions{
 				Overlay: overlay,
 				Systems: systems,
 			})
+			logBrowseTiming("root_contents_dir_count", overlayPath, started, totalDirs)
 			if err != nil {
 				return nil, fmt.Errorf("error counting system root contents directories: %w", err)
 			}
@@ -588,6 +600,7 @@ func browseSystemRootContents(
 				env, dirs, nil, virtualEntries, maxResults, totalFiles, totalDirs, next, hasNext, systems, tags,
 			)
 		}
+		started = time.Now()
 		files, filesErr := env.Database.MediaDB.BrowseFiles(env.Context, &database.BrowseFilesOptions{
 			Overlay: overlay,
 			Limit:   remaining + 1,
@@ -595,6 +608,7 @@ func browseSystemRootContents(
 			Systems: systems,
 			Tags:    tags,
 		})
+		logBrowseTiming("root_contents_files", overlayPath, started, len(files))
 		if filesErr != nil {
 			return nil, fmt.Errorf("error browsing system root contents files: %w", filesErr)
 		}
@@ -613,6 +627,7 @@ func browseSystemRootContents(
 	if cursor != nil && cursor.Phase == browsePhaseFiles && cursor.LastID == 0 {
 		fileCursor = nil
 	}
+	filesStarted := time.Now()
 	files, filesErr := env.Database.MediaDB.BrowseFiles(env.Context, &database.BrowseFilesOptions{
 		Overlay: overlay,
 		Cursor:  fileCursor,
@@ -622,6 +637,7 @@ func browseSystemRootContents(
 		Systems: systems,
 		Tags:    tags,
 	})
+	logBrowseTiming("root_contents_files", overlayPath, filesStarted, len(files))
 	if filesErr != nil {
 		return nil, fmt.Errorf("error browsing system root contents files: %w", filesErr)
 	}
@@ -649,12 +665,18 @@ func browseRootContentsFileCount(
 	systems []systemdefs.System,
 	tags []zapscript.TagFilter,
 ) (int, error) {
+	started := time.Now()
 	count, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
 		Overlay: &database.BrowseOverlay{Sources: sources},
 		Letter:  letter,
 		Systems: systems,
 		Tags:    tags,
 	})
+	prefix := ""
+	if len(sources) > 0 {
+		prefix = sources[0].PathPrefix
+	}
+	logBrowseTiming("root_contents_file_count", prefix, started, count)
 	if err != nil {
 		return 0, fmt.Errorf("error counting system root contents files: %w", err)
 	}
