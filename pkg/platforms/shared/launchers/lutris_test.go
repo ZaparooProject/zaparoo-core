@@ -25,14 +25,62 @@ package launchers
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLutrisBuildLaunchCommandFlatpak(t *testing.T) {
+	t.Parallel()
+
+	opts := LutrisOptions{
+		CheckFlatpak: true,
+		lookPath: func(name string) (string, error) {
+			if name == "flatpak" {
+				return "/usr/bin/flatpak", nil
+			}
+			return "", os.ErrNotExist
+		},
+		isFlatpakInstalled: func(id string) bool { return id == FlatpakLutrisID },
+		launchEnv:          func() []string { return []string{"DISPLAY=:1"} },
+	}
+	launcher := NewLutrisLauncher(opts)
+	command, err := launcher.BuildLaunchCommand(nil, "lutris://game-slug/Game", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/bin/flatpak", command.Executable)
+	assert.Equal(t, []string{
+		"run", "--die-with-parent", FlatpakLutrisID, "lutris:rungame/game-slug",
+	}, command.Args)
+	assert.Equal(t, []string{"DISPLAY=:1"}, command.Env)
+	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
+}
+
+func TestLutrisBuildLaunchCommandNative(t *testing.T) {
+	t.Parallel()
+
+	opts := LutrisOptions{
+		CheckFlatpak: true,
+		lookPath: func(name string) (string, error) {
+			if name == "lutris" {
+				return "/usr/bin/lutris", nil
+			}
+			return "", os.ErrNotExist
+		},
+		isFlatpakInstalled: func(string) bool { return true },
+		launchEnv:          func() []string { return nil },
+	}
+	launcher := NewLutrisLauncher(opts)
+	command, err := launcher.BuildLaunchCommand(nil, "lutris://game-slug/Game", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/bin/lutris", command.Executable)
+	assert.Equal(t, []string{"lutris:rungame/game-slug"}, command.Args)
+}
 
 func TestScanLutrisGames(t *testing.T) {
 	t.Parallel()

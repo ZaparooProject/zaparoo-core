@@ -24,6 +24,9 @@ package launchers
 
 // LutrisOptions configures the Lutris launcher behavior.
 type LutrisOptions struct {
+	lookPath           func(string) (string, error)
+	isFlatpakInstalled func(string) bool
+	launchEnv          func() []string
 	// CheckFlatpak enables checking for Flatpak Lutris installation.
 	// Flatpak path: ~/.var/app/net.lutris.Lutris/
 	CheckFlatpak bool
@@ -31,6 +34,9 @@ type LutrisOptions struct {
 
 // HeroicOptions configures the Heroic launcher behavior.
 type HeroicOptions struct {
+	lookPath           func(string) (string, error)
+	isFlatpakInstalled func(string) bool
+	launchEnv          func() []string
 	// CheckFlatpak enables checking for Flatpak Heroic installation.
 	// Flatpak path: ~/.var/app/com.heroicgameslauncher.hgl/
 	CheckFlatpak bool

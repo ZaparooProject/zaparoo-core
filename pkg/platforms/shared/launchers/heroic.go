@@ -25,10 +25,13 @@ package launchers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -46,150 +49,226 @@ type heroicGameInfo struct {
 	IsInstalled bool   `json:"is_installed"` //nolint:tagliatelle // External JSON format from Heroic
 }
 
+const (
+	maxHeroicLibrarySize = 16 << 20
+	maxHeroicGames       = 100_000
+	maxHeroicFieldLength = 4096
+
+	// Heroic's Electron wrapper can detach from `flatpak run`. Running it
+	// through a fixed shell monitor keeps a waitable Flatpak process until
+	// Heroic's supported --no-gui mode exits after the launched game.
+	heroicFlatpakMonitor = `/app/bin/heroic-run --no-gui "$1"
+status=$?
+while pgrep -f '^/app/bin/heroic/heroic( |$)' >/dev/null 2>&1; do sleep 1; done
+exit "$status"`
+)
+
 // ScanHeroicGames scans Heroic Games Launcher library files for installed games.
 func ScanHeroicGames(storeCacheDir string) ([]platforms.ScanResult, error) {
+	info, err := os.Stat(storeCacheDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat Heroic store cache: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("heroic store cache path is not a directory")
+	}
+
+	libraries := []struct {
+		path    string
+		jsonKey string
+		runner  string
+		label   string
+	}{
+		{
+			path:    filepath.Join(storeCacheDir, "legendary_library.json"),
+			jsonKey: "library", runner: "legendary", label: "legendary_library.json",
+		},
+		{
+			path:    filepath.Join(storeCacheDir, "gog_library.json"),
+			jsonKey: "games", runner: "gog", label: "gog_library.json",
+		},
+		{
+			path:    filepath.Join(storeCacheDir, "nile_library.json"),
+			jsonKey: "library", runner: "nile", label: "nile_library.json",
+		},
+		{
+			path:    filepath.Join(filepath.Dir(storeCacheDir), "sideload_apps", "library.json"),
+			jsonKey: "games", runner: "sideload", label: "sideload_apps/library.json",
+		},
+	}
 	results := make([]platforms.ScanResult, 0)
-
-	// Check if store_cache directory exists
-	if _, err := os.Stat(storeCacheDir); os.IsNotExist(err) {
-		log.Debug().Msg("Heroic store_cache directory not found")
-		return results, nil
+	for _, library := range libraries {
+		items, scanErr := scanHeroicLibraryFile(library.path, library.jsonKey, library.runner)
+		if scanErr != nil {
+			log.Warn().Err(scanErr).Str("file", library.label).Msg("failed to scan Heroic library")
+			continue
+		}
+		if len(results)+len(items) > maxHeroicGames {
+			return nil, errors.New("heroic game library exceeds entry limit")
+		}
+		results = append(results, items...)
 	}
-
-	// Scan Epic Games (legendary_library.json)
-	epicResults, err := scanHeroicLibraryFile(
-		filepath.Join(storeCacheDir, "legendary_library.json"),
-		"library",
-	)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to scan Heroic Epic Games library")
-	} else {
-		results = append(results, epicResults...)
-	}
-
-	// Scan GOG games (gog_library.json)
-	gogResults, err := scanHeroicLibraryFile(
-		filepath.Join(storeCacheDir, "gog_library.json"),
-		"games",
-	)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to scan Heroic GOG library")
-	} else {
-		results = append(results, gogResults...)
-	}
-
-	log.Debug().Msgf("found %d Heroic games", len(results))
+	log.Debug().Int("count", len(results)).Msg("found Heroic games")
 	return results, nil
 }
 
-// scanHeroicLibraryFile parses a single Heroic library JSON file and returns scan results.
-func scanHeroicLibraryFile(filePath, jsonKey string) ([]platforms.ScanResult, error) {
-	results := make([]platforms.ScanResult, 0)
-
-	// Check if file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Debug().Msgf("Heroic library file not found: %s", filePath)
-		return results, nil
+func scanHeroicLibraryFile(filePath, jsonKey string, defaultRunners ...string) ([]platforms.ScanResult, error) {
+	defaultRunner := ""
+	if len(defaultRunners) > 0 {
+		defaultRunner = defaultRunners[0]
 	}
-
-	// Read the JSON file
-	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is constructed from known directory
+	//nolint:gosec // filePath is constructed from a known Heroic cache directory.
+	file, err := os.Open(filePath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return results, fmt.Errorf("failed to read Heroic library file: %w", err)
+		return nil, fmt.Errorf("open Heroic library file: %w", err)
+	}
+	defer file.Close() //nolint:errcheck // Read-only file.
+	data, err := io.ReadAll(io.LimitReader(file, maxHeroicLibrarySize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Heroic library file: %w", err)
+	}
+	if len(data) > maxHeroicLibrarySize {
+		return nil, errors.New("heroic library file exceeds size limit")
 	}
 
-	// Parse JSON - structure is { "library": [...] } or { "games": [...] }
-	var libraryData map[string][]heroicGameInfo
+	var libraryData map[string]json.RawMessage
 	if err := json.Unmarshal(data, &libraryData); err != nil {
-		return results, fmt.Errorf("failed to parse Heroic library JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse Heroic library JSON: %w", err)
 	}
-
-	// Get the games array
-	games, ok := libraryData[jsonKey]
+	rawGames, ok := libraryData[jsonKey]
 	if !ok {
-		log.Debug().Msgf("Heroic library file missing expected key: %s", jsonKey)
-		return results, nil
+		return nil, nil
+	}
+	var games []heroicGameInfo
+	if err := json.Unmarshal(rawGames, &games); err != nil {
+		return nil, fmt.Errorf("failed to parse Heroic game entries: %w", err)
+	}
+	if len(games) > maxHeroicGames {
+		return nil, errors.New("heroic game library exceeds entry limit")
 	}
 
-	// Filter for installed games and build scan results
+	results := make([]platforms.ScanResult, 0, len(games))
 	for _, game := range games {
-		// Skip non-installed games
 		if !game.IsInstalled {
 			continue
 		}
-
-		// Skip games without an app_name
-		if game.AppName == "" {
-			log.Debug().Msgf("Heroic game missing app_name: %s", game.Title)
+		appName := strings.TrimSpace(game.AppName)
+		title := strings.TrimSpace(game.Title)
+		runner := strings.ToLower(strings.TrimSpace(game.Runner))
+		if runner == "" {
+			runner = defaultRunner
+		}
+		if !validHeroicRunner(runner) || appName == "" || len(appName) > maxHeroicFieldLength ||
+			len(title) > maxHeroicFieldLength || virtualpath.ContainsControlChar(appName) ||
+			virtualpath.ContainsControlChar(title) ||
+			(runner == "gog" && strings.EqualFold(appName, "gog-redist")) {
 			continue
 		}
-
 		results = append(results, platforms.ScanResult{
-			Name:  game.Title,
-			Path:  virtualpath.CreateVirtualPath(shared.SchemeHeroic, game.AppName, game.Title),
-			NoExt: true,
+			Name: title, Path: virtualpath.CreateVirtualPath(
+				shared.SchemeHeroic, runner+":"+appName, title,
+			), NoExt: true,
 		})
 	}
-
 	return results, nil
+}
+
+func validHeroicRunner(runner string) bool {
+	switch runner {
+	case "legendary", "gog", "nile", "sideload":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewHeroicLauncher creates a configurable Heroic Games Launcher.
 func NewHeroicLauncher(opts HeroicOptions) platforms.Launcher {
+	resolve := newApplicationResolver("heroic", FlatpakHeroicID, applicationResolverOptions{
+		lookPath: opts.lookPath, isFlatpakInstalled: opts.isFlatpakInstalled, checkFlatpak: opts.CheckFlatpak,
+	})
+	buildCommand := func(path string) (*platforms.LaunchCommand, error) {
+		id, err := virtualpath.ExtractSchemeID(path, shared.SchemeHeroic)
+		if err != nil {
+			return nil, fmt.Errorf("extract Heroic game ID: %w", err)
+		}
+		runner := ""
+		appName := id
+		if candidate, value, found := strings.Cut(id, ":"); found && validHeroicRunner(candidate) {
+			runner = candidate
+			appName = value
+		}
+		if appName == "" || len(appName) > maxHeroicFieldLength || virtualpath.ContainsControlChar(appName) {
+			return nil, errors.New("invalid Heroic game ID")
+		}
+		query := url.Values{"appName": []string{appName}, "gui": []string{"false"}}
+		if runner != "" {
+			query.Set("runner", runner)
+		}
+		launchURL := (&url.URL{Scheme: "heroic", Host: "launch", RawQuery: query.Encode()}).String()
+		installation, err := resolve()
+		if err != nil {
+			return nil, err
+		}
+		if installation.flatpak {
+			installation = withFlatpakDieWithParent(installation)
+			installation.argsPrefix = []string{
+				"run", "--die-with-parent", "--command=sh", FlatpakHeroicID,
+			}
+			return buildApplicationCommand(
+				installation, []string{"-c", heroicFlatpakMonitor, "zaparoo-heroic", launchURL}, opts.launchEnv,
+			), nil
+		}
+		return buildApplicationCommand(installation, []string{"--no-gui", launchURL}, opts.launchEnv), nil
+	}
+
 	return platforms.Launcher{
-		ID:       "Heroic",
-		SystemID: systemdefs.SystemPC,
-		Schemes:  []string{shared.SchemeHeroic},
+		ID: "Heroic", SystemID: systemdefs.SystemPC, Schemes: []string{shared.SchemeHeroic},
+		Lifecycle: platforms.LifecycleBlocking,
+		Availability: func(*config.Instance) error {
+			_, err := resolve()
+			return err
+		},
+		BuildLaunchCommand: func(
+			_ *config.Instance, path string, _ *platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return buildCommand(path)
+		},
 		Scanner: func(
 			_ context.Context,
 			_ *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			// Check if Heroic is installed
-			_, err := exec.LookPath("heroic")
-			if err != nil {
-				log.Debug().Err(err).Msg("Heroic Games Launcher not found in PATH, skipping scanner")
-				// Not an error condition - just means Heroic isn't installed
-				return results, nil
+			if _, err := resolve(); err != nil {
+				return results, nil //nolint:nilerr // An uninstalled optional launcher contributes no media.
 			}
-
-			// Find Heroic store cache (native or Flatpak)
 			storeCacheDir, found := FindHeroicStoreCache(opts.CheckFlatpak)
 			if !found {
-				log.Debug().Msg("Heroic store_cache directory not found")
 				return results, nil
 			}
-
-			// Scan Heroic libraries for installed games
 			heroicResults, err := ScanHeroicGames(storeCacheDir)
 			if err != nil {
-				log.Warn().Err(err).Msg("failed to scan Heroic games, continuing without them")
-			} else {
-				results = append(results, heroicResults...)
+				return results, fmt.Errorf("scan Heroic games: %w", err)
 			}
-
-			return results, nil
+			return append(results, heroicResults...), nil
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			// Extract game app name from heroic://appName format
-			appName, err := virtualpath.ExtractSchemeID(path, shared.SchemeHeroic)
+			command, err := buildCommand(path)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract Heroic game name from path: %w", err)
+				return nil, err
 			}
-
-			// Launch via heroic command
-			cmd := exec.CommandContext( //nolint:gosec // App name from internal database
-				context.Background(),
-				"heroic",
-				"launch",
-				appName,
-			)
-			err = cmd.Start()
+			process, err := startTrackedApplicationCommand(command)
 			if err != nil {
-				return nil, fmt.Errorf("failed to start Heroic Games Launcher: %w", err)
+				return nil, fmt.Errorf("start Heroic Games Launcher: %w", err)
 			}
-			return nil, nil
+			return process, nil
 		},
 	}
 }

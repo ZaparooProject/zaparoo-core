@@ -24,7 +24,6 @@ package gamelistxml
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"html"
@@ -339,7 +338,7 @@ func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 			continue
 		}
 
-		gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
+		gl, err := esapi.ReadGameListXMLFS(g.filesystem(), gamelistPath)
 		if err != nil {
 			log.Warn().Err(err).Str("path", gamelistPath).Msg("gamelistxml: failed to read gamelist.xml, skipping")
 			continue
@@ -384,7 +383,7 @@ func (g *GamelistXMLScraper) loadCustomGamelistFile(system scraper.ScrapeSystem)
 		return parsedGamelistFile{}, false
 	}
 
-	gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
+	gl, err := esapi.ReadGameListXMLFS(g.filesystem(), gamelistPath)
 	if err != nil {
 		log.Warn().Err(err).Str("path", gamelistPath).
 			Msg("gamelistxml: failed to read custom gamelist.xml, skipping")
@@ -1747,18 +1746,6 @@ func mediaFilenameKey(path string) string {
 		return ""
 	}
 	return strings.ToLower(filename)
-}
-
-func readGameListXMLFS(fs afero.Fs, path string) (*esapi.GameList, error) {
-	data, err := afero.ReadFile(fs, path)
-	if err != nil {
-		return nil, fmt.Errorf("read gamelist XML %q: %w", path, err)
-	}
-	var gameList esapi.GameList
-	if err := xml.Unmarshal(data, &gameList); err != nil {
-		return nil, fmt.Errorf("parse gamelist XML %q: %w", path, err)
-	}
-	return &gameList, nil
 }
 
 // companionSource is the XML source attribute value that marks ZaparooCompanion entries.

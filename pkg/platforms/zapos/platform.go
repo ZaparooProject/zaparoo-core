@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 )
@@ -26,6 +27,7 @@ const retroArchNetworkAddr = "127.0.0.1:55355"
 // Platform implements Zaparoo OS support.
 type Platform struct {
 	*linuxbase.Base
+	emulationOptionsOverride *linuxemu.Options
 }
 
 // NewPlatform creates a Zaparoo OS platform.
@@ -73,7 +75,20 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		applianceRetroArchOptions(),
 		retroarch.CoreLaunches(retroarch.ProfileApplianceARM),
 	)
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), builtIn...)
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(builtIn)), custom...), builtIn...)
+	builtIn = append(builtIn, linuxemu.Launchers(cfg, p.emulationOptions(), existing)...)
+	linuxemu.AttachPlainESDEScanners(cfg, p.emulationOptions(), builtIn)
+	return append(custom, builtIn...)
+}
+
+func (p *Platform) emulationOptions() linuxemu.Options {
+	if p.emulationOptionsOverride != nil {
+		return *p.emulationOptionsOverride
+	}
+	options := linuxemu.NewOptions("", applianceRetroArchOptions())
+	options.IncludeRetroArch = false
+	return options
 }
 
 func applianceRetroArchOptions() retroarch.Options {

@@ -20,60 +20,16 @@
 package esde
 
 import (
-	"encoding/xml"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/rs/zerolog/log"
 )
 
-// GameEntry represents a game from an EmulationStation gamelist.xml file.
-type GameEntry struct {
-	// Name is the display name of the game
-	Name string `xml:"name"`
-	// Path is the path to the ROM file (may be relative to the system folder)
-	Path string `xml:"path"`
-}
-
-// GameList represents the structure of an EmulationStation gamelist.xml file.
-type GameList struct {
-	XMLName xml.Name    `xml:"gameList"`
-	Games   []GameEntry `xml:"game"`
-}
-
-// ReadGameList reads and parses a gamelist.xml file from the given path.
-func ReadGameList(path string) (GameList, error) {
-	cleanPath := filepath.Clean(path)
-	if !filepath.IsAbs(cleanPath) {
-		cleanPath = filepath.Join(".", cleanPath)
-	}
-
-	xmlFile, err := os.Open(cleanPath) // #nosec G304 - path is validated above
-	if err != nil {
-		return GameList{}, fmt.Errorf("failed to open gamelist.xml at %s: %w", cleanPath, err)
-	}
-	defer func() {
-		if closeErr := xmlFile.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing gamelist.xml file")
-		}
-	}()
-
-	data, err := io.ReadAll(xmlFile)
-	if err != nil {
-		return GameList{}, fmt.Errorf("failed to read gamelist.xml at %s: %w", cleanPath, err)
-	}
-
-	var gameList GameList
-	if err := xml.Unmarshal(data, &gameList); err != nil {
-		return GameList{}, fmt.Errorf("failed to parse gamelist.xml: %w", err)
-	}
-
-	return gameList, nil
-}
+const maxMetadataLength = 4096
 
 // ScannerConfig holds configuration for scanning EmulationStation gamelists.
 type ScannerConfig struct {
@@ -86,25 +42,45 @@ type ScannerConfig struct {
 	SystemFolder string
 }
 
-// ResolveGamePath resolves a game path from gamelist.xml to an absolute path.
-// Gamelist paths may be:
-// - Absolute (starts with /)
-// - Relative with ./ prefix (./game.rom)
-// - Relative without prefix (game.rom)
+// ResolveGamePath resolves a gamelist path inside its declared system root.
+// Absolute paths are accepted only when they remain under that root.
 func ResolveGamePath(gamePath, romsBasePath, systemFolder string) string {
-	// Already absolute
-	if filepath.IsAbs(gamePath) {
-		return filepath.Clean(gamePath)
+	systemRoot := filepath.Clean(filepath.Join(romsBasePath, systemFolder))
+	candidate := filepath.Clean(gamePath)
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(systemRoot, strings.TrimPrefix(candidate, "."+string(filepath.Separator)))
 	}
-
-	// Remove ./ prefix if present
-	cleanPath := gamePath
-	if strings.HasPrefix(gamePath, "./") {
-		cleanPath = gamePath[2:]
+	if !pathWithin(systemRoot, candidate) {
+		return ""
 	}
+	return candidate
+}
 
-	// Build absolute path from roms base + system folder + game path
-	return filepath.Join(romsBasePath, systemFolder, cleanPath)
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && !filepath.IsAbs(rel) && rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func trustedGamePath(gamePath, romsBasePath, systemFolder string) string {
+	candidate := ResolveGamePath(gamePath, romsBasePath, systemFolder)
+	if candidate == "" {
+		return ""
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	systemRoot := filepath.Clean(filepath.Join(romsBasePath, systemFolder))
+	realRoot, err := filepath.EvalSymlinks(systemRoot)
+	if err != nil {
+		return ""
+	}
+	realCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil || !pathWithin(realRoot, realCandidate) {
+		return ""
+	}
+	return candidate
 }
 
 // ScanGamelist scans a system's gamelist.xml and returns scan results.
@@ -118,7 +94,7 @@ func ScanGamelist(cfg ScannerConfig) ([]platforms.ScanResult, error) {
 	}
 	gamelistPath := filepath.Join(gamelistDir, cfg.SystemFolder, "gamelist.xml")
 
-	gameList, err := ReadGameList(gamelistPath)
+	games, err := esapi.ReadGameReferencesXML(gamelistPath)
 	if err != nil {
 		// Not an error - just no gamelist available
 		log.Debug().
@@ -128,13 +104,17 @@ func ScanGamelist(cfg ScannerConfig) ([]platforms.ScanResult, error) {
 		return nil, nil
 	}
 
-	results := make([]platforms.ScanResult, 0, len(gameList.Games))
-	for _, game := range gameList.Games {
-		if game.Path == "" {
+	results := make([]platforms.ScanResult, 0, len(games))
+	for _, game := range games {
+		if game.Path == "" || len(game.Path) > maxMetadataLength || len(game.Name) > maxMetadataLength {
 			continue
 		}
 
-		absPath := ResolveGamePath(game.Path, cfg.RomsBasePath, cfg.SystemFolder)
+		absPath := trustedGamePath(game.Path, cfg.RomsBasePath, cfg.SystemFolder)
+		if absPath == "" {
+			log.Warn().Str("system", cfg.SystemFolder).Msg("ignored unsafe ES-DE gamelist path")
+			continue
+		}
 		results = append(results, platforms.ScanResult{
 			Name: game.Name,
 			Path: absPath,
@@ -159,7 +139,7 @@ func EnhanceResultsFromGamelist(results map[string]platforms.ScanResult, cfg Sca
 	}
 	gamelistPath := filepath.Join(gamelistDir, cfg.SystemFolder, "gamelist.xml")
 
-	gameList, err := ReadGameList(gamelistPath)
+	games, err := esapi.ReadGameReferencesXML(gamelistPath)
 	if err != nil {
 		// Not an error if gamelist doesn't exist
 		log.Debug().
@@ -170,12 +150,15 @@ func EnhanceResultsFromGamelist(results map[string]platforms.ScanResult, cfg Sca
 
 	// Build lookup map from gamelist
 	nameByPath := make(map[string]string)
-	for _, game := range gameList.Games {
-		if game.Path == "" || game.Name == "" {
+	for _, game := range games {
+		if game.Path == "" || game.Name == "" ||
+			len(game.Path) > maxMetadataLength || len(game.Name) > maxMetadataLength {
 			continue
 		}
-		absPath := ResolveGamePath(game.Path, cfg.RomsBasePath, cfg.SystemFolder)
-		nameByPath[absPath] = game.Name
+		absPath := trustedGamePath(game.Path, cfg.RomsBasePath, cfg.SystemFolder)
+		if absPath != "" {
+			nameByPath[absPath] = game.Name
+		}
 	}
 
 	// Update results with gamelist names

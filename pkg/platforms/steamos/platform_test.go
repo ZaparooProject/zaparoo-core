@@ -33,6 +33,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
+	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/steamruntime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -512,6 +514,28 @@ func TestPlatformSteamDeckPaths(t *testing.T) {
 	require.NotNil(t, steamLauncher, "Steam launcher should be present")
 	// The launcher is properly configured - we just verify it exists
 	// Internal paths like /home/deck/.steam/steam are set in the launcher options
+}
+
+func TestLaunchersSuppressDuplicateSharedRetroArch(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	options := linuxemu.NewOptions(t.TempDir(), sharedretroarch.Options{})
+	options.IncludeStandalone = false
+	options.IncludeProviderDecks = false
+	options.IsFlatpakInstalled = func(id string) bool { return id == linuxemu.RetroArchFlatpakID }
+	platform := NewPlatform()
+	platform.emulationOptionsOverride = &options
+
+	count := 0
+	for _, launcher := range platform.Launchers(cfg) {
+		if launcher.ID == "RetroArchSNES9x" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
 }
 
 func TestPlatformReturnToMenuStopsActiveMedia(t *testing.T) {

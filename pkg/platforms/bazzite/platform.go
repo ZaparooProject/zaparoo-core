@@ -24,6 +24,7 @@ package bazzite
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -36,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -48,9 +50,10 @@ import (
 // pre-installed Steam and Lutris, and Heroic available via Flatpak.
 type Platform struct {
 	*linuxbase.Base
-	procScanner  *procscanner.Scanner
-	steamTracker *steamtracker.PlatformIntegration
-	gameMode     *gamescope.Manager
+	procScanner              *procscanner.Scanner
+	steamTracker             *steamtracker.PlatformIntegration
+	gameMode                 *gamescope.Manager
+	emulationOptionsOverride *linuxemu.Options
 }
 
 // NewPlatform creates a new Bazzite platform instance.
@@ -88,24 +91,17 @@ func (p *Platform) StartPost(
 		return err
 	}
 
-	// Resolve Steam root once so tracker uses the same configured installation
-	// as the Steam launcher.
-	steamRoot := steam.NewClient(steam.DefaultBazziteOptions()).FindSteamDir(cfg)
-
-	// Create process scanner for Steam game tracking
+	steamClient := steam.NewClient(steam.DefaultBazziteOptions())
+	if !steamClient.IsSteamInstalled(cfg) {
+		return nil
+	}
 	p.procScanner = procscanner.New()
 	if err := p.procScanner.Start(); err != nil {
 		log.Warn().Err(err).Msg("process scanner failed to start")
 		return nil
 	}
-
-	// Start Steam tracker for external Steam game detection
 	p.steamTracker = steamtracker.NewPlatformIntegration(
-		p.procScanner,
-		p.Base,
-		activeMedia,
-		setActiveMedia,
-		steamRoot,
+		p.procScanner, p.Base, activeMedia, setActiveMedia, steamClient.FindSteamDir(cfg),
 	)
 	p.steamTracker.Start()
 
@@ -148,7 +144,10 @@ func (p *Platform) LaunchMedia(
 // Bazzite supports Steam (native/Flatpak), Lutris (pre-installed),
 // Heroic (Flatpak via Bazaar), WebBrowser, and Generic scripts.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	ls := []platforms.Launcher{
+	steamLauncher := steam.NewSteamLauncher(steam.DefaultBazziteOptions())
+	steamLauncher.Lifecycle = platforms.LifecycleExternal
+	ls := make([]platforms.Launcher, 0, 64)
+	ls = append(ls, []platforms.Launcher{
 		// Kodi launchers (8 types)
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
@@ -160,7 +159,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiTVShowLauncher(),
 
 		// Steam - support both native (default) and Flatpak
-		steam.NewSteamLauncher(steam.DefaultBazziteOptions()),
+		steamLauncher,
 
 		// Lutris - pre-installed native on Bazzite
 		launchers.NewLutrisLauncher(launchers.LutrisOptions{
@@ -172,14 +171,39 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			CheckFlatpak: true,
 		}),
 
+		// Additional Linux game managers and remote streaming
+		launchers.NewBottlesLauncher(),
+		launchers.NewFaugusLauncher(),
+		launchers.NewMoonlightLauncher(),
+
 		// Web browser for URLs
 		launchers.NewWebBrowserLauncher(),
 
 		// Generic scripts
 		launchers.NewGenericLauncher(),
-	}
+	}...)
 
-	ls = append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
-	p.gameMode.WrapLaunchers(ls)
-	return ls
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(ls)), custom...), ls...)
+	ls = append(ls, linuxemu.Launchers(cfg, p.emulationOptions(), existing)...)
+	linuxemu.AttachPlainESDEScanners(cfg, p.emulationOptions(), ls)
+	allLaunchers := make([]platforms.Launcher, 0, len(custom)+len(ls))
+	allLaunchers = append(allLaunchers, custom...)
+	allLaunchers = append(allLaunchers, ls...)
+	p.gameMode.WrapLaunchers(allLaunchers)
+	return allLaunchers
+}
+
+func (*Platform) retroArchConfigPath() string {
+	return filepath.Join(linuxbase.Settings().ConfigDir, "retroarch-network.cfg")
+}
+
+func (p *Platform) emulationOptions() linuxemu.Options {
+	if p.emulationOptionsOverride != nil {
+		return *p.emulationOptionsOverride
+	}
+	launchEnv := func() []string { return linuxbase.DesktopSessionEnvOverrides(p.gameMode) }
+	options := linuxemu.NewOptions("", linuxemu.DesktopRetroArchOptions(p.retroArchConfigPath(), launchEnv))
+	options.LaunchEnv = launchEnv
+	return options
 }

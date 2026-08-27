@@ -236,6 +236,27 @@ func TestStopActiveLauncher(t *testing.T) {
 		assert.Nil(t, activeMedia)
 	})
 
+	t.Run("custom_kill_without_tracked_process", func(t *testing.T) {
+		t.Parallel()
+
+		killCalled := false
+		activeMedia := &models.ActiveMedia{Name: "test"}
+		base := NewBase("test")
+		base.lastLauncher = platforms.Launcher{
+			Kill: func(_ *config.Instance) error {
+				killCalled = true
+				return nil
+			},
+		}
+		base.setActiveMedia = func(m *models.ActiveMedia) {
+			activeMedia = m
+		}
+
+		require.NoError(t, base.StopActiveLauncher(platforms.StopForMenu))
+		assert.True(t, killCalled)
+		assert.Nil(t, activeMedia)
+	})
+
 	t.Run("invalidates_launcher_context", func(t *testing.T) {
 		t.Parallel()
 

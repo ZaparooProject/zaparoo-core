@@ -35,18 +35,17 @@ func linuxRetroArchOptions() sharedretroarch.Options {
 		),
 		AppendConfigPath: defaultRetroArchAppendConfigPath(),
 		NetworkCmdAddr:   retroArchNetworkAddr,
+		LaunchEnv:        func() []string { return linuxbase.DesktopSessionEnvOverrides(nil) },
 		Preflight: sharedretroarch.MemoizePreflight(func(_ string) error {
 			if !launchers.IsFlatpakInstalled(retroArchFlatpakID) {
 				return errors.New("RetroArch Flatpak is not installed")
 			}
+			if err := sharedretroarch.EnsureNetworkCommandConfig(
+				nil, defaultRetroArchAppendConfigPath(),
+			); err != nil {
+				return fmt.Errorf("write RetroArch network config: %w", err)
+			}
 			return nil
 		}),
 	}
-}
-
-func ensureRetroArchNetworkConfig() error {
-	if err := sharedretroarch.EnsureNetworkCommandConfig(nil, defaultRetroArchAppendConfigPath()); err != nil {
-		return fmt.Errorf("write RetroArch network config: %w", err)
-	}
-	return nil
 }

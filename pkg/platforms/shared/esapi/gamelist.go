@@ -52,23 +52,34 @@
 package esapi
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // ESDateFormat is the strftime-style format EmulationStation uses for
 // releasedate and lastplayed: "%Y%m%dT%H%M%S". In Go's time package this
 // translates to the layout below. Some scrapers omit the time component and
 // write only the date portion ("19950311T000000").
-const ESDateFormat = "20060102T150405"
+const (
+	ESDateFormat        = "20060102T150405"
+	MaxGameListXMLSize  = 16 << 20
+	MaxGameListEntries  = 100_000
+	MaxGameListXMLDepth = 64
+)
+
+var (
+	ErrGameListTooLarge     = errors.New("gamelist.xml exceeds size limit")
+	ErrGameListTooManyItems = errors.New("gamelist.xml exceeds entry limit")
+	ErrGameListTooDeep      = errors.New("gamelist.xml exceeds XML depth limit")
+)
 
 // GameList is the root element of an EmulationStation gamelist.xml file.
 // It may contain any mix of <game> and <folder> children.
@@ -76,6 +87,17 @@ type GameList struct {
 	XMLName xml.Name `xml:"gameList"`
 	Games   []Game   `xml:"game"`
 	Folders []Folder `xml:"folder"`
+}
+
+// GameReference is the lightweight gamelist subset needed during media discovery.
+type GameReference struct {
+	Name string `xml:"name"`
+	Path string `xml:"path"`
+}
+
+type gameReferenceList struct {
+	XMLName xml.Name        `xml:"gameList"`
+	Games   []GameReference `xml:"game"`
 }
 
 // Game represents a single <game> entry in the gamelist.xml.
@@ -174,39 +196,123 @@ type Folder struct {
 	Marquee string `xml:"marquee,omitempty"`
 }
 
-// ReadGameListXML opens and unmarshals an EmulationStation gamelist.xml file.
-// Unknown XML elements are silently ignored, so fork-specific fields not
-// present in the target ES version are safe to include.
+// ReadGameListXML opens and decodes a full EmulationStation gamelist.xml file.
 func ReadGameListXML(path string) (GameList, error) {
-	// Clean and validate the path to prevent directory traversal attacks.
+	return ReadGameListXMLFS(afero.NewOsFs(), path)
+}
+
+// ReadGameListXMLFS decodes a full gamelist.xml through the supplied filesystem.
+func ReadGameListXMLFS(fs afero.Fs, path string) (GameList, error) {
+	data, err := readGameListDataFS(fs, path)
+	if err != nil {
+		return GameList{}, err
+	}
+	gameList, err := ParseGameListXML(data)
+	if err != nil {
+		return GameList{}, fmt.Errorf("failed to unmarshal gamelist XML: %w", err)
+	}
+	return gameList, nil
+}
+
+// ReadGameReferencesXML decodes only names and paths needed during discovery.
+func ReadGameReferencesXML(path string) ([]GameReference, error) {
+	return ReadGameReferencesXMLFS(afero.NewOsFs(), path)
+}
+
+// ReadGameReferencesXMLFS decodes lightweight game references through the supplied filesystem.
+func ReadGameReferencesXMLFS(fs afero.Fs, path string) ([]GameReference, error) {
+	data, err := readGameListDataFS(fs, path)
+	if err != nil {
+		return nil, err
+	}
+	gameList, err := parseGameListDocument[gameReferenceList](data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal gamelist XML: %w", err)
+	}
+	return gameList.Games, nil
+}
+
+// ParseGameListXML validates and decodes a full gamelist.xml document.
+func ParseGameListXML(data []byte) (GameList, error) {
+	return parseGameListDocument[GameList](data)
+}
+
+func parseGameListDocument[T any](data []byte) (T, error) {
+	var document T
+	if err := ValidateGameListXML(data); err != nil {
+		return document, err
+	}
+	if err := xml.Unmarshal(data, &document); err != nil {
+		return document, fmt.Errorf("decode gamelist XML: %w", err)
+	}
+	return document, nil
+}
+
+// ValidateGameListXML enforces shared size, depth, root, and entry limits.
+func ValidateGameListXML(data []byte) error {
+	if len(data) > MaxGameListXMLSize {
+		return ErrGameListTooLarge
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	depth := 0
+	entries := 0
+	sawRoot := false
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			if !sawRoot {
+				return errors.New("missing gameList root element")
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("decode gamelist XML token: %w", err)
+		}
+		switch value := token.(type) {
+		case xml.StartElement:
+			depth++
+			if depth > MaxGameListXMLDepth {
+				return ErrGameListTooDeep
+			}
+			if depth == 1 {
+				if sawRoot || value.Name.Local != "gameList" {
+					return errors.New("invalid gameList root element")
+				}
+				sawRoot = true
+			}
+			if depth == 2 && (value.Name.Local == "game" || value.Name.Local == "folder") {
+				entries++
+				if entries > MaxGameListEntries {
+					return ErrGameListTooManyItems
+				}
+			}
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
+func readGameListDataFS(fs afero.Fs, path string) ([]byte, error) {
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
 	cleanPath := filepath.Clean(path)
 	if !filepath.IsAbs(cleanPath) {
 		cleanPath = filepath.Join(".", cleanPath)
 	}
-
-	xmlFile, err := os.Open(cleanPath) // #nosec G304 - path is validated above
+	file, err := fs.Open(cleanPath)
 	if err != nil {
-		return GameList{}, fmt.Errorf("failed to open gamelist XML file %s: %w", cleanPath, err)
+		return nil, fmt.Errorf("failed to open gamelist XML file %s: %w", cleanPath, err)
 	}
-	defer func(xmlFile *os.File) {
-		closeErr := xmlFile.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing xml file")
-		}
-	}(xmlFile)
-
-	data, err := io.ReadAll(xmlFile)
+	defer file.Close() //nolint:errcheck // Read-only file; close errors do not affect parsed data.
+	data, err := io.ReadAll(io.LimitReader(file, MaxGameListXMLSize+1))
 	if err != nil {
-		return GameList{}, fmt.Errorf("failed to read gamelist XML file %s: %w", path, err)
+		return nil, fmt.Errorf("failed to read gamelist XML file %s: %w", cleanPath, err)
 	}
-
-	var gameList GameList
-	err = xml.Unmarshal(data, &gameList)
-	if err != nil {
-		return GameList{}, fmt.Errorf("failed to unmarshal gamelist XML: %w", err)
+	if len(data) > MaxGameListXMLSize {
+		return nil, fmt.Errorf("failed to read gamelist XML file %s: %w", cleanPath, ErrGameListTooLarge)
 	}
-
-	return gameList, nil
+	return data, nil
 }
 
 // ParseESDate parses an EmulationStation datetime string into a time.Time.

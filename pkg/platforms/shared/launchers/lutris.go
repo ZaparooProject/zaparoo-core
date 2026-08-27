@@ -25,9 +25,12 @@ package launchers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
-	"os/exec"
+	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -38,21 +41,33 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	maxLutrisGames       = 100_000
+	maxLutrisFieldLength = 4096
+	lutrisQueryTimeout   = 5 * time.Second
+)
+
 // ScanLutrisGames scans the Lutris pga.db SQLite database for installed games.
 func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	results := make([]platforms.ScanResult, 0)
-
-	// Check if database exists
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+	info, err := os.Stat(dbPath)
+	if os.IsNotExist(err) {
 		log.Debug().Msg("Lutris database not found")
 		return results, nil
 	}
-
-	// Open the SQLite database
-	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to open Lutris database")
-		return results, nil
+		return nil, fmt.Errorf("stat Lutris database: %w", err)
+	}
+	if info.IsDir() {
+		return nil, errors.New("lutris database path is a directory")
+	}
+
+	dsn := (&url.URL{
+		Scheme: "file", Path: dbPath, RawQuery: "mode=ro&_busy_timeout=1000",
+	}).String()
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open Lutris database: %w", err)
 	}
 	defer func() {
 		if closeErr := db.Close(); closeErr != nil {
@@ -60,12 +75,12 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 		}
 	}()
 
-	// Query for installed games: name and slug
-	query := "SELECT name, slug FROM games WHERE installed = 1"
-	rows, err := db.QueryContext(context.Background(), query)
+	ctx, cancel := context.WithTimeout(context.Background(), lutrisQueryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(ctx,
+		"SELECT name, slug FROM games WHERE installed = 1 LIMIT ?", maxLutrisGames+1)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to query Lutris games")
-		return results, nil
+		return nil, fmt.Errorf("query Lutris games: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -73,91 +88,96 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 		}
 	}()
 
-	// Scan results
 	for rows.Next() {
 		var name, slug string
 		if err := rows.Scan(&name, &slug); err != nil {
-			log.Warn().Err(err).Msg("failed to scan Lutris game row")
+			return nil, fmt.Errorf("scan Lutris game row: %w", err)
+		}
+		if len(results) >= maxLutrisGames {
+			return nil, errors.New("lutris game library exceeds entry limit")
+		}
+		name = strings.TrimSpace(name)
+		slug = strings.TrimSpace(slug)
+		if slug == "" || len(name) > maxLutrisFieldLength || len(slug) > maxLutrisFieldLength ||
+			virtualpath.ContainsControlChar(name) || virtualpath.ContainsControlChar(slug) {
 			continue
 		}
-
-		// Skip games without a slug
-		if slug == "" {
-			continue
-		}
-
 		results = append(results, platforms.ScanResult{
-			Name:  name,
-			Path:  virtualpath.CreateVirtualPath(shared.SchemeLutris, slug, name),
-			NoExt: true,
+			Name: name, Path: virtualpath.CreateVirtualPath(shared.SchemeLutris, slug, name), NoExt: true,
 		})
 	}
-
-	// Check for errors during iteration
 	if err := rows.Err(); err != nil {
-		log.Warn().Err(err).Msg("error iterating Lutris game rows")
-		return results, nil
+		return nil, fmt.Errorf("iterate Lutris game rows: %w", err)
 	}
 
-	log.Debug().Msgf("found %d Lutris games", len(results))
+	log.Debug().Int("count", len(results)).Msg("found Lutris games")
 	return results, nil
 }
 
 // NewLutrisLauncher creates a configurable Lutris launcher.
 func NewLutrisLauncher(opts LutrisOptions) platforms.Launcher {
+	resolve := newApplicationResolver("lutris", FlatpakLutrisID, applicationResolverOptions{
+		lookPath: opts.lookPath, isFlatpakInstalled: opts.isFlatpakInstalled, checkFlatpak: opts.CheckFlatpak,
+	})
+	buildCommand := func(path string) (*platforms.LaunchCommand, error) {
+		slug, err := virtualpath.ExtractSchemeID(path, shared.SchemeLutris)
+		if err != nil {
+			return nil, fmt.Errorf("extract Lutris game slug: %w", err)
+		}
+		if slug == "" || len(slug) > maxLutrisFieldLength || virtualpath.ContainsControlChar(slug) {
+			return nil, errors.New("invalid Lutris game slug")
+		}
+		installation, err := resolve()
+		if err != nil {
+			return nil, err
+		}
+		return buildApplicationCommand(
+			withFlatpakDieWithParent(installation), []string{"lutris:rungame/" + slug}, opts.launchEnv,
+		), nil
+	}
+
 	return platforms.Launcher{
-		ID:       "Lutris",
-		SystemID: systemdefs.SystemPC,
-		Schemes:  []string{shared.SchemeLutris},
+		ID: "Lutris", SystemID: systemdefs.SystemPC, Schemes: []string{shared.SchemeLutris},
+		Lifecycle: platforms.LifecycleBlocking,
+		Availability: func(*config.Instance) error {
+			_, err := resolve()
+			return err
+		},
+		BuildLaunchCommand: func(
+			_ *config.Instance, path string, _ *platforms.LaunchOptions,
+		) (*platforms.LaunchCommand, error) {
+			return buildCommand(path)
+		},
 		Scanner: func(
 			_ context.Context,
 			_ *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			// Check if Lutris is installed
-			_, err := exec.LookPath("lutris")
-			if err != nil {
-				log.Debug().Err(err).Msg("Lutris not found in PATH, skipping scanner")
-				// Not an error condition - just means Lutris isn't installed
-				return results, nil
+			if _, err := resolve(); err != nil {
+				return results, nil //nolint:nilerr // An uninstalled optional launcher contributes no media.
 			}
-
-			// Find Lutris database (native or Flatpak)
 			lutrisDB, found := FindLutrisDB(opts.CheckFlatpak)
 			if !found {
-				log.Debug().Msg("Lutris database not found")
 				return results, nil
 			}
-
-			// Scan Lutris database for installed games
 			lutrisResults, err := ScanLutrisGames(lutrisDB)
 			if err != nil {
-				log.Warn().Err(err).Msg("failed to scan Lutris games, continuing without them")
-			} else {
-				results = append(results, lutrisResults...)
+				log.Warn().Err(err).Msg("failed to scan Lutris games")
+				return results, nil
 			}
-
-			return results, nil
+			return append(results, lutrisResults...), nil
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			// Extract game slug/id from lutris://game-slug format
-			slug, err := virtualpath.ExtractSchemeID(path, shared.SchemeLutris)
+			command, err := buildCommand(path)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract Lutris game slug from path: %w", err)
+				return nil, err
 			}
-
-			// Launch via lutris command with rungame action
-			cmd := exec.CommandContext( //nolint:gosec // Game slug from internal database
-				context.Background(),
-				"lutris",
-				"lutris:rungame/"+slug,
-			)
-			err = cmd.Start()
+			process, err := startTrackedApplicationCommand(command)
 			if err != nil {
-				return nil, fmt.Errorf("failed to start Lutris: %w", err)
+				return nil, fmt.Errorf("start Lutris: %w", err)
 			}
-			return nil, nil
+			return process, nil
 		},
 	}
 }
