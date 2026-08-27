@@ -621,6 +621,16 @@ func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
 		trimmed.droppedSystems[systemID] = struct{}{}
 	}
 	for systemID := range remove {
+		// Only systems the cache actually holds entries for become "dropped".
+		// A system it has never seen has nothing stale to fall back for, and
+		// marking it anyway is not harmless: droppedSystems makes
+		// CanServeSystems refuse, so one InsertSystem outside a transaction —
+		// which invalidates with the new system's ID, and a new system has no
+		// media yet — would put every library-wide search back on the grouped
+		// SQL LIKE path until the next full rebuild.
+		if _, known := c.systemIDToDBID[systemID]; !known {
+			continue
+		}
 		trimmed.droppedSystems[systemID] = struct{}{}
 	}
 

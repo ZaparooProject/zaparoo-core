@@ -186,6 +186,40 @@ func TestPartitionServableSystems_SplitsCacheFromInFlight(t *testing.T) {
 		"a system with no rows belongs on neither side")
 }
 
+// TestWithoutSystems_IgnoresSystemsTheCacheNeverHeld pins that removing a
+// system the cache has no entries for does not disable it.
+//
+// InsertSystem outside a transaction invalidates with just the new system's ID,
+// and a system that has only just been inserted has no media yet — so it is
+// absent from the cache. Recording it as dropped made CanServeSystems refuse
+// every library-wide search, which is the grouped SQL LIKE path this cache
+// exists to avoid.
+func TestWithoutSystems_IgnoresSystemsTheCacheNeverHeld(t *testing.T) {
+	t.Parallel()
+
+	cache := buildCoverageCache(106)
+	all := requestedSystems(293)
+	require.True(t, cache.CanServeSystems(all))
+
+	afterInsert := cache.withoutSystems([]string{"BrandNewSystem"})
+
+	assert.True(t, afterInsert.CanServeSystems(all),
+		"inserting a system with no media must not push library-wide searches onto SQL")
+	assert.NotContains(t, afterInsert.droppedSystems, "BrandNewSystem",
+		"a system the cache never held has nothing stale to fall back for")
+
+	cached, viaSQL, ok := afterInsert.PartitionServableSystems(all)
+	require.True(t, ok)
+	assert.Empty(t, viaSQL, "no system needs SQL: none of them were being rewritten")
+	assert.Len(t, cached, 106)
+
+	// A system the cache does hold entries for must still be dropped, so its
+	// stale rows are not served while it is rewritten.
+	afterReindex := cache.withoutSystems([]string{"System007"})
+	assert.Contains(t, afterReindex.droppedSystems, "System007")
+	assert.False(t, afterReindex.CanServeSystems([]string{"System007"}))
+}
+
 // TestPartitionServableSystems_DeclinesWhenNotApplicable keeps the split from
 // being used where its reasoning does not hold. A complete cache needs no
 // split, and a fragment cannot assume an unknown system is empty.
