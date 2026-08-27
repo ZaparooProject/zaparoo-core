@@ -128,17 +128,27 @@ func (r *logRedirector) detach() {
 	r.level = zerolog.TraceLevel
 }
 
+// logCaptureLease serializes capture sessions. There is one global logger, so
+// two tests capturing at once would overwrite each other's target and the first
+// to finish would detach the second's buffer. Holding it for the test and
+// releasing in cleanup makes a concurrent caller wait its turn instead.
+var logCaptureLease syncutil.Mutex
+
 // captureLogs routes global log output into a fresh buffer for the duration of
 // the test, filtered to level and above.
 //
-// Tests using it need not be sequential: other tests' goroutines keep logging
-// into the same buffer, which is why logCapture is synchronized and why
-// assertions here look for the lines they want rather than counting them.
+// Other tests' goroutines keep logging into the same buffer while it is
+// attached, which is why logCapture is synchronized and why assertions here look
+// for the lines they want rather than counting them.
 func captureLogs(t *testing.T, level zerolog.Level) *logCapture {
 	t.Helper()
 	buf := &logCapture{}
+	logCaptureLease.Lock()
 	testLogRedirector.attach(buf, level)
-	t.Cleanup(testLogRedirector.detach)
+	t.Cleanup(func() {
+		testLogRedirector.detach()
+		logCaptureLease.Unlock()
+	})
 	return buf
 }
 

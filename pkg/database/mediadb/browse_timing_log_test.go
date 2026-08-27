@@ -112,11 +112,20 @@ func TestLogBrowseTiming_ReportsRealPoolContention(t *testing.T) {
 
 	// Contended: hold the only connection, start the browse, release after a
 	// known delay. The browse cannot begin work until the hold ends.
+	waitedBefore := sqlDB.Stats().WaitCount
 	hog, err := sqlDB.Conn(context.Background())
 	require.NoError(t, err)
 
 	done := make(chan map[string]any, 1)
 	go func() { done <- browse() }()
+
+	// Start the clock only once the browse is genuinely queued for the
+	// connection. Sleeping straight away instead assumed the goroutine reaches
+	// sqlDB.Conn within holdFor; on a loaded machine it need not, and the
+	// browse then never blocks and reports a connWait near zero.
+	require.Eventually(t, func() bool {
+		return sqlDB.Stats().WaitCount > waitedBefore
+	}, 10*time.Second, time.Millisecond, "browse never queued for the only connection")
 
 	time.Sleep(holdFor)
 	require.NoError(t, hog.Close())
