@@ -20,6 +20,8 @@
 package misterdocs
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,6 +30,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type denyOpenFs struct {
+	afero.Fs
+	deniedPath string
+}
+
+func (fs denyOpenFs) Open(name string) (afero.File, error) {
+	if filepath.Clean(name) == filepath.Clean(fs.deniedPath) {
+		return nil, os.ErrPermission
+	}
+	file, err := fs.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", name, err)
+	}
+	return file, nil
+}
 
 func TestCandidateDocsRoots_PreservesOrderAndDeduplicates(t *testing.T) {
 	t.Parallel()
@@ -62,6 +80,24 @@ func TestDiscoverSources_FindsArtworkAndManualsByFormat(t *testing.T) {
 		{Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork},
 		{Path: manuals, SystemID: systemdefs.SystemFDS, Kind: sourceManuals},
 	}, sources)
+}
+
+func TestDiscoverSources_SkipsUnreadableRootAndContinues(t *testing.T) {
+	t.Parallel()
+
+	baseFS := afero.NewMemMapFs()
+	deniedBase := filepath.Join("media", "usb")
+	deniedRoot := filepath.Join(deniedBase, "docs")
+	goodBase := filepath.Join("media", "fat")
+	artwork := filepath.Join(goodBase, "docs", "SNES", artworkDirName)
+	require.NoError(t, baseFS.MkdirAll(deniedRoot, 0o750))
+	require.NoError(t, baseFS.MkdirAll(artwork, 0o750))
+	require.NoError(t, afero.WriteFile(baseFS, filepath.Join(artwork, indexFileName), []byte("#name\tkey\n"), 0o600))
+	fs := denyOpenFs{Fs: baseFS, deniedPath: deniedRoot}
+
+	sources, err := discoverSources(fs, []string{deniedBase, goodBase})
+	require.NoError(t, err)
+	assert.Equal(t, []sourceDir{{Path: artwork, SystemID: systemdefs.SystemSNES, Kind: sourceArtwork}}, sources)
 }
 
 func TestDiscoverSources_IgnoresUnsupportedLayouts(t *testing.T) {

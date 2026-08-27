@@ -246,14 +246,22 @@ func TestScrapeLoop_AccumulatesSourceLoadFailures(t *testing.T) {
 	mediaDB.AssertExpectations(t)
 }
 
-func TestScrapeLoop_ForceCleanupCountsDeletionAsProcessed(t *testing.T) {
+func TestScrapeLoop_ForceCleanupDoesNotInflateStatsOrUseUnavailableRoots(t *testing.T) {
 	t.Parallel()
 
+	fs := afero.NewMemMapFs()
 	docsRoot := filepath.Join("media", "fat", "docs")
+	unavailableRoot := filepath.Join("media", "usb", "docs")
+	sourcePath := filepath.Join(docsRoot, "SNES", "Manuals")
+	require.NoError(t, fs.MkdirAll(sourcePath, 0o750))
 	stalePath := filepath.Join(docsRoot, "SNES", artworkDirName, "Stale.jpg")
 	staleManual := filepath.Join(docsRoot, "SNES", "Manuals", "Stale.pdf")
+	unavailableManual := filepath.Join(unavailableRoot, "SNES", "Manuals", "Unavailable.pdf")
 	media := []database.MediaWithFullPath{{DBID: 100, MediaTitleDBID: 10, Path: "Game.sfc"}}
-	titles := []database.TitleWithSystem{{DBID: 10, Slug: "game", Name: "Game", SystemID: systemdefs.SystemSNES}}
+	titles := []database.TitleWithSystem{
+		{DBID: 10, Slug: "game", Name: "Game", SystemID: systemdefs.SystemSNES},
+		{DBID: 20, Slug: "other", Name: "Other", SystemID: systemdefs.SystemSNES},
+	}
 
 	mediaDB := testhelpers.NewMockMediaDBI()
 	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return(titles, nil)
@@ -265,19 +273,28 @@ func TestScrapeLoop_ForceCleanupCountsDeletionAsProcessed(t *testing.T) {
 			Text:        filepath.ToSlash(stalePath),
 		}}}, nil,
 	).Once()
-	mediaDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", assertmock.Anything, []int64{10}).Return(
-		map[int64][]database.MediaProperty{10: {{
-			TypeTagDBID: 2,
-			TypeTag:     tags.PropertyTypeTag(tags.TagPropertyManual),
-			Text:        filepath.ToSlash(staleManual),
-		}}}, nil,
+	mediaDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", assertmock.Anything, []int64{10, 20}).Return(
+		map[int64][]database.MediaProperty{
+			10: {{
+				TypeTagDBID: 2,
+				TypeTag:     tags.PropertyTypeTag(tags.TagPropertyManual),
+				Text:        filepath.ToSlash(staleManual),
+			}},
+			20: {{
+				TypeTagDBID: 2,
+				TypeTag:     tags.PropertyTypeTag(tags.TagPropertyManual),
+				Text:        filepath.ToSlash(unavailableManual),
+			}},
+		}, nil,
 	).Once()
 	mediaDB.On("DeleteMediaProperty", assertmock.Anything, int64(100), int64(1)).Return(nil).Once()
 	mediaDB.On("DeleteMediaTitleProperty", assertmock.Anything, int64(10), int64(2)).Return(nil).Once()
 
 	impl := &scraperImpl{
-		fs: afero.NewMemMapFs(), db: mediaDB, docsRoots: []string{docsRoot},
-		sources: map[string][]sourceDir{},
+		fs: fs, db: mediaDB, docsRoots: []string{docsRoot, unavailableRoot},
+		sources: map[string][]sourceDir{
+			systemdefs.SystemSNES: {{Path: sourcePath, SystemID: systemdefs.SystemSNES, Kind: sourceManuals}},
+		},
 	}
 	ch := make(chan scraper.ScrapeUpdate, 4)
 	impl.scrapeLoop(
@@ -289,12 +306,41 @@ func TestScrapeLoop_ForceCleanupCountsDeletionAsProcessed(t *testing.T) {
 		updates = append(updates, update)
 	}
 	require.Len(t, updates, 2)
-	assert.Equal(t, 2, updates[0].Processed)
-	assert.Equal(t, 2, updates[0].Total)
-	assert.Equal(t, 2, updates[0].Matched)
-	assert.LessOrEqual(t, updates[0].Matched, updates[0].Total)
-	mediaDB.AssertNotCalled(t, "GetMediaPropertyMetadata", assertmock.Anything, assertmock.Anything)
-	mediaDB.AssertNotCalled(t, "GetMediaTitlePropertyMetadata", assertmock.Anything, assertmock.Anything)
+	assert.Zero(t, updates[0].Processed)
+	assert.Zero(t, updates[0].Total)
+	assert.Zero(t, updates[0].Matched)
+	mediaDB.AssertNotCalled(t, "DeleteMediaTitleProperty", assertmock.Anything, int64(20), int64(2))
+	mediaDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_ForceSkipsCleanupWithoutSuccessfulSource(t *testing.T) {
+	t.Parallel()
+
+	mediaDB := testhelpers.NewMockMediaDBI()
+	mediaDB.On("GetTitlesBySystemID", systemdefs.SystemSNES).Return([]database.TitleWithSystem{{DBID: 10}}, nil)
+	mediaDB.On("GetMediaBySystemID", systemdefs.SystemSNES).Return(
+		[]database.MediaWithFullPath{{DBID: 100, MediaTitleDBID: 10}}, nil,
+	)
+	impl := &scraperImpl{
+		fs: afero.NewMemMapFs(), db: mediaDB,
+		docsRoots: []string{filepath.Join("media", "missing", "docs")}, sources: map[string][]sourceDir{},
+	}
+	ch := make(chan scraper.ScrapeUpdate, 4)
+
+	impl.scrapeLoop(
+		context.Background(), scraper.ScrapeOptions{Force: true}, []string{systemdefs.SystemSNES}, ch,
+	)
+
+	var updates []scraper.ScrapeUpdate
+	for update := range ch {
+		updates = append(updates, update)
+	}
+	require.Len(t, updates, 2)
+	require.NoError(t, updates[0].Err)
+	mediaDB.AssertNotCalled(t, "GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, assertmock.Anything)
+	mediaDB.AssertNotCalled(
+		t, "GetMediaTitlePropertyMetadataByMediaTitleDBIDs", assertmock.Anything, assertmock.Anything,
+	)
 	mediaDB.AssertExpectations(t)
 }
 
@@ -334,7 +380,6 @@ func TestIsStaleDocsProperty_RestrictsCleanupScope(t *testing.T) {
 			typeTag: tags.PropertyTypeTag(tags.TagPropertyManual), want: true,
 		},
 	}
-	impl := &scraperImpl{docsRoots: []string{docsRoot}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			found := make(map[string]struct{})
@@ -342,7 +387,7 @@ func TestIsStaleDocsProperty_RestrictsCleanupScope(t *testing.T) {
 				found[filepath.Clean(filepath.FromSlash(tt.text))] = struct{}{}
 			}
 			prop := database.MediaProperty{TypeTag: tt.typeTag, Text: tt.text}
-			assert.Equal(t, tt.want, impl.isStaleDocsProperty(&prop, found))
+			assert.Equal(t, tt.want, isStaleDocsProperty(&prop, found, []string{docsRoot}))
 		})
 	}
 }
@@ -370,7 +415,9 @@ func TestDeleteStaleProperties_StopsForCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		deleted, err := impl.deleteStaleProperties(ctx, scraper.ScrapeOptions{}, media, titles, nil)
+		deleted, err := impl.deleteStaleProperties(
+			ctx, scraper.ScrapeOptions{}, media, titles, nil, []string{docsRoot},
+		)
 		assert.Zero(t, deleted)
 		require.ErrorIs(t, err, context.Canceled)
 		mediaDB.AssertNotCalled(t, "GetMediaPropertyMetadataByMediaDBIDs", assertmock.Anything, assertmock.Anything)
@@ -390,7 +437,9 @@ func TestDeleteStaleProperties_StopsForCancellation(t *testing.T) {
 		).Return(map[int64][]database.MediaProperty{10: {staleManual}}, nil).Once()
 		impl := &scraperImpl{db: mediaDB, docsRoots: []string{docsRoot}}
 
-		deleted, err := impl.deleteStaleProperties(ctx, scraper.ScrapeOptions{}, media, titles, nil)
+		deleted, err := impl.deleteStaleProperties(
+			ctx, scraper.ScrapeOptions{}, media, titles, nil, []string{docsRoot},
+		)
 		assert.Zero(t, deleted)
 		require.ErrorIs(t, err, context.Canceled)
 		mediaDB.AssertNotCalled(t, "DeleteMediaProperty", assertmock.Anything, assertmock.Anything, assertmock.Anything)
@@ -411,7 +460,9 @@ func TestDeleteStaleProperties_StopsForCancellation(t *testing.T) {
 		).Return(nil).Once()
 		impl := &scraperImpl{db: mediaDB, docsRoots: []string{docsRoot}}
 
-		deleted, err := impl.deleteStaleProperties(ctx, scraper.ScrapeOptions{}, media, titles, nil)
+		deleted, err := impl.deleteStaleProperties(
+			ctx, scraper.ScrapeOptions{}, media, titles, nil, []string{docsRoot},
+		)
 		assert.Equal(t, 1, deleted)
 		require.ErrorIs(t, err, context.Canceled)
 		mediaDB.AssertNotCalled(

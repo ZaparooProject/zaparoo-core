@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -38,6 +39,7 @@ import (
 const (
 	maxMetadataBytes   = int64(8 * 1024 * 1024)
 	maxMetadataRecords = 100_000
+	directoryReadBatch = 256
 )
 
 type artworkRecord struct {
@@ -93,7 +95,9 @@ func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRec
 	if !nameOK || !keyOK {
 		return sourceRecords{}, errors.New("misterdocs: index.tsv requires name and key columns")
 	}
-	seenNames := make(map[string]struct{})
+	recordsByName := make(map[string]artworkRecord)
+	recordOrder := make([]string, 0, len(rows.records))
+	ambiguousNames := make(map[string]struct{})
 	for _, row := range rows.records {
 		if err := ctx.Err(); err != nil {
 			return sourceRecords{}, err
@@ -109,12 +113,26 @@ func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRec
 			continue
 		}
 		nameKey := strings.ToLower(name)
-		if _, duplicate := seenNames[nameKey]; duplicate {
+		if _, ambiguous := ambiguousNames[nameKey]; ambiguous {
 			result.RowErrors++
 			continue
 		}
-		seenNames[nameKey] = struct{}{}
-		result.Artwork = append(result.Artwork, artworkRecord{Name: name, Key: key, ImagePath: imagePath})
+		if existing, duplicate := recordsByName[nameKey]; duplicate {
+			result.RowErrors++
+			if !strings.EqualFold(existing.Key, key) {
+				delete(recordsByName, nameKey)
+				ambiguousNames[nameKey] = struct{}{}
+				result.RowErrors++
+			}
+			continue
+		}
+		recordsByName[nameKey] = artworkRecord{Name: name, Key: key, ImagePath: imagePath}
+		recordOrder = append(recordOrder, nameKey)
+	}
+	for _, nameKey := range recordOrder {
+		if record, ok := recordsByName[nameKey]; ok {
+			result.Artwork = append(result.Artwork, record)
+		}
 	}
 
 	if isRegularFile(fs, filepath.Join(dir, "gameinfo.tsv")) {
@@ -156,6 +174,9 @@ func loadGameInfo(ctx context.Context, fs afero.Fs, path string) (map[string]gam
 		if key == "" {
 			continue
 		}
+		if _, duplicate := result[key]; duplicate {
+			return nil, fmt.Errorf("misterdocs: gameinfo.tsv contains duplicate key %q", key)
+		}
 		result[key] = gameInfoRecord{
 			Name:      fieldByName(row, rows.columns, "name"),
 			Year:      fieldByName(row, rows.columns, "year"),
@@ -183,54 +204,108 @@ func loadSynopsis(ctx context.Context, fs afero.Fs, path string) (map[string]str
 			return nil, err
 		}
 		key, synopsis, ok := rowValues(row, keyCol, synopsisCol)
-		if ok && key != "" && synopsis != "" {
-			result[key] = synopsis
+		if !ok || key == "" || synopsis == "" {
+			continue
 		}
+		if _, duplicate := result[key]; duplicate {
+			return nil, fmt.Errorf("misterdocs: synopsis_en.tsv contains duplicate key %q", key)
+		}
+		result[key] = synopsis
 	}
 	return result, nil
 }
 
 func loadManualRecords(ctx context.Context, fs afero.Fs, dir string) ([]string, error) {
-	entries, err := afero.ReadDir(fs, dir)
+	directory, err := fs.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("misterdocs: read manuals directory %q: %w", dir, err)
 	}
-	result := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	defer func() { _ = directory.Close() }()
+
+	result := make([]string, 0)
+	for {
+		entries, readErr := directory.Readdir(directoryReadBatch)
+		for _, entry := range entries {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			result, err = appendManualRecord(fs, dir, entry, result)
+			if err != nil {
+				return nil, err
+			}
 		}
-		if len(result) >= maxMetadataRecords {
-			return nil, fmt.Errorf("misterdocs: manuals directory exceeds %d records", maxMetadataRecords)
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
-		if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 || !strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		if isRegularFile(fs, path) {
-			result = append(result, path)
+		if readErr != nil {
+			return nil, fmt.Errorf("misterdocs: read manuals directory %q: %w", dir, readErr)
 		}
 	}
+	sort.Strings(result)
 	return result, nil
 }
 
+func appendManualRecord(
+	fs afero.Fs,
+	dir string,
+	entry os.FileInfo,
+	result []string,
+) ([]string, error) {
+	if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 ||
+		!strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
+		return result, nil
+	}
+	path := filepath.Join(dir, entry.Name())
+	if !isRegularFile(fs, path) {
+		return result, nil
+	}
+	if len(result) >= maxMetadataRecords {
+		return nil, fmt.Errorf("misterdocs: manuals directory exceeds %d records", maxMetadataRecords)
+	}
+	return append(result, path), nil
+}
+
 func imageFilesByStem(fs afero.Fs, dir string) (map[string]string, error) {
-	entries, err := afero.ReadDir(fs, dir)
+	directory, err := fs.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("misterdocs: read artwork directory %q: %w", dir, err)
 	}
+	defer func() { _ = directory.Close() }()
+
 	result := make(map[string]string)
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 || !supportedImageExt(filepath.Ext(entry.Name())) {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		if !isRegularFile(fs, path) {
-			continue
-		}
-		stem := strings.ToLower(strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())))
-		if _, exists := result[stem]; !exists {
+	ambiguous := make(map[string]struct{})
+	imageCount := 0
+	for {
+		entries, readErr := directory.Readdir(directoryReadBatch)
+		for _, entry := range entries {
+			if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 ||
+				!supportedImageExt(filepath.Ext(entry.Name())) {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			if !isRegularFile(fs, path) {
+				continue
+			}
+			if imageCount >= maxMetadataRecords {
+				return nil, fmt.Errorf("misterdocs: artwork directory exceeds %d records", maxMetadataRecords)
+			}
+			imageCount++
+			stem := strings.ToLower(strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())))
+			if _, duplicate := result[stem]; duplicate {
+				delete(result, stem)
+				ambiguous[stem] = struct{}{}
+				continue
+			}
+			if _, duplicate := ambiguous[stem]; duplicate {
+				continue
+			}
 			result[stem] = path
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("misterdocs: read artwork directory %q: %w", dir, readErr)
 		}
 	}
 	return result, nil

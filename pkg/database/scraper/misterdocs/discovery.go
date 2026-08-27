@@ -81,7 +81,7 @@ func discoverSources(fs afero.Fs, roots []string) ([]sourceDir, error) {
 		}
 		systems, err := afero.ReadDir(fs, docsRoot)
 		if err != nil {
-			return nil, fmt.Errorf("misterdocs: read docs root %q: %w", docsRoot, err)
+			continue
 		}
 		for _, systemEntry := range systems {
 			if !systemEntry.IsDir() || systemEntry.Mode()&os.ModeSymlink != 0 {

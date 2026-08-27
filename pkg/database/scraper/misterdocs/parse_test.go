@@ -58,6 +58,27 @@ func TestLoadArtworkRecords_ImportsIndexAndOptionalMetadata(t *testing.T) {
 	assert.Equal(t, 1, got.RowErrors)
 }
 
+func TestLoadArtworkRecords_OmitsAmbiguousDuplicateNames(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string][]byte{
+		"index.tsv":  []byte("#name\tkey\nGame\tFirst\nGame\tSecond\n"),
+		"First.jpg":  []byte("first"),
+		"Second.jpg": []byte("second"),
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	require.NoError(t, err)
+	assert.Empty(t, got.Artwork)
+	assert.Equal(t, 2, got.RowErrors)
+}
+
 func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +90,32 @@ func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
 		"Game.jpg":        []byte("image"),
 		"gameinfo.tsv":    []byte("#name\nGame\n"),
 		"synopsis_en.tsv": []byte("#key\nGame\n"),
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	require.NoError(t, err)
+	require.Len(t, got.Artwork, 1)
+	assert.Empty(t, got.GameInfo)
+	assert.Empty(t, got.Synopsis)
+	assert.Equal(t, 2, got.RowErrors)
+}
+
+func TestLoadArtworkRecords_SkipsDuplicateOptionalMetadataKeys(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string][]byte{
+		"index.tsv": []byte("#name\tkey\nGame\tGame\n"),
+		"Game.jpg":  []byte("image"),
+		"gameinfo.tsv": []byte("#key\tyear\n" +
+			"Game\t1994\nGame\t1995\n"),
+		"synopsis_en.tsv": []byte("#key\tsynopsis\n" +
+			"Game\tFirst\nGame\tSecond\n"),
 	}
 	for name, content := range files {
 		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
@@ -137,6 +184,44 @@ func TestReadTSV_RejectsOversizedMetadata(t *testing.T) {
 
 	_, err := readTSV(context.Background(), fs, path)
 	require.ErrorContains(t, err, "metadata exceeds 8388608-byte limit")
+}
+
+func TestImageFilesByStem_OmitsAmbiguousStems(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Game.jpg"), []byte("jpg"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Game.png"), []byte("png"), 0o600))
+
+	images, err := imageFilesByStem(fs, dir)
+	require.NoError(t, err)
+	assert.NotContains(t, images, "game")
+}
+
+func TestAppendManualRecord_FiltersBeforeEnforcingLimit(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Manuals")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	readmePath := filepath.Join(dir, "README.txt")
+	manualPath := filepath.Join(dir, "Extra.pdf")
+	require.NoError(t, afero.WriteFile(fs, readmePath, []byte("text"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, manualPath, []byte("pdf"), 0o600))
+	readmeInfo, err := fs.Stat(readmePath)
+	require.NoError(t, err)
+	manualInfo, err := fs.Stat(manualPath)
+	require.NoError(t, err)
+	full := make([]string, maxMetadataRecords)
+
+	got, err := appendManualRecord(fs, dir, readmeInfo, full)
+	require.NoError(t, err)
+	assert.Len(t, got, maxMetadataRecords)
+
+	_, err = appendManualRecord(fs, dir, manualInfo, full)
+	require.ErrorContains(t, err, "manuals directory exceeds 100000 records")
 }
 
 func TestLoadManualRecords_FiltersDirectPDFs(t *testing.T) {

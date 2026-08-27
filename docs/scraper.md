@@ -199,7 +199,7 @@ Metadata files are treated as untrusted input. Core bounds their size and record
 | `synopsis_en.tsv` synopsis | title property `property:description` |
 | Manual PDF | title property `property:manual` |
 
-Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. System manuals, overlays, charts, unknown titles, and collisions are left unmatched instead of being attached speculatively. Base-system sources can enrich compatible fallback systems such as SNES MSU and Genesis variants.
+Manual filenames are matched with the same game-title slug normalization used by MediaDB, including leading/trailing article handling. Basenames with no matching title, or whose slug collision remains ambiguous after normalized-name matching, are left unmatched. Category-like names such as system manuals, overlays, or charts are not filtered separately. Base-system sources can enrich compatible fallback systems such as SNES MSU and Genesis variants.
 
 If multiple docs roots provide the same property, MiSTer root order decides which source wins. As with other scrapers, running a different scraper later may replace exclusive tags or same-type properties.
 

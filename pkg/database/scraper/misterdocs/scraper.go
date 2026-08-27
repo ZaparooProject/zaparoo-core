@@ -126,6 +126,7 @@ func (s *scraperImpl) scrapeLoop(
 
 		var records []sourceRecords
 		var sourceError error
+		successfulRoots := make(map[string]struct{})
 		for _, sourceID := range sourceIDsForTarget(targetID) {
 			for _, source := range s.sources[sourceID] {
 				if err := waitForScrape(ctx, opts); err != nil {
@@ -143,18 +144,25 @@ func (s *scraperImpl) scrapeLoop(
 					continue
 				}
 				records = append(records, loaded)
+				if root := s.docsRootForSource(source.Path); root != "" {
+					successfulRoots[root] = struct{}{}
+				}
 			}
 		}
 
+		cleanupRoots := make([]string, 0, len(successfulRoots))
+		for _, root := range s.docsRoots {
+			if _, ok := successfulRoots[root]; ok {
+				cleanupRoots = append(cleanupRoots, root)
+			}
+		}
 		idx := newSystemIndex(titles, media)
 		writeTargets, stats, foundPaths := buildPendingWrites(idx, records, opts.RunID)
-		if opts.Force && sourceError == nil {
-			deleted, cleanupErr := s.deleteStaleProperties(ctx, opts, media, titles, foundPaths)
-			if cleanupErr != nil {
+		if opts.Force && sourceError == nil && len(cleanupRoots) > 0 {
+			if _, cleanupErr := s.deleteStaleProperties(
+				ctx, opts, media, titles, foundPaths, cleanupRoots,
+			); cleanupErr != nil {
 				sourceError = cleanupErr
-			} else if deleted > 0 {
-				stats.Processed += deleted
-				stats.Matched += deleted
 			}
 		}
 
@@ -242,6 +250,7 @@ func (s *scraperImpl) deleteStaleProperties(
 	media []database.MediaWithFullPath,
 	titles []database.TitleWithSystem,
 	found map[string]struct{},
+	cleanupRoots []string,
 ) (int, error) {
 	mediaProps := make(map[int64][]database.MediaProperty, len(media))
 	if len(media) > 0 {
@@ -283,7 +292,7 @@ func (s *scraperImpl) deleteStaleProperties(
 		props := mediaProps[media[i].DBID]
 		for propIdx := range props {
 			prop := &props[propIdx]
-			if !s.isStaleDocsProperty(prop, found) || prop.TypeTagDBID == 0 {
+			if !isStaleDocsProperty(prop, found, cleanupRoots) || prop.TypeTagDBID == 0 {
 				continue
 			}
 			if err := s.db.DeleteMediaProperty(ctx, media[i].DBID, prop.TypeTagDBID); err != nil {
@@ -299,7 +308,7 @@ func (s *scraperImpl) deleteStaleProperties(
 		props := titleProps[titles[i].DBID]
 		for propIdx := range props {
 			prop := &props[propIdx]
-			if !s.isStaleDocsProperty(prop, found) || prop.TypeTagDBID == 0 {
+			if !isStaleDocsProperty(prop, found, cleanupRoots) || prop.TypeTagDBID == 0 {
 				continue
 			}
 			if err := s.db.DeleteMediaTitleProperty(ctx, titles[i].DBID, prop.TypeTagDBID); err != nil {
@@ -311,7 +320,20 @@ func (s *scraperImpl) deleteStaleProperties(
 	return deleted, nil
 }
 
-func (s *scraperImpl) isStaleDocsProperty(prop *database.MediaProperty, found map[string]struct{}) bool {
+func (s *scraperImpl) docsRootForSource(path string) string {
+	for _, root := range s.docsRoots {
+		if pathWithin(path, root) {
+			return root
+		}
+	}
+	return ""
+}
+
+func isStaleDocsProperty(
+	prop *database.MediaProperty,
+	found map[string]struct{},
+	cleanupRoots []string,
+) bool {
 	if prop.Text == "" {
 		return false
 	}
@@ -324,7 +346,7 @@ func (s *scraperImpl) isStaleDocsProperty(prop *database.MediaProperty, found ma
 		return false
 	}
 	withinDocs := false
-	for _, root := range s.docsRoots {
+	for _, root := range cleanupRoots {
 		if pathWithin(path, root) {
 			withinDocs = true
 			break
