@@ -2117,7 +2117,17 @@ None.
     "scrapers": [
       {
         "id": "gamelist.xml",
-        "name": "gamelist.xml",
+        "name": "ES gamelist.xml",
+        "supportedSystems": []
+      },
+      {
+        "id": "media-folder",
+        "name": "ES media folders",
+        "supportedSystems": []
+      },
+      {
+        "id": "mister-docs",
+        "name": "MiSTer docs databases",
         "supportedSystems": []
       }
     ]
