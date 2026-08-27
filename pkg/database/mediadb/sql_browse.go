@@ -588,21 +588,192 @@ func sqlBrowseDirectories(
 	return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
 }
 
+// browseOverlayDirectFilesCTE names the files sitting directly in each route, so
+// a directory can be dropped when a higher-priority route already provides that
+// name as a file. Shared by both overlay directory statements; the caller
+// appends the system filter's args when systemClause is non-empty.
+func browseOverlayDirectFilesCTE(systemClause string) string {
+	query := `direct_files AS (
+			SELECT sources.priority,
+				substr(m.Path, length(m.ParentDir) + 1) AS name
+			FROM sources
+			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
+			INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			WHERE m.IsMissing = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+	}
+	return query + `
+		)`
+}
+
+// browseOverlayDirectoryTail collapses the candidate directories to one entry
+// per name, letting the highest-priority route win, and drops any shadowed by a
+// higher-priority route's direct file. Identical for both statements: only the
+// directory_candidates CTE above it differs between them.
+const browseOverlayDirectoryTail = `ranked AS (
+			SELECT directory_candidates.*,
+				ROW_NUMBER() OVER (PARTITION BY name ORDER BY priority ASC) AS source_rank
+			FROM directory_candidates
+			WHERE NOT EXISTS (
+				SELECT 1 FROM direct_files
+				WHERE direct_files.priority < directory_candidates.priority
+					AND direct_files.name = directory_candidates.name
+			)
+		)
+		SELECT name, file_count, system_ids, parent_dir || name
+		FROM ranked
+		WHERE source_rank = 1`
+
+// sqlBrowseOverlayDirectories lists the merged immediate subdirectories of an
+// overlay's routes, preferring the browse cache and falling back to Media.
+//
+// The overlay branch used to go straight to Media while every other browse entry
+// point routed through the cache. Recomputing a route's child directories means
+// scanning every media row beneath it: on the #1279 device database that is
+// 66,011 rows for C64, and BrowseDirCount runs the same statement a second time
+// per page just to take len(dirs). BrowseDirCounts already holds those names and
+// counts, built from the same IsMissing = 0 rows, so the two agree by
+// construction.
 func sqlBrowseOverlayDirectories(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
 	sources := browseOverlaySources(opts.Overlay)
+	parentIDs, usable, err := browseOverlayCacheParents(ctx, db, sources, opts.Systems)
+	if err != nil {
+		return nil, err
+	}
+	if usable {
+		return sqlBrowseOverlayDirectoriesFromCache(ctx, db, opts, sources, parentIDs)
+	}
+	return sqlBrowseOverlayDirectoriesFromMedia(ctx, db, opts)
+}
+
+// browseOverlayCacheParents resolves each directory-contributing route to its
+// BrowseDirs row and reports whether the cache can answer the listing.
+//
+// A route missing from BrowseDirs does not mean "this route has no
+// subdirectories" — it means the cache has never seen that path, and serving
+// from it would silently drop directories Media still holds. Any such route
+// sends the whole statement to the fallback, matching how
+// sqlBrowseDirectories treats a parent it cannot find.
+func browseOverlayCacheParents(
+	ctx context.Context,
+	db sqlQueryable,
+	sources []database.BrowseSource,
+	systems []systemdefs.System,
+) (parentIDs []int64, usable bool, err error) {
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil || !ready {
+		return nil, false, err
+	}
+	covered, err := sqlBrowseCacheCoversSystems(ctx, db, systems)
+	if err != nil || !covered {
+		return nil, false, err
+	}
+
+	parentIDs = make([]int64, len(sources))
+	for i := range sources {
+		if !sources[i].IncludeDirs {
+			continue
+		}
+		id, ok, dirErr := sqlBrowseDirID(ctx, db, browseRouteCacheKey(sources[i].PathPrefix))
+		if dirErr != nil {
+			return nil, false, dirErr
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		parentIDs[i] = id
+	}
+	return parentIDs, true, nil
+}
+
+func sqlBrowseOverlayDirectoriesFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+	sources []database.BrowseSource,
+	parentIDs []int64,
+) ([]database.BrowseDirectoryResult, error) {
+	query, args := browseOverlayDirectoriesCacheQuery(opts, sources, parentIDs)
+	return runBrowseOverlayDirectories(ctx, db, query, args, opts)
+}
+
+// browseOverlayDirectoriesCacheQuery builds the cache-backed statement and its
+// arguments. Separate from the exec so the query-plan regression test measures
+// the statement production actually runs rather than a copy of it, matching
+// browseOverlayFileCountQuery.
+func browseOverlayDirectoriesCacheQuery(
+	opts database.BrowseDirectoriesOptions,
+	sources []database.BrowseSource,
+	parentIDs []int64,
+) (query string, args []any) {
 	values := make([]string, len(sources))
-	args := make([]any, 0, len(sources)+16)
+	args = make([]any, 0, len(sources)*4+16)
+	for i := range sources {
+		values[i] = "(?, ?, ?, ?)"
+		args = append(args, sources[i].PathPrefix, parentIDs[i], i, sources[i].IncludeDirs)
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	query = `WITH sources(parent_dir, parent_id, priority, include_dirs) AS (VALUES ` +
+		strings.Join(values, ",") + `),
+		directory_candidates AS (
+			SELECT sources.parent_dir,
+				sources.priority,
+				child.Name AS name,
+				SUM(counts.FileCount) AS file_count,
+				GROUP_CONCAT(DISTINCT s.SystemID) AS system_ids
+			FROM sources
+			INNER JOIN BrowseDirCounts counts
+				ON counts.ParentDirDBID = sources.parent_id
+				-- v3 self rows are the parent's own direct-file count, not a child.
+				AND counts.ChildDirDBID != counts.ParentDirDBID
+			INNER JOIN BrowseDirs child ON child.DBID = counts.ChildDirDBID
+			INNER JOIN Systems s ON s.DBID = counts.SystemDBID
+			WHERE sources.include_dirs = 1 AND child.IsVirtual = 0`
+	if systemClause != "" {
+		query += ` AND ` + systemClause
+		args = append(args, systemArgs...)
+	}
+	query += `
+			GROUP BY sources.parent_dir, sources.priority, child.DBID, child.Name
+		), ` + browseOverlayDirectFilesCTE(systemClause)
+	if systemClause != "" {
+		args = append(args, systemArgs...)
+	}
+	return query + `, ` + browseOverlayDirectoryTail, args
+}
+
+func sqlBrowseOverlayDirectoriesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	query, args := browseOverlayDirectoriesMediaQuery(opts)
+	return runBrowseOverlayDirectories(ctx, db, query, args, opts)
+}
+
+// browseOverlayDirectoriesMediaQuery builds the fallback statement, which
+// derives the child directories by scanning every media row beneath each route.
+// Factored out alongside browseOverlayDirectoriesCacheQuery so the plan test can
+// compare the two shapes.
+func browseOverlayDirectoriesMediaQuery(
+	opts database.BrowseDirectoriesOptions,
+) (query string, args []any) {
+	sources := browseOverlaySources(opts.Overlay)
+	values := make([]string, len(sources))
+	args = make([]any, 0, len(sources)*3+16)
 	for i := range sources {
 		values[i] = "(?, ?, ?)"
 		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
 	}
 
 	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
-	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+	query = `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
 		matched_dirs AS (
 			SELECT sources.parent_dir,
 				sources.priority,
@@ -628,31 +799,22 @@ func sqlBrowseOverlayDirectories(
 			FROM matched_dirs
 			WHERE instr(rest, '/') > 0
 			GROUP BY parent_dir, priority, name
-		), direct_files AS (
-			SELECT sources.priority,
-				substr(m.Path, length(m.ParentDir) + 1) AS name
-			FROM sources
-			INNER JOIN Media m ON m.ParentDir = sources.parent_dir
-			INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			WHERE m.IsMissing = 0`
+		), ` + browseOverlayDirectFilesCTE(systemClause)
 	if systemClause != "" {
-		query += ` AND ` + systemClause
 		args = append(args, systemArgs...)
 	}
-	query += `
-		), ranked AS (
-			SELECT directory_candidates.*,
-				ROW_NUMBER() OVER (PARTITION BY name ORDER BY priority ASC) AS source_rank
-			FROM directory_candidates
-			WHERE NOT EXISTS (
-				SELECT 1 FROM direct_files
-				WHERE direct_files.priority < directory_candidates.priority
-					AND direct_files.name = directory_candidates.name
-			)
-		)
-		SELECT name, file_count, system_ids, parent_dir || name
-		FROM ranked
-		WHERE source_rank = 1`
+	return query + `, ` + browseOverlayDirectoryTail, args
+}
+
+// runBrowseOverlayDirectories appends the paging clauses both overlay directory
+// statements end with and reads the rows.
+func runBrowseOverlayDirectories(
+	ctx context.Context,
+	db sqlQueryable,
+	query string,
+	args []any,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
 	if opts.AfterName != "" {
 		query += ` AND name > ?`
 		args = append(args, opts.AfterName)

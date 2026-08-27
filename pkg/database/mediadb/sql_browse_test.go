@@ -1619,3 +1619,297 @@ func TestBrowseOverlayFiles_FirstRootWinsByFilesystemName(t *testing.T) {
 		index.Buckets[0].Key, index.Buckets[1].Key, index.Buckets[2].Key,
 	})
 }
+
+// overlayDirsFixture seeds two overlapping routes plus a third that must
+// contribute no directories, and returns the sources in priority order.
+//
+// The shapes it covers are the ones the merged root view actually produces:
+// the same directory name under two routes (the higher-priority route wins),
+// a directory shadowed by a higher-priority route's file of the same name,
+// a directory only the lower-priority route has, and an IncludeDirs: false
+// route (an ancestor already represented by a more specific route).
+func overlayDirsFixture(t *testing.T, mediaDB *MediaDB) []database.BrowseSource {
+	t.Helper()
+
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	high := browseTestDir("overlay", "high")
+	low := browseTestDir("overlay", "low")
+	noDirs := browseTestDir("overlay", "nodirs")
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insert := func(name, mediaPath string) {
+		t.Helper()
+		title, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       slugs.Slugify(nesSystem.GetMediaType(), name+mediaPath),
+			Name:       name,
+		})
+		require.NoError(t, titleErr)
+		_, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           mediaPath,
+			ParentDir:      filepath.ToSlash(filepath.Dir(mediaPath)) + "/",
+			SortName:       name,
+		})
+		require.NoError(t, mediaErr)
+	}
+	// Shared name: both routes have a "Both" directory, high priority wins.
+	insert("High Both", high+"Both/One.nes")
+	insert("High Both Two", high+"Both/Two.nes")
+	insert("Low Both", low+"Both/Three.nes")
+	// Shadowed: high has a file named "Shadow", low has a directory.
+	insert("Shadow File", high+"Shadow")
+	insert("Shadowed Media", low+"Shadow/Inside.nes")
+	// Only in the lower-priority route.
+	insert("Only Low", low+"OnlyLow/Inside.nes")
+	// The IncludeDirs: false route's subdirectory must never be listed.
+	insert("Excluded", noDirs+"Excluded/Inside.nes")
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	return []database.BrowseSource{
+		{PathPrefix: high, IncludeDirs: true},
+		{PathPrefix: low, IncludeDirs: true},
+		{PathPrefix: noDirs, IncludeDirs: false},
+	}
+}
+
+func nesSystemForTest(t *testing.T) []systemdefs.System {
+	t.Helper()
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	return []systemdefs.System{*nesSystem}
+}
+
+// TestBrowseOverlayDirectories_CacheMatchesMedia is the assertion the cache
+// routing exists for: the browse cache and the Media scan must return the same
+// merged directory listing, or the merged root view changes depending on
+// whether an index has finished.
+//
+// Recomputing this from Media means scanning every row beneath every route —
+// 66,011 rows for C64 on the #1279 device database, twice per page because
+// BrowseDirCount reruns the same statement. BrowseDirCounts already holds the
+// same names and counts, built from the same IsMissing = 0 rows.
+func TestBrowseOverlayDirectories_CacheMatchesMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sources := overlayDirsFixture(t, mediaDB)
+	systems := nesSystemForTest(t)
+	opts := database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: systems,
+	}
+
+	_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+	require.NoError(t, err)
+	require.False(t, usable, "with no cache built the listing must come from media")
+
+	fromMedia, err := mediaDB.BrowseDirectories(ctx, opts)
+	require.NoError(t, err)
+	mediaDirCount, err := mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		Overlay: opts.Overlay,
+		Systems: systems,
+	})
+	require.NoError(t, err)
+
+	// The expected shape, pinned so a change in either path is visible rather
+	// than the two silently agreeing on something wrong.
+	require.Len(t, fromMedia, 2)
+	assert.Equal(t, []string{"Both", "OnlyLow"}, []string{fromMedia[0].Name, fromMedia[1].Name})
+	assert.Equal(t, 2, fromMedia[0].FileCount, "the higher-priority route's Both wins with its own count")
+	assert.Equal(t, browseTestPath("overlay", "high")+"/Both", fromMedia[0].Path)
+	assert.Equal(t, browseTestPath("overlay", "low")+"/OnlyLow", fromMedia[1].Path)
+	assert.Equal(t, 2, mediaDirCount)
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+
+	_, usable, err = browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+	require.NoError(t, err)
+	require.True(t, usable, "a full rebuild must make the cache serve the listing")
+
+	fromCache, err := mediaDB.BrowseDirectories(ctx, opts)
+	require.NoError(t, err)
+	assert.Equal(t, fromMedia, fromCache)
+
+	cacheDirCount, err := mediaDB.BrowseDirCount(ctx, database.BrowseDirCountOptions{
+		Overlay: opts.Overlay,
+		Systems: systems,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, mediaDirCount, cacheDirCount)
+}
+
+// TestBrowseOverlayDirectories_CachePagesLikeMedia covers AfterName and Limit,
+// which page the merged root's directory phase.
+func TestBrowseOverlayDirectories_CachePagesLikeMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sources := overlayDirsFixture(t, mediaDB)
+	systems := nesSystemForTest(t)
+	overlay := &database.BrowseOverlay{Sources: sources}
+
+	pages := func() [][]database.BrowseDirectoryResult {
+		t.Helper()
+		first, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: overlay,
+			Systems: systems,
+			Limit:   1,
+		})
+		require.NoError(t, err)
+		require.Len(t, first, 1)
+		second, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay:   overlay,
+			Systems:   systems,
+			AfterName: first[0].Name,
+			Limit:     1,
+		})
+		require.NoError(t, err)
+		return [][]database.BrowseDirectoryResult{first, second}
+	}
+
+	fromMedia := pages()
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	assert.Equal(t, fromMedia, pages())
+	assert.Equal(t, "Both", fromMedia[0][0].Name)
+	assert.Equal(t, "OnlyLow", fromMedia[1][0].Name)
+}
+
+// TestBrowseOverlayDirectories_FallsBackWhenCacheCannotAnswer pins the three
+// ways the cache is declined. Each must land on the media scan and return the
+// full listing: serving a partial answer would drop directories that exist.
+func TestBrowseOverlayDirectories_FallsBackWhenCacheCannotAnswer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("route missing from the cache", func(t *testing.T) {
+		t.Parallel()
+		mediaDB, cleanup := setupTempMediaDB(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		sources := overlayDirsFixture(t, mediaDB)
+		systems := nesSystemForTest(t)
+		require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+
+		// A route absent from BrowseDirs is not a route without subdirectories:
+		// the cache has never seen it, so answering from the cache would hide
+		// the directories media still holds.
+		_, err := mediaDB.sql.Load().ExecContext(ctx,
+			"DELETE FROM BrowseDirs WHERE Path = ?", sources[1].PathPrefix)
+		require.NoError(t, err)
+
+		_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+		require.NoError(t, err)
+		assert.False(t, usable, "a route the cache never saw must send the listing to media")
+
+		dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Systems: systems,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Both", "OnlyLow"}, []string{dirs[0].Name, dirs[1].Name})
+	})
+
+	t.Run("cache does not cover the system", func(t *testing.T) {
+		t.Parallel()
+		mediaDB, cleanup := setupTempMediaDB(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		sources := overlayDirsFixture(t, mediaDB)
+		systems := nesSystemForTest(t)
+
+		// A per-system refresh for a different system leaves the cache present
+		// but marked incomplete, which is the mid-index state.
+		other, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
+		require.NoError(t, err)
+		require.NoError(t, sqlPopulateBrowseCacheForSystems(ctx, mediaDB.sql.Load(), []int64{other.DBID}))
+
+		_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+		require.NoError(t, err)
+		assert.False(t, usable, "an incomplete cache without this system's rows must not answer")
+
+		dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Systems: systems,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Both", "OnlyLow"}, []string{dirs[0].Name, dirs[1].Name})
+	})
+
+	t.Run("cache invalidated", func(t *testing.T) {
+		t.Parallel()
+		mediaDB, cleanup := setupTempMediaDB(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		sources := overlayDirsFixture(t, mediaDB)
+		systems := nesSystemForTest(t)
+		require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+		_, err := mediaDB.sql.Load().ExecContext(ctx,
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+			DBConfigBrowseIndexVersion, "not-a-known-version")
+		require.NoError(t, err)
+
+		_, usable, err := browseOverlayCacheParents(ctx, mediaDB.sql.Load(), sources, systems)
+		require.NoError(t, err)
+		assert.False(t, usable, "an unrecognised cache version must not be served")
+
+		dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Systems: systems,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Both", "OnlyLow"}, []string{dirs[0].Name, dirs[1].Name})
+	})
+}
+
+// TestBrowseOverlayDirectories_ReadsFromTheCache is what makes the equivalence
+// tests above mean something. They compare two paths that agree by design, so
+// they would pass just as well if the cache were never consulted.
+//
+// Here the cached count is changed to a value the media table cannot produce.
+// If the listing still reports it, the statement read BrowseDirCounts; if it
+// reports the media count, the routing has regressed to the prefix scan this
+// change exists to avoid.
+func TestBrowseOverlayDirectories_ReadsFromTheCache(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sources := overlayDirsFixture(t, mediaDB)
+	systems := nesSystemForTest(t)
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+
+	const sentinelCount = 4242
+	res, err := mediaDB.sql.Load().ExecContext(ctx, `
+		UPDATE BrowseDirCounts
+		SET FileCount = ?
+		WHERE ChildDirDBID = (SELECT DBID FROM BrowseDirs WHERE Path = ?)
+			AND ParentDirDBID != ChildDirDBID`,
+		sentinelCount, sources[0].PathPrefix+"Both/")
+	require.NoError(t, err)
+	updated, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), updated, "the fixture must produce exactly one cached count for Both")
+
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Systems: systems,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 2)
+	assert.Equal(t, "Both", dirs[0].Name)
+	assert.Equal(t, sentinelCount, dirs[0].FileCount,
+		"the merged root directory listing must come from BrowseDirCounts, not a Media prefix scan")
+}
