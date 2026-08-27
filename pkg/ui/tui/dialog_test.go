@@ -75,7 +75,7 @@ func TestDialog_SizesToContent(t *testing.T) {
 		pages.AddPage("dialog", dialog, true, true)
 		runner.App().SetFocus(dialog)
 	})
-	require.True(t, runner.WaitForText("Hi", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Hi", uiSettleTimeout))
 
 	bounds, ok := drawnBounds(runner)
 	require.True(t, ok, "dialog should be drawn")
@@ -118,7 +118,7 @@ func TestDialog_ClampedToParentWindow(t *testing.T) {
 		pages.AddPage("dialog", dialog, true, true)
 		runner.App().SetFocus(dialog)
 	})
-	require.True(t, runner.WaitForText("word-wrap", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("word-wrap", uiSettleTimeout))
 
 	bounds, ok := drawnBounds(runner)
 	require.True(t, ok, "dialog should be drawn")
@@ -155,7 +155,7 @@ func TestDialog_ButtonSelectionAndEscape(t *testing.T) {
 			pages.AddPage("dialog", dialog, true, true)
 			runner.App().SetFocus(dialog)
 		})
-		require.True(t, runner.WaitForText("Pick one", 500*time.Millisecond))
+		require.True(t, runner.WaitForText("Pick one", uiSettleTimeout))
 		return pressed
 	}
 
@@ -212,7 +212,7 @@ func TestDialog_LongTextWordWraps(t *testing.T) {
 		runner.App().SetFocus(dialog)
 	})
 
-	assert.True(t, runner.WaitForText("FINAL-MARKER", 500*time.Millisecond),
+	assert.True(t, runner.WaitForText("FINAL-MARKER", uiSettleTimeout),
 		"wrapped text should remain fully visible")
 }
 
@@ -236,12 +236,12 @@ func TestDialog_SetTextUpdatesContent(t *testing.T) {
 		pages.AddPage("dialog", dialog, true, true)
 		runner.App().SetFocus(dialog)
 	})
-	require.True(t, runner.WaitForText("Before", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Before", uiSettleTimeout))
 
 	runner.QueueUpdateDraw(func() {
 		dialog.SetText("After the update")
 	})
-	assert.True(t, runner.WaitForText("After the update", 500*time.Millisecond))
+	assert.True(t, runner.WaitForText("After the update", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Before"), "old text should be gone")
 }
 

@@ -30,6 +30,7 @@ import (
 	"html"
 	"math"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -1045,6 +1046,21 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		totalProcessed += companion.Processed + processed
 		totalMatched += companion.Matched + matched
 		totalSkipped += companion.Skipped + skipped
+
+		// Hand this system's working set back to the OS before starting the
+		// next one. A system's peak is proportional to its size — C64 builds
+		// roughly 150 MB of indexes, parsed entries and parent metadata on top
+		// of a ~70 MB baseline — and Go does not return that on its own, so
+		// without this RSS ratchets from system to system.
+		//
+		// On the #1279 device (492 MB, no swap) that ratchet is what turns a
+		// large system into an outage: measured mid-scrape, concurrent API
+		// traffic took RSS from 222 MB to 325 MB, MemFree to 4 MB and page
+		// cache from 139 MB to 85 MB. With nothing left to evict the box
+		// thrashes on major faults — scrape throughput fell from ~250 children
+		// per 15s to 44 in 48s, and sshd could not complete a banner exchange.
+		// Releasing per system keeps the peak to one system rather than the run.
+		debug.FreeOSMemory()
 	}
 
 	ch <- scraper.ScrapeUpdate{
@@ -2067,6 +2083,13 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 	sentinel := scraper.SentinelTagInfo("gamelist.xml")
 	stats := companionStats{WriteStats: scrapeWriteStats{UniqueTitleDBIDs: make(map[int64]struct{})}}
 	children = resolveCompanionSlugConflicts(system.ID, parents, children, &stats)
+
+	// Past this point only parentMeta and children are read, so drop the parsed
+	// parent entries rather than holding them for the whole loop — 17,418 of
+	// them on C64. resolveCompanionSlugConflicts keeps nothing that points at
+	// the slice: it copies the names it needs into a local map.
+	parentCount := len(parents)
+	parents = nil
 	lastProgress := time.Now().Add(-scrapeProgressInterval)
 	emitProgress := func(force bool) bool {
 		if ch == nil {
@@ -2095,7 +2118,7 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 	defer func() {
 		log.Info().
 			Str("system", system.ID).
-			Int("parents", len(parents)).
+			Int("parents", parentCount).
 			Int("children", len(children)).
 			Int("processed", stats.Processed).
 			Int("matched", stats.Matched).

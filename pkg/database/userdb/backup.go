@@ -779,20 +779,6 @@ func (db *UserDB) restoreFailed(cause error) (database.RestoreInfo, error) {
 	return database.RestoreInfo{}, cause
 }
 
-func preserveCorruptFile(path string) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return
-	} else if err != nil {
-		log.Warn().Err(err).Str("path", path).Msg("failed to stat corrupt user database file")
-		return
-	}
-	backup := database.CorruptBackupPath(path)
-	_ = os.Remove(backup)
-	if err := os.Rename(path, backup); err != nil {
-		log.Warn().Err(err).Str("path", path).Msg("failed to preserve corrupt user database file")
-	}
-}
-
 func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 	// Recovery renames the database and its sidecars aside, so in-flight
 	// queries have to finish first. A drain failure is only logged: the
@@ -801,7 +787,7 @@ func (db *UserDB) RecoverFromCorruption() (database.RestoreInfo, error) {
 		log.Warn().Err(err).Msg("error closing corrupt user database before recovery")
 	}
 	for _, path := range []string{db.GetDBPath(), db.GetDBPath() + "-wal", db.GetDBPath() + "-shm"} {
-		preserveCorruptFile(path)
+		database.PreserveCorruptFile(path, "user")
 	}
 
 	backups, err := db.ListBackups()

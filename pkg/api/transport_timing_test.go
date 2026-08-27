@@ -32,7 +32,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,10 +69,7 @@ func TestLogWebSocketTransportTimingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-			defer func() { log.Logger = originalLogger }()
+			buf := captureLogs(t, zerolog.DebugLevel)
 
 			logWebSocketTransportTiming(
 				models.NewStringID("request-1"), tt.responseType, tt.encrypted, 321,
@@ -109,10 +105,7 @@ func TestHTTPResponseTransportTimingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler, _, _ := createTestPostHandler(t)
-			var buf logCapture
-			originalLogger := log.Logger
-			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-			defer func() { log.Logger = originalLogger }()
+			buf := captureLogs(t, zerolog.DebugLevel)
 
 			body := `{"jsonrpc":"2.0","id":"transport-id","method":"` + tt.method + `"}`
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api", strings.NewReader(body))
@@ -171,10 +164,7 @@ func TestWebSocketDispatcherQueueMetadata(t *testing.T) {
 }
 
 func TestWebSocketDispatcherQueueTimingLogs(t *testing.T) {
-	var buf logCapture
-	originalLogger := log.Logger
-	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-	defer func() { log.Logger = originalLogger }()
+	buf := captureLogs(t, zerolog.DebugLevel)
 
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.queue", func(requests.RequestEnv) (any, error) {

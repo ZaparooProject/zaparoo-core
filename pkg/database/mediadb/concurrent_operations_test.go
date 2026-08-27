@@ -66,6 +66,12 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	fakeClock := clockwork.NewRealClock()
@@ -210,6 +216,12 @@ func TestConcurrentStatusUpdates(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
@@ -287,6 +299,12 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
@@ -398,6 +416,12 @@ func TestConcurrentIndexingAndOptimizationStatusChecks(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
@@ -448,6 +472,12 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// sqlmock serves exactly one connection. Left unbounded, database/sql
+	// reacts to concurrent callers by trying to open a second one, which
+	// sqlmock refuses with "expected a connection to be available" — an
+	// intermittent failure that has nothing to do with what this test covers.
+	// Pinning the pool makes the callers queue on the one connection instead.
+	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{

@@ -252,3 +252,60 @@ func (db *MediaDB) searchMediaTypeGroupsWithSQL(
 	}
 	return results, nil
 }
+
+// searchSplitAcrossCacheAndSQL answers a search that spans systems the slug
+// cache covers and systems currently being re-indexed.
+//
+// The cached side is re-entered through the normal search path with a narrowed
+// system list, so it takes the in-memory route it would have taken anyway. The
+// SQL side runs only for the in-flight systems, which is the difference between
+// a grouped LIKE across the whole library and one across a system or two.
+// Results are merged with the same ordering, dedup and limit the grouped SQL
+// path applies, so the caller cannot tell which rows came from where.
+func (db *MediaDB) searchSplitAcrossCacheAndSQL(
+	ctx context.Context,
+	cachedSystems, sqlSystems []string,
+	rawWords []string,
+	filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	cachedFilters := *filters
+	cachedFilters.Systems = systemsByIDs(cachedSystems)
+	results, err := db.SearchMediaWithFilters(ctx, &cachedFilters)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(sqlSystems) > 0 {
+		sqlFilters := *filters
+		sqlFilters.Systems = systemsByIDs(sqlSystems)
+		groups := buildMediaSearchTypeGroups(sqlFilters.Systems, rawWords)
+		inFlight, sqlErr := db.searchMediaTypeGroupsWithSQL(ctx, groups, rawWords, &sqlFilters)
+		if sqlErr != nil {
+			return nil, sqlErr
+		}
+		results = append(results, inFlight...)
+	}
+
+	slices.SortFunc(results, func(a, b database.SearchResultWithCursor) int {
+		return compareSearchResults(&a, &b, filters.Sort)
+	})
+	results = slices.CompactFunc(results, func(a, b database.SearchResultWithCursor) bool {
+		return a.MediaID == b.MediaID
+	})
+	if len(results) > filters.Limit {
+		results = results[:filters.Limit]
+	}
+	return results, nil
+}
+
+// systemsByIDs resolves system IDs to definitions, dropping any the build does
+// not know about.
+func systemsByIDs(ids []string) []systemdefs.System {
+	out := make([]systemdefs.System, 0, len(ids))
+	for _, id := range ids {
+		if sys, err := systemdefs.GetSystem(id); err == nil {
+			out = append(out, *sys)
+		}
+	}
+	return out
+}

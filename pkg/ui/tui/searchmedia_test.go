@@ -190,7 +190,7 @@ func TestBuildSearchMedia_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond), "Search Media title should appear")
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout), "Search Media title should appear")
 
 	// Verify UI elements are visible
 	assert.True(t, runner.ContainsText("Name"), "Name label should be visible")
@@ -243,7 +243,7 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	// Type in search
 	runner.SimulateString("mario")
@@ -256,7 +256,7 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 
 	// Wait for SearchMedia to be called using the mock's signal channel
 	called := mockSvc.SearchMediaCalled()
-	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+	assert.True(t, runner.WaitForSignal(called, uiSettleTimeout), "SearchMedia should be called")
 }
 
 func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
@@ -302,12 +302,12 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	runner.SimulateTab()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
-	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
+	require.True(t, runner.WaitForText("Loaded 2 results", uiSettleTimeout))
 	assert.Equal(t, 1, mockSvc.SearchMediaCallCount(), "initial selection should not immediately prefetch")
 
 	// Editing the input must not combine the previous page's cursor with a new query.
@@ -328,11 +328,11 @@ func TestBuildSearchMedia_AutoloadsMoreResults_Integration(t *testing.T) {
 		<-scrollDone
 		t.Fatal("scrolling blocked while the next page loaded")
 	}
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
-	require.True(t, runner.WaitForText("Loading more results", 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
+	require.True(t, runner.WaitForText("Loading more results", uiSettleTimeout))
 	close(releaseNextPage)
 
-	assert.True(t, runner.WaitForText("Game Three", 100*time.Millisecond))
+	assert.True(t, runner.WaitForText("Game Three", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Game One"), "first page should remain visible")
 	assert.True(t, runner.ContainsText("game-two.chd"), "prefetch should preserve current selection")
 	assert.False(t, runner.ContainsText("Load more results"), "pagination should not add a list row")
@@ -383,21 +383,21 @@ func TestBuildSearchMedia_AutoloadErrorCanRetry_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		BuildSearchMedia(mockSvc, pages, runner.App(), NewSession())
 	})
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	runner.SimulateTab()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
-	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
+	require.True(t, runner.WaitForText("Loaded 2 results", uiSettleTimeout))
 	runner.SimulateArrowDown()
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
 
-	assert.True(t, runner.WaitForText("Error loading more results", 100*time.Millisecond))
+	assert.True(t, runner.WaitForText("Error loading more results", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Load more results"), "failed load should not add a list row")
 
 	runner.SimulateArrowUp()
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
-	assert.True(t, runner.WaitForText("Game Three", 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
+	assert.True(t, runner.WaitForText("Game Three", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Game One"), "retry should preserve first page")
 	mockSvc.AssertExpectations(t)
 }
@@ -432,18 +432,18 @@ func TestBuildSearchMedia_FreshSearchErrorClearsPagination_Integration(t *testin
 	runner.QueueUpdateDraw(func() {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	runner.SimulateTab()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
-	require.True(t, runner.WaitForText("Loaded 2 results", 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
+	require.True(t, runner.WaitForText("Loaded 2 results", uiSettleTimeout))
 
 	runner.SimulateArrowLeft()
 	session.SetSearchMediaName("new query")
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), 100*time.Millisecond))
-	require.True(t, runner.WaitForText("An error occurred during search", 100*time.Millisecond))
+	require.True(t, runner.WaitForSignal(mockSvc.SearchMediaCalled(), uiSettleTimeout))
+	require.True(t, runner.WaitForText("An error occurred during search", uiSettleTimeout))
 
 	runner.SimulateTab()
 	runner.SimulateArrowDown()
@@ -508,17 +508,17 @@ func TestBuildSearchMedia_DisambiguatingTags_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	// Trigger search
 	runner.SimulateTab()
 	runner.SimulateEnter()
 
 	called := mockSvc.SearchMediaCalled()
-	require.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+	require.True(t, runner.WaitForSignal(called, uiSettleTimeout), "SearchMedia should be called")
 
 	// Results with disambiguating tags should show them in the row
-	assert.True(t, runner.WaitForText("region:eu", 100*time.Millisecond), "region:eu tag should appear in results")
+	assert.True(t, runner.WaitForText("region:eu", uiSettleTimeout), "region:eu tag should appear in results")
 	assert.True(t, runner.ContainsText("region:jp"), "region:jp tag should appear in results")
 
 	// Result without tags should still render cleanly (no spurious parens)
@@ -546,7 +546,7 @@ func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	// Helper to get front page
 	getFrontPage := func() string {
@@ -563,7 +563,7 @@ func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
 	// Verify we went back
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return getFrontPage() == PageMain
-	}, 100*time.Millisecond), "Should navigate back to main page")
+	}, uiSettleTimeout), "Should navigate back to main page")
 }
 
 func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
@@ -590,7 +590,7 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	// Navigate to Clear button (Tab then right)
 	runner.SimulateTab()
@@ -604,7 +604,7 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 		return session.GetSearchMediaName() == "" &&
 			session.GetSearchMediaSystem() == "" &&
 			session.GetSearchMediaSystemName() == "All"
-	}, 100*time.Millisecond), "Session state should be cleared")
+	}, uiSettleTimeout), "Session state should be cleared")
 }
 
 func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
@@ -637,7 +637,7 @@ func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", uiSettleTimeout))
 
 	// Navigate down to system button
 	runner.SimulateArrowDown()

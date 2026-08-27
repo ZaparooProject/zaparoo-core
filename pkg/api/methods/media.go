@@ -669,8 +669,22 @@ func startMediaDBGeneration(
 		// Widen the connection pool for the duration: the indexing writer
 		// holds a connection near-continuously, and foreground search +
 		// browse must not queue behind each other on the single remainder.
+		//
+		// The restore is released explicitly before optimization is handed off
+		// (see releaseConnBoost below); this defer only covers the paths that
+		// return before reaching that point. Leaving it to the defer alone
+		// raced optimization's own boost and broke it on three consecutive
+		// device runs — see #1279 and releaseConnBoost's comment.
+		connBoostReleased := false
+		releaseConnBoost := func() {
+			if connBoostReleased {
+				return
+			}
+			connBoostReleased = true
+			db.MediaDB.SetIndexingConnBoost(false)
+		}
 		db.MediaDB.SetIndexingConnBoost(true)
-		defer db.MediaDB.SetIndexingConnBoost(false)
+		defer releaseConnBoost()
 
 		if rebuild {
 			// Recreate closes the database, and Close waits for all tracked
@@ -832,6 +846,18 @@ func startMediaDBGeneration(
 		// the OS so idle RSS drops from peak.
 		runtime.GC()
 		debug.FreeOSMemory()
+
+		// Drop the indexing pool boost BEFORE optimization is spawned, not on
+		// the way out of this goroutine.
+		//
+		// Optimization re-applies its own boost as its first act, and that
+		// begins by draining every pooled connection. It sizes that drain from
+		// SetMaxOpenConns, so if this restore is still pending it reads the
+		// widened cap, tries to acquire one more connection than the pool will
+		// ever hand out once the restore lands, and deadlocks against its own
+		// held connections until the acquire deadline expires. Releasing here
+		// gives the two a happens-before edge without any waiting.
+		releaseConnBoost()
 
 		// Atomically hand indexing ownership to optimization so scraping cannot
 		// enter between completed indexing and post-index maintenance.

@@ -26,14 +26,13 @@ package mediadb
 // library built through the production staging pipeline. See stat1_seed.go
 // for how and when they are applied.
 var stat1SeedRows = []struct{ tbl, idx, stat string }{
-	{tbl: "DBConfig", idx: "sqlite_autoindex_DBConfig_1", stat: "3 1"},
+	{tbl: "DBConfig", idx: "sqlite_autoindex_DBConfig_1", stat: "2 1"},
 	{tbl: "Media", idx: "idx_media_browse_sort", stat: "99000 3300 3300 1 1"},
 	{tbl: "Media", idx: "idx_media_parentdir", stat: "99000 3300"},
 	{tbl: "Media", idx: "idx_media_parentdir_system", stat: "99000 3300 3300"},
 	{tbl: "Media", idx: "media_mediatitle_idx", stat: "99000 1"},
 	{tbl: "Media", idx: "media_missing_idx", stat: "99000 99000"},
 	{tbl: "Media", idx: "media_path_idx", stat: "99000 1"},
-	{tbl: "Media", idx: "media_system_path_idx", stat: "99000 3300 1"},
 	{tbl: "Media", idx: "media_system_present_path_idx", stat: "99000 3300 1"},
 	{tbl: "Media", idx: "media_title_present_idx", stat: "99000 1 1"},
 	{tbl: "Media", idx: "sqlite_autoindex_Media_1", stat: "99000 3300 1"},
@@ -44,9 +43,9 @@ var stat1SeedRows = []struct{ tbl, idx, stat string }{
 	{tbl: "MediaTitles", idx: "mediatitles_slug_idx", stat: "99000 7"},
 	{tbl: "MediaTitles", idx: "mediatitles_system_slug_idx", stat: "99000 3300 1"},
 	{tbl: "Systems", idx: "sqlite_autoindex_Systems_1", stat: "30 1"},
-	{tbl: "TagTypes", idx: "sqlite_autoindex_TagTypes_1", stat: "49 1"},
-	{tbl: "Tags", idx: "tags_tag_idx", stat: "1219 1"},
-	{tbl: "Tags", idx: "tags_tagtype_idx", stat: "1219 31"},
-	{tbl: "Tags", idx: "tags_type_tag_idx", stat: "1219 31 1"},
-	{tbl: "goose_db_version", idx: "", stat: "14"},
+	{tbl: "TagTypes", idx: "sqlite_autoindex_TagTypes_1", stat: "50 1"},
+	{tbl: "Tags", idx: "tags_tag_idx", stat: "1220 1"},
+	{tbl: "Tags", idx: "tags_tagtype_idx", stat: "1220 31"},
+	{tbl: "Tags", idx: "tags_type_tag_idx", stat: "1220 31 1"},
+	{tbl: "goose_db_version", idx: "", stat: "15"},
 }

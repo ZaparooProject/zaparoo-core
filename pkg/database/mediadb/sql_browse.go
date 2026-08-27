@@ -1140,10 +1140,27 @@ func sqlBrowseFiles(
 	return sqlBrowseFilesFromMedia(ctx, db, opts)
 }
 
+// overlayHigherPriorityDirectoryCondition drops a directory that a
+// higher-priority route also provides, so an overlaid path shows one entry
+// rather than one per route.
+//
+// INDEXED BY idx_media_browse_sort is load-bearing, not a hint. This runs as a
+// correlated subquery once per candidate row, and its ParentDir bounds are
+// built by concatenation from the outer row, so the planner cannot see them as
+// a range at plan time. Left to choose, it picked media_missing_idx —
+// IsMissing = 0 matches every row in the table, so each candidate scanned the
+// whole of Media and only then filtered on ParentDir.
+//
+// Measured on the #1279 device database (229,553 rows): browsing a 4-file
+// directory took 64 ms, and a 20,131-file directory did not finish in ten
+// minutes. Against idx_media_browse_sort (ParentDir, IsMissing, ...) the same
+// two are 0.6 ms and 22 ms, because the bounds become a covering range scan.
+// The index is created by the base schema migration and recreated by
+// CreateSecondaryIndexes, so it is always present.
 const overlayHigherPriorityDirectoryCondition = `NOT EXISTS (
 	SELECT 1
 	FROM sources higher
-	INNER JOIN Media descendant ON descendant.IsMissing = 0
+	INNER JOIN Media descendant INDEXED BY idx_media_browse_sort ON descendant.IsMissing = 0
 	WHERE higher.priority < sources.priority
 		AND higher.include_dirs = 1
 		AND descendant.ParentDir >= higher.parent_dir || substr(m.Path, length(m.ParentDir) + 1) || '/'
@@ -1804,14 +1821,15 @@ func sqlBrowseFileCount(
 	return sqlBrowseFileCountFromMedia(ctx, db, opts)
 }
 
-func sqlBrowseOverlayFileCount(
-	ctx context.Context,
-	db sqlQueryable,
-	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
-) (int, error) {
+// browseOverlayFileCountQuery builds the overlay file-count statement and its
+// arguments. Separate from the exec so the query-plan regression test can
+// measure the statement production actually runs rather than a copy of it.
+func browseOverlayFileCountQuery(
+	opts database.BrowseFileCountOptions, //nolint:gocritic // mirrors the caller's value options
+) (query string, args []any) {
 	sources := browseOverlaySources(opts.Overlay)
 	values := make([]string, len(sources))
-	args := make([]any, 0, len(sources)+16)
+	args = make([]any, 0, len(sources)+16)
 	for i := range sources {
 		values[i] = "(?, ?, ?)"
 		args = append(args, sources[i].PathPrefix, i, sources[i].IncludeDirs)
@@ -1827,7 +1845,7 @@ func sqlBrowseOverlayFileCount(
 	}
 	where, filterArgs := browseFilesFilterCondition(filterOpts, false)
 	args = append(args, filterArgs...)
-	query := `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
+	return `WITH sources(parent_dir, priority, include_dirs) AS (VALUES ` + strings.Join(values, ",") + `),
 		ranked AS (
 			SELECT m.DBID,
 				ROW_NUMBER() OVER (
@@ -1842,7 +1860,15 @@ func sqlBrowseOverlayFileCount(
 		SELECT COUNT(*)
 		FROM ranked
 		INNER JOIN Media m ON m.DBID = ranked.DBID
-		WHERE ranked.source_rank = 1 AND ` + where
+		WHERE ranked.source_rank = 1 AND ` + where, args
+}
+
+func sqlBrowseOverlayFileCount(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // internal call mirrors MediaDBI value options
+) (int, error) {
+	query, args := browseOverlayFileCountQuery(opts)
 	var count int
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("browse overlay file count: %w", err)

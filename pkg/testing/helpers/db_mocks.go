@@ -1032,6 +1032,12 @@ func (m *MockMediaDBI) Open() error {
 }
 
 func (m *MockMediaDBI) UnsafeGetSQLDb() *sql.DB {
+	// Unstubbed returns nil rather than panicking: callers are diagnostics that
+	// already handle a database with no open handle, and a test that does not
+	// care about them should not have to stub this.
+	if !m.hasExpectation("UnsafeGetSQLDb") {
+		return nil
+	}
 	args := m.Called()
 	if db, ok := args.Get(0).(*sql.DB); ok {
 		return db
@@ -1095,6 +1101,11 @@ func (m *MockMediaDBI) GetMediaByText(query string) (database.Media, error) {
 }
 
 func (m *MockMediaDBI) GetDBPath() string {
+	// Unstubbed returns "" rather than panicking, for the same reason as
+	// UnsafeGetSQLDb above.
+	if !m.hasExpectation("GetDBPath") {
+		return ""
+	}
 	args := m.Called()
 	return args.String(0)
 }

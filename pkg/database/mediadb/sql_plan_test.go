@@ -41,7 +41,7 @@ func TestExplainHotScraperQueries(t *testing.T) {
 
 	explainQueryPlan(ctx, t, mediaDB.sql.Load(), `
 		SELECT m.DBID
-		FROM Media m INDEXED BY media_system_path_idx
+		FROM Media m INDEXED BY sqlite_autoindex_Media_1
 		CROSS JOIN MediaTags mt
 		WHERE m.SystemDBID = ?
 		  AND mt.MediaDBID = m.DBID

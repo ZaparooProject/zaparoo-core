@@ -23,12 +23,34 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 )
+
+// zaparooBenchLargeEnv gates reconcile benchmark cases large enough to blow
+// the 45-minute count=6 budget of task bench-baseline/bench-compare — neither
+// passes -short, so testing.Short() wouldn't gate these. Added for #1279 to
+// reproduce the scale (tens of thousands of files/tag links in one system)
+// where the reconcile pipeline showed super-linear cost on device:
+//
+//	ZAPAROO_BENCH_LARGE=1 go test -bench=Reconcile -benchtime=1x -count=1 ./pkg/database/mediascanner/
+const zaparooBenchLargeEnv = "ZAPAROO_BENCH_LARGE"
+
+// largeReconcileBenchSize is the size threshold above which a bench case
+// needs zaparooBenchLargeEnv set.
+const largeReconcileBenchSize = 50_000
+
+func skipUnlessLargeReconcileBench(b *testing.B) {
+	b.Helper()
+	if os.Getenv(zaparooBenchLargeEnv) != "1" {
+		b.Skipf("set %s=1 to run this large-scale reconcile benchmark", zaparooBenchLargeEnv)
+	}
+}
 
 func BenchmarkGetPathFragments(b *testing.B) {
 	cases := []struct {
@@ -135,10 +157,14 @@ func BenchmarkMediaScanner_StageAndReconcile_FreshDB(b *testing.B) {
 	}{
 		{name: "1k", n: 1_000},
 		{name: "10k", n: 10_000},
+		{name: "50k", n: largeReconcileBenchSize},
 	}
 
 	for _, sz := range sizes {
 		b.Run(sz.name, func(b *testing.B) {
+			if sz.n == largeReconcileBenchSize {
+				skipUnlessLargeReconcileBench(b)
+			}
 			b.ReportAllocs()
 			filenames := buildSyntheticFilenames(sz.n)
 			ctx := context.Background()
@@ -240,11 +266,15 @@ func BenchmarkMediaScanner_Reconcile_ExistingRows(b *testing.B) {
 		n    int
 	}{
 		{name: "10k", n: 10_000},
+		{name: "50k", n: largeReconcileBenchSize},
 		{name: "100k", n: 100_000},
 	}
 
 	for _, sz := range sizes {
 		b.Run(sz.name, func(b *testing.B) {
+			if sz.n == largeReconcileBenchSize {
+				skipUnlessLargeReconcileBench(b)
+			}
 			b.ReportAllocs()
 			filenames := buildSyntheticFilenames(sz.n)
 			ctx := context.Background()
@@ -275,6 +305,114 @@ func BenchmarkMediaScanner_Reconcile_ExistingRows(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				seedOnce()
+			}
+		})
+	}
+}
+
+// growingRunSystemCount, growingRunFilesPerSystem, and growingRunMegaFiles
+// shape BenchmarkMediaScanner_GrowingRun_AnalyzeCadence: a full library's
+// worth of distinct systems reconciled in sequence against one continuously
+// growing database, the shape a real device index run takes and none of the
+// other benchmarks in this file reproduce (they compare a fixed scan against
+// a small number of discrete existing-DB sizes, not a monotonic multi-system
+// growth curve). 120 systems of 500 files each, with every 20th system a
+// 20,000-file mega-system, approximates a real MiSTer library (#1279 round 3
+// device data: 131 systems, most under 1k files, a handful of mega-systems in
+// the tens of thousands) without the runtime of a full-scale run. The mega
+// systems specifically stress the risk this benchmark exists to check: a real
+// re-analysis (not a skipped no-op) firing against an already-large, still
+// growing Media table.
+const (
+	growingRunSystemCount    = 120
+	growingRunFilesPerSystem = 500
+	growingRunMegaEvery      = 20
+	growingRunMegaFiles      = 20_000
+)
+
+func growingRunFilesForSystem(sys int) int {
+	if sys%growingRunMegaEvery == 0 {
+		return growingRunMegaFiles
+	}
+	return growingRunFilesPerSystem
+}
+
+// BenchmarkMediaScanner_GrowingRun_AnalyzeCadence measures the aggregate cost
+// of calling AnalyzeApproximate (PRAGMA optimize) after every system-boundary
+// commit in a long run, instead of only once after the first system (#1279
+// round 4). PRAGMA optimize only re-analyzes a table whose size has changed
+// >10x (or that lacks stats) since its last analysis, so the expectation is
+// that most of these calls become cheap no-ops once table sizes stabilize
+// relative to their own last analysis — this benchmark measures whether that
+// expectation holds, rather than assuming it does.
+//
+//	ZAPAROO_BENCH_LARGE=1 go test -bench=GrowingRun -benchtime=1x -count=1 ./pkg/database/mediascanner/
+func BenchmarkMediaScanner_GrowingRun_AnalyzeCadence(b *testing.B) {
+	skipUnlessLargeReconcileBench(b)
+	ctx := context.Background()
+
+	cases := []struct {
+		name         string
+		analyzeEvery bool
+		analyzeOnce  bool
+	}{
+		{name: "PerSystem", analyzeEvery: true},
+		{name: "Once", analyzeOnce: true},
+		{name: "Never"},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+
+			for b.Loop() {
+				db, cleanup := helpers.NewInMemoryMediaDB(b)
+				if err := SeedCanonicalTags(ctx, db); err != nil {
+					b.Fatal(err)
+				}
+
+				var analyzeTotal time.Duration
+				analyzeCalls := 0
+				analyzed := false
+				for sys := range growingRunSystemCount {
+					systemID := fmt.Sprintf("synth%d", sys)
+					filenames := buildSyntheticFilenames(growingRunFilesForSystem(sys))
+					for i := range filenames {
+						filenames[i] = fmt.Sprintf("/roms/%s/f%d.rom", systemID, i)
+					}
+
+					if err := db.BeginTransaction(true); err != nil {
+						b.Fatal(err)
+					}
+					for _, fn := range filenames {
+						if err := StageMediaPath(&StageMediaPathParams{
+							DB: db, SystemID: systemID, Path: fn,
+						}); err != nil {
+							b.Fatal(err)
+						}
+					}
+					if _, err := db.ReconcileStagedSystem(ctx, systemID, database.ScanReconcileOpts{}); err != nil {
+						b.Fatal(err)
+					}
+					if err := db.CommitTransaction(); err != nil {
+						b.Fatal(err)
+					}
+
+					runAnalyze := tc.analyzeEvery || (tc.analyzeOnce && !analyzed)
+					if runAnalyze {
+						start := time.Now()
+						if err := db.AnalyzeApproximate(); err != nil {
+							b.Fatal(err)
+						}
+						analyzeTotal += time.Since(start)
+						analyzeCalls++
+						analyzed = true
+					}
+				}
+
+				b.ReportMetric(float64(analyzeTotal.Milliseconds()), "analyze-ms/op")
+				b.ReportMetric(float64(analyzeCalls), "analyze-calls/op")
+				cleanup()
 			}
 		})
 	}

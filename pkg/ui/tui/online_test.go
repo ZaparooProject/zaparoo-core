@@ -21,7 +21,6 @@ package tui
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -103,21 +102,21 @@ func TestBuildOnlineSettingsMenu_CustomEndpointsShowWarnings_Integration(t *test
 	})
 
 	require.True(t, runner.WaitForText(
-		"One or more Zaparoo Online endpoints are set to a custom server.", 100*time.Millisecond))
+		"One or more Zaparoo Online endpoints are set to a custom server.", uiSettleTimeout))
 
 	// Row descriptions only show in the help line for the currently
 	// selected row (dynamic help mode). Account, Warp, Unlink account,
 	// then Remote control.
-	require.True(t, runner.WaitForText("Remote control", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Remote control", uiSettleTimeout))
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
-	assert.True(t, runner.WaitForText("Custom server: custom-remote.example.com.", 100*time.Millisecond))
+	assert.True(t, runner.WaitForText("Custom server: custom-remote.example.com.", uiSettleTimeout))
 
 	// Two more down: past Remote control activity, to Play history sync.
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
-	assert.True(t, runner.WaitForText("Custom server: custom-playtime.example.com.", 100*time.Millisecond))
+	assert.True(t, runner.WaitForText("Custom server: custom-playtime.example.com.", uiSettleTimeout))
 }
 
 func TestBuildOnlineSettingsMenu_DefaultEndpointsShowNoWarning_Integration(t *testing.T) {
@@ -138,7 +137,7 @@ func TestBuildOnlineSettingsMenu_DefaultEndpointsShowNoWarning_Integration(t *te
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Remote control", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Remote control", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Custom server:"))
 }
 
@@ -157,7 +156,7 @@ func TestBuildOnlineSettingsMenu_NotLinkedShowsLinkAction_Integration(t *testing
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Link account", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Link account", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Not linked"), "link status shows on the menu line")
 	assert.True(t, runner.ContainsText("Play history sync"), "sync consent is configurable before linking")
 	assert.True(t, runner.ContainsText("Cloud backup"), "features are discoverable while unlinked")
@@ -181,7 +180,7 @@ func TestBuildOnlineSettingsMenu_LinkedShowsAccountControls_Integration(t *testi
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Account", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Account", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Linked"), "link status shows on the menu line")
 	assert.True(t, runner.ContainsText("Warp"), "Warp subscription status shows on the menu line")
 	assert.True(t, runner.ContainsText("Remote control"))
@@ -206,7 +205,7 @@ func TestBuildOnlineSettingsMenu_RemoteControlToggleUpdatesConsent_Integration(t
 	runner.QueueUpdateDraw(func() {
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Remote control", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Remote control", uiSettleTimeout))
 
 	// Account, Warp, Unlink account, then Remote control.
 	runner.SimulateArrowDown()
@@ -225,7 +224,7 @@ func TestBuildOnlineSettingsMenu_RemoteControlToggleUpdatesConsent_Integration(t
 			}
 		}
 		return false
-	}, 100*time.Millisecond), "toggle should disable remote control consent")
+	}, uiSettleTimeout), "toggle should disable remote control consent")
 }
 
 func TestBuildOnlineSettingsMenu_PlayHistoryToggleUpdatesConsent_Integration(t *testing.T) {
@@ -243,7 +242,7 @@ func TestBuildOnlineSettingsMenu_PlayHistoryToggleUpdatesConsent_Integration(t *
 	runner.QueueUpdateDraw(func() {
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Play history sync", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Play history sync", uiSettleTimeout))
 
 	// Account, Warp, Unlink account, Remote control, Remote control
 	// activity, then Play history sync.
@@ -265,7 +264,7 @@ func TestBuildOnlineSettingsMenu_PlayHistoryToggleUpdatesConsent_Integration(t *
 			}
 		}
 		return false
-	}, 100*time.Millisecond), "toggle should disable playtime sync consent")
+	}, uiSettleTimeout), "toggle should disable playtime sync consent")
 }
 
 func TestBuildOnlineSettingsMenu_LinkedShowsDeviceName_Integration(t *testing.T) {
@@ -286,7 +285,7 @@ func TestBuildOnlineSettingsMenu_LinkedShowsDeviceName_Integration(t *testing.T)
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
 
-	require.True(t, runner.WaitForText("Linked as Living Room MiSTer", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Linked as Living Room MiSTer", uiSettleTimeout))
 }
 
 func TestBuildOnlineSettingsMenu_CustomServerShownInStatus_Integration(t *testing.T) {
@@ -307,7 +306,7 @@ func TestBuildOnlineSettingsMenu_CustomServerShownInStatus_Integration(t *testin
 
 	// The custom server host shows in the help text of the selected
 	// Account row.
-	require.True(t, runner.WaitForText("This device is linked to backup.example.com", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("This device is linked to backup.example.com", uiSettleTimeout))
 }
 
 func TestBuildOnlineSettingsMenu_UnlinkConfirmFlow_Integration(t *testing.T) {
@@ -327,21 +326,21 @@ func TestBuildOnlineSettingsMenu_UnlinkConfirmFlow_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Unlink account", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Unlink account", uiSettleTimeout))
 
 	// Account section: Account row, Warp row, Unlink account.
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Unlink from Zaparoo Online?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Unlink from Zaparoo Online?", uiSettleTimeout))
 
 	// Confirm ("Yes" is focused first).
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("credentials were removed", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("credentials were removed", uiSettleTimeout))
 
 	// Dismiss the confirmation: the page rebuilds in the unlinked state.
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Link account", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Link account", uiSettleTimeout))
 	mockSvc.AssertCalled(t, "Unlink", mock.Anything)
 }
 
@@ -360,7 +359,7 @@ func TestBuildOnlineSettingsMenu_CloudBackupNavigatesToBackupPage_Integration(t 
 	runner.QueueUpdateDraw(func() {
 		buildOnlineSettingsMenu(mockSvc, pages, runner.App(), func() {})
 	})
-	require.True(t, runner.WaitForText("Cloud backup", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Cloud backup", uiSettleTimeout))
 
 	// Account, Warp, Unlink account, Remote control, Remote control
 	// activity, Play history sync, then Cloud backup.
@@ -372,6 +371,6 @@ func TestBuildOnlineSettingsMenu_CloudBackupNavigatesToBackupPage_Integration(t 
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
 
-	require.True(t, runner.WaitForText("Automatic backup", 500*time.Millisecond),
+	require.True(t, runner.WaitForText("Automatic backup", uiSettleTimeout),
 		"selecting Cloud backup should open the backup settings page")
 }

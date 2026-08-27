@@ -25,11 +25,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/jonboulle/clockwork"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,4 +144,111 @@ func TestCommitAboveThresholdTruncatesWAL(t *testing.T) {
 	require.NoError(t, h.db.sql.Load().QueryRowContext(
 		h.db.ctx, "SELECT COUNT(*) FROM Media").Scan(&count))
 	require.Equal(t, 4000, count)
+}
+
+// TestCheckpointLog_IncludesPoolStats asserts the checkpoint-completed log line
+// carries the connection pool's open/inUse/idle counts alongside the existing
+// busy/frame fields — added for #1279 to help tell whether a concurrent reader
+// (not just indexing's own writer) was checked out at the moment a checkpoint
+// couldn't fully reclaim the WAL. Cannot run in parallel: swaps zerolog.Logger.
+func TestCheckpointLog_IncludesPoolStats(t *testing.T) {
+	h := newWALTestDB(t)
+
+	orig := mediaWALCheckpointThreshold
+	mediaWALCheckpointThreshold = 32 * 1024
+	t.Cleanup(func() { mediaWALCheckpointThreshold = orig })
+
+	var buf strings.Builder
+	prevLogger := log.Logger
+	prevLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = prevLogger
+		zerolog.SetGlobalLevel(prevLevel)
+	})
+
+	require.NoError(t, h.db.BeginTransaction(false))
+	for i := range 4000 {
+		media := database.Media{
+			MediaTitleDBID: h.title.DBID,
+			SystemDBID:     h.system.DBID,
+			Path:           filepath.Join("test", "path", fmt.Sprintf("game%d.bin", i)),
+		}
+		_, err := h.db.InsertMedia(media)
+		require.NoError(t, err)
+	}
+	require.NoError(t, h.db.CommitTransaction())
+
+	output := buf.String()
+	require.Contains(t, output, "media database WAL checkpoint completed")
+	for _, field := range []string{`"poolOpen":`, `"poolInUse":`, `"poolIdle":`} {
+		require.Contains(t, output, field)
+	}
+}
+
+// TestCommitTransaction_LogsBreakdown asserts CommitTransactionWithOptions logs its
+// four-segment timing breakdown (flush/sqliteCommit/invalidate/checkpoint) plus the
+// WAL size immediately before and after tx.Commit() — the pair of numbers issue #1279
+// asks for to tell whether SQLite's automatic checkpointing ran inside the commit.
+// Cannot run in parallel with other tests: it swaps the shared zerolog.Logger/level.
+func TestCommitTransaction_LogsBreakdown(t *testing.T) {
+	h := newWALTestDB(t)
+
+	var buf strings.Builder
+	prevLogger := log.Logger
+	prevLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = prevLogger
+		zerolog.SetGlobalLevel(prevLevel)
+	})
+
+	require.NoError(t, h.db.BeginTransaction(false))
+	media := database.Media{
+		MediaTitleDBID: h.title.DBID,
+		SystemDBID:     h.system.DBID,
+		Path:           filepath.Join("test", "path", "game.bin"),
+	}
+	_, err := h.db.InsertMedia(media)
+	require.NoError(t, err)
+	require.NoError(t, h.db.CommitTransaction())
+
+	output := buf.String()
+	require.Contains(t, output, "media database commit breakdown")
+	for _, field := range []string{
+		`"flush":`, `"sqliteCommit":`, `"invalidate":`, `"checkpoint":`, `"total":`,
+		`"walSizeBeforeCommit":`, `"walSizeAfterCommit":`,
+		`"poolOpen":`, `"poolInUse":`, `"poolIdle":`,
+	} {
+		require.Contains(t, output, field)
+	}
+}
+
+// TestCommitTransaction_PreservesSlugCacheDuringIndexing asserts a batch commit
+// taken mid-indexing still takes the indexing branch of cache invalidation and
+// leaves the slug search cache intact, so foreground launches and searches keep
+// working off last-good coverage while an index is in progress.
+func TestCommitTransaction_PreservesSlugCacheDuringIndexing(t *testing.T) {
+	t.Parallel()
+
+	h := newWALTestDB(t)
+	require.NoError(t, h.db.SetIndexingStatus(IndexingStatusRunning))
+
+	sentinelCache := &SlugSearchCache{}
+	h.db.slugSearchCache.Store(sentinelCache)
+
+	require.NoError(t, h.db.BeginTransaction(false))
+	media := database.Media{
+		MediaTitleDBID: h.title.DBID,
+		SystemDBID:     h.system.DBID,
+		Path:           filepath.Join("test", "path", "game.bin"),
+	}
+	_, err := h.db.InsertMedia(media)
+	require.NoError(t, err)
+	require.NoError(t, h.db.CommitTransaction())
+
+	require.Same(t, sentinelCache, h.db.slugSearchCache.Load(),
+		"PreserveSlugSearchCache must still be honored during an indexing batch commit")
 }

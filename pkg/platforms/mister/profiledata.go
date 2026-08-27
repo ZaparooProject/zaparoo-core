@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -468,7 +469,7 @@ func (d *profileDataManager) writeNameFile(profileDir string, ref platforms.Prof
 // root drive appearing late, or a manual unmount.
 func (*Platform) WatchProfileData(ctx context.Context, onChange func()) {
 	go func() {
-		file, err := os.Open(mountInfoPath)
+		file, err := os.Open(helpers.MountInfoPath())
 		if err != nil {
 			log.Error().Err(err).Msg("profiles: mount watcher unavailable")
 			return
@@ -516,7 +517,7 @@ func (*Platform) WatchProfileData(ctx context.Context, onChange func()) {
 // mountInfoSum fingerprints the current mount table so poll wakeups that
 // end up changing nothing (mount + matching unmount) don't trigger work.
 func mountInfoSum() [32]byte {
-	data, err := os.ReadFile(mountInfoPath)
+	data, err := os.ReadFile(helpers.MountInfoPath())
 	if err != nil {
 		return [32]byte{}
 	}

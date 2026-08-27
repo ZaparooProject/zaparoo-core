@@ -171,13 +171,23 @@ func TestMediaDB_Recreate_KeepBackup(t *testing.T) {
 	mediaDB.MarkCorrupt("test")
 	path := mediaDB.GetDBPath()
 
+	// Write deterministic sidecars so the WAL/SHM preservation assertions below
+	// don't depend on incidental SQLite checkpoint timing at Close().
+	require.NoError(t, os.WriteFile(path+"-wal", []byte("wal contents"), 0o600))
+	require.NoError(t, os.WriteFile(path+"-shm", []byte("shm contents"), 0o600))
+
 	require.NoError(t, mediaDB.Recreate(true))
 
-	// Forensic backup kept, marker cleared. (The reopened WAL database creates fresh
-	// -wal/-shm sidecars; the point is the stale corrupt ones don't survive into it,
-	// which the empty+queryable check below confirms.)
+	// Forensic backup kept for the database and both sidecars, marker cleared.
+	// (The reopened WAL database creates fresh -wal/-shm sidecars; the point is
+	// the stale corrupt ones don't survive into it, which the empty+queryable
+	// check below confirms.)
 	_, backupErr := os.Stat(path + database.CorruptMarkerSuffix + ".bak")
-	require.NoError(t, backupErr, "backup copy should be kept when keepBackup=true")
+	require.NoError(t, backupErr, "database backup copy should be kept when keepBackup=true")
+	_, walBackupErr := os.Stat(path + "-wal" + database.CorruptMarkerSuffix + ".bak")
+	require.NoError(t, walBackupErr, "WAL backup copy should be kept when keepBackup=true")
+	_, shmBackupErr := os.Stat(path + "-shm" + database.CorruptMarkerSuffix + ".bak")
+	require.NoError(t, shmBackupErr, "SHM backup copy should be kept when keepBackup=true")
 	assert.False(t, mediaDB.IsMarkedCorrupt(), "marker should be cleared after recreate")
 
 	// Fresh schema: queryable and empty, with durable intent to rebuild it.

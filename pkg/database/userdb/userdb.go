@@ -138,6 +138,7 @@ func (db *UserDB) openSQLConnection(dbPath string) (*sql.DB, error) {
 			log.Warn().Err(err).Msg("failed to enable user database cell size checks; continuing without")
 		}
 	}
+	database.LogEffectivePragmasForDB(db.ctx, sqlInstance, "user", database.SynchronousFull, database.UnsetPageSize)
 	return sqlInstance, nil
 }
 

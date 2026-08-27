@@ -25,22 +25,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"golang.org/x/sys/unix"
 )
 
-var mountInfoPath = filepath.Join(string(filepath.Separator), "proc", "self", "mountinfo")
-
 // mountEntry is one line of /proc/self/mountinfo, reduced to the fields
 // mount ownership decisions need. Entries appear in mount order, so of two
 // entries with the same Mountpoint the later one shadows the earlier.
+//
+// Kept as a local type rather than using helpers.MountEntry directly because
+// it is the currency of the mounter interface below and of the ledger, and
+// none of that wants the per-mount options field.
 type mountEntry struct {
 	Root       string // path inside the source filesystem, e.g. /zaparoo/profiles/x/saves
 	Mountpoint string // where it is mounted, e.g. /media/fat/saves
@@ -61,11 +61,11 @@ type mounter interface {
 type sysMounter struct{}
 
 func (sysMounter) Mounts() ([]mountEntry, error) {
-	data, err := os.ReadFile(mountInfoPath) //nolint:gosec // fixed procfs path assembled from constants
+	entries, err := helpers.ReadMountInfo()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read mountinfo: %w", err)
 	}
-	return parseMountInfo(string(data)), nil
+	return toMountEntries(entries), nil
 }
 
 func (m sysMounter) BindMount(source, target string) (mountEntry, error) {
@@ -116,55 +116,19 @@ func (sysMounter) Unmount(target string) error {
 	return nil
 }
 
-// parseMountInfo parses /proc/self/mountinfo content. Format per line:
-//
-//	36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw
-//	(1) (2) (3) (root) (mountpoint) (opts) (optional...) - (fstype) (source) (superopts)
-//
-// Malformed lines are skipped.
-func parseMountInfo(data string) []mountEntry {
-	var entries []mountEntry
-	for line := range strings.Lines(data) {
-		fields := strings.Fields(line)
-		sep := -1
-		for i, f := range fields {
-			if f == "-" && i >= 6 {
-				sep = i
-				break
-			}
-		}
-		if sep < 0 || sep+2 >= len(fields) || len(fields) < 5 {
-			continue
-		}
-		entries = append(entries, mountEntry{
-			Root:       unescapeMountField(fields[3]),
-			Mountpoint: unescapeMountField(fields[4]),
-			FSType:     fields[sep+1],
-			Source:     unescapeMountField(fields[sep+2]),
+// toMountEntries drops the per-mount options field helpers.ParseMountInfo
+// carries but the mount ownership logic here has no use for.
+func toMountEntries(entries []helpers.MountEntry) []mountEntry {
+	out := make([]mountEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, mountEntry{
+			Root:       e.Root,
+			Mountpoint: e.Mountpoint,
+			FSType:     e.FSType,
+			Source:     e.Source,
 		})
 	}
-	return entries
-}
-
-// unescapeMountField decodes the octal escapes the kernel uses for
-// whitespace in mountinfo fields (e.g. \040 for space).
-func unescapeMountField(s string) string {
-	if !strings.Contains(s, `\`) {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+3 < len(s) {
-			if code, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
-				_ = b.WriteByte(byte(code))
-				i += 3
-				continue
-			}
-		}
-		_ = b.WriteByte(s[i])
-	}
-	return b.String()
+	return out
 }
 
 // mountsAt returns the mounts stacked on target in mount order: the last

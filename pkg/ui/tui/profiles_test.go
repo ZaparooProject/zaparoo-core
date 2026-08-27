@@ -259,10 +259,10 @@ func TestBuildProfilesSettingsMenu_ToggleRequiresAdminPIN_Integration(t *testing
 		buildProfilesSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Require profile for launch", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Require profile for launch", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Block launches until a profile is active"))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Profile PIN", uiSettleTimeout))
 	runner.SimulateString("1234")
 	runner.SimulateEnter()
 	select {
@@ -296,7 +296,7 @@ func TestBuildProfilesPage_Integration(t *testing.T) {
 		BuildProfilesPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Profiles", 100*time.Millisecond), "Profiles title should appear")
+	require.True(t, runner.WaitForText("Profiles", uiSettleTimeout), "Profiles title should appear")
 	assert.True(t, runner.ContainsText("Kid A"), "profile names should be listed")
 	assert.True(t, runner.ContainsText("Kid B"), "profile names should be listed")
 	assert.True(t, runner.ContainsText("active"), "active profile should be marked")
@@ -332,15 +332,15 @@ func TestBuildProfilesPage_SelectPromptsThenOpensEdit_Integration(t *testing.T) 
 		BuildProfilesPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Kid A", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Kid A", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("New"))
 	assert.True(t, runner.ContainsText("Switch"))
 	assert.True(t, runner.ContainsText("Back"))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Profile PIN", uiSettleTimeout))
 	runner.SimulateString("1234")
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Edit", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Edit", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Write Card"))
 	assert.True(t, runner.ContainsText("Switch ID: ******"))
 	assert.False(t, runner.ContainsText("New ID"))
@@ -372,7 +372,7 @@ func TestProfileSwitchModal_Integration(t *testing.T) {
 			})
 	})
 
-	require.True(t, runner.WaitForText("Switch Profile", 100*time.Millisecond), "modal title should appear")
+	require.True(t, runner.WaitForText("Switch Profile", uiSettleTimeout), "modal title should appear")
 	assert.True(t, runner.ContainsText("Shared profile"), "shared profile entry should be listed")
 	assert.True(t, runner.ContainsText("Kid A (active)"), "active profile should be marked")
 	assert.True(t, runner.ContainsText("Kid B"), "profiles should be listed")
@@ -419,7 +419,7 @@ func TestProfileSwitchModal_ProtectedProfileRequiresPIN_Integration(t *testing.T
 	// prompt and does not send its bearer switch ID behind the user's back.
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Profile PIN", uiSettleTimeout))
 	mockSvc.AssertNotCalled(t, "SwitchProfile", mock.Anything, mock.Anything)
 
 	// Non-digits are rejected by the field. A short PIN remains local and
@@ -427,7 +427,7 @@ func TestProfileSwitchModal_ProtectedProfileRequiresPIN_Integration(t *testing.T
 	runner.SimulateString("a123")
 	assert.False(t, runner.ContainsText("123"), "entered PIN must be masked")
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("PIN must be 4 to 8 digits", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("PIN must be 4 to 8 digits", uiSettleTimeout))
 	mockSvc.AssertNotCalled(t, "SwitchProfile", mock.Anything, mock.Anything)
 	runner.SimulateEnter() // dismiss validation error
 
@@ -474,7 +474,7 @@ func TestPromptProfileManagement_Integration(t *testing.T) {
 		}, nil)
 	})
 
-	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Profile PIN", uiSettleTimeout))
 	runner.SimulateString("1234")
 	runner.SimulateEnter()
 	select {
@@ -503,7 +503,7 @@ func TestPromptProfileManagement_MultipleAdminsShowsChooser_Integration(t *testi
 		promptProfileManagement(mockSvc, pages, runner.App(), profiles, func() {}, nil)
 	})
 
-	require.True(t, runner.WaitForText("Administrator", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Administrator", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Kid A"))
 	assert.True(t, runner.ContainsText("Kid B"))
 }
@@ -522,7 +522,7 @@ func TestProfilePINEditModal_ShowsContextualClear_Integration(t *testing.T) {
 		showProfilePINEditModal(pages, runner.App(), true, func(string) {}, func() {}, nil)
 	})
 
-	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Profile PIN", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Set PIN"))
 	assert.True(t, runner.ContainsText("Clear PIN"))
 	assert.True(t, runner.ContainsText("Cancel"))
@@ -542,7 +542,7 @@ func TestProfileSwitchIDModal_RevealsOnlyOnSelection_Integration(t *testing.T) {
 		showProfileSwitchIDModal(pages, runner.App(), "corn-arm-truck", func() {}, nil)
 	})
 
-	require.True(t, runner.WaitForText("corn-arm-truck", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("corn-arm-truck", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Reset"))
 }
 
@@ -566,7 +566,7 @@ func TestBuildProfilesPage_EmptyState_Integration(t *testing.T) {
 		BuildProfilesPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("no profiles", 100*time.Millisecond),
+	require.True(t, runner.WaitForText("no profiles", uiSettleTimeout),
 		"empty state should explain profile setup")
 	assert.True(t, runner.ContainsText("New"), "stable New action should be visible")
 }
@@ -587,7 +587,7 @@ func TestBuildProfileEditPage_ProfileLookupFailureFailsClosed_Integration(t *tes
 		buildProfileEditPage(mockSvc, pages, runner.App(), nil)
 	})
 
-	require.True(t, runner.WaitForText("Failed to load profiles", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Failed to load profiles", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("initial administrator"))
 	mockSvc.AssertNotCalled(t, "NewProfile", mock.Anything, mock.Anything)
 }
@@ -611,7 +611,7 @@ func TestBuildProfileEditPage_New_Integration(t *testing.T) {
 		buildProfileEditPage(mockSvc, pages, runner.App(), nil)
 	})
 
-	require.True(t, runner.WaitForText("New", 100*time.Millisecond), "New title should appear")
+	require.True(t, runner.WaitForText("New", uiSettleTimeout), "New title should appear")
 	assert.True(t, runner.ContainsText("Name"), "Name field should be visible")
 	assert.True(t, runner.ContainsText("PIN"), "PIN field should be visible")
 	assert.True(t, runner.ContainsText("Limits"), "Limits toggle should be visible")
@@ -640,7 +640,7 @@ func TestBuildProfileEditPage_Edit_Integration(t *testing.T) {
 		buildProfileEditPage(mockSvc, pages, runner.App(), &profiles.Profiles[0])
 	})
 
-	require.True(t, runner.WaitForText("Edit", 100*time.Millisecond), "Edit title should appear")
+	require.True(t, runner.WaitForText("Edit", uiSettleTimeout), "Edit title should appear")
 	assert.True(t, runner.ContainsText("Kid A"), "existing name should be pre-filled")
 	assert.True(t, runner.ContainsText("PIN: ******"), "existing PIN should use a fixed mask")
 	assert.True(t, runner.ContainsText("Switch ID: ******"), "switch ID should be masked until selected")
