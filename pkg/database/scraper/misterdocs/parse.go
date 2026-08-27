@@ -77,7 +77,7 @@ func loadSourceRecords(ctx context.Context, fs afero.Fs, source sourceDir) (sour
 }
 
 func loadArtworkRecords(ctx context.Context, fs afero.Fs, dir string) (sourceRecords, error) {
-	images, err := imageFilesByStem(fs, dir)
+	images, err := imageFilesByStem(ctx, fs, dir)
 	if err != nil {
 		return sourceRecords{}, err
 	}
@@ -265,7 +265,7 @@ func appendManualRecord(
 	return append(result, path), nil
 }
 
-func imageFilesByStem(fs afero.Fs, dir string) (map[string]string, error) {
+func imageFilesByStem(ctx context.Context, fs afero.Fs, dir string) (map[string]string, error) {
 	directory, err := fs.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("misterdocs: read artwork directory %q: %w", dir, err)
@@ -276,8 +276,14 @@ func imageFilesByStem(fs afero.Fs, dir string) (map[string]string, error) {
 	ambiguous := make(map[string]struct{})
 	imageCount := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		entries, readErr := directory.Readdir(directoryReadBatch)
 		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 ||
 				!supportedImageExt(filepath.Ext(entry.Name())) {
 				continue

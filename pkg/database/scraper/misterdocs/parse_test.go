@@ -22,6 +22,8 @@ package misterdocs
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +31,38 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type cancelOnReaddirFile struct {
+	afero.File
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (file *cancelOnReaddirFile) Readdir(count int) ([]os.FileInfo, error) {
+	entries, err := file.File.Readdir(count)
+	file.calls++
+	file.cancel()
+	return entries, err //nolint:wrapcheck // Test boundary preserves underlying directory behavior.
+}
+
+type cancelOnReaddirFS struct {
+	afero.Fs
+	file   *cancelOnReaddirFile
+	cancel context.CancelFunc
+	path   string
+}
+
+func (fs *cancelOnReaddirFS) Open(name string) (afero.File, error) {
+	file, err := fs.Fs.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", name, err)
+	}
+	if filepath.Clean(name) != filepath.Clean(fs.path) {
+		return file, nil
+	}
+	fs.file = &cancelOnReaddirFile{File: file, cancel: fs.cancel}
+	return fs.file, nil
+}
 
 func TestLoadArtworkRecords_ImportsIndexAndOptionalMetadata(t *testing.T) {
 	t.Parallel()
@@ -195,9 +229,26 @@ func TestImageFilesByStem_OmitsAmbiguousStems(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Game.jpg"), []byte("jpg"), 0o600))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, "Game.png"), []byte("png"), 0o600))
 
-	images, err := imageFilesByStem(fs, dir)
+	images, err := imageFilesByStem(context.Background(), fs, dir)
 	require.NoError(t, err)
 	assert.NotContains(t, images, "game")
+}
+
+func TestImageFilesByStem_StopsEnumerationAfterCancellation(t *testing.T) {
+	t.Parallel()
+
+	baseFS := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, baseFS.MkdirAll(dir, 0o750))
+	require.NoError(t, afero.WriteFile(baseFS, filepath.Join(dir, "Game.jpg"), []byte("image"), 0o600))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fs := &cancelOnReaddirFS{Fs: baseFS, path: dir, cancel: cancel}
+
+	_, err := imageFilesByStem(ctx, fs, dir)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, fs.file)
+	assert.Equal(t, 1, fs.file.calls)
 }
 
 func TestAppendManualRecord_FiltersBeforeEnforcingLimit(t *testing.T) {
