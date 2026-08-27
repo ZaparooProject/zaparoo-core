@@ -236,3 +236,72 @@ func seedBenchBrowseDB(b *testing.B, mediaDB *MediaDB, rows int, withTags bool) 
 	require.NoError(b, tx.Commit())
 	return parentDir
 }
+
+// BenchmarkBrowseCacheRefresh_GrowingTable reproduces the mid-scan refresh
+// pattern of a long index: each system is refreshed once, in order, against a
+// BrowseDirs table that already holds every earlier system's dirs. The reported
+// time is the whole sweep, so a refresh whose cost tracks total table size shows
+// up as super-linear growth in systems rather than a constant per-system cost.
+func BenchmarkBrowseCacheRefresh_GrowingTable(b *testing.B) {
+	for _, systems := range []int{32, 128} {
+		b.Run(fmt.Sprintf("systems-%d", systems), func(b *testing.B) {
+			b.ReportAllocs()
+			ctx := context.Background()
+			for b.Loop() {
+				b.StopTimer()
+				mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+				systemIDs := seedBenchBrowseCacheSystems(b, mediaDB, systems)
+				b.StartTimer()
+
+				for _, systemID := range systemIDs {
+					if err := mediaDB.PopulateBrowseCacheForSystems(ctx, []string{systemID}); err != nil {
+						b.Fatal(err)
+					}
+				}
+
+				b.StopTimer()
+				cleanup()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+// seedBenchBrowseCacheSystems gives each system its own dir subtree under a
+// shared ancestor, so every refresh both reuses existing dirs and adds new ones.
+func seedBenchBrowseCacheSystems(b *testing.B, mediaDB *MediaDB, systems int) []string {
+	b.Helper()
+	ctx := context.Background()
+	const dirsPerSystem = 20
+	const filesPerDir = 5
+
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(b, err)
+	defer func() { _ = tx.Rollback() }()
+
+	systemIDs := make([]string, 0, systems)
+	for s := 1; s <= systems; s++ {
+		systemID := fmt.Sprintf("BenchSys%03d", s)
+		systemIDs = append(systemIDs, systemID)
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)", s, systemID, systemID)
+		require.NoError(b, err)
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)",
+			s, s, fmt.Sprintf("bench-title-%03d", s), systemID)
+		require.NoError(b, err)
+
+		for d := range dirsPerSystem {
+			dir := fmt.Sprintf("/roms/shared/sys%03d/dir%02d/", s, d)
+			for f := range filesPerDir {
+				_, err = tx.ExecContext(ctx, `
+					INSERT INTO Media (SystemDBID, MediaTitleDBID, Path, ParentDir, SortName, IsMissing)
+					VALUES (?, ?, ?, ?, ?, 0)`,
+					s, s, fmt.Sprintf("%sgame%02d.rom", dir, f), dir, fmt.Sprintf("game%02d", f))
+				require.NoError(b, err)
+			}
+		}
+	}
+	require.NoError(b, tx.Commit())
+	return systemIDs
+}

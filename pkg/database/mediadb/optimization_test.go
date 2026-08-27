@@ -66,8 +66,12 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "browse_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	// PopulateBrowseCache: BEGIN, SELECT (empty), DELETEs, root dir insert,
-	// count prepare, COMMIT.
+	// PopulateBrowseCache pins a connection and disables foreign keys before
+	// opening its transaction — the unqualified DELETE below cascades otherwise
+	// (see acquireBrowseCacheConn, #1279). Then: BEGIN, SELECT (empty), DELETEs,
+	// root dir insert, count prepare, COMMIT, and the pragma is restored.
+	mock.ExpectExec("PRAGMA foreign_keys = OFF").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT m.SystemDBID, m.Path").
 		WillReturnRows(sqlmock.NewRows([]string{"SystemDBID", "Path"}))
@@ -87,6 +91,8 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 		WithArgs(DBConfigBrowseIndexComplete, "1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
+	mock.ExpectExec("PRAGMA foreign_keys = ON").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
 // expectDisambiguationBackfillStepNoop mocks the disambiguation_backfill step
