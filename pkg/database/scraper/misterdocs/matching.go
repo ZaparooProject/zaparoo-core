@@ -106,11 +106,15 @@ func buildPendingWrites(
 				TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
 				Text:    filepath.ToSlash(record.ImagePath),
 			}
+			props := write.titleProp
 			if exact {
-				write.mediaProp[prop.TypeTag] = prop
-			} else {
-				write.titleProp[prop.TypeTag] = prop
+				props = write.mediaProp
 			}
+			if _, exists := props[prop.TypeTag]; exists {
+				stats.Skipped++
+				continue
+			}
+			props[prop.TypeTag] = prop
 			applyGameMetadata(write, source, record.Key)
 			stats.Matched++
 		}

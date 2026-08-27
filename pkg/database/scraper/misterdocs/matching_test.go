@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,7 +83,24 @@ func TestBuildPendingWrites_MapsExactArtworkMetadataAndManual(t *testing.T) {
 	assert.Equal(t, "4", tagValues[string(tags.TagTypePlayers)])
 	assert.Equal(t, "platform", tagValues[string(tags.TagTypeGenre)])
 	assert.Equal(t, "studio", tagValues[string(tags.TagTypeDeveloper)])
-	assert.Contains(t, write.MediaTags, database.TagInfo{Type: "scraper-run.mister-docs", Tag: "run-1"})
+	assert.Contains(t, write.MediaTags, scraper.RunTagInfo(scraperID, "run-1"))
+}
+
+func TestBuildPendingWrites_SkipsDuplicateArtworkForMedia(t *testing.T) {
+	t.Parallel()
+
+	firstPath := filepath.Join("docs", "SNES", "Artwork", "Game.jpg")
+	secondPath := filepath.Join("docs", "SNES", "Artwork", "Game.png")
+	records := []sourceRecords{{Artwork: []artworkRecord{
+		{Name: "Game (USA)", Key: "Game", ImagePath: firstPath},
+		{Name: "Game (USA)", Key: "Game", ImagePath: secondPath},
+	}}}
+
+	targets, stats, _ := buildPendingWrites(testSystemIndex(), records, "")
+	require.Len(t, targets, 1)
+	assert.Equal(t, matchStats{Processed: 2, Matched: 1, Skipped: 1}, stats)
+	require.Len(t, targets[0].Write.MediaProps, 1)
+	assert.Equal(t, filepath.ToSlash(firstPath), targets[0].Write.MediaProps[0].Text)
 }
 
 func TestMatchArtwork_UsesUniqueTitleFallbackAtTitleScope(t *testing.T) {
@@ -96,10 +114,88 @@ func TestMatchArtwork_UsesUniqueTitleFallbackAtTitleScope(t *testing.T) {
 	assert.Equal(t, int64(10), title.DBID)
 }
 
+func TestMatchArtwork_DisambiguatesSharedMediaBaseByTitleSlug(t *testing.T) {
+	t.Parallel()
+
+	idx := newSystemIndex(
+		[]database.TitleWithSystem{
+			{DBID: 10, Slug: "game", Name: "Game"},
+			{DBID: 20, Slug: "other", Name: "Other"},
+		},
+		[]database.MediaWithFullPath{
+			{DBID: 100, MediaTitleDBID: 10, Path: filepath.Join("games", "Game.sfc")},
+			{DBID: 200, MediaTitleDBID: 20, Path: filepath.Join("games", "Game.zip")},
+		},
+	)
+
+	media, title, exact := matchArtwork(idx, artworkRecord{Name: "Game"})
+	require.NotNil(t, media)
+	require.NotNil(t, title)
+	assert.Equal(t, int64(100), media.DBID)
+	assert.Equal(t, int64(10), title.DBID)
+	assert.True(t, exact)
+}
+
+func TestMatchArtwork_RejectsAmbiguousSharedMediaBase(t *testing.T) {
+	t.Parallel()
+
+	idx := newSystemIndex(
+		[]database.TitleWithSystem{
+			{DBID: 10, Slug: "game", Name: "Game"},
+			{DBID: 20, Slug: "game", Name: "Game"},
+		},
+		[]database.MediaWithFullPath{
+			{DBID: 100, MediaTitleDBID: 10, Path: filepath.Join("games", "Game.sfc")},
+			{DBID: 200, MediaTitleDBID: 20, Path: filepath.Join("games", "Game.zip")},
+		},
+	)
+
+	media, title, exact := matchArtwork(idx, artworkRecord{Name: "Game"})
+	assert.Nil(t, media)
+	assert.Nil(t, title)
+	assert.False(t, exact)
+}
+
+func TestMatchArtwork_TitleFallbackPrefersPresentMedia(t *testing.T) {
+	t.Parallel()
+
+	idx := newSystemIndex(
+		[]database.TitleWithSystem{{DBID: 10, Slug: "game", Name: "Game"}},
+		[]database.MediaWithFullPath{
+			{DBID: 100, MediaTitleDBID: 10, Path: "Missing.sfc", IsMissing: true},
+			{DBID: 200, MediaTitleDBID: 10, Path: "Present.sfc"},
+		},
+	)
+
+	media, title, exact := matchArtwork(idx, artworkRecord{Name: "Game"})
+	require.NotNil(t, media)
+	require.NotNil(t, title)
+	assert.Equal(t, int64(200), media.DBID)
+	assert.False(t, exact)
+}
+
 func TestMatchManualTitle_RejectsUnknown(t *testing.T) {
 	t.Parallel()
 
 	assert.Nil(t, matchManualTitle(testSystemIndex(), "System Manual.pdf"))
+}
+
+func TestMatchManualTitle_SharedSlugUsesUniqueNormalizedName(t *testing.T) {
+	t.Parallel()
+
+	unique := newSystemIndex([]database.TitleWithSystem{
+		{DBID: 10, Slug: "game", Name: "Game"},
+		{DBID: 20, Slug: "game", Name: "Game II"},
+	}, nil)
+	matched := matchManualTitle(unique, "Game.pdf")
+	require.NotNil(t, matched)
+	assert.Equal(t, int64(10), matched.DBID)
+
+	ambiguous := newSystemIndex([]database.TitleWithSystem{
+		{DBID: 10, Slug: "game", Name: "Game"},
+		{DBID: 20, Slug: "game", Name: "Game"},
+	}, nil)
+	assert.Nil(t, matchManualTitle(ambiguous, "Game.pdf"))
 }
 
 func TestNormalizedYear(t *testing.T) {

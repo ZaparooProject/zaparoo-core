@@ -22,6 +22,7 @@ package misterdocs
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -48,11 +49,44 @@ func FuzzParseTSV(f *testing.F) {
 	})
 }
 
+func TestPathWithin(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("media", "fat", "docs")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "descendant", path: filepath.Join(root, "SNES", "Artwork", "Game.jpg"), want: true},
+		{name: "parent", path: filepath.Dir(root), want: false},
+		{name: "sibling", path: filepath.Join(filepath.Dir(root), "docs-old", "Game.jpg"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertPathWithin(t, tt.path, root, tt.want)
+		})
+	}
+}
+
+func assertPathWithin(t *testing.T, path, root string, want bool) {
+	t.Helper()
+	if got := pathWithin(path, root); got != want {
+		t.Errorf("pathWithin(%q, %q) = %t, want %t", path, root, got, want)
+	}
+}
+
 func FuzzPathWithin(f *testing.F) {
 	f.Add("/media/fat/docs/SNES/Artwork/Game.jpg", "/media/fat/docs")
 	f.Add("/media/fat/docs/../linux/secret", "/media/fat/docs")
 
-	f.Fuzz(func(_ *testing.T, path, root string) {
-		_ = pathWithin(path, root)
+	f.Fuzz(func(t *testing.T, path, root string) {
+		if !pathWithin(path, root) {
+			return
+		}
+		rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Fatalf("pathWithin accepted path %q outside root %q", path, root)
+		}
 	})
 }

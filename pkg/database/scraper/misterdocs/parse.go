@@ -281,7 +281,8 @@ func readTSV(ctx context.Context, fs afero.Fs, path string) (tsvRows, error) {
 		columns[strings.ToLower(value)] = i
 	}
 	result := tsvRows{columns: columns, records: make([][]string, 0)}
-	for len(result.records) < maxMetadataRecords {
+	totalRecords := 0
+	for {
 		if err := ctx.Err(); err != nil {
 			return tsvRows{}, fmt.Errorf("parse metadata %q: %w", path, err)
 		}
@@ -291,6 +292,10 @@ func readTSV(ctx context.Context, fs afero.Fs, path string) (tsvRows, error) {
 		}
 		if readErr != nil {
 			return tsvRows{}, fmt.Errorf("read metadata row %q: %w", path, readErr)
+		}
+		totalRecords++
+		if totalRecords > maxMetadataRecords {
+			return tsvRows{}, fmt.Errorf("metadata exceeds %d-record limit", maxMetadataRecords)
 		}
 		valid := true
 		for i := range record {
@@ -304,10 +309,6 @@ func readTSV(ctx context.Context, fs afero.Fs, path string) (tsvRows, error) {
 			result.records = append(result.records, record)
 		}
 	}
-	if _, err := reader.Read(); !errors.Is(err, io.EOF) {
-		return tsvRows{}, fmt.Errorf("metadata exceeds %d-record limit", maxMetadataRecords)
-	}
-	return result, nil
 }
 
 func field(row []string, column int) string {

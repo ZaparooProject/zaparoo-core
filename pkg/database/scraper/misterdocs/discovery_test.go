@@ -64,6 +64,29 @@ func TestDiscoverSources_FindsArtworkAndManualsByFormat(t *testing.T) {
 	}, sources)
 }
 
+func TestDiscoverSources_IgnoresUnsupportedLayouts(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	root := filepath.Join("media", "fat")
+	docsRoot := filepath.Join(root, "docs")
+	require.NoError(t, fs.MkdirAll(filepath.Join(docsRoot, "Unknown", "Manuals"), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(docsRoot, "SNES", artworkDirName), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Join(docsRoot, "SNES", "Cheats"), 0o750))
+	require.NoError(t, afero.WriteFile(fs, filepath.Join(docsRoot, "README.txt"), []byte("text"), 0o600))
+
+	sources, err := discoverSources(fs, []string{root})
+	require.NoError(t, err)
+	assert.Empty(t, sources)
+}
+
+func TestResolveSourceSystem_FallsBackToParent(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, systemdefs.SystemSNES, resolveSourceSystem("SNES", "Scans Manuals"))
+	assert.Empty(t, resolveSourceSystem("Unknown", "Scans Manuals"))
+}
+
 func TestSourceIDsForTarget_IncludesFallbacks(t *testing.T) {
 	t.Parallel()
 

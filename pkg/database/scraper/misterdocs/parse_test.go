@@ -20,6 +20,7 @@
 package misterdocs
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"testing"
@@ -57,6 +58,30 @@ func TestLoadArtworkRecords_ImportsIndexAndOptionalMetadata(t *testing.T) {
 	assert.Equal(t, 1, got.RowErrors)
 }
 
+func TestLoadArtworkRecords_SkipsMalformedOptionalMetadata(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Artwork")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	files := map[string][]byte{
+		"index.tsv":       []byte("#name\tkey\nGame\tGame\n"),
+		"Game.jpg":        []byte("image"),
+		"gameinfo.tsv":    []byte("#name\nGame\n"),
+		"synopsis_en.tsv": []byte("#key\nGame\n"),
+	}
+	for name, content := range files {
+		require.NoError(t, afero.WriteFile(fs, filepath.Join(dir, name), content, 0o600))
+	}
+
+	got, err := loadArtworkRecords(context.Background(), fs, dir)
+	require.NoError(t, err)
+	require.Len(t, got.Artwork, 1)
+	assert.Empty(t, got.GameInfo)
+	assert.Empty(t, got.Synopsis)
+	assert.Equal(t, 2, got.RowErrors)
+}
+
 func TestLoadArtworkRecords_RequiresColumns(t *testing.T) {
 	t.Parallel()
 
@@ -68,6 +93,50 @@ func TestLoadArtworkRecords_RequiresColumns(t *testing.T) {
 	_, err := loadArtworkRecords(context.Background(), fs, dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires name and key")
+}
+
+func TestLoadSourceRecords_HandlesManualsAndRejectsUnknownKinds(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	dir := filepath.Join("docs", "SNES", "Manuals")
+	require.NoError(t, fs.MkdirAll(dir, 0o750))
+	manualPath := filepath.Join(dir, "Game.pdf")
+	require.NoError(t, afero.WriteFile(fs, manualPath, []byte("pdf"), 0o600))
+
+	got, err := loadSourceRecords(context.Background(), fs, sourceDir{Path: dir, Kind: sourceManuals})
+	require.NoError(t, err)
+	assert.Equal(t, []string{manualPath}, got.Manuals)
+
+	_, err = loadSourceRecords(context.Background(), fs, sourceDir{Path: dir, Kind: sourceKind(255)})
+	require.ErrorContains(t, err, "unknown source kind")
+}
+
+func TestReadTSV_RejectsExcessInvalidUTF8Rows(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("docs", "index.tsv")
+	records := bytes.Repeat([]byte{0xff, '\n'}, maxMetadataRecords+1)
+	data := append([]byte("#name\n"), records...)
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, afero.WriteFile(fs, path, data, 0o600))
+
+	_, err := readTSV(context.Background(), fs, path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata exceeds 100000-record limit")
+}
+
+func TestReadTSV_RejectsOversizedMetadata(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("docs", "index.tsv")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, afero.WriteFile(fs, path, bytes.Repeat([]byte{'x'}, int(maxMetadataBytes)+1), 0o600))
+
+	_, err := readTSV(context.Background(), fs, path)
+	require.ErrorContains(t, err, "metadata exceeds 8388608-byte limit")
 }
 
 func TestLoadManualRecords_FiltersDirectPDFs(t *testing.T) {

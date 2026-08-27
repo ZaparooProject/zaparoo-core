@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/bgpriority"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
 
@@ -63,7 +64,8 @@ func NewPlatformScraper() platforms.Scraper {
 			if fs == nil {
 				fs = afero.NewOsFs()
 			}
-			sources, err := discoverSources(fs, pl.RootDirs(cfg))
+			rootDirs := pl.RootDirs(cfg)
+			sources, err := discoverSources(fs, rootDirs)
 			if err != nil {
 				return err
 			}
@@ -73,7 +75,7 @@ func NewPlatformScraper() platforms.Scraper {
 			}
 			targets := orderedTargetSystems(indexed, opts.Systems)
 			impl := &scraperImpl{
-				fs: fs, db: db.MediaDB, docsRoots: candidateDocsRoots(pl.RootDirs(cfg)),
+				fs: fs, db: db.MediaDB, docsRoots: candidateDocsRoots(rootDirs),
 				sources: sourcesBySystem(sources),
 			}
 			go impl.scrapeLoop(ctx, opts, targets, ch)
@@ -134,7 +136,10 @@ func (s *scraperImpl) scrapeLoop(
 				}
 				loaded, loadErr := loadSourceRecords(ctx, s.fs, source)
 				if loadErr != nil {
-					sourceError = fmt.Errorf("misterdocs: load %q: %w", source.Path, loadErr)
+					sourceError = errors.Join(
+						sourceError,
+						fmt.Errorf("misterdocs: load %q: %w", source.Path, loadErr),
+					)
 					continue
 				}
 				records = append(records, loaded)
@@ -144,10 +149,11 @@ func (s *scraperImpl) scrapeLoop(
 		idx := newSystemIndex(titles, media)
 		writeTargets, stats, foundPaths := buildPendingWrites(idx, records, opts.RunID)
 		if opts.Force && sourceError == nil {
-			deleted, cleanupErr := s.deleteStaleProperties(ctx, media, titles, foundPaths)
+			deleted, cleanupErr := s.deleteStaleProperties(ctx, opts, media, titles, foundPaths)
 			if cleanupErr != nil {
 				sourceError = cleanupErr
 			} else if deleted > 0 {
+				stats.Processed += deleted
 				stats.Matched += deleted
 			}
 		}
@@ -201,9 +207,13 @@ func (s *scraperImpl) applyTargets(
 		end := min(start+writeBatchSize, len(targets))
 		batch := targets[start:end]
 		if canBatch {
-			if err := batcher.ApplyScrapeResults(ctx, batch); err == nil {
+			batchErr := batcher.ApplyScrapeResults(ctx, batch)
+			if batchErr == nil {
 				continue
 			}
+			log.Warn().Err(batchErr).
+				Int("targets", len(batch)).
+				Msg("misterdocs: batch write failed, falling back to per-record writes")
 		}
 		for _, target := range batch {
 			if err := s.db.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write); err != nil {
@@ -228,16 +238,49 @@ func waitForScrape(ctx context.Context, opts scraper.ScrapeOptions) error {
 
 func (s *scraperImpl) deleteStaleProperties(
 	ctx context.Context,
+	opts scraper.ScrapeOptions,
 	media []database.MediaWithFullPath,
 	titles []database.TitleWithSystem,
 	found map[string]struct{},
 ) (int, error) {
+	mediaProps := make(map[int64][]database.MediaProperty, len(media))
+	if len(media) > 0 {
+		if err := waitForScrape(ctx, opts); err != nil {
+			return 0, err
+		}
+		mediaIDs := make([]int64, len(media))
+		for i := range media {
+			mediaIDs[i] = media[i].DBID
+		}
+		var err error
+		mediaProps, err = s.db.GetMediaPropertyMetadataByMediaDBIDs(ctx, mediaIDs)
+		if err != nil {
+			return 0, fmt.Errorf("misterdocs: load media properties for cleanup: %w", err)
+		}
+	}
+
+	titleProps := make(map[int64][]database.MediaProperty, len(titles))
+	if len(titles) > 0 {
+		if err := waitForScrape(ctx, opts); err != nil {
+			return 0, err
+		}
+		titleIDs := make([]int64, len(titles))
+		for i := range titles {
+			titleIDs[i] = titles[i].DBID
+		}
+		var err error
+		titleProps, err = s.db.GetMediaTitlePropertyMetadataByMediaTitleDBIDs(ctx, titleIDs)
+		if err != nil {
+			return 0, fmt.Errorf("misterdocs: load title properties for cleanup: %w", err)
+		}
+	}
+
 	deleted := 0
 	for i := range media {
-		props, err := s.db.GetMediaPropertyMetadata(ctx, media[i].DBID)
-		if err != nil {
-			return deleted, fmt.Errorf("misterdocs: load media properties for cleanup: %w", err)
+		if err := waitForScrape(ctx, opts); err != nil {
+			return deleted, err
 		}
+		props := mediaProps[media[i].DBID]
 		for propIdx := range props {
 			prop := &props[propIdx]
 			if !s.isStaleDocsProperty(prop, found) || prop.TypeTagDBID == 0 {
@@ -250,10 +293,10 @@ func (s *scraperImpl) deleteStaleProperties(
 		}
 	}
 	for i := range titles {
-		props, err := s.db.GetMediaTitlePropertyMetadata(ctx, titles[i].DBID)
-		if err != nil {
-			return deleted, fmt.Errorf("misterdocs: load title properties for cleanup: %w", err)
+		if err := waitForScrape(ctx, opts); err != nil {
+			return deleted, err
 		}
+		props := titleProps[titles[i].DBID]
 		for propIdx := range props {
 			prop := &props[propIdx]
 			if !s.isStaleDocsProperty(prop, found) || prop.TypeTagDBID == 0 {
