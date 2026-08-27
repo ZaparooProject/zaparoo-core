@@ -2771,12 +2771,80 @@ func (db *MediaDB) WALCheckpoint() error {
 }
 
 // BrowseDirectories returns distinct immediate subdirectory names under the given path prefix.
+// Browse call timing thresholds. Above the first a call is reported at info so
+// it survives the default log level; above the second it is a warn.
+const (
+	browseTimingLogThreshold  = 250 * time.Millisecond
+	browseTimingWarnThreshold = 5 * time.Second
+)
+
+// poolWaitSample captures database/sql's cumulative connection-wait counters.
+//
+// These are POOL-WIDE totals, not per-caller: a delta across one browse call
+// includes time other goroutines spent blocked in the same window. That is
+// still the measurement needed here, because the open question is whether a
+// slow browse is executing SQL or queued behind the indexing writer for a
+// connection, and the logs cannot currently tell those apart. A near-zero
+// delta rules contention out; a large one says the pool was saturated, without
+// attributing the wait to this specific call.
+type poolWaitSample struct {
+	waitCount    int64
+	waitDuration time.Duration
+}
+
+func samplePoolWait(sqlDB *sql.DB) poolWaitSample {
+	if sqlDB == nil {
+		return poolWaitSample{}
+	}
+	stats := sqlDB.Stats()
+	return poolWaitSample{waitCount: stats.WaitCount, waitDuration: stats.WaitDuration}
+}
+
+// logBrowseTiming splits a browse call's wall time into time the pool spent
+// handing out connections and time spent doing work. Browse is the one
+// foreground path that runs concurrently with indexing, so this is where the
+// distinction decides whether to fix the query or the concurrency.
+func (db *MediaDB) logBrowseTiming(op string, routes int, started time.Time, before poolWaitSample) {
+	elapsed := time.Since(started)
+	if elapsed < browseTimingLogThreshold {
+		return
+	}
+	sqlDB := db.sql.Load()
+	after := samplePoolWait(sqlDB)
+	connWait := after.waitDuration - before.waitDuration
+
+	event := log.Info()
+	if elapsed > browseTimingWarnThreshold {
+		event = log.Warn()
+	}
+	event = logPoolStats(event, sqlDB)
+	event = event.
+		Str("op", op).
+		Dur("elapsed", elapsed).
+		Dur("poolConnWait", connWait).
+		Int64("poolConnWaitCount", after.waitCount-before.waitCount).
+		Dur("nonWait", elapsed-connWait).
+		// The overlay query joins Media once per source route and re-checks
+		// higher-priority routes per candidate row, so cost rises faster than
+		// route count. On the same line as the wait so the two are comparable
+		// without matching timestamps across log entries.
+		Bool("boosted", db.indexingCacheBoost.Load())
+	if routes > 0 {
+		event = event.Int("routes", routes)
+	}
+	event.Msg("browse call timing")
+}
+
 func (db *MediaDB) BrowseDirectories(
 	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	started, wait := time.Now(), samplePoolWait(db.sql.Load())
+	defer func() {
+		db.logBrowseTiming("browse directories", len(browseOverlaySources(opts.Overlay)), started, wait)
+	}()
 	results, err := sqlBrowseDirectories(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
@@ -2791,6 +2859,8 @@ func (db *MediaDB) BrowseFiles(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	started, wait := time.Now(), samplePoolWait(db.sql.Load())
+	defer func() { db.logBrowseTiming("browse files", len(browseOverlaySources(opts.Overlay)), started, wait) }()
 	results, err := sqlBrowseFiles(ctx, db.sql.Load(), opts)
 	db.NoteCorruption(err)
 	return results, err
@@ -2827,6 +2897,10 @@ func (db *MediaDB) BrowseFileCount(
 	if db.sql.Load() == nil {
 		return 0, ErrNullSQL
 	}
+	started, wait := time.Now(), samplePoolWait(db.sql.Load())
+	defer func() {
+		db.logBrowseTiming("browse file count", len(browseOverlaySources(opts.Overlay)), started, wait)
+	}()
 	return sqlBrowseFileCount(ctx, db.sql.Load(), opts)
 }
 
@@ -2875,6 +2949,8 @@ func (db *MediaDB) BrowseRootCounts(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	started, wait := time.Now(), samplePoolWait(db.sql.Load())
+	defer func() { db.logBrowseTiming("browse root counts", len(rootDirs), started, wait) }()
 	return sqlBrowseRootCounts(ctx, db.sql.Load(), rootDirs)
 }
 
@@ -2885,6 +2961,8 @@ func (db *MediaDB) BrowseRouteCounts(
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL
 	}
+	started, wait := time.Now(), samplePoolWait(db.sql.Load())
+	defer func() { db.logBrowseTiming("browse route counts", 0, started, wait) }()
 	return sqlBrowseRouteCounts(ctx, db.sql.Load(), opts)
 }
 
@@ -2898,6 +2976,10 @@ func (db *MediaDB) BrowseSystemRootCandidates(
 	if db.sql.Load() == nil {
 		return database.BrowseSystemRootCandidates{}, false, ErrNullSQL
 	}
+	started, wait := time.Now(), samplePoolWait(db.sql.Load())
+	defer func() {
+		db.logBrowseTiming("browse system root candidates", len(opts.Roots), started, wait)
+	}()
 	return sqlBrowseSystemRootCandidates(ctx, db.sql.Load(), opts)
 }
 
