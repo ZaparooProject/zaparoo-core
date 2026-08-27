@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -151,14 +152,11 @@ func TestHandleProfiles_List_UnpairedRemoteSeesSwitchIDs(t *testing.T) {
 	env, mockUserDB, _ := newProfilesEnv(t)
 	env.IsLocal = false
 	env.ClientRole = "" // no paired identity
+	env.PlatformID = platformids.Mister
 
 	mockUserDB.On("ListProfiles").Return([]database.Profile{*testProfileRow(t, "1234")}, nil)
 
-	// A remote request with no paired identity is treated as admin: it
-	// predates the permission system (plaintext WS while encryption is
-	// off) and already has full API access, so hiding switch IDs from it
-	// would protect nothing. Enforcement starts when service.encryption
-	// requires pairing.
+	// MiSTer preserves switch-ID visibility for its grandfathered legacy API.
 	result, err := HandleProfiles(env)
 	require.NoError(t, err)
 	resp, ok := result.(models.ProfilesResponse)
@@ -314,6 +312,7 @@ func TestHandleProfilesActive(t *testing.T) {
 func TestHandleProfilesDelete(t *testing.T) {
 	t.Parallel()
 	env, mockUserDB, st := newProfilesEnv(t)
+	env.IsLocal = true
 
 	st.SetActiveProfile(&models.ActiveProfile{ProfileID: "profile-1", Name: "Kid A"})
 	mockUserDB.On("DeleteProfile", "profile-1").Return(nil)
@@ -349,6 +348,7 @@ func TestHandleProfilesUpdate_LocalRecoveryPromotesAdmin(t *testing.T) {
 func TestHandleProfilesUpdate_ClearPIN(t *testing.T) {
 	t.Parallel()
 	env, mockUserDB, _ := newProfilesEnv(t)
+	env.IsLocal = true
 
 	mockUserDB.On("GetProfile", "profile-1").Return(testProfileRow(t, "1234"), nil)
 	mockUserDB.On("UpdateProfile", mock.MatchedBy(func(p *database.Profile) bool {

@@ -54,13 +54,9 @@ const (
 	maxHeroicGames       = 100_000
 	maxHeroicFieldLength = 4096
 
-	// Heroic's Electron wrapper can detach from `flatpak run`. Running it
-	// through a fixed shell monitor keeps a waitable Flatpak process until
-	// Heroic's supported --no-gui mode exits after the launched game.
-	heroicFlatpakMonitor = `/app/bin/heroic-run --no-gui "$1"
-status=$?
-while pgrep -f '^/app/bin/heroic/heroic( |$)' >/dev/null 2>&1; do sleep 1; done
-exit "$status"`
+	// Run Heroic's supported no-GUI entrypoint as the Flatpak command so its
+	// lifetime represents this launch, never an unrelated resident Heroic GUI.
+	heroicFlatpakMonitor = `exec /app/bin/heroic-run --no-gui "$1"`
 )
 
 // ScanHeroicGames scans Heroic Games Launcher library files for installed games.

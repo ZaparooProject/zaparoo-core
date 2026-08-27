@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -133,6 +134,7 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia(t *testing.T) {
 		State:         appState,
 		LimitsManager: limitsManager,
 		Params:        paramsJSON,
+		IsLocal:       true,
 	}
 
 	// Call the handler
@@ -197,6 +199,7 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia(t *testing.T) {
 		State:         appState,
 		LimitsManager: limitsManager,
 		Params:        paramsJSON,
+		IsLocal:       true,
 	}
 
 	// Call the handler
@@ -261,8 +264,9 @@ func TestHandleSettings_ReaderConnections(t *testing.T) {
 func TestHandleSettings_ReportsEncryptionSetting(t *testing.T) {
 	t.Parallel()
 
+	enabled := true
 	cfg, err := config.NewConfig(t.TempDir(), config.Values{
-		Service: config.Service{Encryption: true},
+		Service: config.Service{Encryption: &enabled},
 	})
 	require.NoError(t, err)
 	mockPlatform := mocks.NewMockPlatform()
@@ -386,6 +390,7 @@ func TestHandleSettingsUpdate_ReaderConnections(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -497,6 +502,7 @@ func TestHandleSettingsUpdate_ErrorReportingEnable(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -536,6 +542,7 @@ func TestHandleSettingsUpdate_ErrorReportingDisable(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -571,6 +578,7 @@ func TestHandleSettingsUpdate_UpdateChannel(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -613,6 +621,7 @@ func TestHandleSettings_UpdateCheckRoundTrip(t *testing.T) {
 				Platform: mockPlatform,
 				Config:   cfg,
 				State:    appState,
+				IsLocal:  true,
 			}
 
 			result, err := HandleSettings(env)
@@ -671,6 +680,7 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -714,12 +724,13 @@ func TestHandleSettingsUpdate_NonLocalBackupSettingsRejectBeforeMutation(t *test
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
-		Context:  context.Background(),
-		Platform: mockPlatform,
-		Config:   cfg,
-		State:    appState,
-		Params:   paramsJSON,
-		IsLocal:  false,
+		Context:    context.Background(),
+		Platform:   mockPlatform,
+		Config:     cfg,
+		State:      appState,
+		Params:     paramsJSON,
+		PlatformID: platformids.Mister,
+		IsLocal:    false,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -822,6 +833,7 @@ func TestHandleSettingsUpdate_ReaderConnectionsEnabled(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -902,6 +914,7 @@ func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -957,6 +970,7 @@ func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
 		Config:   cfg,
 		State:    appState,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -1028,6 +1042,7 @@ func TestHandleSettingsUpdate_AudioVolume(t *testing.T) {
 		State:    appState,
 		Player:   mockPlayer,
 		Params:   paramsJSON,
+		IsLocal:  true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -1187,6 +1202,7 @@ func TestHandleSettingsUpdate_SystemDefaults(t *testing.T) {
 		State:         appState,
 		LauncherCache: cache,
 		Params:        paramsJSON,
+		IsLocal:       true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -1236,6 +1252,7 @@ func TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup(t *testing.T) {
 		State:         appState,
 		LauncherCache: cache,
 		Params:        paramsJSON,
+		IsLocal:       true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -1287,6 +1304,7 @@ func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownLauncher(t *testing.T
 		State:         appState,
 		LauncherCache: cache,
 		Params:        paramsJSON,
+		IsLocal:       true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -1400,6 +1418,7 @@ func TestHandleSettingsUpdate_SystemDefaults_AllowsEmptyLauncher(t *testing.T) {
 		State:         appState,
 		LauncherCache: cache,
 		Params:        paramsJSON,
+		IsLocal:       true,
 	}
 
 	_, err = HandleSettingsUpdate(env)
@@ -1492,6 +1511,7 @@ func TestHandleSettings_UpdateInstallRoundTrip(t *testing.T) {
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
+		IsLocal:  true,
 	}
 
 	// Installing on its own is off until someone asks for it, even on a
@@ -1593,6 +1613,7 @@ func TestHandleSettingsUpdate_UpdateInstallNeedsChecking(t *testing.T) {
 				Config:   cfg,
 				State:    appState,
 				Params:   paramsJSON,
+				IsLocal:  true,
 			}
 
 			_, err = HandleSettingsUpdate(env)

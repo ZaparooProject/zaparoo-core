@@ -25,6 +25,7 @@ import (
 	zapscriptlib "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/inputmacro"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -54,6 +55,9 @@ func parseInputMacro(cmdName, macro string) ([]string, error) {
 
 //nolint:gocritic // single-use parameter in API handler
 func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
+	if err := requireCapability(&env, permissions.CapInput); err != nil {
+		return nil, err
+	}
 	var params models.InputKeyboardParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
@@ -84,6 +88,9 @@ func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 
 //nolint:gocritic // single-use parameter in API handler
 func HandleInputGamepad(env requests.RequestEnv) (any, error) {
+	if err := requireCapability(&env, permissions.CapInput); err != nil {
+		return nil, err
+	}
 	var params models.InputGamepadParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)

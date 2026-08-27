@@ -45,6 +45,13 @@ func main() {
 	}
 }
 
+func linuxDefaults() config.Values {
+	defaults := config.BaseDefaults
+	enabled := true
+	defaults.Service.Encryption = &enabled
+	return defaults
+}
+
 func run() error {
 	defer telemetry.Close()
 	defer func() {
@@ -109,7 +116,7 @@ func run() error {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
-	cfg := cli.Setup(pl, config.BaseDefaults, logWriters)
+	cfg := cli.Setup(pl, linuxDefaults(), logWriters)
 
 	if *start {
 		if err := cli.StartAndOpenBrowser(cfg); err != nil {

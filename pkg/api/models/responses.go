@@ -726,9 +726,12 @@ type ClientsResponse struct {
 // ClientsCurrentResponse describes the current connection's paired identity
 // and effective role capabilities. Role is null when the connection has no
 // paired identity; capabilities remain populated from its legacy grant.
+//
+//nolint:govet // Field order follows the established wire contract.
 type ClientsCurrentResponse struct {
 	Role         *string  `json:"role"`
 	Capabilities []string `json:"capabilities"`
+	Access       string   `json:"access"`
 	Paired       bool     `json:"paired"`
 }
 

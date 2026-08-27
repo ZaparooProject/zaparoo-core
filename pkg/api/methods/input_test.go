@@ -27,12 +27,34 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHandleInputKeyboard_LegacyPolicy(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("KeyboardPress", "a").Return(nil)
+	params := json.RawMessage(`{"keys":"a"}`)
+
+	_, err := HandleInputKeyboard(requests.RequestEnv{
+		Platform: pl, PlatformID: platformids.Linux, Params: params,
+	})
+	require.ErrorIs(t, err, ErrForbidden)
+	pl.AssertNotCalled(t, "KeyboardPress", "a")
+
+	_, err = HandleInputKeyboard(requests.RequestEnv{
+		Platform: pl, PlatformID: platformids.Batocera, Params: params,
+	})
+	require.NoError(t, err)
+	pl.AssertCalled(t, "KeyboardPress", "a")
+}
 
 func TestHandleInputKeyboard_SingleKey(t *testing.T) {
 	t.Parallel()
@@ -49,6 +71,7 @@ func TestHandleInputKeyboard_SingleKey(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"keys": "a"}`),
+		IsLocal:  true,
 	}
 
 	result, err := HandleInputKeyboard(env)
@@ -72,6 +95,7 @@ func TestHandleInputKeyboard_MultiCharMacro(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"keys": "abc{enter}"}`),
+		IsLocal:  true,
 	}
 
 	result, err := HandleInputKeyboard(env)
@@ -97,6 +121,7 @@ func TestHandleInputKeyboard_SpecialKey(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"keys": "{f9}"}`),
+		IsLocal:  true,
 	}
 
 	result, err := HandleInputKeyboard(env)
@@ -111,6 +136,7 @@ func TestHandleInputKeyboard_MissingParams(t *testing.T) {
 	env := requests.RequestEnv{
 		Context: context.Background(),
 		Params:  json.RawMessage(`{}`),
+		IsLocal: true,
 	}
 
 	_, err := HandleInputKeyboard(env)
@@ -136,6 +162,7 @@ func TestHandleInputKeyboard_PlatformError(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"keys": "a"}`),
+		IsLocal:  true,
 	}
 
 	_, err := HandleInputKeyboard(env)
@@ -158,6 +185,7 @@ func TestHandleInputGamepad_SingleButton(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"buttons": "A"}`),
+		IsLocal:  true,
 	}
 
 	result, err := HandleInputGamepad(env)
@@ -181,6 +209,7 @@ func TestHandleInputGamepad_MultiButton(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"buttons": "{up}{down}A"}`),
+		IsLocal:  true,
 	}
 
 	result, err := HandleInputGamepad(env)
@@ -197,6 +226,7 @@ func TestHandleInputGamepad_MissingParams(t *testing.T) {
 	env := requests.RequestEnv{
 		Context: context.Background(),
 		Params:  json.RawMessage(`{}`),
+		IsLocal: true,
 	}
 
 	_, err := HandleInputGamepad(env)
@@ -222,6 +252,7 @@ func TestHandleInputGamepad_PlatformError(t *testing.T) {
 		Context:  context.Background(),
 		Platform: pl,
 		Params:   json.RawMessage(`{"buttons": "A"}`),
+		IsLocal:  true,
 	}
 
 	_, err := HandleInputGamepad(env)

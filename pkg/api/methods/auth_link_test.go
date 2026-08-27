@@ -205,18 +205,26 @@ func waitForAuthLinkStatus(t *testing.T, want string, timeout time.Duration) mod
 	return models.AuthLinkStatusResponse{}
 }
 
-func TestSettingsAuthLink_RequiresLocalOrAdminClient(t *testing.T) {
+func TestSettingsAuthLink_StartIsOpenAndCancelRequiresAdmin(t *testing.T) {
 	// Not parallel: uses package-level link session state.
 	resetAuthLinkState(t)
 
-	_, err := HandleSettingsAuthLink(requests.RequestEnv{IsLocal: false}, nil)
+	// Malformed parameters prove unauthenticated and member requests reached
+	// link-flow validation instead of being rejected by an authority gate.
+	_, err := HandleSettingsAuthLink(requests.RequestEnv{
+		IsLocal: false,
+		Params:  json.RawMessage(`{`),
+	}, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "local or admin client")
+	assert.Contains(t, err.Error(), "invalid params")
 
-	memberEnv := requests.RequestEnv{IsLocal: false, ClientRole: string(permissions.RoleMember)}
-	_, err = HandleSettingsAuthLink(memberEnv, nil)
+	_, err = HandleSettingsAuthLink(requests.RequestEnv{
+		IsLocal:    false,
+		ClientRole: string(permissions.RoleMember),
+		Params:     json.RawMessage(`{`),
+	}, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "local or admin client")
+	assert.Contains(t, err.Error(), "invalid params")
 
 	_, err = HandleSettingsAuthLinkCancel(requests.RequestEnv{IsLocal: false})
 	require.Error(t, err)

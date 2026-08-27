@@ -22,8 +22,8 @@ package retroarch
 
 import (
 	"path/filepath"
-	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/spf13/afero"
 )
 
@@ -101,18 +101,26 @@ func BuildCommand(opts Options, c CoreLaunch, mediaPath string) CommandSpec { //
 	return buildCommandWithCore(&opts, c.Core, mediaPath)
 }
 
-// MemoizePreflight ensures a shared runtime dependency check runs once per
-// launcher catalog while per-core filesystem checks remain independent.
+// MemoizePreflight caches a successful shared runtime dependency check per
+// launcher catalog while allowing transient failures to be retried.
 func MemoizePreflight(preflight PreflightFunc) PreflightFunc {
 	if preflight == nil {
 		return nil
 	}
 
-	var once sync.Once
-	var result error
+	var mu syncutil.Mutex
+	done := false
 	return func(corePath string) error {
-		once.Do(func() { result = preflight(corePath) })
-		return result
+		mu.Lock()
+		defer mu.Unlock()
+		if done {
+			return nil
+		}
+		if err := preflight(corePath); err != nil {
+			return err
+		}
+		done = true
+		return nil
 	}
 }
 

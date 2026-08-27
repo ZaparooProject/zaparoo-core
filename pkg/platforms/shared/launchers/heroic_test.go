@@ -53,7 +53,7 @@ func TestHeroicBuildLaunchCommandFlatpak(t *testing.T) {
 	assert.Equal(t, "/usr/bin/flatpak", command.Executable)
 	assert.Equal(t, []string{
 		"run", "--die-with-parent", "--command=sh", FlatpakHeroicID,
-		"-c", heroicFlatpakMonitor, "zaparoo-heroic",
+		"-c", `exec /app/bin/heroic-run --no-gui "$1"`, "zaparoo-heroic",
 		"heroic://launch?appName=Quail&gui=false&runner=legendary",
 	}, command.Args)
 	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)

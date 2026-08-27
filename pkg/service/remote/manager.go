@@ -419,14 +419,11 @@ func (*manager) jitter(duration time.Duration) time.Duration {
 	return floor + time.Duration(random.Int64())
 }
 
-// requestEnv builds the RequestEnv for a dispatched API method call. role
-// must never be empty: requests.RequestEnv.ClientRole == "" combined with
-// IsLocal == false resolves to admin under permissions.Grant.EffectiveRole
-// (the unpaired-remote-is-admin backward-compatibility rule) — every remote
-// operation must carry an explicit, capability-empty role instead. See
-// permissions.RoleRemote.
+// requestEnv builds the RequestEnv for a dispatched API method call. Online
+// operations always use the dedicated capability-empty internal role; invalid
+// or missing values fail closed instead of degrading to a public member role.
 func (m *manager) requestEnv(ctx context.Context, role permissions.Role, params json.RawMessage) requests.RequestEnv {
-	if role == "" {
+	if role != permissions.RoleRemote {
 		role = permissions.RoleRemote
 	}
 	return requests.RequestEnv{

@@ -210,14 +210,22 @@ This access is also allowed when a connection is made over a WebSocket Secure (w
 
 ### Permissions
 
-Core evaluates permissions for each request from connection locality and paired-client role:
+Core evaluates four public access states:
 
 - **Localhost** requests originate from Core's device and have full access.
-- Paired **admin** clients have the `profiles.manage`, `settings.write`, and `update.apply` capabilities.
-- Paired **member** clients can use day-to-day methods, but cannot manage profiles, change protected settings, or apply updates.
-- **Unpaired remote** clients are possible only when encryption is disabled. For backward compatibility they receive admin capabilities, but methods explicitly restricted to localhost or to a paired admin still reject them. They do not get the `update.apply` capability, and `update.check` is closed to them too.
+- Authenticated **admin** includes paired admin clients and requests carrying a valid configured static API key. API-key admin is not localhost and cannot invoke localhost-only methods.
+- Authenticated **member** clients can use day-to-day methods, including input and screenshots, but cannot manage profiles, change protected settings, or apply updates.
+- Unauthenticated **legacy** clients are admitted only on MiSTer, MiSTeX, Batocera, LibreELEC, and ReplayOS. Legacy is a distinct compatibility state, never admin. Every other platform rejects legacy full-API access.
 
-Call [`clients.current`](./methods.md#clientscurrent) to inspect current connection's role and capabilities. Every method in [API Methods](./methods) states its access requirements. Some read methods return additional sensitive fields to privileged clients; those fields are identified in their result contracts.
+Grandfathered legacy screenshot access exists on MiSTer and ReplayOS. Grandfathered legacy input exists on MiSTer, MiSTeX, Batocera, and ReplayOS. New methods and capabilities do not become legacy-accessible automatically.
+
+Legacy admission does not govern Core's intentionally unauthenticated surface:
+
+- Client pairing (`/api/pair/start`, `/api/pair/finish`) is remotely reachable and strictly rate limited.
+- Online authentication bootstrap (`settings.auth.claim`, `settings.auth.status`, `settings.auth.link`, and redacted `settings.auth.link.status`) is available before authentication. Remote HTTP POST requires `allowed_ips` and remains rate limited.
+- `/health` is unrestricted and returns only `OK` for liveness checks.
+
+Call [`clients.current`](./methods.md#clientscurrent) to inspect current connection's access state, paired role, and capabilities. Every method in [API Methods](./methods) states its access requirements. Some read methods return additional sensitive fields to privileged clients; those fields are identified in their result contracts.
 
 ### Heartbeat
 
@@ -313,9 +321,9 @@ Methods execute actions and return data from Core. This catalog documents **88 n
 | readers                         | List connected readers and capabilities.                                              | All clients |
 | readers.write                   | Write text using available write-capable reader.                                      | All clients |
 | readers.write.cancel            | Cancel active reader write.                                                           | All clients |
-| input.keyboard                  | Send keyboard input sequence.                                                         | All clients |
-| input.gamepad                   | Send gamepad input sequence.                                                          | All clients |
-| screenshot                      | Capture platform display.                                                             | All clients |
+| input.keyboard                  | Send keyboard input sequence.                                                         | `input` |
+| input.gamepad                   | Send gamepad input sequence.                                                          | `input` |
+| screenshot                      | Capture platform display.                                                             | `screenshot` |
 | version                         | Return Core version and platform.                                                     | All clients |
 | health                          | Check whether Core is responding.                                                     | All clients |
 | inbox                           | List inbox messages.                                                                  | All clients |

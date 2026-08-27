@@ -55,6 +55,32 @@ func TestWritePong_Plaintext(t *testing.T) {
 // heartbeat used to bypass encryption entirely. The test exercises the
 // real production path (writePong → SendEncryptedFrame) with a capturing
 // writer in place of melody's session.Write.
+func TestWriteNotificationFrame_Encrypted(t *testing.T) {
+	t.Parallel()
+
+	cs, clientSecrets := establishTestEncryptionSession(t)
+	plaintext := []byte(`{"jsonrpc":"2.0","method":"media.started"}`)
+	var got []byte
+	require.NoError(t, writeNotificationFrame(func(data []byte) error {
+		got = append([]byte(nil), data...)
+		return nil
+	}, cs, webSocketAuthEncrypted, plaintext))
+
+	var frame apimiddleware.EncryptedFrame
+	require.NoError(t, json.Unmarshal(got, &frame))
+	ct, err := base64.StdEncoding.DecodeString(frame.Ciphertext)
+	require.NoError(t, err)
+	decrypted, err := crypto.Decrypt(
+		clientSecrets.s2cGCM,
+		clientSecrets.s2cNonce,
+		0,
+		ct,
+		clientSecrets.aad,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
 func TestWritePong_Encrypted(t *testing.T) {
 	t.Parallel()
 

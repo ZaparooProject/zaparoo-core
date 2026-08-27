@@ -66,8 +66,10 @@ func (*apiPlaybackStub) Seek(_ string, _ time.Duration) error            { retur
 func (*apiPlaybackStub) State(_ string) audio.PlaybackState              { return audio.PlaybackState{} }
 
 // createTestPostHandler creates a POST handler with mocked dependencies for testing.
-// The returned tracker counts RequestStarted/RequestEnded calls so tests can
-// assert balance.
+// Requests created by httptest use its reserved remote address by default; the
+// wrapper treats that default as loopback. Tests exercising remote authority
+// must set a different RemoteAddr explicitly. The returned tracker counts
+// RequestStarted/RequestEnded calls so tests can assert balance.
 func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeRequestTracker) {
 	t.Helper()
 
@@ -76,17 +78,17 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 	// Add test methods
 	err := methodMap.AddMethod("test.echo", func(_ requests.RequestEnv) (any, error) {
 		return map[string]string{"echo": "success"}, nil
-	})
+	}, true)
 	require.NoError(t, err)
 
 	err = methodMap.AddMethod("test.error", func(_ requests.RequestEnv) (any, error) {
 		return nil, errors.New("test error")
-	})
+	}, true)
 	require.NoError(t, err)
 
 	err = methodMap.AddMethod("test.expectederror", func(_ requests.RequestEnv) (any, error) {
 		return nil, models.ClientErrf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
-	})
+	}, true)
 	require.NoError(t, err)
 
 	platform := mocks.NewMockPlatform()
@@ -115,11 +117,17 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 	confirmQueue := make(chan chan error, 10)
 	tracker := &fakeRequestTracker{}
 	playbackManager := &apiPlaybackStub{}
-	handler := handlePostRequest(
+	postHandler := handlePostRequest(
 		methodMap, platform, cfg, st,
 		tokenQueue, confirmQueue, db,
 		nil, nil, nil, playbackManager, nil, nil, nil, tracker,
 	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.RemoteAddr == "192.0.2.1:1234" {
+			r.RemoteAddr = "127.0.0.1:1234"
+		}
+		postHandler(w, r)
+	})
 	return handler, methodMap, tracker
 }
 
@@ -141,13 +149,16 @@ func TestHandlePostRequest_AppliesMethodSpecificTimeout(t *testing.T) {
 
 			handler, methodMap, _ := createTestPostHandler(t)
 			deadlineCh := make(chan time.Time, 1)
-			methodMap.Store(tt.method, func(env requests.RequestEnv) (any, error) {
-				deadline, ok := env.Context.Deadline()
-				if !ok {
-					deadline = time.Time{}
-				}
-				deadlineCh <- deadline
-				return map[string]bool{"ok": true}, nil
+			methodMap.Store(tt.method, methodDefinition{
+				handler: func(env requests.RequestEnv) (any, error) {
+					deadline, ok := env.Context.Deadline()
+					if !ok {
+						deadline = time.Time{}
+					}
+					deadlineCh <- deadline
+					return map[string]bool{"ok": true}, nil
+				},
+				legacyAllowed: true,
 			})
 
 			reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"` + tt.method + `"}`
@@ -182,7 +193,7 @@ func TestHandlePostRequest_InjectsPlaybackManager(t *testing.T) {
 	err := methodMap.AddMethod("test.playback", func(env requests.RequestEnv) (any, error) {
 		assert.Same(t, playbackManager, env.PlaybackManager)
 		return map[string]bool{"ok": true}, nil
-	})
+	}, true)
 	require.NoError(t, err)
 
 	platform := mocks.NewMockPlatform()
@@ -239,7 +250,7 @@ func TestHandlePostRequest_ValidRequest(t *testing.T) {
 		"RequestStarted and RequestEnded must balance")
 }
 
-func TestHandlePostRequest_ClientsCurrentUnpairedRemote(t *testing.T) {
+func TestHandlePostRequest_RejectsUnpairedRemoteOnUnknownPlatform(t *testing.T) {
 	t.Parallel()
 
 	handler, _, _ := createTestPostHandler(t)
@@ -247,21 +258,16 @@ func TestHandlePostRequest_ClientsCurrentUnpairedRemote(t *testing.T) {
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "192.0.2.1:1234"
+	req.RemoteAddr = "198.51.100.1:1234"
 	recorder := httptest.NewRecorder()
 
 	handler(recorder, req)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	assert.JSONEq(t, `{
-		"jsonrpc":"2.0",
-		"id":"current-client",
-		"result":{
-			"paired":false,
-			"role":null,
-			"capabilities":["profiles.manage","settings.write"]
-		}
-	}`, recorder.Body.String())
+	var response models.ResponseObject
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.NotNil(t, response.Error)
+	assert.Contains(t, response.Error.Message, "client role does not permit")
 }
 
 // TestHandlePostRequest_InvalidJSON tests that malformed JSON returns HTTP 200 with JSON-RPC parse error.
@@ -688,7 +694,7 @@ func TestHandlePostRequest_ResponseWithCallback(t *testing.T) {
 			Result:     map[string]string{"status": "updated"},
 			AfterWrite: func() { afterWriteCalled = true },
 		}, nil
-	})
+	}, true)
 	require.NoError(t, err)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.callback"}`

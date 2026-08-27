@@ -78,7 +78,8 @@ func HandleClientsCurrent(env requests.RequestEnv) (any, error) {
 
 	resp := models.ClientsCurrentResponse{
 		Capabilities: capabilities,
-		Paired:       env.ClientRole != "",
+		Access:       string(grant.Access()),
+		Paired:       env.ClientRole != "" && permissions.ValidRole(env.ClientRole),
 	}
 	if resp.Paired {
 		role := env.ClientRole
