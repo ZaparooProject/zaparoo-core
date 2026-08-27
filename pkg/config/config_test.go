@@ -1713,3 +1713,26 @@ volume = 80
 	assert.True(t, cfg.DebugLogging())
 	assert.Equal(t, 80, cfg.AudioVolume())
 }
+
+func TestApplyTOML_InvalidAllowRegexes(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{vals: Values{}}
+	data := `
+[launchers]
+allow_file = ["["]
+
+[zapscript]
+allow_execute = ["["]
+allow_http = ["["]
+
+[service]
+allow_run = ["["]
+`
+
+	require.NoError(t, cfg.applyTOML(data))
+	assert.Equal(t, []*regexp.Regexp{nil}, cfg.vals.Launchers.allowFileRe)
+	assert.Equal(t, []*regexp.Regexp{nil}, cfg.vals.ZapScript.allowExecuteRe)
+	assert.Equal(t, []*regexp.Regexp{nil}, cfg.vals.ZapScript.allowHTTPRe)
+	assert.Equal(t, []*regexp.Regexp{nil}, cfg.vals.Service.allowRunRe)
+}
