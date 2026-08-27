@@ -91,7 +91,9 @@ func unescapeMountField(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+3 < len(s) {
+		// i+4 <= len(s) is the bound for the s[i+1:i+4] slice below: a backslash
+		// plus exactly three octal digits.
+		if s[i] == '\\' && i+4 <= len(s) {
 			if code, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
 				_ = b.WriteByte(byte(code))
 				i += 3

@@ -58,7 +58,6 @@ const (
 	throttledMaxFilesPerTransaction = 500
 	disabledWALAutoCheckpoint       = 0
 	defaultWALAutoCheckpoint        = 1000
-	mediaIndexingPageSize           = 4096 // SQLite's compiled default; mirrors mediaPageSize in mediadb.go
 	mediaDatabaseCorruptMessage     = "media database is corrupt; manual repair or rebuild required; " +
 		"original database left untouched"
 	// walkEntryWaitInterval is how often (in scanned filesystem entries) the
@@ -108,7 +107,7 @@ func logIndexingEnvironment(db database.MediaDBI, platform platforms.Platform) {
 // physical connection. Best-effort, like logIndexingEnvironment above.
 func logEffectiveIndexingPragmas(ctx context.Context, db database.MediaDBI) {
 	database.LogEffectivePragmasForDB(
-		ctx, db.UnsafeGetSQLDb(), "media-indexing", database.SynchronousNormal, mediaIndexingPageSize,
+		ctx, db.UnsafeGetSQLDb(), "media-indexing", database.SynchronousNormal, database.UnsetPageSize,
 	)
 }
 

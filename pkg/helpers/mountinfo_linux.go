@@ -47,9 +47,20 @@ func ReadMountInfo() ([]MountEntry, error) {
 	return ParseMountInfo(string(data)), nil
 }
 
-// StorageInfoForPath returns the mount entry that owns path: the entry whose
-// Mountpoint is the longest prefix of path's absolute form. Returns false if
-// mountinfo could not be read or nothing matches.
+// mountpointOwns reports whether absPath lies under mountpoint, comparing whole
+// path components. A plain prefix test would put /media/fatty under /media/fat
+// and pick the wrong storage for it. Separators are literal "/" because that is
+// what the kernel writes in mountinfo, regardless of host path conventions.
+func mountpointOwns(mountpoint, absPath string) bool {
+	if mountpoint == "/" {
+		return true
+	}
+	return absPath == mountpoint || strings.HasPrefix(absPath, mountpoint+"/")
+}
+
+// StorageInfoForPath returns the mount entry that owns path: the entry with the
+// longest mountpoint that contains it. Returns false if mountinfo could not be
+// read or nothing matches.
 func StorageInfoForPath(path string) (StorageInfo, bool) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -63,7 +74,7 @@ func StorageInfoForPath(path string) (StorageInfo, bool) {
 	var best MountEntry
 	found := false
 	for _, e := range entries {
-		if e.Mountpoint != "/" && !strings.HasPrefix(absPath, e.Mountpoint) {
+		if !mountpointOwns(e.Mountpoint, absPath) {
 			continue
 		}
 		if !found || len(e.Mountpoint) >= len(best.Mountpoint) {

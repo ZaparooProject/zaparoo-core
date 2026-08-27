@@ -126,6 +126,35 @@ func TestLogEffectivePragmasForDB_UnexpectedSettings_LogsWarn(t *testing.T) {
 	require.Contains(t, output, `"level":"warn"`)
 }
 
+// TestLogEffectivePragmasForDB_UnsetPageSizeDoesNotWarn covers the callers'
+// actual configuration: none of them set _page_size, so an existing database
+// carries whatever page size it was created with. That is not a misconfiguration
+// and must not raise the line to warn, or the warnings that do matter — a WAL
+// fallback, a synchronous mismatch — get lost in noise on every open.
+func TestLogEffectivePragmasForDB_UnsetPageSizeDoesNotWarn(t *testing.T) {
+	db := openTestSQLite(t, "?_journal_mode=WAL&_synchronous=NORMAL")
+
+	logPragmas := func(wantPageSize int64) string {
+		var buf strings.Builder
+		prevLogger := log.Logger
+		log.Logger = zerolog.New(&buf)
+		defer func() { log.Logger = prevLogger }()
+		LogEffectivePragmasForDB(context.Background(), db, "test-db", SynchronousNormal, wantPageSize)
+		return buf.String()
+	}
+
+	// 8192 is deliberately not this database's page size, so a non-zero
+	// expectation must warn. Establishes that the comparison is live at all,
+	// which is what makes the UnsetPageSize case below meaningful rather than
+	// vacuously passing.
+	require.Contains(t, logPragmas(8192), `"level":"warn"`)
+
+	unset := logPragmas(UnsetPageSize)
+	require.Contains(t, unset, `"level":"info"`)
+	require.NotContains(t, unset, `"level":"warn"`)
+	require.Contains(t, unset, `"pageSize":`, "the value is still reported, just not judged")
+}
+
 func TestLogEffectivePragmasForDB_AcquireFailure_LogsWarnWithoutPanic(t *testing.T) {
 	db := openTestSQLite(t, "?_journal_mode=WAL")
 	require.NoError(t, db.Close())

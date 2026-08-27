@@ -54,12 +54,10 @@ const (
 	browseRefreshPlanRowsPerSystem = 500
 )
 
-// scanBrowseCacheMediaForSystemsQuery mirrors the statement built by
-// scanBrowseCacheMediaForSystems for the single-system case the mid-scan
-// refresh always uses. Kept in sync by TestBrowseCacheRefreshQuery_MatchesSource.
-const scanBrowseCacheMediaForSystemsQuery = "SELECT m.SystemDBID, m.Path FROM Media m " +
-	"WHERE m.IsMissing = 0 AND m.SystemDBID IN (?) " +
-	"ORDER BY m.SystemDBID, m.Path"
+// The single-system IN clause the mid-scan refresh always uses. The statement
+// itself comes from browseCacheMediaScanQuery, the same function production
+// calls, so there is no copy here that could drift from it.
+const browseRefreshPlanSingleSystemInClause = "?"
 
 // TestBrowseCacheRefreshQueryPlan_UsesCoveringIndex is the regression guard.
 //
@@ -76,7 +74,8 @@ func TestBrowseCacheRefreshQueryPlan_UsesCoveringIndex(t *testing.T) {
 	seedBrowseRefreshPlanDB(t, mediaDB, browseRefreshPlanSystems, browseRefreshPlanRowsPerSystem)
 	require.NoError(t, sqlAnalyze(ctx, mediaDB.sql.Load()))
 
-	plan := browseRefreshQueryPlan(ctx, t, mediaDB, scanBrowseCacheMediaForSystemsQuery)
+	plan := browseRefreshQueryPlan(ctx, t, mediaDB,
+		browseCacheMediaScanQuery(browseRefreshPlanSingleSystemInClause))
 	t.Logf("EXPLAIN QUERY PLAN:\n%s", plan)
 
 	assert.Contains(t, plan, "media_system_present_path_idx",

@@ -696,6 +696,19 @@ func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache 
 	}
 
 	merged.liveEntries = computeLiveEntries(merged.droppedRanges, merged.entryCount)
+
+	if blockStart == 0 {
+		// The base contributed no entries, so it has no CSR index to preserve
+		// and there is nothing for a delta layer to sit on top of. Build the
+		// index outright: the unfiltered Search path keys off trigramPostings,
+		// so leaving this cache reachable only through a delta would put every
+		// query on linearSearch until enough refreshes accumulated to trigger
+		// compaction.
+		merged.trigramDeltas = nil
+		ensureTrigramIndex(merged)
+		return merged
+	}
+
 	merged.trigramDeltas = appendTrigramDelta(base.trigramDeltas, merged, blockStart)
 	if len(merged.trigramDeltas) > maxTrigramDeltaLayers {
 		compactTrigramDeltas(merged)

@@ -126,7 +126,6 @@ const (
 	defaultConnTempStore     = "FILE"
 	defaultWALAutoCheckpoint = 1000
 	connectionAcquireTimeout = 5 * time.Second
-	mediaPageSize            = 4096 // SQLite's compiled-in default
 )
 
 // getSqliteConnParams constructs the SQLite connection string. MediaDB uses
@@ -514,7 +513,7 @@ func (db *MediaDB) Open() error {
 			log.Warn().Err(err).Msg("failed to enable media database cell size checks; continuing without")
 		}
 	}
-	database.LogEffectivePragmasForDB(db.ctx, sqlInstance, "media", database.SynchronousNormal, mediaPageSize)
+	database.LogEffectivePragmasForDB(db.ctx, sqlInstance, "media", database.SynchronousNormal, database.UnsetPageSize)
 
 	clearUtilityTagCache()
 	clearCoverAvailabilityCache()

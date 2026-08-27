@@ -28,6 +28,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// UnsetPageSize is the wantPageSize value meaning "this database does not
+// configure page_size, so do not treat whatever it has as a mismatch".
+const UnsetPageSize int64 = 0
+
 // SQLite's PRAGMA synchronous integer values, for comparing against
 // EffectivePragmas.Synchronous without a magic number at each call site.
 const (
@@ -132,8 +136,15 @@ func LogEffectivePragmasForDB(
 		return
 	}
 
+	// wantPageSize == 0 means "not configured, so nothing to disagree with".
+	// page_size is fixed when a database file is created and none of the DSNs
+	// here set _page_size, so an existing database legitimately carries whatever
+	// it was created with; warning about that on every open would be noise
+	// against the mismatches that do matter.
+	pageSizeUnexpected := wantPageSize != 0 && pragmas.PageSize != wantPageSize
+
 	event := log.Info()
-	if pragmas.JournalMode != "wal" || pragmas.Synchronous != wantSynchronous || pragmas.PageSize != wantPageSize {
+	if pragmas.JournalMode != "wal" || pragmas.Synchronous != wantSynchronous || pageSizeUnexpected {
 		event = log.Warn()
 	}
 	LogEffectivePragmas(event, pragmas).Str("db", dbLabel).Msg("effective database pragmas")

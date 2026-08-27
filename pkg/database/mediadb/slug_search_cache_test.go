@@ -925,3 +925,47 @@ func TestCompactTrigramDeltas_PreservesSearchResults(t *testing.T) {
 	assert.NotEmpty(t, cache.Search(nil, [][][]byte{{[]byte("super")}}),
 		"query fixture must actually match entries")
 }
+
+// TestMergeIntoEmptyBaseBuildsTrigramIndex covers the case where a refresh
+// fragment is merged into a cache that exists but holds no entries — a cache
+// built before any system was indexed, or one whose entries have all been
+// tombstoned by withoutSystems.
+//
+// Search's unfiltered path keys off trigramPostings, so if the merge only
+// records a delta layer the whole cache stays on linearSearch until enough
+// further refreshes accumulate to trigger compaction. Assert the index exists,
+// not just that results are correct: results are correct either way, which is
+// exactly what makes the regression invisible without this.
+func TestMergeIntoEmptyBaseBuildsTrigramIndex(t *testing.T) {
+	t.Parallel()
+
+	type entry = struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}
+
+	base := buildTestCache([]entry{}, map[int64]string{})
+	base.coveredSystems = map[string]struct{}{}
+	require.Zero(t, base.entryCount, "base must be a real but empty cache, not nil")
+
+	fragment := buildTestCache([]entry{
+		{slug: "super-mario-world", secSlug: "mario-world", titleDBID: 10, systemDBID: 1},
+		{slug: "super-metroid", titleDBID: 11, systemDBID: 1},
+	}, map[int64]string{1: "SNES"})
+	fragment.coveredSystems = map[string]struct{}{"SNES": {}}
+
+	merged := mergeSlugSearchCaches(base, fragment)
+
+	require.Equal(t, 2, merged.entryCount)
+	assert.NotEmpty(t, merged.trigramPostings,
+		"an empty base leaves nothing to layer a delta on, so the merge must build the CSR index; "+
+			"without it Search takes the linear path over every entry")
+	assert.Empty(t, merged.trigramDeltas,
+		"the index covers every entry, so there should be no delta layer left to compact")
+
+	assert.ElementsMatch(t, []int64{10, 11}, merged.Search(nil, [][][]byte{{[]byte("super")}}))
+	assert.ElementsMatch(t, []int64{10}, merged.Search(nil, [][][]byte{{[]byte("mario-world")}}))
+	assert.Empty(t, merged.Search(nil, [][][]byte{{[]byte("castlevania")}}))
+}

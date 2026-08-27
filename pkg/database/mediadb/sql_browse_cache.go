@@ -570,6 +570,15 @@ func attachBrowseCacheDirLookup(
 
 // scanBrowseCacheMediaForSystems feeds the target systems' non-missing media
 // rows into the builder.
+// browseCacheMediaScanQuery builds the media scan statement for the given IN
+// placeholder clause. Exists as its own function so the query-plan regression
+// test can measure the real statement rather than a copy of it that could drift.
+func browseCacheMediaScanQuery(inClause string) string {
+	return "SELECT m.SystemDBID, m.Path FROM Media m " +
+		"WHERE m.IsMissing = 0 AND m.SystemDBID IN (" + inClause + ") " +
+		"ORDER BY m.SystemDBID, m.Path"
+}
+
 func scanBrowseCacheMediaForSystems(
 	ctx context.Context, tx *sql.Tx, builder *browseCacheBuilder, inClause string, args []any,
 ) error {
@@ -581,9 +590,7 @@ func scanBrowseCacheMediaForSystems(
 	// Row order only decides which DBID a newly minted dir receives, so any stable
 	// order will do — and Path order is steadier than rowid order, which depends
 	// on insertion history. See browse_cache_refresh_plan_test.go.
-	rows, err := tx.QueryContext(ctx,
-		"SELECT m.SystemDBID, m.Path FROM Media m WHERE m.IsMissing = 0 AND m.SystemDBID IN ("+
-			inClause+") ORDER BY m.SystemDBID, m.Path", args...)
+	rows, err := tx.QueryContext(ctx, browseCacheMediaScanQuery(inClause), args...)
 	if err != nil {
 		return fmt.Errorf("browse cache: failed to query system media: %w", err)
 	}

@@ -24,54 +24,84 @@ package helpers
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// The three tests below cannot run in parallel with each other: the latter
-// two swap the package-level mountInfoPath var to point at a fake table,
-// which would race a concurrent StorageInfoForPath call in this first test
-// reading the real /proc/self/mountinfo path.
-func TestStorageInfoForPath(t *testing.T) {
-	// A real system's /proc/self/mountinfo always has at least a root entry,
-	// so any absolute path resolves to *some* mount — this exercises the
-	// longest-prefix-match logic against the live mount table without faking
-	// procfs, and cross-checks it against a stat-based sanity bound (the
-	// resolved mountpoint must actually be an ancestor directory of path).
-	dir := t.TempDir()
-	info, ok := StorageInfoForPath(dir)
-	require.True(t, ok, "expected some mount to own %s", dir)
-	assert.NotEmpty(t, info.FSType)
+// These tests cannot run in parallel with each other: they swap the
+// package-level mountInfoPath var to point at a fixture.
 
-	absDir, err := filepath.Abs(dir)
-	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(absDir, info.Mountpoint),
-		"mountpoint %q should be a prefix of %q", info.Mountpoint, absDir)
+// useMountInfoFixture points mountInfoPath at a fake mount table for the
+// duration of the test. The real /proc/self/mountinfo is deliberately not read:
+// results would depend on how the host running the tests happens to be
+// partitioned, and procfs is a platform boundary.
+func useMountInfoFixture(t *testing.T, data string) {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), "mountinfo")
+	require.NoError(t, os.WriteFile(tmp, []byte(data), 0o600))
+	orig := mountInfoPath
+	mountInfoPath = tmp
+	t.Cleanup(func() { mountInfoPath = orig })
 }
 
-func TestStorageInfoForPath_LongestMountWins(t *testing.T) {
-	orig := mountInfoPath
-	tmp := filepath.Join(t.TempDir(), "mountinfo")
-	data := "1 0 0:1 / / rw - ext4 /dev/root rw\n" +
-		"2 1 0:2 / /media rw - exfat /dev/sda1 rw\n" +
-		"3 2 0:3 / /media/fat rw - vfat /dev/sdb1 rw\n"
-	require.NoError(t, os.WriteFile(tmp, []byte(data), 0o600))
-	mountInfoPath = tmp
-	defer func() { mountInfoPath = orig }()
+const mountInfoFixture = "1 0 0:1 / / rw - ext4 /dev/root rw\n" +
+	"2 1 0:2 / /media rw - exfat /dev/sda1 rw\n" +
+	"3 2 0:3 / /media/fat rw - vfat /dev/sdb1 rw\n" +
+	"4 2 0:4 / /media/fatty rw - btrfs /dev/sdc1 rw\n"
+
+func TestStorageInfoForPath(t *testing.T) {
+	useMountInfoFixture(t, mountInfoFixture)
 
 	info, ok := StorageInfoForPath("/media/fat/zaparoo/media.db")
 	require.True(t, ok)
 	assert.Equal(t, "vfat", info.FSType)
 	assert.Equal(t, "/media/fat", info.Mountpoint)
 	assert.Equal(t, "/dev/sdb1", info.Source)
+	assert.Equal(t, "rw", info.Options)
+}
+
+func TestStorageInfoForPath_LongestMountWins(t *testing.T) {
+	useMountInfoFixture(t, mountInfoFixture)
+
+	info, ok := StorageInfoForPath("/media/fat/zaparoo/media.db")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat", info.Mountpoint)
 
 	info, ok = StorageInfoForPath("/media/other")
 	require.True(t, ok)
 	assert.Equal(t, "exfat", info.FSType)
 	assert.Equal(t, "/media", info.Mountpoint)
+
+	info, ok = StorageInfoForPath("/somewhere/else")
+	require.True(t, ok, "the root mount owns everything not under a longer one")
+	assert.Equal(t, "/", info.Mountpoint)
+}
+
+// TestStorageInfoForPath_MatchesWholePathComponents guards the case a plain
+// strings.HasPrefix gets wrong.
+//
+// The fixture here deliberately does NOT mount /media/fatty: with it mounted,
+// the longest-match tiebreak picks it anyway and a broken prefix test still
+// passes. The bug only shows when the similarly-named directory is not itself a
+// mountpoint, so /media/fatty/... must fall through to /media rather than being
+// captured by /media/fat.
+func TestStorageInfoForPath_MatchesWholePathComponents(t *testing.T) {
+	useMountInfoFixture(t, "1 0 0:1 / / rw - ext4 /dev/root rw\n"+
+		"2 1 0:2 / /media rw - exfat /dev/sda1 rw\n"+
+		"3 2 0:3 / /media/fat rw - vfat /dev/sdb1 rw\n")
+
+	info, ok := StorageInfoForPath("/media/fatty/zaparoo/media.db")
+	require.True(t, ok)
+	assert.Equal(t, "/media", info.Mountpoint, "/media/fatty must not be captured by the /media/fat mount")
+	assert.Equal(t, "exfat", info.FSType)
+
+	// The mountpoint itself, with no trailing component, still resolves to it.
+	info, ok = StorageInfoForPath("/media/fat")
+	require.True(t, ok)
+	assert.Equal(t, "vfat", info.FSType)
+	assert.Equal(t, "/media/fat", info.Mountpoint)
 }
 
 func TestStorageInfoForPath_UnreadableMountInfo(t *testing.T) {
