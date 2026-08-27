@@ -419,7 +419,7 @@ func (c *Instance) applyTOML(data string) error {
 
 		re, err := regexp.Compile(anchorPattern(allowFile))
 		if err != nil {
-			log.Warn().Msgf("invalid allow file regex: %s", allowFile)
+			log.Warn().Err(err).Msgf("invalid allow file regex: %s", allowFile)
 			continue
 		}
 		c.vals.Launchers.allowFileRe[i] = re
@@ -430,7 +430,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowExecute := range c.vals.ZapScript.AllowExecute {
 		re, err := regexp.Compile(anchorPattern(allowExecute))
 		if err != nil {
-			log.Warn().Msgf("invalid allow execute regex: %s", allowExecute)
+			log.Warn().Err(err).Msgf("invalid allow execute regex: %s", allowExecute)
 			continue
 		}
 		c.vals.ZapScript.allowExecuteRe[i] = re
@@ -441,7 +441,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowHTTP := range c.vals.ZapScript.AllowHTTP {
 		re, err := regexp.Compile(anchorPattern(allowHTTP))
 		if err != nil {
-			log.Warn().Msgf("invalid allow HTTP regex: %s", allowHTTP)
+			log.Warn().Err(err).Msgf("invalid allow HTTP regex: %s", allowHTTP)
 			continue
 		}
 		c.vals.ZapScript.allowHTTPRe[i] = re
@@ -452,7 +452,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowRun := range c.vals.Service.AllowRun {
 		re, err := regexp.Compile(anchorPattern(allowRun))
 		if err != nil {
-			log.Warn().Msgf("invalid allow run regex: %s", allowRun)
+			log.Warn().Err(err).Msgf("invalid allow run regex: %s", allowRun)
 			continue
 		}
 		c.vals.Service.allowRunRe[i] = re

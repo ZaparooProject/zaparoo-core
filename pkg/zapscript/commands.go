@@ -65,8 +65,8 @@ var (
 	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
 )
 
-// getLauncherIDs extracts launcher IDs from the platform for validation context.
-func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
+// GetLauncherIDs extracts launcher IDs from the platform for validation context.
+func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 	launchers := pl.Launchers(cfg)
 	ids := make([]string, len(launchers))
 	for i := range launchers {
@@ -78,7 +78,7 @@ func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 // ParseAdvArgs parses and validates advanced arguments for a command.
 // Returns an error if parsing or validation fails.
 func ParseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) error {
-	ctx := advargs.NewParseContext(getLauncherIDs(pl, env.Cfg))
+	ctx := advargs.NewParseContext(GetLauncherIDs(pl, env.Cfg))
 	if err := advargs.Parse(env.Cmd.AdvArgs.Raw(), dest, ctx); err != nil {
 		return fmt.Errorf("failed to parse advanced args: %w", err)
 	}
