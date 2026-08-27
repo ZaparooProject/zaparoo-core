@@ -495,7 +495,12 @@ func runMediaDBStartupMaintenance(
 
 	db.TrackBackgroundOperation()
 	defer db.BackgroundOperationDone()
+	runMediaDBStartupMaintenanceWork(ctx, db, pauser, tagCacheLoaded)
+}
 
+func runMediaDBStartupMaintenanceWork(
+	ctx context.Context, db database.MediaDBI, pauser *syncutil.Pauser, tagCacheLoaded bool,
+) {
 	// Boot here intentionally does NOT issue PRAGMA optimize or
 	// wal_checkpoint(TRUNCATE). SQLite's auto-checkpoint runs PASSIVE
 	// inline with COMMITs and keeps the WAL bounded without blocking
@@ -568,6 +573,24 @@ func runMediaDBStartupMaintenance(
 		return
 	}
 
+	coordinator, coordinatorErr := database.GetMediaDBWriteCoordinator(db)
+	if coordinatorErr != nil {
+		log.Error().Err(coordinatorErr).Msg("temporary media repair cannot get write coordinator")
+		return
+	}
+	lease, acquireErr := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	if acquireErr != nil {
+		if errors.Is(acquireErr, database.ErrMediaWriteConflict) {
+			deferMediaWriteRetry(mediaWriteRetryMaintenance)
+			log.Info().Err(acquireErr).Msg("temporary media repair deferred; media database write active")
+			return
+		}
+		log.Error().Err(acquireErr).Msg("failed to acquire temporary media repair lease")
+		return
+	}
+
 	log.Info().Msg("temporary media repair jobs pending; starting background optimization")
-	db.RunBackgroundOptimization(nil, pauser)
+	if runErr := coordinator.RunBackgroundOptimizationWithLease(nil, pauser, lease); runErr != nil {
+		log.Error().Err(runErr).Msg("temporary media repair optimization failed")
+	}
 }

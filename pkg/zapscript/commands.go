@@ -65,8 +65,8 @@ var (
 	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
 )
 
-// getLauncherIDs extracts launcher IDs from the platform for validation context.
-func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
+// GetLauncherIDs extracts launcher IDs from the platform for validation context.
+func GetLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 	launchers := pl.Launchers(cfg)
 	ids := make([]string, len(launchers))
 	for i := range launchers {
@@ -78,7 +78,7 @@ func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
 // ParseAdvArgs parses and validates advanced arguments for a command.
 // Returns an error if parsing or validation fails.
 func ParseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) error {
-	ctx := advargs.NewParseContext(getLauncherIDs(pl, env.Cfg))
+	ctx := advargs.NewParseContext(GetLauncherIDs(pl, env.Cfg))
 	if err := advargs.Parse(env.Cmd.AdvArgs.Raw(), dest, ctx); err != nil {
 		return fmt.Errorf("failed to parse advanced args: %w", err)
 	}
@@ -450,9 +450,18 @@ func RunCommand(
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
 
-	linkValue, err := checkZapLink(cfg, pl, db, cmd)
-	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", err)
+	// Remote-sourced commands are already fully-formed, pre-validated
+	// structural commands built server-side (see pkg/service/remote). There
+	// is nothing for a ZapLink to legitimately resolve here, and letting one
+	// substitute in server-fetched ZapScript would bypass the remote
+	// operation allowlist entirely.
+	linkValue := ""
+	if token.Source != tokens.SourceRemote {
+		var linkErr error
+		linkValue, linkErr = checkZapLink(cfg, pl, db, cmd)
+		if linkErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", linkErr)
+		}
 	}
 	if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
@@ -498,7 +507,7 @@ func RunCommand(
 	}
 
 	if when, ok := cmd.AdvArgs.GetWhen(); ok && !helpers.IsTruthy(when) {
-		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
+		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd.Name)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,
 			NewCommands: newCmds,

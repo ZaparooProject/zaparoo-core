@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -50,6 +51,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/remote"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
@@ -370,7 +372,8 @@ func startService(
 
 	player := audio.NewMalgoPlayer()
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
-	playbackManager := audio.NewLongformPlaybackManager(pl.Settings().LowPowerAudio)
+	platformSettings := pl.Settings()
+	playbackManager := audio.NewLongformPlaybackManager(platformSettings.ResourceConstrained)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
@@ -502,7 +505,7 @@ func startService(
 		startMediaReadyProbe(svc, media, gen)
 		if script := cfg.LaunchersOnMediaStart(); script != "" {
 			if hookErr := runHook(svc, "on_media_start", script, nil, nil); hookErr != nil {
-				log.Error().Err(hookErr).Msg("error running on_media_start script")
+				logHookError(hookErr, "on_media_start")
 			}
 		}
 	})
@@ -540,9 +543,15 @@ func startService(
 	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
-	// Create pausers to pause heavy background media work while a game is running.
+	// Resource-constrained platforms pace indexing and scraping so UI, API,
+	// reader, and audio work gets regular CPU time. Active media can impose the
+	// stronger light/heavy throttle or full pause through these same pausers.
 	indexPauser := syncutil.NewPauser()
 	scrapePauser := syncutil.NewPauser()
+	if platformSettings.ResourceConstrained {
+		indexPauser.SetBaselineThrottle(syncutil.ThrottleBackground)
+		scrapePauser.SetBaselineThrottle(syncutil.ThrottleBackground)
+	}
 	backupPauser := syncutil.NewPauser()
 
 	discoveryService := discovery.New(cfg)
@@ -656,7 +665,9 @@ func startService(
 			}
 
 			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-			if !resumeStarted && checkAndResumeOptimization(db, st.Notifications, indexPauser) {
+			if resumeStarted {
+				deferMediaWriteRetry(mediaWriteRetryOptimization)
+			} else if checkAndResumeOptimization(db, st.Notifications, indexPauser) {
 				// A failed optimization revealed a corrupt database; rebuild it now
 				// rather than waiting for the next startup.
 				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
@@ -722,7 +733,9 @@ func startService(
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, cfg, st.Notifications, scrapePauser)
 	go watchGameForBackupPause(st.GetContext(), notifBroker, st, cfg, st.Notifications, backupPauser)
-	go watchForCorruptMediaDBRecovery(st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser)
+	go watchForCorruptMediaDBRecovery(
+		st.GetContext(), notifBroker, pl, cfg, db, st, indexPauser, scrapePauser,
+	)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
@@ -847,6 +860,28 @@ func startService(
 		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
+
+	// A separate MethodMap instance from the one api.StartWithReady builds
+	// internally: remote's allowlist (pkg/service/remote/allowlist.go) never
+	// references the pairing methods api.Start registers on its own map
+	// after construction, so the two registries can't diverge in a way that
+	// matters here. Deliberately after StartPost: StartPost sets platform
+	// fields (e.g. p.ctx, p.setActiveMedia on MiSTer) that a dispatched
+	// launch or non-hidden mister.script operation reaches into, so the
+	// remote poller must not be able to dispatch anything before they exist.
+	remote.Start(st.GetContext(), &remote.Deps{
+		Platform: svc.Platform, Config: svc.Config, State: svc.State, DB: svc.DB,
+		Profiles: svc.Profiles, PlaybackManager: svc.PlaybackManager, UI: svc.UI,
+		ConfirmQueue: svc.ConfirmQueue, PlaylistQueue: svc.PlaylistQueue,
+		IndexPauser: indexPauser, ScrapePauser: scrapePauser, BackupPauser: backupPauser,
+		Methods: api.NewMethodMap(),
+		RunZapScript: func(
+			runCtx context.Context, token tokens.Token, plsc playlists.PlaylistController,
+			exprEnv *gozapscript.ArgExprEnv, inHookContext bool,
+		) error {
+			return runTokenZapScriptWithContext(runCtx, svc, token, plsc, exprEnv, inHookContext)
+		},
+	}, backgroundWG)
 
 	// A rollback finishes before there is a database to post to and then
 	// re-execs, so this is the first point at which the user can be told about

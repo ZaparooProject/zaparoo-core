@@ -117,6 +117,26 @@ func NoteCorruption(dbPath string, err error, now time.Time) bool {
 	return true
 }
 
+// PreserveCorruptFile renames path aside to its CorruptBackupPath, so a file
+// about to be replaced or deleted survives as a forensic copy. A missing
+// source file is a silent no-op (nothing to preserve); any other stat or
+// rename failure is logged, not returned — recovery must proceed even when
+// the forensic copy could not be made. dbLabel names the database in the log
+// line (e.g. "media", "user").
+func PreserveCorruptFile(path, dbLabel string) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return
+	} else if err != nil {
+		log.Warn().Err(err).Str("db", dbLabel).Str("path", path).Msg("failed to stat corrupt database file")
+		return
+	}
+	backup := CorruptBackupPath(path)
+	_ = os.Remove(backup)
+	if err := os.Rename(path, backup); err != nil {
+		log.Warn().Err(err).Str("db", dbLabel).Str("path", path).Msg("failed to preserve corrupt database file")
+	}
+}
+
 // RemoveSidecars deletes the -wal and -shm sidecar files for dbPath. A stale WAL
 // left next to a freshly restored or recreated database would re-corrupt it.
 func RemoveSidecars(dbPath string) {

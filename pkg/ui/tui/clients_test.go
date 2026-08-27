@@ -61,7 +61,7 @@ func TestBuildClientsPage_FirstClientAdmin_Integration(t *testing.T) {
 		BuildClientsPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Clients", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Clients", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("no paired clients"))
 	assert.True(t, runner.ContainsText("Pair"))
 
@@ -69,9 +69,9 @@ func TestBuildClientsPage_FirstClientAdmin_Integration(t *testing.T) {
 	// administrator assignment.
 	runner.SimulateTab()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("first paired client", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("first paired client", uiSettleTimeout))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Pairing PIN: 123 456", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Pairing PIN: 123 456", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Role: Admin"))
 	assert.True(t, runner.ContainsText("Expires in:"))
 	require.True(t, runner.WaitForText("Expires in: 0:00", 3*time.Second))
@@ -101,9 +101,9 @@ func TestBuildClientsPage_RequireEncryptionConfirmation_Integration(t *testing.T
 		BuildClientsPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Require encryption", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Require encryption", uiSettleTimeout))
 	runner.SimulateArrowRight()
-	require.True(t, runner.WaitForText("Require encrypted remote", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Require encrypted remote", uiSettleTimeout))
 	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
 }
@@ -130,7 +130,7 @@ func TestBuildClientsPage_DisableEncryptionImmediately_Integration(t *testing.T)
 		BuildClientsPage(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Require encryption", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Require encryption", uiSettleTimeout))
 	runner.SimulateArrowLeft()
 	mockSvc.AssertExpectations(t)
 }
@@ -153,10 +153,10 @@ func TestShowClientRolePicker_AdminWithoutProfilesStartsPairing_Integration(t *t
 		showClientRolePicker(mockSvc, pages, runner.App(), nil, func() {})
 	})
 
-	require.True(t, runner.WaitForText("Client Role", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Client Role", uiSettleTimeout))
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Pairing PIN: 654 321", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Pairing PIN: 654 321", uiSettleTimeout))
 	assert.False(t, runner.ContainsText("Profile PIN"))
 	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
@@ -182,13 +182,13 @@ func TestShowClientRolePicker_AdminPromptsCredential_Integration(t *testing.T) {
 		showClientRolePicker(mockSvc, pages, runner.App(), profiles, func() {})
 	})
 
-	require.True(t, runner.WaitForText("Client Role", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Client Role", uiSettleTimeout))
 	runner.SimulateArrowDown() // Admin
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Profile PIN", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Profile PIN", uiSettleTimeout))
 	runner.SimulateString("1234")
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Pairing PIN: 654 321", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Pairing PIN: 654 321", uiSettleTimeout))
 	runner.SimulateEnter()
 	mockSvc.AssertExpectations(t)
 }

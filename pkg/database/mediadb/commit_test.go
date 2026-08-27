@@ -20,42 +20,34 @@
 package mediadb
 
 import (
-	"database/sql"
-	"errors"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 )
 
+// TestShouldCheckpointAfterCommit covers the three modes the function actually
+// branches on. Indexing status and its lookup error used to select the auto
+// behaviour; checkpointLargeWAL's size-driven checkpoint replaced that, so auto
+// no longer takes them and only Force asks for a checkpoint of its own.
 func TestShouldCheckpointAfterCommit(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		err    error
-		name   string
-		status string
-		mode   database.WALCheckpointMode
-		want   bool
+		name string
+		mode database.WALCheckpointMode
+		want bool
 	}{
-		{name: "auto running", mode: database.WALCheckpointAuto, status: IndexingStatusRunning, want: false},
-		{name: "auto pending", mode: database.WALCheckpointAuto, status: IndexingStatusPending, want: false},
-		{name: "auto completed", mode: database.WALCheckpointAuto, status: IndexingStatusCompleted, want: false},
-		{name: "auto failed", mode: database.WALCheckpointAuto, status: IndexingStatusFailed, want: false},
-		{
-			name: "auto status error", mode: database.WALCheckpointAuto,
-			status: "", err: errors.New("status failed"), want: false,
-		},
-		{name: "auto no rows", mode: database.WALCheckpointAuto, status: "", err: sql.ErrNoRows, want: false},
-		{name: "skip running", mode: database.WALCheckpointSkip, status: IndexingStatusRunning, want: false},
-		{name: "force completed", mode: database.WALCheckpointForce, status: IndexingStatusCompleted, want: true},
+		{name: "auto defers to checkpointLargeWAL", mode: database.WALCheckpointAuto, want: false},
+		{name: "skip never checkpoints", mode: database.WALCheckpointSkip, want: false},
+		{name: "force always checkpoints", mode: database.WALCheckpointForce, want: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tt.want, shouldCheckpointAfterCommit(tt.mode, tt.status, tt.err))
+			assert.Equal(t, tt.want, shouldCheckpointAfterCommit(tt.mode))
 		})
 	}
 }

@@ -20,12 +20,25 @@
 package api
 
 import (
+	"os"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"go.uber.org/goleak"
 )
 
+// testLogRedirector is installed as the global logger's writer for the whole
+// test binary, so tests capture output by pointing it somewhere rather than by
+// assigning log.Logger. See logRedirector for why that assignment was a race.
+var testLogRedirector = &logRedirector{fallback: os.Stderr, level: zerolog.TraceLevel}
+
 func TestMain(m *testing.M) {
+	// Install once, before any test runs, and leave it alone from here on.
+	// Everything reaches the writer; captureLogs applies the per-test level.
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	log.Logger = zerolog.New(testLogRedirector).With().Timestamp().Logger()
+
 	goleak.VerifyTestMain(m,
 		// melody's hub goroutine is managed by the library and Close() is async
 		goleak.IgnoreTopFunction("github.com/olahol/melody.(*hub).run"),

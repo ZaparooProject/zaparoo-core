@@ -67,6 +67,29 @@ var mediaDBRecoveryAttempts atomic.Int32
 
 var mediaDBRecoveryLimitReported atomic.Bool
 
+const (
+	mediaWriteRetryIndexing uint32 = 1 << iota
+	mediaWriteRetryScraping
+	mediaWriteRetryOptimization
+	mediaWriteRetryMaintenance
+	mediaWriteRetryBrowseCacheHeal
+)
+
+var pendingMediaWriteRetries atomic.Uint32
+
+func deferMediaWriteRetry(operations uint32) {
+	for {
+		pending := pendingMediaWriteRetries.Load()
+		if pendingMediaWriteRetries.CompareAndSwap(pending, pending|operations) {
+			return
+		}
+	}
+}
+
+func claimMediaWriteRetries() uint32 {
+	return pendingMediaWriteRetries.Swap(0)
+}
+
 func claimMediaDBRecoveryAttempt() (int32, bool) {
 	for {
 		attempts := mediaDBRecoveryAttempts.Load()
@@ -165,6 +188,10 @@ func checkAndResumeIndexing(
 	if indexingStatus == mediadb.IndexingStatusFailed {
 		log.Warn().Msg("media indexing failed with an empty database; retrying automatically")
 	}
+	if activeMediaWriteOperation(db.MediaDB) != database.MediaWriteOperationNone {
+		deferMediaWriteRetry(mediaWriteRetryIndexing)
+		return false
+	}
 
 	// Bound only stalled resumes. A full reindex on a large library can span many
 	// user power cycles; those should resume indefinitely as long as completed
@@ -232,6 +259,9 @@ func checkAndResumeIndexing(
 	// GenerateMediaDB spawns its own goroutine and returns immediately
 	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db, pauser)
 	if err != nil {
+		if errors.Is(err, database.ErrMediaWriteConflict) {
+			deferMediaWriteRetry(mediaWriteRetryIndexing)
+		}
 		// An expected operational state (e.g. indexing/scraping already running)
 		// means auto-resume isn't needed — not a failure worth reporting.
 		var clientErr *models.ClientError
@@ -253,6 +283,7 @@ type mediaDBGenerateFunc func(
 	[]systemdefs.System,
 	*database.Database,
 	*syncutil.Pauser,
+	*database.MediaWriteLease,
 ) error
 
 // checkAndRecoverCorruptMediaDB rebuilds the media database from scratch when corruption
@@ -267,7 +298,7 @@ func checkAndRecoverCorruptMediaDB(
 	st *state.State,
 	pauser *syncutil.Pauser,
 ) {
-	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDB)
+	checkAndRecoverCorruptMediaDBWithGenerator(pl, cfg, db, st, pauser, methods.GenerateMediaDBWithLease)
 }
 
 func checkAndRecoverCorruptMediaDBWithGenerator(
@@ -308,6 +339,28 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 		return
 	}
 
+	coordinator, err := database.GetMediaDBWriteCoordinator(db.MediaDB)
+	if err != nil {
+		log.Error().Err(err).Msg("media database recovery cannot get write coordinator")
+		return
+	}
+	lease, err := coordinator.AcquireMediaWrite(database.MediaWriteOperationRecovery)
+	if err != nil {
+		log.Warn().Err(err).Msg("media database flagged corrupt but write operation owns database; deferring recovery")
+		return
+	}
+	leaseTransferred := false
+	defer func() {
+		if !leaseTransferred {
+			lease.Release()
+		}
+	}()
+
+	if st != nil {
+		st.SetMediaDBRecoveryActive(true)
+		defer st.SetMediaDBRecoveryActive(false)
+	}
+
 	// Close the race between the active-work check and Recreate: once this gate is
 	// held, new tracked work waits until the replacement database is ready. Release
 	// it before starting the reindex: GenerateMediaDB registers that work through
@@ -329,15 +382,18 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 				"Safely shut down, check free space, and replace or reimage the storage device before trying again.",
 				inboxservice.CategoryMediaDBCorruptionRecoveryLimit)
 		}
+		finishMediaDBRecoveryNotification(st, db.MediaDB)
 		return
 	}
 
 	log.Error().Int32("recovery_attempt", attempt).Strs("integrity", db.MediaDB.IntegrityReport()).
 		Msg("media database is corrupt; rebuilding from scratch")
 	if st != nil {
+		display := "Recovering media database"
 		notifications.MediaIndexing(st.Notifications, models.IndexingStatusResponse{
-			Exists:   false,
-			Indexing: true,
+			Exists:             false,
+			Indexing:           true,
+			CurrentStepDisplay: &display,
 		})
 	}
 
@@ -378,8 +434,13 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 			Msg("media database recreated but service state is unavailable for reindex")
 		return
 	}
+	if handoffErr := lease.Handoff(database.MediaWriteOperationIndexing); handoffErr != nil {
+		log.Error().Err(handoffErr).Msg("failed to hand off media database recovery to reindex")
+		finishMediaDBRecoveryNotification(st, db.MediaDB)
+		return
+	}
 	if err := generate(st.GetContext(), pl, cfg, st.Notifications,
-		systemdefs.AllSystems(), db, pauser); err != nil {
+		systemdefs.AllSystems(), db, pauser, lease); err != nil {
 		var clientErr *models.ClientError
 		if errors.As(err, &clientErr) {
 			log.Warn().Err(err).Int32("recovery_attempt", attempt).Str("recovery_outcome", "reindex_skipped").
@@ -392,7 +453,9 @@ func checkAndRecoverCorruptMediaDBWithGenerator(
 			"Restart Zaparoo after checking available storage space.",
 			inboxservice.CategoryMediaDBCorruptionRecoveryFailure)
 		finishMediaDBRecoveryNotification(st, db.MediaDB)
+		return
 	}
+	leaseTransferred = true
 }
 
 func finishMediaDBRecoveryNotification(st *state.State, mediaDB database.MediaDBI) {
@@ -426,7 +489,18 @@ func addMediaDBRecoveryFailureInbox(st *state.State, body, category string) {
 	}
 }
 
+func activeMediaWriteOperation(mediaDB database.MediaDBI) database.MediaWriteOperation {
+	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return database.MediaWriteOperationNone
+	}
+	return coordinator.ActiveMediaWriteOperation()
+}
+
 func mediaDBCorruptionRecoveryBlocked(mediaDB database.MediaDBI) bool {
+	if activeMediaWriteOperation(mediaDB) != database.MediaWriteOperationNone {
+		return true
+	}
 	if !mediaDB.HasBackgroundOperations() {
 		return false
 	}
@@ -451,10 +525,11 @@ func watchForCorruptMediaDBRecovery(
 	cfg *config.Instance,
 	db *database.Database,
 	st *state.State,
-	pauser *syncutil.Pauser,
+	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 ) {
 	watchForCorruptMediaDBRecoveryAtInterval(
-		ctx, b, pl, cfg, db, st, pauser, mediaDBRecoveryPollInterval,
+		ctx, b, pl, cfg, db, st, indexPauser, scrapePauser, mediaDBRecoveryPollInterval,
 	)
 }
 
@@ -465,7 +540,8 @@ func watchForCorruptMediaDBRecoveryAtInterval(
 	cfg *config.Instance,
 	db *database.Database,
 	st *state.State,
-	pauser *syncutil.Pauser,
+	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 	pollInterval time.Duration,
 ) {
 	notifChan, subID := b.Subscribe(32, models.NotificationMediaIndexing)
@@ -481,10 +557,67 @@ func watchForCorruptMediaDBRecoveryAtInterval(
 			if !ok {
 				return
 			}
-			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			retryDurableMediaWriteOperations(ctx, pl, cfg, db, st, indexPauser, scrapePauser)
 		case <-ticker.C:
-			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, pauser)
+			checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			retryDurableMediaWriteOperations(ctx, pl, cfg, db, st, indexPauser, scrapePauser)
 		}
+	}
+}
+
+// retryDurableMediaWriteOperations retries persisted work explicitly deferred by
+// a process-local lease conflict. Persisted statuses remain restart state, never locks.
+func retryDurableMediaWriteOperations(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
+) {
+	if db == nil || db.MediaDB == nil {
+		return
+	}
+
+	if ctx.Err() != nil || pl == nil || st == nil ||
+		activeMediaWriteOperation(db.MediaDB) != database.MediaWriteOperationNone {
+		return
+	}
+	pending := claimMediaWriteRetries()
+	if pending&mediaWriteRetryIndexing != 0 {
+		if checkAndResumeIndexing(pl, cfg, db, st, indexPauser) {
+			deferMediaWriteRetry(pending &^ mediaWriteRetryIndexing)
+			return
+		}
+	}
+	if pending&mediaWriteRetryScraping != 0 {
+		checkAndResumeScraping(pl, cfg, db, st, scrapePauser)
+		if activeMediaWriteOperation(db.MediaDB) != database.MediaWriteOperationNone {
+			deferMediaWriteRetry(pending &^ (mediaWriteRetryIndexing | mediaWriteRetryScraping))
+			return
+		}
+	}
+	if pending&mediaWriteRetryOptimization != 0 {
+		db.MediaDB.TrackBackgroundOperation()
+		go func() {
+			corrupt := checkAndResumeOptimization(db, st.Notifications, indexPauser)
+			db.MediaDB.BackgroundOperationDone()
+			if corrupt {
+				checkAndRecoverCorruptMediaDB(pl, cfg, db, st, indexPauser)
+			}
+		}()
+	}
+	if pending&mediaWriteRetryMaintenance != 0 {
+		db.MediaDB.TrackBackgroundOperation()
+		go func() {
+			defer db.MediaDB.BackgroundOperationDone()
+			runMediaDBStartupMaintenanceWork(ctx, db.MediaDB, indexPauser, true)
+		}()
+	}
+	if pending&mediaWriteRetryBrowseCacheHeal != 0 {
+		checkAndHealBrowseCache(ctx, db, st.Notifications, indexPauser)
 	}
 }
 
@@ -561,6 +694,24 @@ func checkAndHealBrowseCache(
 			log.Debug().Msg("skipping browse cache self-heal; optimization started while paused")
 			return
 		}
+		coordinator, coordinatorErr := database.GetMediaDBWriteCoordinator(db.MediaDB)
+		if coordinatorErr != nil {
+			log.Error().Err(coordinatorErr).Msg("browse cache self-heal cannot get media database write coordinator")
+			return
+		}
+		lease, acquireErr := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+		if acquireErr != nil {
+			if errors.Is(acquireErr, database.ErrMediaWriteConflict) {
+				deferMediaWriteRetry(mediaWriteRetryBrowseCacheHeal)
+				log.Debug().Err(acquireErr).
+					Msg("deferring browse cache self-heal; media database write operation active")
+				return
+			}
+			log.Error().Err(acquireErr).Msg("failed to acquire browse cache self-heal lease")
+			return
+		}
+		defer lease.Release()
+
 		// Surface the rebuild as an optimizing operation so the client can show a
 		// "preparing library" indicator instead of the user staring at slow or
 		// empty browse results. The push updates clients already connected; the
@@ -613,6 +764,10 @@ func checkAndResumeScraping(
 		log.Debug().Msgf("scraping status is '%s', no auto-resume needed", status)
 		return
 	}
+	if activeMediaWriteOperation(db.MediaDB) != database.MediaWriteOperationNone {
+		deferMediaWriteRetry(mediaWriteRetryScraping)
+		return
+	}
 
 	operation, found, err := db.MediaDB.GetScrapingOperation()
 	if err != nil {
@@ -651,6 +806,12 @@ func checkAndResumeScraping(
 	}
 	err = methods.ResumeMediaScrape(&env, operation)
 	if err != nil {
+		if errors.Is(err, database.ErrMediaWriteConflict) {
+			deferMediaWriteRetry(mediaWriteRetryScraping)
+			log.Info().Err(err).Str("scraper", operation.ScraperID).
+				Msg("media scraping auto-resume deferred; media database write operation active")
+			return
+		}
 		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 			log.Warn().Err(setErr).Msg("failed to persist scraping auto-resume failure status")
 		}
@@ -676,6 +837,10 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 	if status == mediadb.IndexingStatusPending ||
 		status == mediadb.IndexingStatusRunning ||
 		status == mediadb.IndexingStatusFailed {
+		if activeMediaWriteOperation(db.MediaDB) != database.MediaWriteOperationNone {
+			deferMediaWriteRetry(mediaWriteRetryOptimization)
+			return false
+		}
 		// A failed optimization is often the symptom of a corrupt database — e.g. a
 		// PRAGMA optimize that hit a malformed page. Resuming would just fail again
 		// on every boot, so confirm integrity first and route confirmed corruption
@@ -694,14 +859,33 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 				return true
 			}
 		}
+		coordinator, coordinatorErr := database.GetMediaDBWriteCoordinator(db.MediaDB)
+		if coordinatorErr != nil {
+			log.Error().Err(coordinatorErr).Msg("optimization auto-resume cannot get write coordinator")
+			return false
+		}
+		lease, acquireErr := coordinator.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+		if acquireErr != nil {
+			if errors.Is(acquireErr, database.ErrMediaWriteConflict) {
+				deferMediaWriteRetry(mediaWriteRetryOptimization)
+				log.Info().Err(acquireErr).Msg("optimization auto-resume deferred; media database write active")
+				return false
+			}
+			log.Error().Err(acquireErr).Msg("failed to acquire optimization auto-resume lease")
+			return false
+		}
+
 		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
-		db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
+		runErr := coordinator.RunBackgroundOptimizationWithLease(func(optimizing bool) {
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,
 			})
-		}, pauser)
+		}, pauser, lease)
+		if runErr != nil {
+			log.Error().Err(runErr).Msg("optimization auto-resume failed")
+		}
 	} else {
 		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)
 	}

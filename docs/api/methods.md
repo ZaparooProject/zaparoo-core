@@ -716,6 +716,8 @@ Browse indexed media content by directory, similar to navigating a file manager.
 
 When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots. When `systems` is provided without `path`, returns populated launcher routes for those systems only. Pass the same `systems` filter when browsing a returned route to keep shared paths scoped to the selected systems.
 
+Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
+
 Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
 
 #### Parameters
@@ -727,6 +729,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
 | systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
 | fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
+| rootView   | string | No       | Pathless system-root presentation: `routes` (default) returns separate populated routes; `contents` returns one-level immediate contents and requires exactly one system. Ignored when `path` is non-empty. Repeat with cursor requests. |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
 | cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, tags, letter, and sort parameters. |
 | tags       | string[] | No     | Filter direct media files by tags. Syntax and AND/NOT/OR operators match `media.search`. Directories remain unfiltered. |
@@ -740,6 +743,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | path       | string                                | Yes      | The browsed directory path. Empty string when listing roots.             |
 | entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
 | totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `tags` and `letter` filters). |
+| totalDirs  | number                                | Yes      | Total count of immediate child directories in the current directory.     |
 | pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
 
 ##### Browse entry object
@@ -755,7 +759,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
-| relativePath | string   | No       | Relative path from root directory. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
 | hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
@@ -807,6 +811,64 @@ All parameters are optional. When called with no parameters, returns root entrie
 }
 ```
 
+#### Root contents example
+
+With SNES media under `/configured/SNES` and `/roms/SNES`, this view displays their immediate children together. If both roots contain the same basename, `/configured/SNES` wins because it appears first in platform root order.
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.browse",
+  "params": {
+    "systems": ["SNES"],
+    "rootView": "contents"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "path": "",
+    "entries": [
+      {
+        "name": "RPGs",
+        "path": "/configured/SNES/RPGs",
+        "type": "directory",
+        "fileCount": 42,
+        "systemIds": ["SNES"],
+        "hasCover": false
+      },
+      {
+        "mediaId": 42,
+        "name": "Super Mario World",
+        "path": "/roms/SNES/Super Mario World.sfc",
+        "type": "media",
+        "systemId": "SNES",
+        "zapScript": "@SNES/Super Mario World",
+        "relativePath": "SNES/Super Mario World.sfc",
+        "hasCover": true
+      }
+    ],
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 100
+    },
+    "totalDirs": 1,
+    "totalFiles": 1
+  }
+}
+```
+
+Selecting `RPGs` browses only `/configured/SNES/RPGs`; `rootView` does not merge lower levels.
+
 #### Browse path example
 
 ##### Request
@@ -847,7 +909,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "systemId": "SNES",
         "hasCover": true,
         "zapScript": "@SNES/Super Mario World",
-        "relativePath": "Super Mario World.sfc",
+        "relativePath": "SNES/Super Mario World.sfc",
         "tags": [
           {"tag": "1990", "type": "year"},
           {"tag": "2", "type": "players"}
@@ -861,7 +923,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "systemId": "SNES",
         "hasCover": false,
         "zapScript": "@SNES/The Legend of Zelda - A Link to the Past",
-        "relativePath": "The Legend of Zelda - A Link to the Past.sfc",
+        "relativePath": "SNES/The Legend of Zelda - A Link to the Past.sfc",
         "tags": [
           {"tag": "1991", "type": "year"},
           {"tag": "1", "type": "players"}
@@ -2456,7 +2518,7 @@ An object:
 
 List systems currently indexed or supported by an available launcher on the running platform. Virtual systems are also included.
 
-Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index.
+Set `all` to include every system represented by the running platform's launcher definitions, even when its runtime dependency is currently unavailable. This is useful when selecting a specific system for its first media index. On MiSTer, a launcher whose FPGA core isn't installed on the SD card counts as unavailable, so without `all` the system list reflects only systems you can currently launch. See [launchers](#launchers) to check which core a launcher needs.
 
 Responses include an exact non-missing `mediaCount` for each system when the media database count query succeeds. Supported systems with no indexed media have `mediaCount: 0`. The field is omitted if counts are unavailable, preserving compatibility with older clients and database-error fallback behavior.
 
@@ -4299,22 +4361,40 @@ List all launchers known to the running service. Suitable for populating a UI la
 
 #### Parameters
 
-None.
+| Key         | Type     | Required | Description                                                                                        |
+| :---------- | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| systems     | string[] | No       | Case-insensitive list of system IDs to restrict results to. A missing key or empty list returns every launcher. Values not matching any launcher's system return no launchers for that value, rather than an error, since launcher system IDs can be launchable or virtual systems outside the standard system list. |
+| fuzzySystem | boolean  | No       | Also resolve a system-ID alias to its canonical ID before matching (e.g., `"megadrive"` matches `"Genesis"`). Matching is always case-insensitive regardless of this flag.       |
+
+The unfiltered response can be large on platforms with many launchers (250+ on MiSTer). Pass `systems` to scope the request when looking up a specific system's launchers.
 
 #### Result
 
 | Key       | Type                                  | Required | Description                  |
 | :-------- | :------------------------------------ | :------- | :--------------------------- |
-| launchers | [Launcher](#launcher-object)[] | Yes      | All cached launchers, sorted by `systemId` then `id`. |
+| launchers | [Launcher](#launcher-object)[] | Yes      | Matching cached launchers, sorted by `systemId` then `id`. |
 
 ##### Launcher object
 
-| Key        | Type     | Required | Description                                                                                            |
-| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
-| id         | string   | Yes      | Unique launcher identifier.                                                                            |
-| systemId   | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
-| systemName | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
-| groups     | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+| Key                 | Type     | Required | Description                                                                                            |
+| :------------------ | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
+| id                  | string   | Yes      | Unique launcher identifier.                                                                            |
+| systemId            | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
+| systemName          | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
+| groups              | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+| available           | boolean  | Yes      | Whether this launcher's runtime dependencies are currently satisfied.                                  |
+| availabilityReason  | string   | No       | Why the launcher is unavailable. Omitted when `available` is `true`.                                   |
+| default             | boolean  | No       | Whether this launcher is the configured default for its system (`systemDefaults.launcher`, matched by launcher ID or by any of `groups`). Omitted (implicitly `false`) otherwise.                                    |
+| backend             | string   | No       | What kind of thing this launcher runs. Currently only `mister_core` is emitted. Omitted when the platform has nothing to say about this launcher. Clients must ignore backend values they don't recognize. |
+| misterCore          | [MisterCoreInfo](#mistercoreinfo-object) | No | Present when `backend` is `mister_core` and the core is installed. Absent when the core isn't installed; `available` and `availabilityReason` say why. |
+
+##### MisterCoreInfo object
+
+| Key     | Type   | Required | Description                                                                                     |
+| :------ | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| name    | string | Yes      | RBF short name, e.g. `"3DO"`.                                                                     |
+| file    | string | Yes      | Installed RBF filename, e.g. `"3DO_20250101.rbf"`. Identifies the installed core version.         |
+| mglPath | string | Yes      | SD-relative core identity used to launch it, e.g. `"_Console (Dual SDRAM)/3DO"`. Never an absolute filesystem path. |
 
 #### Example
 
@@ -4324,7 +4404,10 @@ None.
 {
   "jsonrpc": "2.0",
   "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
-  "method": "launchers"
+  "method": "launchers",
+  "params": {
+    "systems": ["3DO"]
+  }
 }
 ```
 
@@ -4337,16 +4420,25 @@ None.
   "result": {
     "launchers": [
       {
-        "id": "retroarch",
-        "systemId": "Genesis",
-        "systemName": "Genesis",
-        "groups": ["libretro"]
+        "id": "3DO",
+        "systemId": "3DO",
+        "systemName": "3DO",
+        "available": true,
+        "default": true,
+        "backend": "mister_core",
+        "misterCore": {
+          "name": "3DO",
+          "file": "3DO_20250101.rbf",
+          "mglPath": "_Console/3DO"
+        }
       },
       {
-        "id": "snes9x",
-        "systemId": "SNES",
-        "systemName": "Super Nintendo",
-        "groups": ["libretro"]
+        "id": "DualRAM3DO",
+        "systemId": "3DO",
+        "systemName": "3DO",
+        "available": false,
+        "availabilityReason": "core not installed: _Console (Dual SDRAM)/3DO",
+        "backend": "mister_core"
       }
     ]
   }

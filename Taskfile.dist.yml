@@ -163,6 +163,7 @@ tasks:
           "FuzzCheckMappingUID ./pkg/service"
           "FuzzCheckMappingText ./pkg/service"
           "FuzzCheckMappingData ./pkg/service"
+          "FuzzBuildStructuralCommand ./pkg/service/remote"
         )
         for target in "${targets[@]}"; do
           func="${target%% *}"

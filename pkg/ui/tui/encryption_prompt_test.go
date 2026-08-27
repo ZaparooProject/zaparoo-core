@@ -62,7 +62,7 @@ func TestShowEncryptionPrompt_Buttons_Integration(t *testing.T) {
 		)
 	})
 
-	require.True(t, runner.WaitForText("Secure Zaparoo?", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Secure Zaparoo?", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Secure Now"))
 	assert.True(t, runner.ContainsText("Not Now"))
 	assert.True(t, runner.ContainsText("Don't Ask Again"))
@@ -70,7 +70,7 @@ func TestShowEncryptionPrompt_Buttons_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, runner.WaitForSignal(secureCalled, 100*time.Millisecond),
+	assert.True(t, runner.WaitForSignal(secureCalled, uiSettleTimeout),
 		"Secure Now callback should be called")
 	select {
 	case <-dontAskCalled:
@@ -124,7 +124,7 @@ func TestMaybeShowEncryptionPrompt_ShowsWithNoClients(t *testing.T) {
 		maybeShowEncryptionPrompt(svc, pages, runner.App(), nil)
 	})
 
-	assert.True(t, runner.WaitForText("Secure Zaparoo?", 100*time.Millisecond))
+	assert.True(t, runner.WaitForText("Secure Zaparoo?", uiSettleTimeout))
 	svc.AssertExpectations(t)
 }
 
@@ -156,7 +156,7 @@ func TestEncryptionPairingModal_SuccessKeepsEncryption(t *testing.T) {
 	})
 
 	require.True(t, runner.WaitForText("Zaparoo secured.", time.Second))
-	assert.True(t, runner.WaitForSignal(markPrompted, 100*time.Millisecond),
+	assert.True(t, runner.WaitForSignal(markPrompted, uiSettleTimeout),
 		"markPrompted should be called on success")
 	// Encryption must not be reverted on success.
 	assert.Equal(t, 0, svc.UpdateSettingsCallCount())

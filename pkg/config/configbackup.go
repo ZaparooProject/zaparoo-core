@@ -27,7 +27,12 @@ import (
 )
 
 const (
-	DefaultBackupRemoteBaseURL  = "https://api.zaparoo.com"
+	// DefaultOnlineBaseURL is the official Zaparoo Online API host. Every
+	// per-feature base URL (backup, playtime, remote control) defaults to
+	// this same value; it exists as one shared constant so a check for
+	// "is this feature pointed at a custom server" has one place to live.
+	DefaultOnlineBaseURL        = "https://api.zaparoo.com"
+	DefaultBackupRemoteBaseURL  = DefaultOnlineBaseURL
 	DefaultBackupRemoteSchedule = "daily"
 )
 
@@ -214,6 +219,14 @@ func isAllowedHTTPRemoteAddr(addr netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+// IsDefaultOnlineBaseURL reports whether raw is empty or matches the
+// official Zaparoo Online host: the shared "is this a custom server"
+// check used by every configurable Online endpoint (backup, playtime,
+// remote control).
+func IsDefaultOnlineBaseURL(raw string) bool {
+	return raw == "" || strings.EqualFold(strings.TrimRight(raw, "/"), DefaultOnlineBaseURL)
 }
 
 func BackupAuthLookupURL(rawURL string) string {

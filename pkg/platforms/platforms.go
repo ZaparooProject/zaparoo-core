@@ -436,10 +436,10 @@ type Settings struct {
 	// the main TUI occupies the platform's primary display. Utility widgets do
 	// not apply this policy because their controls can trigger ZapScript.
 	DisableZapScriptInTUI bool
-	// LowPowerAudio indicates the platform has very limited CPU available for
-	// audio decoding, so streaming playback trades resampler quality for
-	// decode speed.
-	LowPowerAudio bool
+	// ResourceConstrained indicates the platform has limited CPU and I/O
+	// capacity. Core uses lower-cost audio processing and cooperatively paces
+	// expensive background media work on these platforms.
+	ResourceConstrained bool
 }
 
 // ScraperCustomOption is a single user-configurable option for a scraper.
@@ -475,6 +475,25 @@ type Scraper struct {
 // runtime launcher dependencies and can force their rediscovery.
 type LauncherRefreshProvider interface {
 	RefreshLauncherDependencies() error
+}
+
+// LauncherRuntimeProvider is optionally implemented by platforms that can
+// describe what a launcher actually runs — an FPGA core, a libretro core, an
+// executable. Implementations must be read-only and cheap: they are called
+// once per launcher per request and must not touch the filesystem or trigger
+// a rescan. A zero models.LauncherRuntime means the platform has nothing to
+// say about that launcher.
+type LauncherRuntimeProvider interface {
+	LauncherRuntime(cfg *config.Instance, l *Launcher) models.LauncherRuntime
+}
+
+// SystemLauncherSelector is optionally implemented by platforms where a
+// system can run under more than one launcher (e.g. a MiSTer alt core) and a
+// caller needs to pick which one, with no media loaded. Callers must verify
+// launcher.SystemID matches systemID before calling; implementations are not
+// required to check it themselves.
+type SystemLauncherSelector interface {
+	LaunchSystemLauncher(cfg *config.Instance, systemID string, launcher *Launcher) error
 }
 
 // TrackedProcessWaiter is optionally implemented by platforms that coordinate
@@ -523,7 +542,9 @@ type Platform interface {
 	ScanHook(*tokens.Token) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
-	// RootDirs returns a list of root folders to scan for media files.
+	// RootDirs returns root folders to scan for media files, ordered from
+	// highest to lowest priority. Consumers resolving duplicate relative names
+	// must prefer the first matching root.
 	RootDirs(*config.Instance) []string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.

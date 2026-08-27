@@ -30,6 +30,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/spf13/afero"
@@ -244,14 +245,17 @@ func TestApply_RejectsUnknownItem(t *testing.T) {
 	assert.Empty(t, d.ledger.entries)
 }
 
-func TestParseMountInfo(t *testing.T) {
+// TestToMountEntries pins the projection from the shared helpers parser onto
+// the local mountEntry type. The mountinfo format itself is covered in
+// pkg/helpers; what matters here is that the four fields mount ownership
+// decisions depend on survive the conversion intact.
+func TestToMountEntries(t *testing.T) {
 	t.Parallel()
 	data := `21 26 179:1 / /media/fat rw,noatime - exfat /dev/mmcblk0p1 rw,iocharset=utf8
 36 21 0:41 /saves /media/fat/saves rw,relatime shared:1 - cifs //10.0.0.3/MiSTer rw,username=x
 40 21 179:1 /System\040Volume\040Information /media/fat/svi rw - exfat /dev/mmcblk0p1 rw
-garbage line
 `
-	entries := parseMountInfo(data)
+	entries := toMountEntries(helpers.ParseMountInfo(data))
 	require.Len(t, entries, 3)
 	assert.Equal(t, mountEntry{
 		Root: "/", Mountpoint: "/media/fat", FSType: "exfat", Source: "/dev/mmcblk0p1",

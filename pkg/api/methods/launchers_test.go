@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -374,4 +375,162 @@ func TestHandleLaunchers_NilCacheReturnsEmpty(t *testing.T) {
 	resp, ok := result.(models.LaunchersResponse)
 	require.True(t, ok)
 	assert.Empty(t, resp.Launchers)
+}
+
+func newLaunchersTestEnv(t *testing.T, cache *corehelpers.LauncherCache) requests.RequestEnv {
+	t.Helper()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	return requests.RequestEnv{
+		Context:       context.Background(),
+		Config:        cfg,
+		LauncherCache: cache,
+	}
+}
+
+// TestHandleLaunchers_SystemsFilter verifies the systems param restricts
+// results to matching launchers, case-insensitively, and an unmatched filter
+// value returns an empty list rather than an error.
+func TestHandleLaunchers_SystemsFilter(t *testing.T) {
+	t.Parallel()
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes9x", SystemID: "SNES"},
+		{ID: "retroarch", SystemID: "Genesis"},
+	})
+	env := newLaunchersTestEnv(t, cache)
+
+	params, err := json.Marshal(models.LaunchersParams{Systems: &[]string{"snes"}})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err := HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.LaunchersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Launchers, 1)
+	assert.Equal(t, "snes9x", resp.Launchers[0].ID)
+
+	params, err = json.Marshal(models.LaunchersParams{Systems: &[]string{"NoSuchSystem"}})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err = HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.LaunchersResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Launchers)
+
+	// fuzzySystem resolves a known alias to its canonical system ID before
+	// matching; without it, the same alias value matches nothing.
+	fuzzy := true
+	params, err = json.Marshal(models.LaunchersParams{Systems: &[]string{"MegaDrive"}, FuzzySystem: &fuzzy})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err = HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.LaunchersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Launchers, 1)
+	assert.Equal(t, "retroarch", resp.Launchers[0].ID)
+
+	notFuzzy := false
+	params, err = json.Marshal(models.LaunchersParams{Systems: &[]string{"MegaDrive"}, FuzzySystem: &notFuzzy})
+	require.NoError(t, err)
+	env.Params = params
+
+	result, err = HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok = result.(models.LaunchersResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Launchers)
+}
+
+// TestHandleLaunchers_DefaultFlag verifies Default is set when a launcher
+// matches the configured system default, by ID or by group membership.
+func TestHandleLaunchers_DefaultFlag(t *testing.T) {
+	t.Parallel()
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes9x", SystemID: "SNES"},
+		{ID: "kodi-video", SystemID: "Video", Groups: []string{"Kodi", "KodiTV"}},
+		{ID: "other-video", SystemID: "Video"},
+	})
+	env := newLaunchersTestEnv(t, cache)
+	env.Config.SetSystemDefaults([]config.SystemsDefault{
+		{System: "SNES", Launcher: "snes9x"},
+		{System: "Video", Launcher: "KodiTV"},
+	})
+
+	result, err := HandleLaunchers(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.LaunchersResponse)
+	require.True(t, ok)
+
+	byID := make(map[string]models.Launcher, len(resp.Launchers))
+	for _, l := range resp.Launchers {
+		byID[l.ID] = l
+	}
+	assert.True(t, byID["snes9x"].Default, "direct ID match should be default")
+	assert.True(t, byID["kodi-video"].Default, "group match should be default")
+	assert.False(t, byID["other-video"].Default, "non-matching launcher should not be default")
+}
+
+type runtimeMockPlatform struct {
+	*mocks.MockPlatform
+	runtime models.LauncherRuntime
+}
+
+func (p *runtimeMockPlatform) LauncherRuntime(_ *config.Instance, _ *platforms.Launcher) models.LauncherRuntime {
+	return p.runtime
+}
+
+// TestHandleLaunchers_RuntimeDetail verifies a platform implementing
+// LauncherRuntimeProvider has its detail attached, and a platform that
+// doesn't implement it leaves Backend/MisterCore empty without panicking.
+func TestHandleLaunchers_RuntimeDetail(t *testing.T) {
+	t.Parallel()
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{{ID: "DualRAM3DO", SystemID: "3DO"}})
+
+	t.Run("with provider", func(t *testing.T) {
+		t.Parallel()
+		env := newLaunchersTestEnv(t, cache)
+		env.Platform = &runtimeMockPlatform{
+			MockPlatform: mocks.NewMockPlatform(),
+			runtime: models.LauncherRuntime{
+				Backend: models.LauncherBackendMisterCore,
+				MisterCore: &models.MisterCoreInfo{
+					Name: "3DO", File: "3DO_20250101.rbf", MGLPath: "_Console (Dual SDRAM)/3DO",
+				},
+			},
+		}
+
+		result, err := HandleLaunchers(env)
+		require.NoError(t, err)
+		resp, ok := result.(models.LaunchersResponse)
+		require.True(t, ok)
+		require.Len(t, resp.Launchers, 1)
+		assert.Equal(t, models.LauncherBackendMisterCore, resp.Launchers[0].Backend)
+		require.NotNil(t, resp.Launchers[0].MisterCore)
+		assert.Equal(t, "3DO", resp.Launchers[0].MisterCore.Name)
+	})
+
+	t.Run("without provider", func(t *testing.T) {
+		t.Parallel()
+		env := newLaunchersTestEnv(t, cache)
+		env.Platform = mocks.NewMockPlatform()
+
+		result, err := HandleLaunchers(env)
+		require.NoError(t, err)
+		resp, ok := result.(models.LaunchersResponse)
+		require.True(t, ok)
+		require.Len(t, resp.Launchers, 1)
+		assert.Empty(t, resp.Launchers[0].Backend)
+		assert.Nil(t, resp.Launchers[0].MisterCore)
+	})
 }

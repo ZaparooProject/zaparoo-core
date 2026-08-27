@@ -38,7 +38,7 @@ import (
 
 const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, ` +
 	`m\.SortName, m\.IsMissing ` +
-	`FROM Media m INDEXED BY media_system_path_idx.*` +
+	`FROM Media m INDEXED BY sqlite_autoindex_Media_1.*` +
 	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
 	`ORDER BY m\.Path`
 
@@ -921,7 +921,7 @@ func TestSqlPopulateSystemTagsCache_Success(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM SystemTagsCache").
 		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
 		WillReturnResult(sqlmock.NewResult(1, 6))
 	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
 		WillReturnResult(sqlmock.NewResult(1, 4))
@@ -958,7 +958,7 @@ func TestSqlPopulateSystemTagsCache_MediaInsertError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM SystemTagsCache").
 		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
@@ -977,7 +977,7 @@ func TestSqlPopulateSystemTagsCache_TitleInsertError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM SystemTagsCache").
 		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
 		WillReturnResult(sqlmock.NewResult(1, 6))
 	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
 		WillReturnError(sql.ErrConnDone)
@@ -998,7 +998,7 @@ func TestSqlPopulateSystemTagsCache_CommitError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM SystemTagsCache").
 		WillReturnResult(sqlmock.NewResult(0, 5))
-	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY sqlite_autoindex_Media_1.*`).
 		WillReturnResult(sqlmock.NewResult(1, 6))
 	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
 		WillReturnResult(sqlmock.NewResult(1, 4))

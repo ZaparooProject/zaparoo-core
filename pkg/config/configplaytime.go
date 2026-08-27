@@ -26,7 +26,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const DefaultPlaytimeBaseURL = "https://api.zaparoo.com"
+const DefaultPlaytimeBaseURL = DefaultOnlineBaseURL
 
 // Playtime configures play time tracking and limits.
 type Playtime struct {

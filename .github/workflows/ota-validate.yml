@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   validate:
-    # Stable releases and non-nightly pre-releases are the ones that can be promoted.
+    # Stable, beta, and release-candidate tags are promotable; nightly and alpha are not.
     if: ${{ !github.event.release.prerelease || !contains(github.event.release.tag_name, 'nightly') }}
     name: Check ${{ github.event.release.tag_name }} is promotable
     runs-on: ubuntu-latest
@@ -35,6 +35,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Validate OTA prerelease tag format
+        if: ${{ github.event.release.prerelease }}
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(beta|rc)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error title=Invalid OTA prerelease tag::Invalid tag '$TAG'. Use vX.Y.Z-beta.N or vX.Y.Z-rc.N. Alpha releases are not promotable to the beta OTA channel."
+            exit 1
+          fi
 
       - name: Download the release
         env:

@@ -1132,8 +1132,24 @@ func TestManagerNotifyScheduleStaleAddsInboxNotice(t *testing.T) {
 	}
 }
 
+func TestHeartbeatCapabilitiesWithdrawRemoteOperationsWithoutConsent(t *testing.T) {
+	cfg := &config.Instance{}
+	capabilities := heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL())
+	assert.Equal(t, 1, capabilities["backup"])
+	assert.NotContains(t, capabilities, "remote_operations")
+
+	cfg.SetRemoteControl(true)
+	assert.Contains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "remote_operations")
+
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://remote.example.com"))
+	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.BackupRemoteBaseURL()), "remote_operations")
+	assert.NotContains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "backup")
+	assert.Contains(t, heartbeatCapabilities(cfg, cfg.RemoteControlBaseURL()), "remote_operations")
+}
+
 func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 	env := newBackupTestEnv(t, platformids.Mister)
+	env.Manager.cfg.SetRemoteControl(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
@@ -1148,6 +1164,13 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 				return
 			}
 			assert.InDelta(t, 1, capabilities["backup"], 0)
+			remoteOperations, ok := capabilities["remote_operations"].(map[string]any)
+			if !assert.True(t, ok) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			assert.InDelta(t, 1, remoteOperations["version"], 0)
+			assert.Equal(t, true, remoteOperations["enabled"])
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/me":
 			writeJSON(t, w, remoteDeviceMeResponse{ID: "device-1", Name: "Living Room", BackupActive: true})
@@ -1156,6 +1179,7 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	require.NoError(t, env.Manager.cfg.SetRemoteControlBaseURL(server.URL))
 	configureRemoteTestAuth(t, env.Manager, server.URL)
 
 	require.NoError(t, env.Manager.SendHeartbeat(context.Background()))
@@ -1163,6 +1187,45 @@ func TestManagerSendHeartbeatRefreshesAvailability(t *testing.T) {
 	assert.Equal(t, RemoteAvailabilityAvailable, status.Remote.Availability)
 	require.NotNil(t, status.Remote.DeviceName)
 	assert.Equal(t, "Living Room", *status.Remote.DeviceName)
+}
+
+// TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRefresh
+// pins that SendCapabilityHeartbeat reports the full capability document
+// (unlike SendHeartbeat, it doesn't couple to backup entitlement/refresh) and
+// does not also refresh remote availability, so a caller that only wants
+// liveness/consent advertised does not pay for an extra /v1/device/me round
+// trip.
+func TestManagerSendCapabilityHeartbeatReportsCapabilitiesWithoutAvailabilityRefresh(t *testing.T) {
+	env := newBackupTestEnv(t, platformids.Mister)
+	env.Manager.cfg.SetRemoteControl(true)
+	var heartbeatCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat" {
+			heartbeatCalls++
+			var body map[string]any
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			capabilities, ok := body["capabilities"].(map[string]any)
+			if !assert.True(t, ok) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			assert.Contains(t, capabilities, "backup")
+			assert.Contains(t, capabilities, "remote_operations")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	require.NoError(t, env.Manager.cfg.SetRemoteControlBaseURL(server.URL))
+	configureRemoteTestAuth(t, env.Manager, server.URL)
+
+	require.NoError(t, env.Manager.SendCapabilityHeartbeat(context.Background()))
+	assert.Equal(t, 1, heartbeatCalls)
+	assert.Equal(t, RemoteAvailabilityUnknown, env.Manager.Status().Remote.Availability)
 }
 
 func TestManagerRestoreHoldsExclusiveGateThroughSuccess(t *testing.T) {

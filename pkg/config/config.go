@@ -366,6 +366,35 @@ func (c *Instance) applyTOML(data string) error {
 	if c.vals.Playtime.BaseURL == DefaultPlaytimeBaseURL {
 		c.vals.Playtime.BaseURL = ""
 	}
+	if c.vals.Service.RemoteControl.BaseURL == DefaultRemoteControlBaseURL {
+		c.vals.Service.RemoteControl.BaseURL = ""
+	}
+
+	// A base URL only ever reaches config.toml by hand-editing it, since none
+	// of the Set*BaseURL validators have a production caller, so validate
+	// here instead. A bad value falls back to the default rather than
+	// failing the whole config load.
+	if c.vals.Backup.Remote.BaseURL != "" {
+		if err := ValidateBackupRemoteBaseURL(c.vals.Backup.Remote.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Backup.Remote.BaseURL).
+				Msg("invalid backup remote base URL in config, falling back to default")
+			c.vals.Backup.Remote.BaseURL = ""
+		}
+	}
+	if c.vals.Playtime.BaseURL != "" {
+		if err := ValidatePlaytimeBaseURL(c.vals.Playtime.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Playtime.BaseURL).
+				Msg("invalid playtime base URL in config, falling back to default")
+			c.vals.Playtime.BaseURL = ""
+		}
+	}
+	if c.vals.Service.RemoteControl.BaseURL != "" {
+		if err := ValidateRemoteControlBaseURL(c.vals.Service.RemoteControl.BaseURL); err != nil {
+			log.Warn().Err(err).Str("value", c.vals.Service.RemoteControl.BaseURL).
+				Msg("invalid remote control base URL in config, falling back to default")
+			c.vals.Service.RemoteControl.BaseURL = ""
+		}
+	}
 
 	c.vals.Launchers.Custom = validateCustomLaunchers(
 		c.vals.Launchers.Custom,
@@ -390,7 +419,7 @@ func (c *Instance) applyTOML(data string) error {
 
 		re, err := regexp.Compile(anchorPattern(allowFile))
 		if err != nil {
-			log.Warn().Msgf("invalid allow file regex: %s", allowFile)
+			log.Warn().Err(err).Msgf("invalid allow file regex: %s", allowFile)
 			continue
 		}
 		c.vals.Launchers.allowFileRe[i] = re
@@ -401,7 +430,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowExecute := range c.vals.ZapScript.AllowExecute {
 		re, err := regexp.Compile(anchorPattern(allowExecute))
 		if err != nil {
-			log.Warn().Msgf("invalid allow execute regex: %s", allowExecute)
+			log.Warn().Err(err).Msgf("invalid allow execute regex: %s", allowExecute)
 			continue
 		}
 		c.vals.ZapScript.allowExecuteRe[i] = re
@@ -412,7 +441,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowHTTP := range c.vals.ZapScript.AllowHTTP {
 		re, err := regexp.Compile(anchorPattern(allowHTTP))
 		if err != nil {
-			log.Warn().Msgf("invalid allow HTTP regex: %s", allowHTTP)
+			log.Warn().Err(err).Msgf("invalid allow HTTP regex: %s", allowHTTP)
 			continue
 		}
 		c.vals.ZapScript.allowHTTPRe[i] = re
@@ -423,7 +452,7 @@ func (c *Instance) applyTOML(data string) error {
 	for i, allowRun := range c.vals.Service.AllowRun {
 		re, err := regexp.Compile(anchorPattern(allowRun))
 		if err != nil {
-			log.Warn().Msgf("invalid allow run regex: %s", allowRun)
+			log.Warn().Err(err).Msgf("invalid allow run regex: %s", allowRun)
 			continue
 		}
 		c.vals.Service.allowRunRe[i] = re

@@ -182,6 +182,7 @@ const (
 	MethodInputGamepad                = "input.gamepad"
 	MethodScreenshot                  = "screenshot"
 	MethodMediaTitleParse             = "media.title.parse"
+	MethodRemoteActivity              = "remote.activity"
 )
 
 // MethodHasUnboundedRuntime reports whether a method may run without a fixed

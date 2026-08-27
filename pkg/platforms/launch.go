@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
@@ -223,21 +224,21 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		return nil
 	}
 
-	// Try to look up SystemID from MediaDB if launcher doesn't have one
+	// Look up the indexed display name from MediaDB. SearchMediaPathExact
+	// requires at least one system to search - a launcher without a
+	// SystemID has nothing to scope the search to, so displayName stays the
+	// filename-parsed fallback in that case, same as before.
 	systemID := params.Launcher.SystemID
 	displayName := tags.ParseTitleFromFilename(getDisplayName(params.Path), false)
 
-	if params.DB != nil && params.DB.MediaDB != nil {
+	if systemID != "" && params.DB != nil && params.DB.MediaDB != nil {
 		ctx, cancel := activeMediaLookupContext(params.Context)
-		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(ctx, nil, params.Path)
+		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(
+			ctx, []systemdefs.System{{ID: systemID}}, params.Path,
+		)
 		cancel()
-		if searchErr == nil && len(results) > 0 {
-			if systemID == "" && results[0].SystemID != "" {
-				systemID = results[0].SystemID
-			}
-			if results[0].Name != "" {
-				displayName = results[0].Name
-			}
+		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
+			displayName = results[0].Name
 		}
 	}
 

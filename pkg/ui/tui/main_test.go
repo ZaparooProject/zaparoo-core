@@ -23,7 +23,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -54,7 +53,7 @@ func TestBuildMainPage_ShowsAppFooter(t *testing.T) {
 	const expectedFooterText = "Connect with the Zaparoo App (iOS/Android): https://zaparoo.app/"
 	require.True(t, runner.WaitForText(
 		expectedFooterText,
-		500*time.Millisecond,
+		uiSettleTimeout,
 	))
 
 	screenLines := strings.Split(runner.GetScreenText(), "\n")
@@ -389,14 +388,14 @@ func TestButtonGrid_HelpCallback_Integration(t *testing.T) {
 	// Should trigger help for first button on focus
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return containsHelpText("Help for button 1")
-	}, 100*time.Millisecond), "Should receive help for first button")
+	}, uiSettleTimeout), "Should receive help for first button")
 
 	// Navigate right
 	runner.SimulateArrowRight()
 
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return containsHelpText("Help for button 2")
-	}, 100*time.Millisecond), "Should receive help for second button")
+	}, uiSettleTimeout), "Should receive help for second button")
 }
 
 func TestButtonGrid_Navigation_Integration(t *testing.T) {
@@ -506,7 +505,7 @@ func TestButtonGrid_EscapeCallback_Integration(t *testing.T) {
 
 	runner.SimulateEscape()
 
-	assert.True(t, runner.WaitForSignal(escapeCalled, 100*time.Millisecond), "Escape callback should be called")
+	assert.True(t, runner.WaitForSignal(escapeCalled, uiSettleTimeout), "Escape callback should be called")
 }
 
 func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
@@ -535,7 +534,7 @@ func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
 
 	runner.SimulateEnter()
 
-	assert.True(t, runner.WaitForSignal(buttonPressed, 100*time.Millisecond), "Button should be activated on Enter")
+	assert.True(t, runner.WaitForSignal(buttonPressed, uiSettleTimeout), "Button should be activated on Enter")
 }
 
 func TestButtonGrid_DisabledButtonsSkipped_Integration(t *testing.T) {

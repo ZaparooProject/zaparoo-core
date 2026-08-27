@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	sortpkg "sort"
 	"strings"
 	"time"
 
@@ -46,6 +47,9 @@ import (
 const (
 	browsePhaseDirs  = "dirs"
 	browsePhaseFiles = "files"
+
+	browseRootViewRoutes   = "routes"
+	browseRootViewContents = "contents"
 )
 
 // browseCursorData is the JSON-serializable keyset cursor for browse pagination.
@@ -58,6 +62,7 @@ type browseCursorData struct {
 	SortMode   string `json:"sortMode,omitempty"`
 	Phase      string `json:"phase,omitempty"`
 	DirName    string `json:"dirName,omitempty"`
+	RootView   string `json:"rootView,omitempty"`
 	LastID     int64  `json:"lastId"`
 	TotalFiles int    `json:"totalFiles,omitempty"`
 	TotalDirs  int    `json:"totalDirs,omitempty"`
@@ -79,45 +84,70 @@ func encodeBrowseCursor(lastID int64, sortValue string, totalFiles ...int) (stri
 	return encodeCursorData(&data)
 }
 
-func encodeBrowseCursorWithMode(lastID int64, sortValue, sortMode string, totalFiles int) (string, error) {
+func encodeBrowseCursorWithMode(
+	lastID int64,
+	sortValue, sortMode string,
+	totalFiles int,
+	rootViews ...string,
+) (string, error) {
 	data := browseCursorData{LastID: lastID, SortValue: sortValue, SortMode: sortMode}
 	if totalFiles > 0 {
 		data.TotalFiles = totalFiles
+	}
+	if len(rootViews) > 0 {
+		data.RootView = rootViews[0]
 	}
 	return encodeCursorData(&data)
 }
 
 // encodeDirCursor builds a dirs-phase cursor positioned after dirName.
-func encodeDirCursor(dirName string, totalFiles, totalDirs int) (string, error) {
-	return encodeCursorData(&browseCursorData{
+func encodeDirCursor(dirName string, totalFiles, totalDirs int, rootViews ...string) (string, error) {
+	data := &browseCursorData{
 		Phase:      browsePhaseDirs,
 		DirName:    dirName,
 		TotalFiles: totalFiles,
 		TotalDirs:  totalDirs,
-	})
+	}
+	if len(rootViews) > 0 {
+		data.RootView = rootViews[0]
+	}
+	return encodeCursorData(data)
 }
 
 // encodeFileCursor builds a files-phase cursor from the last file's keyset.
-func encodeFileCursor(lastID int64, sortValue, sortMode string, totalFiles, totalDirs int) (string, error) {
-	return encodeCursorData(&browseCursorData{
+func encodeFileCursor(
+	lastID int64,
+	sortValue, sortMode string,
+	totalFiles, totalDirs int,
+	rootViews ...string,
+) (string, error) {
+	data := &browseCursorData{
 		Phase:      browsePhaseFiles,
 		SortValue:  sortValue,
 		SortMode:   sortMode,
 		LastID:     lastID,
 		TotalFiles: totalFiles,
 		TotalDirs:  totalDirs,
-	})
+	}
+	if len(rootViews) > 0 {
+		data.RootView = rootViews[0]
+	}
+	return encodeCursorData(data)
 }
 
 // encodeFilesStartCursor builds a files-phase cursor with no keyset (LastID 0),
 // marking the transition from the dirs phase so the next page starts files from
 // the beginning.
-func encodeFilesStartCursor(totalFiles, totalDirs int) (string, error) {
-	return encodeCursorData(&browseCursorData{
+func encodeFilesStartCursor(totalFiles, totalDirs int, rootViews ...string) (string, error) {
+	data := &browseCursorData{
 		Phase:      browsePhaseFiles,
 		TotalFiles: totalFiles,
 		TotalDirs:  totalDirs,
-	})
+	}
+	if len(rootViews) > 0 {
+		data.RootView = rootViews[0]
+	}
+	return encodeCursorData(data)
 }
 
 func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
@@ -147,6 +177,7 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 		SortMode:   data.SortMode,
 		Phase:      data.Phase,
 		DirName:    data.DirName,
+		RootView:   data.RootView,
 		TotalFiles: data.TotalFiles,
 		TotalDirs:  data.TotalDirs,
 	}, nil
@@ -241,8 +272,26 @@ func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		}
 	}
 
-	// No path → return root entries
+	// No path → return root entries or an opt-in one-level contents overlay.
 	if params.Path == nil || *params.Path == "" {
+		rootView := browseRootViewRoutes
+		if params.RootView != nil {
+			rootView = *params.RootView
+		}
+		if cursor != nil && cursor.RootView != "" && cursor.RootView != rootView {
+			return nil, models.ClientErrf("cursor does not match rootView %s", rootView)
+		}
+		if rootView == browseRootViewContents {
+			if len(systems) != 1 {
+				return nil, models.ClientErrf("rootView contents requires exactly one system")
+			}
+			if cursor != nil && cursor.RootView != browseRootViewContents {
+				return nil, models.ClientErrf("cursor does not match rootView contents")
+			}
+			return browseSystemRootContents(
+				&env, systems, cursor, maxResults, params.Letter, sort, tagFilters,
+			)
+		}
 		if len(systems) > 0 {
 			return browseSystemRoots(&env, systems)
 		}
@@ -250,6 +299,9 @@ func browseMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	}
 
 	path := *params.Path
+	if cursor != nil && cursor.RootView != "" {
+		return nil, models.ClientErrf("rootView contents cursor does not match path browse")
+	}
 
 	// Virtual path (contains ://)
 	if strings.Contains(path, "://") {
@@ -322,6 +374,17 @@ func browseRoots(env *requests.RequestEnv) (any, error) {
 }
 
 func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (any, error) {
+	entries, err := resolveSystemRootEntries(env, systems)
+	if err != nil {
+		return nil, err
+	}
+	return models.BrowseResults{Entries: entries}, nil
+}
+
+func resolveSystemRootEntries(
+	env *requests.RequestEnv,
+	systems []systemdefs.System,
+) ([]models.BrowseEntry, error) {
 	started := time.Now()
 	routes, err := buildSystemBrowseRouteCandidates(env, systems)
 	if err != nil {
@@ -387,7 +450,245 @@ func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (a
 
 	entries = dedupeSystemRootEntries(entries)
 
-	return models.BrowseResults{Entries: entries}, nil
+	return entries, nil
+}
+
+func systemRootContentsSources(
+	env *requests.RequestEnv,
+	entries []models.BrowseEntry,
+) ([]database.BrowseSource, []models.BrowseEntry) {
+	physical := make([]models.BrowseEntry, 0, len(entries))
+	virtual := make([]models.BrowseEntry, 0)
+	for i := range entries {
+		if strings.Contains(entries[i].Path, "://") {
+			virtual = append(virtual, entries[i])
+			continue
+		}
+		physical = append(physical, entries[i])
+	}
+
+	var rootDirs []string
+	if env.Platform != nil {
+		rootDirs = env.Platform.RootDirs(env.Config)
+	}
+	rootPriority := func(path string) int {
+		for i, root := range rootDirs {
+			if helpers.PathHasPrefix(path, root) {
+				return i
+			}
+		}
+		return len(rootDirs)
+	}
+	sortpkg.SliceStable(physical, func(i, j int) bool {
+		return rootPriority(physical[i].Path) < rootPriority(physical[j].Path)
+	})
+
+	sources := make([]database.BrowseSource, 0, len(physical))
+	for i := range physical {
+		includeDirs := true
+		for j := range physical {
+			if i != j && isStrictFilesystemDescendant(physical[j].Path, physical[i].Path) {
+				includeDirs = false
+				break
+			}
+		}
+		prefix := filepath.ToSlash(filepath.Clean(physical[i].Path))
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		sources = append(sources, database.BrowseSource{
+			PathPrefix:  prefix,
+			IncludeDirs: includeDirs,
+		})
+	}
+	return sources, virtual
+}
+
+func browseSystemRootContents(
+	env *requests.RequestEnv,
+	systems []systemdefs.System,
+	cursor *database.BrowseCursor,
+	maxResults int,
+	letter *string,
+	sortOrder string,
+	tags []zapscript.TagFilter,
+) (any, error) {
+	rootEntries, err := resolveSystemRootEntries(env, systems)
+	if err != nil {
+		return nil, err
+	}
+	sources, virtualEntries := systemRootContentsSources(env, rootEntries)
+	overlay := &database.BrowseOverlay{Sources: sources}
+	if cursor != nil {
+		virtualEntries = nil
+	}
+	if len(sources) == 0 {
+		return models.BrowseResults{Entries: virtualEntries}, nil
+	}
+
+	var totalDirs, totalFiles int
+	if cursor != nil {
+		totalDirs = cursor.TotalDirs
+		totalFiles = cursor.TotalFiles
+	}
+	inDirsPhase := letter == nil && (cursor == nil || cursor.Phase == browsePhaseDirs)
+	if inDirsPhase {
+		afterName := ""
+		if cursor != nil {
+			afterName = cursor.DirName
+		}
+		dirs, dirsErr := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
+			Overlay:   overlay,
+			AfterName: afterName,
+			Systems:   systems,
+			Limit:     maxResults + 1,
+		})
+		if dirsErr != nil {
+			return nil, fmt.Errorf("error browsing system root contents directories: %w", dirsErr)
+		}
+		if cursor == nil {
+			totalDirs, err = env.Database.MediaDB.BrowseDirCount(env.Context, database.BrowseDirCountOptions{
+				Overlay: overlay,
+				Systems: systems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error counting system root contents directories: %w", err)
+			}
+			totalFiles, err = browseRootContentsFileCount(env, sources, letter, systems, tags)
+			if err != nil {
+				return nil, err
+			}
+		}
+		hasMoreDirs := len(dirs) > maxResults
+		if hasMoreDirs {
+			dirs = dirs[:maxResults]
+			next, encErr := encodeDirCursor(
+				dirs[len(dirs)-1].Name, totalFiles, totalDirs, browseRootViewContents,
+			)
+			if encErr != nil {
+				return nil, fmt.Errorf("failed to encode root contents cursor: %w", encErr)
+			}
+			return buildRootContentsResponse(
+				env, dirs, nil, virtualEntries, maxResults, totalFiles, totalDirs, &next, true, systems, tags,
+			)
+		}
+
+		remaining := maxResults - len(dirs)
+		if remaining <= 0 {
+			var next *string
+			hasNext := totalFiles > 0
+			if hasNext {
+				encoded, encErr := encodeFilesStartCursor(totalFiles, totalDirs, browseRootViewContents)
+				if encErr != nil {
+					return nil, fmt.Errorf("failed to encode root contents cursor: %w", encErr)
+				}
+				next = &encoded
+			}
+			return buildRootContentsResponse(
+				env, dirs, nil, virtualEntries, maxResults, totalFiles, totalDirs, next, hasNext, systems, tags,
+			)
+		}
+		files, filesErr := env.Database.MediaDB.BrowseFiles(env.Context, &database.BrowseFilesOptions{
+			Overlay: overlay,
+			Limit:   remaining + 1,
+			Sort:    sortOrder,
+			Systems: systems,
+			Tags:    tags,
+		})
+		if filesErr != nil {
+			return nil, fmt.Errorf("error browsing system root contents files: %w", filesErr)
+		}
+		files, next, pageErr := paginateFiles(
+			files, remaining, totalFiles, totalDirs, sortOrder, browseRootViewContents,
+		)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		return buildRootContentsResponse(
+			env, dirs, files, virtualEntries, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags,
+		)
+	}
+
+	fileCursor := cursor
+	if cursor != nil && cursor.Phase == browsePhaseFiles && cursor.LastID == 0 {
+		fileCursor = nil
+	}
+	files, filesErr := env.Database.MediaDB.BrowseFiles(env.Context, &database.BrowseFilesOptions{
+		Overlay: overlay,
+		Cursor:  fileCursor,
+		Limit:   maxResults + 1,
+		Letter:  letter,
+		Sort:    sortOrder,
+		Systems: systems,
+		Tags:    tags,
+	})
+	if filesErr != nil {
+		return nil, fmt.Errorf("error browsing system root contents files: %w", filesErr)
+	}
+	if totalFiles == 0 && (len(files) > 0 || cursor != nil) {
+		totalFiles, err = browseRootContentsFileCount(env, sources, letter, systems, tags)
+		if err != nil {
+			return nil, err
+		}
+	}
+	files, next, pageErr := paginateFiles(
+		files, maxResults, totalFiles, totalDirs, sortOrder, browseRootViewContents,
+	)
+	if pageErr != nil {
+		return nil, pageErr
+	}
+	return buildRootContentsResponse(
+		env, nil, files, virtualEntries, maxResults, totalFiles, totalDirs, next, next != nil, systems, tags,
+	)
+}
+
+func browseRootContentsFileCount(
+	env *requests.RequestEnv,
+	sources []database.BrowseSource,
+	letter *string,
+	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
+) (int, error) {
+	count, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
+		Overlay: &database.BrowseOverlay{Sources: sources},
+		Letter:  letter,
+		Systems: systems,
+		Tags:    tags,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("error counting system root contents files: %w", err)
+	}
+	return count, nil
+}
+
+func buildRootContentsResponse(
+	env *requests.RequestEnv,
+	dirs []database.BrowseDirectoryResult,
+	files []database.SearchResultWithCursor,
+	virtualEntries []models.BrowseEntry,
+	maxResults, totalFiles, totalDirs int,
+	nextCursor *string,
+	hasNextPage bool,
+	systems []systemdefs.System,
+	tags []zapscript.TagFilter,
+) (any, error) {
+	result, err := buildBrowseResponse(
+		env, "", dirs, files, maxResults, totalFiles, totalDirs, nextCursor, hasNextPage, systems, tags,
+	)
+	if err != nil {
+		return nil, err
+	}
+	browseResult, ok := result.(models.BrowseResults)
+	if !ok {
+		return nil, fmt.Errorf("unexpected root contents response type %T", result)
+	}
+	if len(virtualEntries) > 0 {
+		entries := make([]models.BrowseEntry, 0, len(virtualEntries)+len(browseResult.Entries))
+		entries = append(entries, virtualEntries...)
+		entries = append(entries, browseResult.Entries...)
+		browseResult.Entries = entries
+	}
+	return browseResult, nil
 }
 
 func dedupeSystemRootEntries(entries []models.BrowseEntry) []models.BrowseEntry {
@@ -834,6 +1135,7 @@ func paginateFiles(
 	limit int,
 	totalFiles, totalDirs int,
 	sort string,
+	rootViews ...string,
 ) (page []database.SearchResultWithCursor, next *string, err error) {
 	if len(files) <= limit {
 		return files, nil, nil
@@ -849,7 +1151,9 @@ func paginateFiles(
 			sortValue = last.Name
 		}
 	}
-	encoded, encErr := encodeFileCursor(last.MediaID, sortValue, last.SortMode, totalFiles, totalDirs)
+	encoded, encErr := encodeFileCursor(
+		last.MediaID, sortValue, last.SortMode, totalFiles, totalDirs, rootViews...,
+	)
 	if encErr != nil {
 		return nil, nil, fmt.Errorf("failed to encode cursor: %w", encErr)
 	}
@@ -931,11 +1235,6 @@ func buildBrowseResponse(
 		tags = tagSets[0]
 	}
 
-	var rootDirs []string
-	if env.LauncherCache != nil && env.Platform != nil {
-		rootDirs = env.Platform.RootDirs(env.Config)
-	}
-
 	var singletonAliases map[string]database.SingletonContainerAlias
 	if len(tags) == 0 {
 		singletonAliases = resolveDirSingletonAliases(env, path, dirs, systems)
@@ -943,7 +1242,10 @@ func buildBrowseResponse(
 
 	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
 	for _, dir := range dirs {
-		dirPath := filepath.ToSlash(filepath.Join(path, dir.Name))
+		dirPath := dir.Path
+		if dirPath == "" {
+			dirPath = filepath.ToSlash(filepath.Join(path, dir.Name))
+		}
 		entry := models.BrowseEntry{
 			Name:      dir.Name,
 			Path:      dirPath,
@@ -951,7 +1253,7 @@ func buildBrowseResponse(
 			FileCount: &dir.FileCount,
 			SystemIDs: dir.SystemIDs,
 		}
-		if alias, ok := singletonAliases[dirPath+"/"]; ok {
+		if alias, ok := singletonAliases[strings.TrimSuffix(dirPath, "/")+"/"]; ok {
 			result := database.SearchResultWithCursor{
 				MediaID:       alias.Row.DBID,
 				SystemID:      alias.Row.System.SystemID,
@@ -961,7 +1263,7 @@ func buildBrowseResponse(
 				ZapScriptTags: alias.ZapScriptTags,
 				HasCover:      alias.HasCover,
 			}
-			mediaEntry := buildMediaEntry(&result, env, rootDirs)
+			mediaEntry := buildMediaEntry(&result, env)
 			entry.Name = mediaEntry.Name
 			entry.MediaID = mediaEntry.MediaID
 			entry.SystemID = mediaEntry.SystemID
@@ -975,7 +1277,7 @@ func buildBrowseResponse(
 	}
 
 	for i := range files {
-		entry := buildMediaEntry(&files[i], env, rootDirs)
+		entry := buildMediaEntry(&files[i], env)
 		entries = append(entries, entry)
 	}
 
@@ -1041,8 +1343,12 @@ func resolveDirSingletonAliases(
 		if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
 			continue
 		}
+		childDir := dir.Path
+		if childDir == "" {
+			childDir = filepath.ToSlash(filepath.Join(path, dir.Name))
+		}
 		candidates = append(candidates, database.SingletonAliasCandidate{
-			ChildDir:  filepath.ToSlash(filepath.Join(path, dir.Name)) + "/",
+			ChildDir:  strings.TrimSuffix(filepath.ToSlash(childDir), "/") + "/",
 			FileCount: dir.FileCount,
 		})
 	}
@@ -1101,7 +1407,6 @@ func browseMediaDisplayName(path, sortName, titleName string) string {
 func buildMediaEntry(
 	result *database.SearchResultWithCursor,
 	env *requests.RequestEnv,
-	rootDirs []string,
 ) models.BrowseEntry {
 	entry := models.BrowseEntry{
 		MediaID:            result.MediaID,
@@ -1116,10 +1421,7 @@ func buildMediaEntry(
 	zapScript := result.ZapScript()
 	entry.ZapScript = &zapScript
 
-	if env.LauncherCache != nil {
-		relPath := env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, result.Path)
-		entry.RelPath = &relPath
-	}
+	entry.RelPath = mediaResponseRelativePath(env, result.SystemID, result.Path)
 
 	return entry
 }

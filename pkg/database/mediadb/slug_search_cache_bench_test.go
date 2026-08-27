@@ -116,3 +116,98 @@ func BenchmarkSlugSearchCache_MidScanChurn_FullSweep(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkSlugSearchCache_SearchWithDeltaLayers isolates what delta layers
+// cost a search. Every per-system refresh appends one layer, and both
+// postingListSize and combinedPostingList walk all layers per trigram —
+// postingListSize from inside a sort comparator — so a 131-system run ends with
+// ~130 of them.
+//
+// Both sub-benchmarks run against the SAME merged cache contents; only the
+// index representation differs. Comparing a 130-layer cache against a 0-layer
+// one would instead compare two different corpora, because each merge appends a
+// system's entries on top of tombstoning the old ones.
+func BenchmarkSlugSearchCache_SearchWithDeltaLayers(b *testing.B) {
+	const systems = 130
+	const titlesPerSystem = 800
+
+	build := func() *SlugSearchCache {
+		base, systemNames := buildBenchSweepCache(systems, titlesPerSystem)
+		cache := base
+		for s := 1; s <= systems; s++ {
+			cache = cache.withoutSystems([]string{systemNames[int64(s)]})
+			cache = mergeSlugSearchCaches(cache, buildBenchFragment(
+				int64(s), systemNames[int64(s)], titlesPerSystem))
+		}
+		return cache
+	}
+
+	// A broad query returns huge posting lists that dwarf the per-layer walk; a
+	// selective one is what a user actually types, and is where layer overhead
+	// is the largest share of the work.
+	queries := map[string][][][]byte{
+		"broad":     {{[]byte("game-title-number")}, {[]byte("alt-name")}},
+		"selective": {{[]byte("number-77-421")}},
+	}
+
+	// After 130 merges the layer count is whatever compaction left behind, which
+	// is at most maxTrigramDeltaLayers — not one layer per system. This measures
+	// the BOUNDED worst case that ships. The unbounded case (130 layers: 42.5us
+	// selective vs 10.8us compacted) was measured before compaction was wired in
+	// and is what justified the bound; it is no longer reachable here.
+	layered := build()
+	if got := len(layered.trigramDeltas); got == 0 || got > maxTrigramDeltaLayers {
+		b.Fatalf("expected 1..%d delta layers after compaction, got %d", maxTrigramDeltaLayers, got)
+	}
+	b.Logf("layered cache carries %d delta layers (cap %d)", len(layered.trigramDeltas), maxTrigramDeltaLayers)
+	compacted := build()
+	compactTrigramDeltas(compacted)
+	if len(compacted.trigramDeltas) != 0 {
+		b.Fatal("compaction must clear delta layers")
+	}
+
+	for _, shape := range []string{"broad", "selective"} {
+		query := queries[shape]
+		for _, variant := range []struct {
+			cache *SlugSearchCache
+			name  string
+		}{{name: "layered", cache: layered}, {name: "compacted", cache: compacted}} {
+			b.Run(shape+"/"+variant.name, func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					variant.cache.Search(nil, query)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkSlugSearchCache_CompactTrigramDeltas measures one compaction, which
+// is a full CSR rebuild over the whole corpus. This is the cost side of the
+// threshold choice: a lower layer cap buys search latency by paying this more
+// often during an index.
+func BenchmarkSlugSearchCache_CompactTrigramDeltas(b *testing.B) {
+	for _, tier := range []struct{ systems, titlesPerSystem int }{
+		{systems: 130, titlesPerSystem: 800},
+		{systems: 130, titlesPerSystem: 1600},
+	} {
+		b.Run(fmt.Sprintf("entries-%d", tier.systems*tier.titlesPerSystem*2), func(b *testing.B) {
+			base, systemNames := buildBenchSweepCache(tier.systems, tier.titlesPerSystem)
+			cache := base
+			for s := 1; s <= tier.systems; s++ {
+				cache = cache.withoutSystems([]string{systemNames[int64(s)]})
+				cache = mergeSlugSearchCaches(cache, buildBenchFragment(
+					int64(s), systemNames[int64(s)], tier.titlesPerSystem))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				b.StopTimer()
+				clone := *cache
+				b.StartTimer()
+				compactTrigramDeltas(&clone)
+			}
+		})
+	}
+}

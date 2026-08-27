@@ -47,9 +47,11 @@ package helpers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -364,6 +366,17 @@ func (m *MockUserDBI) UpdateMediaHistoryIdentity(dbid int64, identity *database.
 	updated := args.Bool(0)
 	if err := args.Error(1); err != nil {
 		return updated, fmt.Errorf("mock UserDBI update media history identity failed: %w", err)
+	}
+	return updated, nil
+}
+
+func (m *MockUserDBI) UpdateMediaHistoryIdentityAndPath(
+	dbid int64, path string, identity *database.MediaIdentity,
+) (bool, error) {
+	args := m.Called(dbid, path, identity)
+	updated := args.Bool(0)
+	if err := args.Error(1); err != nil {
+		return updated, fmt.Errorf("mock UserDBI update media history identity and path failed: %w", err)
 	}
 	return updated, nil
 }
@@ -773,6 +786,77 @@ func (m *MockUserDBI) DeleteDeviceState(key string) error {
 	return nil
 }
 
+func (m *MockUserDBI) ClaimRemoteCommand(
+	command *database.RemoteCommand,
+) (*database.RemoteCommand, bool, error) {
+	args := m.Called(command)
+	stored, ok := args.Get(0).(*database.RemoteCommand)
+	if !ok && args.Get(0) != nil {
+		return nil, false, errors.New("mock UserDBI claim remote command returned invalid command")
+	}
+	if err := args.Error(2); err != nil {
+		return stored, args.Bool(1), fmt.Errorf("mock UserDBI claim remote command failed: %w", err)
+	}
+	return stored, args.Bool(1), nil
+}
+
+func (m *MockUserDBI) TransitionRemoteCommand(
+	commandID, fromState, toState string, executionExpiresAt *time.Time,
+) (bool, error) {
+	args := m.Called(commandID, fromState, toState, executionExpiresAt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserDBI) StoreRemoteCommandResult(
+	commandID, fromState, status string, result json.RawMessage, errorCode string,
+) (bool, error) {
+	args := m.Called(commandID, fromState, status, result, errorCode)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserDBI) MarkRemoteCommandResultReported(commandID string) error {
+	if err := m.Called(commandID).Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI mark remote command result reported failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) ListUnreportedRemoteCommands(limit int) ([]database.RemoteCommand, error) {
+	args := m.Called(limit)
+	commands, ok := args.Get(0).([]database.RemoteCommand)
+	if !ok && args.Get(0) != nil {
+		return nil, errors.New("mock UserDBI list unreported remote commands returned invalid list")
+	}
+	if err := args.Error(1); err != nil {
+		return commands, fmt.Errorf("mock UserDBI list unreported remote commands failed: %w", err)
+	}
+	return commands, nil
+}
+
+func (m *MockUserDBI) ListRecentRemoteCommands(limit int) ([]database.RemoteCommand, error) {
+	args := m.Called(limit)
+	commands, ok := args.Get(0).([]database.RemoteCommand)
+	if !ok && args.Get(0) != nil {
+		return nil, errors.New("mock UserDBI list recent remote commands returned invalid list")
+	}
+	if err := args.Error(1); err != nil {
+		return commands, fmt.Errorf("mock UserDBI list recent remote commands failed: %w", err)
+	}
+	return commands, nil
+}
+
+func (m *MockUserDBI) PruneRemoteCommands(before time.Time) (int64, error) {
+	args := m.Called(before)
+	removed, ok := args.Get(0).(int64)
+	if !ok {
+		return 0, errors.New("mock UserDBI prune remote commands returned invalid count")
+	}
+	if err := args.Error(1); err != nil {
+		return removed, fmt.Errorf("mock UserDBI prune remote commands failed: %w", err)
+	}
+	return removed, nil
+}
+
 func (m *MockUserDBI) Backup(reason string, manual bool) (database.BackupInfo, error) {
 	args := m.Called(reason, manual)
 	info, ok := args.Get(0).(database.BackupInfo)
@@ -912,6 +996,7 @@ func (m *MockUserDBI) RecoverFromCorruption() (database.RestoreInfo, error) {
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock
+	mediaWriteArbiter     atomic.Pointer[database.MediaWriteArbiter]
 	ScrapeImageSystems    []string
 	TransactionCount      int
 	OperationsOutsideTxn  int
@@ -947,6 +1032,12 @@ func (m *MockMediaDBI) Open() error {
 }
 
 func (m *MockMediaDBI) UnsafeGetSQLDb() *sql.DB {
+	// Unstubbed returns nil rather than panicking: callers are diagnostics that
+	// already handle a database with no open handle, and a test that does not
+	// care about them should not have to stub this.
+	if !m.hasExpectation("UnsafeGetSQLDb") {
+		return nil
+	}
 	args := m.Called()
 	if db, ok := args.Get(0).(*sql.DB); ok {
 		return db
@@ -1010,6 +1101,11 @@ func (m *MockMediaDBI) GetMediaByText(query string) (database.Media, error) {
 }
 
 func (m *MockMediaDBI) GetDBPath() string {
+	// Unstubbed returns "" rather than panicking, for the same reason as
+	// UnsafeGetSQLDb above.
+	if !m.hasExpectation("GetDBPath") {
+		return ""
+	}
 	args := m.Called()
 	return args.String(0)
 }
@@ -1847,6 +1943,31 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 // the media status query don't each need to stub it. Tests that care about a
 // full RunBackgroundOptimization pass set Optimizing directly; tests exercising
 // the browse-cache self-heal use BeginBrowseCacheRebuild/EndBrowseCacheRebuild.
+func (m *MockMediaDBI) getMediaWriteArbiter() *database.MediaWriteArbiter {
+	if arbiter := m.mediaWriteArbiter.Load(); arbiter != nil {
+		return arbiter
+	}
+	arbiter := &database.MediaWriteArbiter{}
+	if m.mediaWriteArbiter.CompareAndSwap(nil, arbiter) {
+		return arbiter
+	}
+	return m.mediaWriteArbiter.Load()
+}
+
+func (m *MockMediaDBI) AcquireMediaWrite(
+	operation database.MediaWriteOperation,
+) (*database.MediaWriteLease, error) {
+	lease, err := m.getMediaWriteArbiter().TryAcquire(operation)
+	if err != nil {
+		return nil, fmt.Errorf("mock acquire media database write operation: %w", err)
+	}
+	return lease, nil
+}
+
+func (m *MockMediaDBI) ActiveMediaWriteOperation() database.MediaWriteOperation {
+	return m.getMediaWriteArbiter().Active()
+}
+
 func (m *MockMediaDBI) IsOptimizing() bool {
 	return m.Optimizing || m.BrowseCacheRebuilding
 }
@@ -1859,8 +1980,33 @@ func (m *MockMediaDBI) EndBrowseCacheRebuild() {
 	m.BrowseCacheRebuilding = false
 }
 
-func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
+func (m *MockMediaDBI) RunBackgroundOptimization(
+	statusCallback func(optimizing bool), pauser *syncutil.Pauser,
+) {
+	lease, err := m.AcquireMediaWrite(database.MediaWriteOperationOptimization)
+	if err != nil {
+		return
+	}
+	defer lease.Release()
 	m.Called(statusCallback, pauser)
+}
+
+func (m *MockMediaDBI) RunBackgroundOptimizationWithLease(
+	statusCallback func(optimizing bool), pauser *syncutil.Pauser, lease *database.MediaWriteLease,
+) error {
+	if !lease.ValidFor(database.MediaWriteOperationOptimization) {
+		lease.Release()
+		return database.ErrMediaWriteLease
+	}
+	defer lease.Release()
+	args := m.Called(statusCallback, pauser, lease)
+	if len(args) == 0 {
+		return nil
+	}
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock background optimization with lease failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {
@@ -1905,6 +2051,10 @@ func (m *MockMediaDBI) BackgroundOperationDone() {
 
 func (*MockMediaDBI) SetIndexingCacheSize(_ bool) {
 	// No-op for mock — cache_size is a SQLite-specific optimization
+}
+
+func (*MockMediaDBI) SetWALAutoCheckpoint(_ int) {
+	// No-op for mock — WAL autocheckpoint is a SQLite-specific optimization.
 }
 
 func (m *MockMediaDBI) DropSecondaryIndexes() error {
@@ -2733,7 +2883,8 @@ func (m *MockMediaDBI) GetMediaCoverStatus(
 }
 
 func (m *MockMediaDBI) BrowseFileCount(
-	ctx context.Context, opts database.BrowseFileCountOptions,
+	ctx context.Context,
+	opts database.BrowseFileCountOptions, //nolint:gocritic // interface keeps browse option values consistent
 ) (int, error) {
 	args := m.Called(ctx, opts)
 	if count, ok := args.Get(0).(int); ok {

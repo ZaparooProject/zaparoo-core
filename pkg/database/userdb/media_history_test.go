@@ -299,6 +299,105 @@ func TestSqlUpdateMediaHistoryIdentity_ReportsUncountableUpdate(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
+func TestSqlUpdateMediaHistoryIdentityAndPath(t *testing.T) {
+	t.Parallel()
+
+	canonicalPath := filepath.Join("_Arcade", "Pooyan.mra")
+	identity := database.MediaIdentity{
+		MediaType:              "Arcade",
+		CanonicalSystemID:      "Arcade",
+		DisplayName:            "Pooyan",
+		CoreSlug:               "pooyan",
+		ObservationFingerprint: "sha256:test",
+		Tags: []database.MediaIdentityTag{
+			{Type: "region", Value: "us", Role: database.MediaIdentityTagRoleIdentity},
+		},
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
+	tests := []struct {
+		execErr error
+		name    string
+	}{
+		{name: "success"},
+		{name: "database error", execErr: sqlmock.ErrCancelled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db, mockDB, err := testsqlmock.NewSQLMock()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			expectation := mockDB.ExpectExec(
+				`UPDATE MediaHistory SET MediaPath = \?, MediaName = \?, Tags = \?, MediaIdentity = \?, `+
+					`MediaIdentityPolicyVersion = \?, UpdatedAt = MAX\(\?, UpdatedAt \+ 1\), `+
+					`SyncedAt = NULL WHERE DBID = \?.*MediaIdentityPolicyVersion < \?`,
+			).WithArgs(
+				canonicalPath,
+				identity.DisplayName,
+				database.EncodeTagStrings(identity.LegacyTags()),
+				database.EncodeMediaIdentity(&identity),
+				identity.PolicyVersion,
+				sqlmock.AnyArg(),
+				int64(40),
+				identity.PolicyVersion,
+				identity.PolicyVersion,
+				canonicalPath,
+			)
+			if tt.execErr != nil {
+				expectation.WillReturnError(tt.execErr)
+			} else {
+				expectation.WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+
+			updated, updateErr := sqlUpdateMediaHistoryIdentityAndPath(
+				context.Background(), db, 40, canonicalPath, &identity,
+			)
+			if tt.execErr != nil {
+				require.Error(t, updateErr)
+				assert.Contains(t, updateErr.Error(), "failed to execute media history identity and path update")
+				assert.False(t, updated)
+			} else {
+				require.NoError(t, updateErr)
+				assert.True(t, updated)
+			}
+			assert.NoError(t, mockDB.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestSqlUpdateMediaHistoryIdentityAndPath_RejectsNilIdentity(t *testing.T) {
+	t.Parallel()
+	db, mockDB, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	updated, err := sqlUpdateMediaHistoryIdentityAndPath(context.Background(), db, 40, "path.mra", nil)
+	require.Error(t, err)
+	assert.False(t, updated)
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "no statement may reach the database")
+}
+
+// An empty path would otherwise blank MediaPath on the row it is meant to
+// correct, leaving the enriched session unlaunchable and unidentifiable.
+func TestSqlUpdateMediaHistoryIdentityAndPath_RejectsEmptyPath(t *testing.T) {
+	t.Parallel()
+	db, mockDB, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	identity := database.MediaIdentity{
+		MediaType: "Arcade", CanonicalSystemID: "Arcade", DisplayName: "Pooyan",
+		CoreSlug: "pooyan", ObservationFingerprint: "sha256:test",
+		PolicyVersion: database.CurrentMediaIdentityPolicyVersion,
+	}
+	updated, err := sqlUpdateMediaHistoryIdentityAndPath(context.Background(), db, 40, "", &identity)
+	require.Error(t, err)
+	assert.False(t, updated)
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "no statement may reach the database")
+}
+
 func TestSqlCloseMediaHistory_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()

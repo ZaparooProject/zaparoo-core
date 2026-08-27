@@ -104,6 +104,9 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 		if !strings.HasSuffix(script, ".sh") {
 			return platforms.CmdResult{}, fmt.Errorf("invalid script: %s", script)
 		}
+		if filepath.Base(script) != script || strings.Contains(script, "\\") {
+			return platforms.CmdResult{}, fmt.Errorf("invalid script: %s", script)
+		}
 
 		scriptPath := filepath.Join(config.ScriptsDir, script)
 		if _, err := os.Stat(scriptPath); err != nil {

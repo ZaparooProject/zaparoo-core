@@ -162,7 +162,6 @@ func TestConnectionParameters(t *testing.T) {
 	require.Contains(t, connParams, "_cache_size=-8192") // 8MB cache (safe on 256MB systems)
 	require.Contains(t, connParams, "_temp_store=FILE")  // temp tables on disk for safe VACUUM
 	require.Contains(t, connParams, "_mmap_size=0")      // disabled to avoid memory pressure
-	require.Contains(t, connParams, "_page_size=8192")
 	require.Contains(t, connParams, "_foreign_keys=ON")
 	require.Contains(t, connParams, "_busy_timeout=5000")
 

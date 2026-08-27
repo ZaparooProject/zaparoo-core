@@ -472,9 +472,16 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 		return nil, fmt.Errorf("scraper %q has no Scrape function", s.ID)
 	}
 
-	if err := startScrapingIfNoIndex(params.ScraperID, params.Force); err != nil {
+	lease, err := startScraping(env.Database.MediaDB, params.ScraperID, params.Force)
+	if err != nil {
 		return nil, err
 	}
+	leaseOwned := true
+	defer func() {
+		if leaseOwned {
+			lease.Release()
+		}
+	}()
 
 	ns := env.State.Notifications
 	db := env.Database
@@ -564,7 +571,9 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 
 	scraperID := params.ScraperID
 	db.MediaDB.TrackBackgroundOperation()
+	leaseOwned = false
 	go func() {
+		defer lease.Release()
 		defer scrapingStatusInstance.clearIfOwner(scraperID)
 		defer cancelFunc()
 		defer db.MediaDB.BackgroundOperationDone()

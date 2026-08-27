@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -249,6 +250,12 @@ func TestUserDBBackupForTransferRemovesClientCredentials(t *testing.T) {
 		Role:       "admin",
 		CreatedAt:  time.Now().Unix(),
 	}))
+	_, _, err := userDB.ClaimRemoteCommand(&database.RemoteCommand{
+		CommandID: "cmd-private", OperationID: "op-private", OperationType: "echo",
+		ProtocolVersion: 1, ParamsDigest: "digest", Origin: json.RawMessage(`{"kind":"first_party"}`),
+		DeadlineAt: time.Now().Add(time.Hour), State: "recorded",
+	})
+	require.NoError(t, err)
 
 	portable, cleanup, err := userDB.BackupForTransfer(context.Background(), "test-transfer")
 	require.NoError(t, err)
@@ -260,8 +267,13 @@ func TestUserDBBackupForTransferRemovesClientCredentials(t *testing.T) {
 	require.NoError(t, portableDB.QueryRowContext(
 		context.Background(), "SELECT COUNT(*) FROM Clients",
 	).Scan(&clientCount))
+	var remoteCommandCount int
+	require.NoError(t, portableDB.QueryRowContext(
+		context.Background(), "SELECT COUNT(*) FROM RemoteCommands",
+	).Scan(&remoteCommandCount))
 	require.NoError(t, portableDB.Close())
 	assert.Zero(t, clientCount)
+	assert.Zero(t, remoteCommandCount)
 
 	portableBytes, err := os.ReadFile(portable.Path)
 	require.NoError(t, err)
@@ -276,8 +288,12 @@ func TestUserDBBackupForTransferRemovesClientCredentials(t *testing.T) {
 	require.NoError(t, fullDB.QueryRowContext(
 		context.Background(), "SELECT COUNT(*) FROM Clients",
 	).Scan(&clientCount))
+	require.NoError(t, fullDB.QueryRowContext(
+		context.Background(), "SELECT COUNT(*) FROM RemoteCommands",
+	).Scan(&remoteCommandCount))
 	require.NoError(t, fullDB.Close())
 	assert.Equal(t, 1, clientCount)
+	assert.Equal(t, 1, remoteCommandCount)
 
 	portablePath := portable.Path
 	require.NoError(t, cleanup())

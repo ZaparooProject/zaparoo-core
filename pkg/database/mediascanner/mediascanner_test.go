@@ -509,12 +509,17 @@ func TestNewNamesIndex_CorruptExistingTagsMarksDatabaseCorrupt(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
 	mockMediaDB.On("SetIndexingSystems", []string{"NES"}).Return(nil).Once()
+	// The run is marked before it seeds, so that seeding commit invalidates
+	// caches as an indexing commit rather than an ordinary write.
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Once()
 	mockMediaDB.On("SeedCanonicalTagDefinitions", mock.Anything).
 		Return(sqlite3.Error{Code: sqlite3.ErrCorrupt}).Once()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
+	// Twice: a fresh run clears the resume marker before it marks itself
+	// running, and the corruption handler clears it again on the way out.
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Twice()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
 		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
@@ -2490,6 +2495,18 @@ func TestGetFiles_SkipsAppleDoubleFiles(t *testing.T) {
 	assert.Contains(t, files[0], "game.nes")
 }
 
+type recordingIndexingPragmaDB struct {
+	calls []string
+}
+
+func (db *recordingIndexingPragmaDB) SetIndexingCacheSize(enable bool) {
+	db.calls = append(db.calls, fmt.Sprintf("cache:%t", enable))
+}
+
+func (db *recordingIndexingPragmaDB) SetWALAutoCheckpoint(pages int) {
+	db.calls = append(db.calls, fmt.Sprintf("wal:%d", pages))
+}
+
 // TestBatchCommitLimit_FullSpeedWhenNotThrottled verifies a nil or running
 // pauser leaves the batch commit size at its full-speed default.
 func TestBatchCommitLimit_FullSpeedWhenNotThrottled(t *testing.T) {
@@ -2514,6 +2531,48 @@ func TestBatchCommitLimit_ShrinksWhenThrottledOrPaused(t *testing.T) {
 	paused := syncutil.NewPauser()
 	paused.Pause()
 	assert.Equal(t, throttledMaxFilesPerTransaction, batchCommitLimit(paused), "paused pauser")
+}
+
+// TestConfigureIndexingPragmas_DisablesWALAutoCheckpointAndRestoresOnReturn
+// covers both the disable and the restore-on-early-return, on every platform
+// (not just resource-constrained ones) — see configureIndexingPragmas's
+// comment for why this is now unconditional.
+func TestConfigureIndexingPragmas_DisablesWALAutoCheckpointAndRestoresOnReturn(t *testing.T) {
+	t.Parallel()
+
+	db := &recordingIndexingPragmaDB{}
+	earlyErr := errors.New("stop indexing early")
+	err := func() error {
+		cleanup := configureIndexingPragmas(db)
+		defer cleanup()
+		return earlyErr
+	}()
+	require.ErrorIs(t, err, earlyErr)
+	assert.Equal(t, []string{
+		"cache:true",
+		fmt.Sprintf("wal:%d", disabledWALAutoCheckpoint),
+		fmt.Sprintf("wal:%d", defaultWALAutoCheckpoint),
+		"cache:false",
+	}, db.calls)
+}
+
+func TestDirectoryWalkWorkers_ConstrainedOrRestricted(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 1, directoryWalkWorkers(true, nil), "resource-constrained platform")
+	assert.Zero(t, directoryWalkWorkers(false, nil), "unrestricted platform")
+
+	throttled := syncutil.NewPauser()
+	throttled.Throttle(syncutil.ThrottleLight)
+	assert.Equal(t, 1, directoryWalkWorkers(false, throttled), "throttled pauser")
+
+	paused := syncutil.NewPauser()
+	paused.Pause()
+	assert.Equal(t, 1, directoryWalkWorkers(false, paused), "paused pauser")
+
+	baseline := syncutil.NewPauser()
+	baseline.SetBaselineThrottle(syncutil.ThrottleBackground)
+	assert.Equal(t, 1, directoryWalkWorkers(false, baseline), "baseline-paced pauser")
 }
 
 // TestGetFiles_PausedPauserInterruptsWalk verifies GetFiles periodically

@@ -127,9 +127,40 @@ func browseMediaIndex(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 	}
 
-	// No path → root listing. A letter rail is not meaningful for roots.
+	// No path normally means route listing, where a letter rail is not
+	// meaningful. The contents root view is an immediate media listing and uses
+	// the same ordered physical sources as media.browse.
 	if params.Path == nil || *params.Path == "" {
-		return emptyBrowseIndex(), nil
+		rootView := browseRootViewRoutes
+		if params.RootView != nil {
+			rootView = *params.RootView
+		}
+		if rootView != browseRootViewContents {
+			return emptyBrowseIndex(), nil
+		}
+		if len(systems) != 1 {
+			return nil, models.ClientErrf("rootView contents requires exactly one system")
+		}
+		rootEntries, rootErr := resolveSystemRootEntries(&env, systems)
+		if rootErr != nil {
+			return nil, rootErr
+		}
+		sources, _ := systemRootContentsSources(&env, rootEntries)
+		if len(sources) == 0 {
+			return emptyBrowseIndex(), nil
+		}
+		started := time.Now()
+		result, indexErr := env.Database.MediaDB.BrowseIndex(env.Context, database.BrowseIndexOptions{
+			Overlay: &database.BrowseOverlay{Sources: sources},
+			Sort:    sortOrder,
+			Systems: systems,
+			Tags:    tagFilters,
+		})
+		logBrowseTiming("root_contents_index", "", started, len(result.Buckets))
+		if indexErr != nil {
+			return nil, fmt.Errorf("error building root contents browse index: %w", indexErr)
+		}
+		return buildBrowseIndexResponse(result, browseRootViewContents)
 	}
 
 	prefix, err := resolveBrowseIndexPrefix(&env, *params.Path)
@@ -190,14 +221,17 @@ func emptyBrowseIndex() models.BrowseIndexResults {
 	}
 }
 
-func buildBrowseIndexResponse(result database.BrowseIndexResult) (any, error) {
+func buildBrowseIndexResponse(
+	result database.BrowseIndexResult,
+	rootViews ...string,
+) (any, error) {
 	groups := make([]models.BrowseIndexGroup, 0, len(result.Buckets))
 	for i := range result.Buckets {
 		bucket := &result.Buckets[i]
 		var cursor string
 		if !bucket.AtStart {
 			encoded, err := encodeBrowseCursorWithMode(
-				bucket.LastID, bucket.SortValue, result.SortMode, result.TotalFiles,
+				bucket.LastID, bucket.SortValue, result.SortMode, result.TotalFiles, rootViews...,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("failed to encode browse index cursor: %w", err)

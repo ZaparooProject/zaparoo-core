@@ -42,6 +42,7 @@ func TestNewNamesIndex_ResumeUsesPersistedPlanWhenCurrentRunnableSetShrinks(t *t
 	require.NoError(t, err)
 
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", cfg).Return([]string{})
 

@@ -23,16 +23,67 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
+
+// normalizedSystemFilter canonicalizes requested system IDs for filtering.
+// Unlike resolveSystems (media.go), an ID that doesn't match a known system
+// is kept as-is rather than erroring: launcher system IDs can be launchable
+// or virtual systems outside systemdefs, and a filter that matches nothing
+// should return an empty launcher list, not a client error.
+func normalizedSystemFilter(ids []string, fuzzy bool) []string {
+	normalized := make([]string, len(ids))
+	for i, id := range ids {
+		normalized[i] = id
+		if !fuzzy {
+			continue
+		}
+		if sys, err := systemdefs.LookupSystem(id); err == nil {
+			normalized[i] = sys.ID
+		}
+	}
+	return normalized
+}
+
+func matchesSystemFilter(systemID string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(filter, func(id string) bool {
+		return strings.EqualFold(id, systemID)
+	})
+}
+
+// isDefaultLauncher reports whether l is the configured default launcher for
+// its system, matched by launcher ID or by any of the launcher's groups —
+// the same matching settings.systemDefaults.launcher documents.
+func isDefaultLauncher(cfg *config.Instance, l *platforms.Launcher) bool {
+	if cfg == nil || l.SystemID == "" {
+		return false
+	}
+	defaults, ok := cfg.LookupSystemDefaults(l.SystemID)
+	if !ok || defaults.Launcher == "" {
+		return false
+	}
+	if strings.EqualFold(defaults.Launcher, l.ID) {
+		return true
+	}
+	return slices.ContainsFunc(l.Groups, func(group string) bool {
+		return strings.EqualFold(defaults.Launcher, group)
+	})
+}
 
 func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
 	log.Debug().Msg("received launchers request")
@@ -41,10 +92,28 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		return models.LaunchersResponse{Launchers: []models.Launcher{}}, nil
 	}
 
+	var params models.LaunchersParams
+	if len(env.Params) > 0 {
+		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
+	}
+
+	var systemFilter []string
+	if params.Systems != nil {
+		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
+		systemFilter = normalizedSystemFilter(*params.Systems, fuzzy)
+	}
+
+	runtimeProvider, hasRuntimeProvider := env.Platform.(platforms.LauncherRuntimeProvider)
+
 	all := env.LauncherCache.GetAllLaunchers()
 	resp := make([]models.Launcher, 0, len(all))
 	for i := range all {
 		l := all[i]
+		if !matchesSystemFilter(l.SystemID, systemFilter) {
+			continue
+		}
 		var groups []string
 		if len(l.Groups) > 0 {
 			groups = make([]string, len(l.Groups))
@@ -56,11 +125,15 @@ func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			Groups:             groups,
 			Available:          l.Available,
 			AvailabilityReason: l.AvailabilityReason,
+			Default:            isDefaultLauncher(env.Config, &l),
 		}
 		if l.SystemID != "" {
 			if sm, mErr := assets.GetSystemMetadata(l.SystemID); mErr == nil && sm.Name != "" {
 				entry.SystemName = sm.Name
 			}
+		}
+		if hasRuntimeProvider {
+			entry.LauncherRuntime = runtimeProvider.LauncherRuntime(env.Config, &l)
 		}
 		resp = append(resp, entry)
 	}

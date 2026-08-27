@@ -497,3 +497,25 @@ func TestPopulateSystemTagsCacheForSystems_EmptyList(t *testing.T) {
 	err := mediaDB.PopulateSystemTagsCacheForSystems(ctx, []systemdefs.System{})
 	require.NoError(t, err, "should succeed as no-op for empty systems list")
 }
+
+// TestPopulateSystemTagsCache_FailsFastDuringActiveTransaction covers the
+// #1279 bug fix: this used to BeginTx unconditionally, and with the DSN's
+// _txlock=immediate that grabs SQLite's single WAL writer lock at BEGIN,
+// blocking for the full busy_timeout (and pinning a stale reader mark the
+// whole time) against an in-progress indexing transaction. It must now fail
+// immediately instead, matching applyMediaTagMutations's guard.
+func TestPopulateSystemTagsCache_FailsFastDuringActiveTransaction(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	defer func() { _ = mediaDB.RollbackTransaction() }()
+
+	err := mediaDB.PopulateSystemTagsCache(ctx)
+	require.ErrorIs(t, err, ErrTransactionActive)
+
+	err = mediaDB.PopulateSystemTagsCacheForSystems(ctx, []systemdefs.System{{ID: "NES"}})
+	require.ErrorIs(t, err, ErrTransactionActive)
+}

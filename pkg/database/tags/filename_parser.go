@@ -916,6 +916,13 @@ func parseHTGDBPatchSuffix(filename string) ([]CanonicalTag, string, bool) {
 // version extraction. This keeps patch versions attached to their patch identity instead
 // of misclassifying the first bracketed version as the base ROM revision.
 func extractPatchBrackets(filename string) (patchTags []CanonicalTag, remaining string) {
+	// reSquareBracket cannot match without an opening bracket, and
+	// ReplaceAllStringFunc builds a fresh string even when nothing matches, so
+	// bracket-free names (the common case) would otherwise pay a regex run plus
+	// a string, slice and map allocation to get their own input back.
+	if strings.IndexByte(filename, '[') < 0 {
+		return nil, filename
+	}
 	patchTags = make([]CanonicalTag, 0)
 	seen := make(map[string]struct{})
 	remaining = reSquareBracket.ReplaceAllStringFunc(filename, func(group string) string {
@@ -2318,7 +2325,13 @@ func parseFilenameTitle(
 	// Step 2: Strip release group BEFORE separator normalization
 	// Release groups are typically "-GROUP" at the end, and the hyphen will be converted to a space
 	// So we need to remove it early before that conversion happens
-	title = reReleaseGroup.ReplaceAllString(title, "")
+	// reReleaseGroup is anchored at end-of-string and needs a '-', so a title
+	// with no hyphen at all cannot match. ReplaceAllString allocates a new
+	// string even on no match, and this runs twice per file, so skip the engine
+	// for the common hyphen-free case.
+	if strings.IndexByte(title, '-') >= 0 {
+		title = reReleaseGroup.ReplaceAllString(title, "")
+	}
 
 	// Step 3: Normalize filename separators (before scene artifact stripping)
 	// Heuristic: If filename has no spaces AND has 2+ separators (dots, underscores, or dashes),

@@ -110,6 +110,7 @@ func TestNewNamesIndexIndexesVirtualMediaAndPreservesVirtualSystems(t *testing.T
 		MockPlatform: mocks.NewMockPlatform(),
 		defs:         []launchables.Launchable{item},
 	}
+	platform.On("ID").Return("test-platform")
 	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
 	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
 

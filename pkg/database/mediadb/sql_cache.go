@@ -52,7 +52,7 @@ func buildPopulateMediaTagsSQL(systemFilter string) string {
 				m.SystemDBID AS SystemDBID,
 				mt.TagDBID AS TagDBID,
 				COUNT(*) AS Cnt
-			FROM Media m INDEXED BY media_system_path_idx
+			FROM Media m INDEXED BY sqlite_autoindex_Media_1
 			CROSS JOIN MediaTags mt
 			%s
 			  AND mt.MediaDBID = m.DBID

@@ -22,6 +22,7 @@
 package mistermain
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,11 +48,15 @@ func ReadRecent(path string) ([]RecentEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
+	defer func() { _ = file.Close() }()
 
 	for {
 		entry := make([]byte, 1024+256+256)
-		n, err := file.Read(entry)
-		if err == io.EOF || n == 0 {
+		_, err := io.ReadFull(file, entry)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			// EOF: no more records. ErrUnexpectedEOF: a truncated final
+			// record from a write still in progress - discard it rather
+			// than treat partial bytes as a record.
 			break
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to read file: %w", err)

@@ -290,7 +290,15 @@ func TestPersistedSlugSearchCacheMirrorsCacheStruct(t *testing.T) {
 
 	// Mid-scan state with no on-disk representation; each must exist on the
 	// struct so renames keep this list honest.
-	transientFields := []string{"trigramDeltas", "droppedRanges", "liveEntries"}
+	//
+	// derivedFromComplete and droppedSystems describe a cache partway through
+	// an index. PersistSlugSearchCache refuses such a cache (hasMidScanState),
+	// and a cache read back from disk is either complete or rebuilt, so both
+	// are correct at their zero value on load.
+	transientFields := []string{
+		"trigramDeltas", "droppedRanges", "liveEntries",
+		"derivedFromComplete", "droppedSystems",
+	}
 	for _, name := range transientFields {
 		_, ok := cacheT.FieldByName(name)
 		require.True(t, ok, "transient field %s missing from SlugSearchCache; update this list", name)

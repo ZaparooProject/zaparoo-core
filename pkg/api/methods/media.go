@@ -60,6 +60,8 @@ const (
 	preparingMediaDatabaseUpdateDisplay       = "Preparing media database update"
 	preparingResumeMediaDatabaseUpdateDisplay = "Preparing to resume media database update"
 	preparingDatabaseOptimizationDisplay      = "Preparing database optimization"
+	recoveringMediaDatabaseDisplay            = "Recovering media database"
+	mediaDatabaseRecoveryRequiredDisplay      = "Media database recovery required"
 	preparingMediaScrapeDisplay               = "Preparing media scrape"
 )
 
@@ -506,7 +508,7 @@ func GenerateMediaDB(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
-	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false)
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false, nil)
 }
 
 // GenerateMediaDBRebuild is GenerateMediaDB with a fresh start: the media
@@ -522,7 +524,48 @@ func GenerateMediaDBRebuild(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
-	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, true)
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, true, nil)
+}
+
+// GenerateMediaDBWithLease starts indexing with ownership atomically handed off
+// by another MediaDB operation, such as corruption recovery.
+func GenerateMediaDBWithLease(
+	ctx context.Context,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	ns chan<- models.Notification,
+	systems []systemdefs.System,
+	db *database.Database,
+	pauser *syncutil.Pauser,
+	lease *database.MediaWriteLease,
+) error {
+	return startMediaDBGeneration(ctx, pl, cfg, ns, systems, db, pauser, false, lease)
+}
+
+func startPostIndexOptimization(
+	mediaDB database.MediaDBI,
+	lease *database.MediaWriteLease,
+	statusCallback func(optimizing bool),
+	pauser *syncutil.Pauser,
+) error {
+	coordinator, err := database.GetMediaDBWriteCoordinator(mediaDB)
+	if err != nil {
+		return fmt.Errorf("get media database write coordinator for optimization handoff: %w", err)
+	}
+	if err := lease.Handoff(database.MediaWriteOperationOptimization); err != nil {
+		return fmt.Errorf("handoff indexing to optimization: %w", err)
+	}
+
+	// Track wrapper before starting goroutine so Close cannot return before
+	// RunBackgroundOptimizationWithLease registers its internal work.
+	mediaDB.TrackBackgroundOperation()
+	go func() {
+		defer mediaDB.BackgroundOperationDone()
+		if err := coordinator.RunBackgroundOptimizationWithLease(statusCallback, pauser, lease); err != nil {
+			log.Error().Err(err).Msg("post-index background optimization failed")
+		}
+	}()
+	return nil
 }
 
 func startMediaDBGeneration(
@@ -534,10 +577,29 @@ func startMediaDBGeneration(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 	rebuild bool,
+	lease *database.MediaWriteLease,
 ) error {
-	if err := startIndexingIfNoScrape(); err != nil {
-		return err
+	var err error
+	if lease == nil {
+		lease, err = startIndexing(db.MediaDB)
+		if err != nil {
+			return err
+		}
+	} else {
+		if !lease.ValidFor(database.MediaWriteOperationIndexing) {
+			return database.ErrMediaWriteLease
+		}
+		if !statusInstance.startIfNotRunning() {
+			lease.Release()
+			return models.ClientErrf("indexing already in progress")
+		}
 	}
+	leaseOwned := true
+	defer func() {
+		if leaseOwned {
+			lease.Release()
+		}
+	}()
 
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 		Exists:             mediaDBHasUsableData(db.MediaDB),
@@ -589,7 +651,14 @@ func startMediaDBGeneration(
 	log.Info().Msg("generating media db")
 
 	db.MediaDB.TrackBackgroundOperation()
+	leaseOwned = false
 	go func() {
+		leaseTransferred := false
+		defer func() {
+			if !leaseTransferred {
+				lease.Release()
+			}
+		}()
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
@@ -600,8 +669,22 @@ func startMediaDBGeneration(
 		// Widen the connection pool for the duration: the indexing writer
 		// holds a connection near-continuously, and foreground search +
 		// browse must not queue behind each other on the single remainder.
+		//
+		// The restore is released explicitly before optimization is handed off
+		// (see releaseConnBoost below); this defer only covers the paths that
+		// return before reaching that point. Leaving it to the defer alone
+		// raced optimization's own boost and broke it on three consecutive
+		// device runs — see #1279 and releaseConnBoost's comment.
+		connBoostReleased := false
+		releaseConnBoost := func() {
+			if connBoostReleased {
+				return
+			}
+			connBoostReleased = true
+			db.MediaDB.SetIndexingConnBoost(false)
+		}
 		db.MediaDB.SetIndexingConnBoost(true)
-		defer db.MediaDB.SetIndexingConnBoost(false)
+		defer releaseConnBoost()
 
 		if rebuild {
 			// Recreate closes the database, and Close waits for all tracked
@@ -712,16 +795,25 @@ func startMediaDBGeneration(
 			})
 		}, pauser)
 		if err != nil {
-			// A cancelled or failed run may still leave a usable database
-			// (a prior index, or systems committed before the interruption).
-			if errors.Is(err, context.Canceled) {
+			// Corruption transitions directly into recovery. Do not publish a
+			// stopped state between failed indexing and the recovery watcher.
+			switch {
+			case database.IsCorruptionError(err):
+				log.Error().Err(err).Msg("media database corruption detected during indexing; awaiting recovery")
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:             false,
+					Indexing:           true,
+					CurrentStepDisplay: ptrString(recoveringMediaDatabaseDisplay),
+					TotalFiles:         &total,
+				})
+			case errors.Is(err, context.Canceled):
 				log.Info().Msg("media indexing was cancelled")
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 					Exists:     mediaDBHasUsableData(db.MediaDB),
 					Indexing:   false,
 					TotalFiles: &total,
 				})
-			} else {
+			default:
 				log.Error().Err(err).Msg("error generating media db")
 				// TODO: error notification to client
 				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
@@ -755,25 +847,33 @@ func startMediaDBGeneration(
 		runtime.GC()
 		debug.FreeOSMemory()
 
-		// Start background optimization with notification callback
-		// Index rebuilds, cache population, ANALYZE, and WAL checkpoint
-		// run as background steps so launches/searches aren't blocked.
-		// Track the optimization operation BEFORE starting the goroutine to prevent a race
-		// where Close() → Wait() could return between this goroutine's Done() and
-		// RunBackgroundOptimization's internal Add(). The wrapper ensures Done() is called
-		// even if RunBackgroundOptimization skips (e.g., already optimizing).
-		db.MediaDB.TrackBackgroundOperation()
-		go func() {
-			defer db.MediaDB.BackgroundOperationDone()
-			db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
-				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-					Exists:     true,
-					Indexing:   false,
-					Optimizing: optimizing,
-					TotalFiles: &total,
-				})
-			}, pauser)
-		}()
+		// Drop the indexing pool boost BEFORE optimization is spawned, not on
+		// the way out of this goroutine.
+		//
+		// Optimization re-applies its own boost as its first act, and that
+		// begins by draining every pooled connection. It sizes that drain from
+		// SetMaxOpenConns, so if this restore is still pending it reads the
+		// widened cap, tries to acquire one more connection than the pool will
+		// ever hand out once the restore lands, and deadlocks against its own
+		// held connections until the acquire deadline expires. Releasing here
+		// gives the two a happens-before edge without any waiting.
+		releaseConnBoost()
+
+		// Atomically hand indexing ownership to optimization so scraping cannot
+		// enter between completed indexing and post-index maintenance.
+		if handoffErr := startPostIndexOptimization(db.MediaDB, lease, func(optimizing bool) {
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				Optimizing: optimizing,
+				TotalFiles: &total,
+			})
+		}, pauser); handoffErr != nil {
+			log.Error().Err(handoffErr).Msg("failed to hand off indexing to background optimization")
+			statusInstance.clear()
+			return
+		}
+		leaseTransferred = true
 
 		statusInstance.clear()
 		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
@@ -829,23 +929,10 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
-	// Additional validation for selective indexing
-	if isSelectiveIndexing {
-		// Check if optimization is running - this would conflict with selective indexing
-		optimizationStatus, err := env.Database.MediaDB.GetOptimizationStatus()
-		if err != nil {
-			return nil, fmt.Errorf("unable to verify optimization status for selective indexing: %w", err)
-		}
-		if optimizationStatus == "running" {
-			return nil, models.ClientErrf(
-				"selective indexing cannot be performed while database optimization is running",
-			)
-		}
-
-		// Ensure at least one system is specified for selective indexing
-		if len(systems) == 0 {
-			return nil, models.ClientErrf("at least one system must be specified for selective indexing")
-		}
+	// Ensure at least one resolved system is specified for selective indexing.
+	// Process-local lease ownership, not persisted optimization status, decides conflicts.
+	if isSelectiveIndexing && len(systems) == 0 {
+		return nil, models.ClientErrf("at least one system must be specified for selective indexing")
 	}
 
 	// Reconcile with current primary-media state before reporting initial
@@ -1324,6 +1411,17 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		systemsTotal := max(status.totalSteps-1, 0)
 		resp.Database.SystemsCompleted = &systemsCompleted
 		resp.Database.SystemsTotal = &systemsTotal
+	case persistedIndexingStatus == mediadb.IndexingStatusCorrupt || env.Database.MediaDB.IsMarkedCorrupt():
+		resp.Database.Optimizing = false
+		resp.Database.Paused = paused
+		resp.Database.Throttled = throttled
+		resp.Database.Exists = false
+		resp.Database.Indexing = env.State != nil && env.State.MediaDBRecoveryActive()
+		if resp.Database.Indexing {
+			resp.Database.CurrentStepDisplay = ptrString(recoveringMediaDatabaseDisplay)
+		} else {
+			resp.Database.CurrentStepDisplay = ptrString(mediaDatabaseRecoveryRequiredDisplay)
+		}
 	case isPersistentMediaWorkStatus(persistedIndexingStatus):
 		resp.Database.Indexing = true
 		resp.Database.Optimizing = false

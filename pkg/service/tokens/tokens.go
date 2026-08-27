@@ -21,6 +21,8 @@ package tokens
 
 import (
 	"time"
+
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 )
 
 const (
@@ -41,10 +43,15 @@ const (
 	SourceHook     = "Hook"     // Hook-generated token
 	SourceGMC      = "GMC"      // Groovy Media Center proxy
 	SourceControl  = "Control"  // Config-defined control script
+	SourceRemote   = "Remote"   // Allowlisted Zaparoo Online remote operation
 )
 
+//nolint:govet // Field order groups token identity and structural command source.
 type Token struct {
 	ScanTime time.Time
+	// Commands bypass text parsing and mappings for trusted structural callers.
+	// Remote operations use this only after deny-by-default verb validation.
+	Commands []gozapscript.Command
 	Type     string
 	UID      string
 	Text     string

@@ -301,6 +301,42 @@ func TestDefaultSettingsService_GetSystems_Error(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestDefaultSettingsService_GetRemoteActivity(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupRemoteActivityResponse(&models.RemoteActivityResponse{
+		Entries: []models.RemoteActivityEntry{
+			{CreatedAt: "2026-08-24T00:00:00Z", OperationType: "echo", State: "terminal", Status: "succeeded"},
+		},
+	})
+
+	svc := NewSettingsService(mockClient)
+	activity, err := svc.GetRemoteActivity(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, activity.Entries, 1)
+	assert.Equal(t, "echo", activity.Entries[0].OperationType)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_GetRemoteActivity_Error(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupRemoteActivityError(errors.New("remote activity unavailable"))
+
+	svc := NewSettingsService(mockClient)
+	activity, err := svc.GetRemoteActivity(context.Background())
+
+	require.Error(t, err)
+	assert.Nil(t, activity)
+	assert.Contains(t, err.Error(), "failed to get remote activity")
+
+	mockClient.AssertExpectations(t)
+}
+
 func TestMockSettingsService_GetSettings(t *testing.T) {
 	t.Parallel()
 

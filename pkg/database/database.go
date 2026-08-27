@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -389,6 +390,7 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 // BrowseDirectoryResult represents a subdirectory found during browse navigation.
 type BrowseDirectoryResult struct {
 	Name      string
+	Path      string
 	SystemIDs []string
 	FileCount int
 }
@@ -421,6 +423,7 @@ type SingletonAliasCandidate struct {
 // directories returned; 0 means no limit (full listing).
 type BrowseDirectoriesOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	AfterName  string
 	Systems    []systemdefs.System
 	Limit      int
@@ -429,6 +432,7 @@ type BrowseDirectoriesOptions struct {
 // BrowseDirCountOptions contains parameters for the BrowseDirCount query.
 type BrowseDirCountOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Systems    []systemdefs.System
 }
 
@@ -444,9 +448,22 @@ type BrowseCursor struct {
 	SortMode   string
 	Phase      string
 	DirName    string
+	RootView   string
 	LastID     int64
 	TotalFiles int
 	TotalDirs  int
+}
+
+// BrowseSource is one ordered physical directory contributing to a pathless
+// system-root contents view. Earlier sources have higher overlay priority.
+// IncludeDirs is false for an ancestor route retained only for direct media.
+type BrowseSource struct {
+	PathPrefix  string
+	IncludeDirs bool
+}
+
+type BrowseOverlay struct {
+	Sources []BrowseSource
 }
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.
@@ -454,6 +471,7 @@ type BrowseFilesOptions struct {
 	Cursor     *BrowseCursor
 	Letter     *string
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Sort       string
 	Systems    []systemdefs.System
 	Tags       []zapscript.TagFilter
@@ -464,6 +482,7 @@ type BrowseFilesOptions struct {
 type BrowseFileCountOptions struct {
 	Letter     *string
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Systems    []systemdefs.System
 	Tags       []zapscript.TagFilter
 }
@@ -473,6 +492,7 @@ type BrowseFileCountOptions struct {
 // exact list a media.browse call would return.
 type BrowseIndexOptions struct {
 	PathPrefix string
+	Overlay    *BrowseOverlay
 	Sort       string
 	Systems    []systemdefs.System
 	Tags       []zapscript.TagFilter
@@ -787,6 +807,10 @@ type ScanStagedMedia struct {
 // ScanReconcileOpts adjusts how a staged-system reconcile treats the staged
 // file set.
 type ScanReconcileOpts struct {
+	// Yield runs between set-based reconcile steps and chunked missing-media
+	// updates. Background indexers use it for cooperative pacing; nil preserves
+	// unpaced callers such as foreground maintenance and tests.
+	Yield func() error
 	// IncompleteScan means file collection for this system hit errors (an
 	// unreadable path, a failed launcher scanner), so the staged set may be a
 	// subset of what actually exists. Staged files are still upserted and
@@ -813,6 +837,28 @@ type ScanReconcileStats struct {
 }
 
 // JournalMode represents SQLite journal mode
+// RemoteCommand is one durable typed-operation ledger entry. State changes
+// are persisted before side effects so a crash can never cause re-execution.
+//
+//nolint:govet // Field grouping follows persisted lifecycle semantics.
+type RemoteCommand struct {
+	DeadlineAt         time.Time
+	ExecutionExpiresAt *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Origin             json.RawMessage
+	Result             json.RawMessage
+	CommandID          string
+	OperationID        string
+	OperationType      string
+	ParamsDigest       string
+	State              string
+	ResultStatus       string
+	ErrorCode          string
+	ProtocolVersion    int
+	ResultReported     bool
+}
+
 type JournalMode string
 
 // Journal mode constants
@@ -842,6 +888,10 @@ type UserDBI interface {
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	UpdateMediaHistoryIdentity(dbid int64, identity *MediaIdentity) (bool, error)
+	// UpdateMediaHistoryIdentityAndPath is UpdateMediaHistoryIdentity plus a
+	// MediaPath correction, for backfilling legacy rows recorded under a
+	// non-path external identifier (e.g. a MiSTer arcade set name).
+	UpdateMediaHistoryIdentityAndPath(dbid int64, path string, identity *MediaIdentity) (bool, error)
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
 	GetDistinctMediaHistory(
@@ -901,6 +951,15 @@ type UserDBI interface {
 	SetDeviceState(key, value string) error
 	GetDeviceState(key string) (string, bool, error)
 	DeleteDeviceState(key string) error
+	ClaimRemoteCommand(command *RemoteCommand) (*RemoteCommand, bool, error)
+	TransitionRemoteCommand(commandID, fromState, toState string, executionExpiresAt *time.Time) (bool, error)
+	StoreRemoteCommandResult(
+		commandID, fromState, status string, result json.RawMessage, errorCode string,
+	) (bool, error)
+	MarkRemoteCommandResultReported(commandID string) error
+	ListUnreportedRemoteCommands(limit int) ([]RemoteCommand, error)
+	ListRecentRemoteCommands(limit int) ([]RemoteCommand, error)
+	PruneRemoteCommands(before time.Time) (int64, error)
 	Backup(reason string, manual bool) (BackupInfo, error)
 	BackupForUpdate(targetVersion string) (BackupInfo, func() error, error)
 	BackupForTransfer(ctx context.Context, reason string) (BackupInfo, func() error, error)
@@ -983,6 +1042,7 @@ type MediaDBI interface {
 	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
 
 	SetIndexingCacheSize(enable bool)
+	SetWALAutoCheckpoint(pages int)
 	DropSecondaryIndexes() error
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error

@@ -925,7 +925,7 @@ func (m *Manager) createRemoteSnapshot(ctx context.Context, backupType string) (
 	if waitErr := m.pauser.Wait(ctx); waitErr != nil {
 		return RemoteRunInfo{}, fmt.Errorf("creating remote backup snapshot: %w", waitErr)
 	}
-	heartbeatErr := client.heartbeat(ctx)
+	heartbeatErr := client.heartbeat(ctx, heartbeatCapabilities(m.cfg, client.baseURL))
 	if heartbeatErr != nil {
 		return RemoteRunInfo{}, heartbeatErr
 	}
@@ -1261,6 +1261,16 @@ func (m *Manager) notifyRemoteWarnings(warnings []models.BackupWarning) {
 	}
 }
 
+// SendCapabilityHeartbeat reports liveness and the complete capability
+// document without coupling callers to backup entitlement checks.
+func (m *Manager) SendCapabilityHeartbeat(ctx context.Context) error {
+	client, err := m.newRemoteClient()
+	if err != nil {
+		return err
+	}
+	return client.heartbeat(ctx, heartbeatCapabilities(m.cfg, client.baseURL))
+}
+
 // SendHeartbeat reports liveness (Core version + capabilities) when the
 // device is linked. Callers use it independently of backup runs so "last
 // seen" stays fresh even with remote backup disabled.
@@ -1269,7 +1279,7 @@ func (m *Manager) SendHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if heartbeatErr := client.heartbeat(ctx); heartbeatErr != nil {
+	if heartbeatErr := client.heartbeat(ctx, heartbeatCapabilities(m.cfg, client.baseURL)); heartbeatErr != nil {
 		return heartbeatErr
 	}
 	_, err = m.updateRemoteAvailability(ctx, client)
@@ -1557,10 +1567,34 @@ func (m *Manager) NotifyScheduleStale() {
 	}
 }
 
-func (c *remoteClient) heartbeat(ctx context.Context) error {
+func heartbeatCapabilities(cfg *config.Instance, baseURL string) map[string]any {
+	capabilities := make(map[string]any)
+	if sameRemoteEndpoint(baseURL, cfg.BackupRemoteBaseURL()) {
+		capabilities["backup"] = 1
+	}
+	if cfg.RemoteControlEnabled() && sameRemoteEndpoint(baseURL, cfg.RemoteControlBaseURL()) {
+		capabilities["remote_operations"] = map[string]any{"version": 1, "enabled": true}
+	}
+	return capabilities
+}
+
+func sameRemoteEndpoint(first, second string) bool {
+	firstURL, firstErr := url.Parse(strings.TrimRight(first, "/"))
+	secondURL, secondErr := url.Parse(strings.TrimRight(second, "/"))
+	if firstErr != nil || secondErr != nil {
+		return false
+	}
+	firstURL.Scheme = strings.ToLower(firstURL.Scheme)
+	firstURL.Host = strings.ToLower(firstURL.Host)
+	secondURL.Scheme = strings.ToLower(secondURL.Scheme)
+	secondURL.Host = strings.ToLower(secondURL.Host)
+	return firstURL.String() == secondURL.String()
+}
+
+func (c *remoteClient) heartbeat(ctx context.Context, capabilities map[string]any) error {
 	body := map[string]any{
 		"core_version": config.AppVersion,
-		"capabilities": map[string]any{"backup": 1},
+		"capabilities": capabilities,
 	}
 	return c.doJSON(ctx, http.MethodPost, "/v1/device/heartbeat", body, nil)
 }

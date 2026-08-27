@@ -145,22 +145,22 @@ func TestRun_PromoteCrossChecksGithub(t *testing.T) {
 	t.Parallel()
 
 	f := newPublishFixture(t, []string{"v2.16.0"}, []string{channelStable})
-	files := f.stageArchives(t, "v2.17.0-beta1")
-	writeGithubRelease(t, f.fs, "release.json", "v2.17.0-beta1", true, files)
+	files := f.stageArchives(t, "v2.17.0-beta.1")
+	writeGithubRelease(t, f.fs, "release.json", "v2.17.0-beta.1", true, files)
 
-	opts := f.promoteOpts("v2.17.0-beta1", channelBeta)
+	opts := f.promoteOpts("v2.17.0-beta.1", channelBeta)
 	opts.githubRelease = "release.json"
 
 	_, err := run(f.fs, opts, testNow)
 	require.NoError(t, err)
 
 	m, _ := f.published(t)
-	rel := findRelease(m, "v2.17.0-beta1")
+	rel := findRelease(m, "v2.17.0-beta.1")
 	require.NotNil(t, rel)
 	assert.Equal(t, channelBeta, rel.Channel)
 	assert.True(t, rel.Prerelease)
 	assert.Equal(t,
-		"https://github.com/ZaparooProject/zaparoo-core/releases/tag/v2.17.0-beta1",
+		"https://github.com/ZaparooProject/zaparoo-core/releases/tag/v2.17.0-beta.1",
 		rel.URL,
 	)
 	assert.Equal(t, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), rel.PublishedAt.UTC())
@@ -543,7 +543,7 @@ func TestRun_ProducedManifestDecodesInGoSelfupdate(t *testing.T) {
 	t.Parallel()
 
 	f := newPublishFixture(t,
-		[]string{"v2.16.0", "v2.17.0-beta1"},
+		[]string{"v2.16.0", "v2.17.0-beta.1"},
 		[]string{channelStable, channelBeta},
 	)
 	f.stageArchives(t, "v2.16.1")

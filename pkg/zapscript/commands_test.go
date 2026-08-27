@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,8 +33,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	uievents "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/events"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -815,4 +819,116 @@ func TestIsValidCommand(t *testing.T) {
 			assert.Equal(t, tt.want, got, "IsValidCommand(%q) = %v, want %v", tt.cmdName, got, tt.want)
 		})
 	}
+}
+
+// TestRunCommandSkippedWhenLogRedactsSensitiveCommand verifies that a command skipped
+// by an unmet "when" condition logs only its name, not its full command text. Before
+// this, the skip log ran before the isSensitiveCommand check and always logged the
+// full command, including args like an http.get URL's query string.
+func TestRunCommandSkippedWhenLogRedactsSensitiveCommand(t *testing.T) {
+	//nolint:gosec // Test fixture URL, not a real credential.
+	const secretURL = "http://example.com/path?api_key=SECRETVALUE"
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	mockPlatform := mocks.NewMockPlatform()
+
+	result, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{},
+		zapscript.Command{
+			Name:    zapscript.ZapScriptCmdHTTPGet,
+			Args:    []string{secretURL},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"when": "false"}),
+		},
+		1,
+		0,
+		nil,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, result.NewCommands)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "does not meet when criteria: http.get")
+	assert.NotContains(t, logOutput, secretURL)
+	assert.NotContains(t, logOutput, "api_key")
+	mockPlatform.AssertExpectations(t)
+}
+
+// TestRunCommandSkipsZapLinkForRemoteSource pins that a remote-sourced
+// command never reaches ZapLink resolution: the command's own value is
+// already trusted structural input built server-side, so there is nothing
+// for a link to legitimately resolve, and letting one substitute in
+// server-fetched ZapScript would bypass the remote operation allowlist. The
+// mock has no GetZapLinkHost expectation registered, so a call to it fails
+// the test rather than silently passing.
+func TestRunCommandSkipsZapLinkForRemoteSource(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockPlatform := mocks.NewMockPlatform()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceRemote},
+		zapscript.Command{
+			Name: "zzz-test-nonexistent-command",
+			Args: []string{"https://zaplink.example.com/resolves-through-cache"},
+		},
+		1,
+		0,
+		db,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+	mockUserDB.AssertNotCalled(t, "GetZapLinkHost", mock.Anything)
+}
+
+// TestRunCommandAppliesZapLinkForNonRemoteSource pins that every other
+// token source still goes through ZapLink resolution as before. The
+// remote-source skip in RunCommand must not become a blanket skip.
+func TestRunCommandAppliesZapLinkForNonRemoteSource(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetZapLinkHost", "https://zaplink.example.com").Return(false, true, nil)
+	db := &database.Database{UserDB: mockUserDB}
+	mockPlatform := mocks.NewMockPlatform()
+
+	_, err := RunCommand(
+		t.Context(),
+		mockPlatform,
+		&config.Instance{},
+		playlists.PlaylistController{},
+		tokens.Token{Source: tokens.SourceReader},
+		zapscript.Command{
+			Name: "zzz-test-nonexistent-command",
+			Args: []string{"https://zaplink.example.com/resolves-through-cache"},
+		},
+		1,
+		0,
+		db,
+		RunCommandOptions{},
+		&zapscript.ArgExprEnv{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+	mockUserDB.AssertCalled(t, "GetZapLinkHost", "https://zaplink.example.com")
 }

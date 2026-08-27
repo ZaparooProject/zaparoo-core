@@ -93,7 +93,7 @@ func TestSettingsList_ToggleActivation_Integration(t *testing.T) {
 	runner.SimulateEnter()
 
 	// Wait for the callback
-	assert.True(t, runner.WaitForSignal(toggleCalled, 100*time.Millisecond), "toggle callback should be called")
+	assert.True(t, runner.WaitForSignal(toggleCalled, uiSettleTimeout), "toggle callback should be called")
 	assert.True(t, toggleValue, "toggle value should be true after activation")
 }
 
@@ -121,7 +121,7 @@ func TestSettingsList_TextEditActivation_Integration(t *testing.T) {
 
 	assert.True(t, runner.ContainsText("Name: Not set"))
 	runner.SimulateEnter()
-	require.True(t, runner.WaitForText("Edit Name", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Edit Name", uiSettleTimeout))
 	assert.True(t, runner.ContainsText("Enter the profile display name."))
 	runner.SimulateString("Kid A")
 	runner.SimulateEnter()
@@ -132,7 +132,7 @@ func TestSettingsList_TextEditActivation_Integration(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for text edit")
 	}
-	require.True(t, runner.WaitForText("Name: Kid A", 100*time.Millisecond))
+	require.True(t, runner.WaitForText("Name: Kid A", uiSettleTimeout))
 	assert.Equal(t, "Kid A", value)
 }
 
@@ -200,7 +200,7 @@ func TestSettingsList_EscapeGoesBack_Integration(t *testing.T) {
 	// Verify we switched to main page
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return getFrontPage() == "main"
-	}, 100*time.Millisecond), "Should switch to main page")
+	}, uiSettleTimeout), "Should switch to main page")
 }
 
 func TestButtonBar_Navigation_Integration(t *testing.T) {
@@ -234,7 +234,7 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 	// Press Enter on first button
 	runner.SimulateEnter()
 
-	assert.True(t, runner.WaitForSignal(button1Pressed, 100*time.Millisecond), "first button should be pressed")
+	assert.True(t, runner.WaitForSignal(button1Pressed, uiSettleTimeout), "first button should be pressed")
 
 	// Navigate right to second button
 	runner.SimulateArrowRight()
@@ -242,7 +242,7 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 	// Press Enter on second button
 	runner.SimulateEnter()
 
-	assert.True(t, runner.WaitForSignal(button2Pressed, 100*time.Millisecond), "second button should be pressed")
+	assert.True(t, runner.WaitForSignal(button2Pressed, uiSettleTimeout), "second button should be pressed")
 }
 
 func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
@@ -268,7 +268,7 @@ func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
 	// Press Escape
 	runner.SimulateEscape()
 
-	assert.True(t, runner.WaitForSignal(escapeCalled, 100*time.Millisecond), "escape callback should be called")
+	assert.True(t, runner.WaitForSignal(escapeCalled, uiSettleTimeout), "escape callback should be called")
 }
 
 func TestCheckList_Integration(t *testing.T) {
@@ -299,7 +299,7 @@ func TestCheckList_Integration(t *testing.T) {
 	// Toggle first item
 	runner.SimulateEnter()
 
-	assert.True(t, runner.WaitForSignal(selectionChanged, 100*time.Millisecond), "selection callback should be called")
+	assert.True(t, runner.WaitForSignal(selectionChanged, uiSettleTimeout), "selection callback should be called")
 
 	selMu.Lock()
 	require.Len(t, selections, 1)
@@ -310,7 +310,7 @@ func TestCheckList_Integration(t *testing.T) {
 	runner.SimulateArrowDown()
 	runner.SimulateEnter()
 
-	assert.True(t, runner.WaitForSignal(selectionChanged, 100*time.Millisecond), "selection callback should be called")
+	assert.True(t, runner.WaitForSignal(selectionChanged, uiSettleTimeout), "selection callback should be called")
 
 	selMu.Lock()
 	require.Len(t, selections, 2)
@@ -357,7 +357,7 @@ func TestCheckList_EscapeNavigation_Integration(t *testing.T) {
 	// Verify we went back to main
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return getFrontPage() == "main"
-	}, 100*time.Millisecond), "Should go back to main")
+	}, uiSettleTimeout), "Should go back to main")
 }
 
 func TestSettingsList_RefreshItems_Integration(t *testing.T) {
