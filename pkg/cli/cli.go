@@ -56,7 +56,6 @@ type Flags struct {
 	Launch               *string
 	API                  *string
 	Version              *bool
-	Config               *bool
 	ShowLoader           *string
 	ShowPicker           *string
 	Reload               *bool
@@ -101,11 +100,6 @@ func SetupFlags() *Flags {
 			config.VersionFlagName,
 			false,
 			"print version and exit",
-		),
-		Config: flag.Bool(
-			"config",
-			false,
-			"start the text ui to handle Zaparoo config",
 		),
 		Reload: flag.Bool(
 			"reload",
