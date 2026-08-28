@@ -239,13 +239,13 @@ execute = "echo test"
 	assert.Equal(t, "WorkingLauncher", entries[0].ID)
 }
 
-func TestLoadCustomLaunchers_InlineEntryWinsDuplicateID(t *testing.T) {
+func TestLoadCustomLaunchers_InlineEntryWinsCaseInsensitiveDuplicateID(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	launchersDir := filepath.Join("data", "launchers")
 	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
 	require.NoError(t, afero.WriteFile(fs, filepath.Join(launchersDir, "duplicate.toml"), []byte(`
 [[launchers.custom]]
-id = "InlineLauncher"
+id = "inlinelauncher"
 execute = "echo external"
 `), 0o600))
 

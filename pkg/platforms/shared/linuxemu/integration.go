@@ -103,14 +103,15 @@ func Launchers(cfg *config.Instance, options Options, existing []platforms.Launc
 	result := make([]platforms.Launcher, 0, 64)
 	seen := make(map[string]struct{}, len(existing)+64)
 	for i := range existing {
-		seen[existing[i].ID] = struct{}{}
+		seen[strings.ToLower(existing[i].ID)] = struct{}{}
 	}
 	appendUnique := func(items ...platforms.Launcher) {
 		for i := range items {
-			if _, duplicate := seen[items[i].ID]; duplicate {
+			canonicalID := strings.ToLower(items[i].ID)
+			if _, duplicate := seen[canonicalID]; duplicate {
 				continue
 			}
-			seen[items[i].ID] = struct{}{}
+			seen[canonicalID] = struct{}{}
 			result = append(result, items[i])
 		}
 	}

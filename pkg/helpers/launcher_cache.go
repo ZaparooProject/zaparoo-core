@@ -83,7 +83,7 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance,
 
 func launcherInSlice(launchers []platforms.Launcher, id string) bool {
 	for i := range launchers {
-		if launchers[i].ID == id {
+		if strings.EqualFold(launchers[i].ID, id) {
 			return true
 		}
 	}
@@ -165,18 +165,29 @@ func (lc *LauncherCache) setLaunchableSystems(systems []launchables.VirtualSyste
 	lc.launchableSystems = append([]launchables.VirtualSystem(nil), systems...)
 }
 
-// GetLauncherByID finds a launcher by its unique ID.
-// Returns nil if no launcher with the given ID is found.
+// GetLauncherByID finds a launcher by its case-insensitive unique ID.
+// Returns nil if no launcher is found or IDs differing only by case make the lookup ambiguous.
 func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
 
+	var match *platforms.Launcher
 	for i := range lc.allLaunchers {
-		if lc.allLaunchers[i].ID == id {
-			return &lc.allLaunchers[i]
+		candidate := &lc.allLaunchers[i]
+		if !strings.EqualFold(candidate.ID, id) {
+			continue
 		}
+		if match != nil {
+			if candidate.ID != match.ID {
+				log.Error().Str("launcherID", id).Str("firstID", match.ID).Str("conflictingID", candidate.ID).
+					Msg("ambiguous case-insensitive launcher ID")
+				return nil
+			}
+			continue
+		}
+		match = candidate
 	}
-	return nil
+	return match
 }
 
 // Refresh rebuilds the cache with updated launcher data.

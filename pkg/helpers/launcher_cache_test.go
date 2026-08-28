@@ -93,6 +93,33 @@ func TestGetLauncherByID_Found(t *testing.T) {
 	assert.Equal(t, "SNES", launcher.SystemID)
 }
 
+func TestGetLauncherByID_CaseInsensitivePreservesID(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "Native-Audio", SystemID: "Audio"},
+	})
+
+	launcher := cache.GetLauncherByID("native-audio")
+	require.NotNil(t, launcher)
+	assert.Equal(t, "Native-Audio", launcher.ID)
+	assert.Equal(t, "Audio", launcher.SystemID)
+}
+
+func TestGetLauncherByID_CaseFoldCollisionIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	cache := &LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "Steam", SystemID: "PC"},
+		{ID: "steam", SystemID: "PC"},
+	})
+
+	assert.Nil(t, cache.GetLauncherByID("Steam"))
+	assert.Nil(t, cache.GetLauncherByID("STEAM"))
+}
+
 func TestGetLauncherByID_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -276,7 +303,7 @@ func TestInitialize_DeduplicatesExtraLaunchers(t *testing.T) {
 	})
 
 	extra := platforms.Launcher{ID: "extra-launcher", SystemID: "SNES"}
-	duplicate := platforms.Launcher{ID: "platform-launcher", SystemID: "NES"} // same ID as platform launcher
+	duplicate := platforms.Launcher{ID: "PLATFORM-LAUNCHER", SystemID: "NES"} // same ID with different casing
 
 	cache := &LauncherCache{}
 	cache.Initialize(mp, nil, extra, duplicate)
