@@ -64,6 +64,15 @@ func systrayOnReady(
 		mReloadConfig := systray.AddMenuItem("Reload", "Reload Core settings and files")
 		mOpenLog := systray.AddMenuItem("View Log", "View Core log file")
 
+		systray.AddSeparator()
+		mPair := systray.AddMenuItem("Pair Device...", "Show a PIN to pair a phone or tablet")
+		// Titled from status rather than fixed, so the menu says whether there
+		// is anything to install before it is opened. Refreshed on a timer from
+		// update.status, which reads the last check off disk instead of asking
+		// the release server every time the menu is drawn.
+		mUpdate := systray.AddMenuItem(updateMenuTitle(nil), "")
+		go watchUpdateStatus(cfg, mUpdate)
+
 		if cfg.DebugLogging() {
 			systray.AddSeparator()
 		}
@@ -137,6 +146,10 @@ func systrayOnReady(
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")
 					}
+				case <-mPair.ClickedCh:
+					go startPairing(cfg, notify)
+				case <-mUpdate.ClickedCh:
+					go applyUpdateFromMenu(cfg, mUpdate, notify)
 				case <-mAbout.ClickedCh:
 					msg := "Zaparoo Core\n" +
 						"Version v%s\n\n" +

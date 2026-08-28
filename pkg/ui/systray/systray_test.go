@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,6 +93,76 @@ func TestReloadCore(t *testing.T) {
 			} else {
 				require.EqualError(t, err, tt.expectedError)
 			}
+		})
+	}
+}
+
+// The tray entry has to answer "is there anything to do" from its own label,
+// because that is what someone opened the menu to find out.
+func TestUpdateMenuTitle(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		status    *models.UpdateCheckResponse
+		want      string
+		clickable bool
+	}{
+		"nothing read yet": {
+			status: nil, want: "Check for Updates", clickable: true,
+		},
+		"up to date": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityEligible},
+			want:      "Up to date",
+			clickable: true,
+		},
+		"available": {
+			status: &models.UpdateCheckResponse{
+				Eligibility:     updater.EligibilityEligible,
+				UpdateAvailable: true,
+				LatestVersion:   "2.11.0",
+			},
+			want:      "Install 2.11.0",
+			clickable: true,
+		},
+		"available but not rolled out here": {
+			status: &models.UpdateCheckResponse{
+				Eligibility:     updater.EligibilityEligible,
+				UpdateAvailable: true,
+				RolloutHeld:     true,
+				LatestVersion:   "2.11.0",
+			},
+			want:      "not yet rolled out",
+			clickable: true,
+		},
+		// Says so rather than going quiet: an install entry that does nothing
+		// is more confusing than one that explains itself.
+		"managed install cannot act": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityManaged},
+			want:      "Updates managed externally",
+			clickable: false,
+		},
+		"development build cannot act": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityDevelopment},
+			want:      "Development build",
+			clickable: false,
+		},
+		"a rollback is worth surfacing over anything else": {
+			status: &models.UpdateCheckResponse{
+				Eligibility:     updater.EligibilityEligible,
+				UpdateAvailable: true,
+				LatestVersion:   "2.11.0",
+				LastResult:      &models.UpdateLastResult{Outcome: updater.OutcomeRolledBack},
+			},
+			want:      "rolled back",
+			clickable: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, updateMenuTitle(tt.status), tt.want)
+			assert.Equal(t, tt.clickable, updateMenuClickable(tt.status))
 		})
 	}
 }

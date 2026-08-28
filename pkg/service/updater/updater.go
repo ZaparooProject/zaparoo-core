@@ -262,7 +262,67 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 		}
 	}
 
+	if err := recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   result.LatestVersion,
+		UpdateAvailable: result.UpdateAvailable,
+		RolloutHeld:     result.RolloutHeld,
+	}); err != nil {
+		log.Warn().Err(err).Msg("could not record what this update check found")
+	}
+
 	return result, nil
+}
+
+// Status answers from what this device already knows, without contacting the
+// release server or writing anything.
+//
+// A check is expensive in a way that matters on the platforms Core runs on: it
+// fetches and verifies signed metadata and writes the result to the data
+// directory, which on MiSTer is a write onto exfat. That cost is why unpaired
+// clients are refused one. Anything that wants to show update state whenever a
+// screen is drawn has to be able to ask without paying it.
+//
+// The answer is as fresh as the last check, and CheckedAt says when that was,
+// so a caller can be honest about how old it is rather than implying it just
+// looked. Unlike a check, this reports normally on a development build instead
+// of refusing: saying which version is running and that updates do not apply to
+// it is exactly what someone looking at the screen wants to know.
+func Status(ctx context.Context, opts Options) *Result { //nolint:gocritic // hugeParam
+	stateDir := stateDirFor(opts.DataDir)
+	st := stateSnapshot(stateDir)
+
+	result := &Result{
+		CurrentVersion: config.AppVersion,
+		Channel:        opts.Channel,
+		Eligibility:    eligibilityFor(&opts),
+		LastResult:     lastOutcome(stateDir),
+	}
+	if st.LastCheckAt != nil {
+		result.CheckedAt = *st.LastCheckAt
+	}
+	if st.LastCheck == nil {
+		return result
+	}
+
+	result.LatestVersion = st.LastCheck.LatestVersion
+	result.RolloutHeld = st.LastCheck.RolloutHeld
+	// Recomputed rather than replayed. The recorded answer was true when the
+	// check ran, and the most likely reason it is not true now is that the
+	// update it describes has since been installed, so reporting it back would
+	// keep offering a version already running.
+	if upgrade, err := newerThanCurrent(result.LatestVersion); err == nil {
+		result.UpdateAvailable = upgrade
+	}
+	if !result.UpdateAvailable {
+		return result
+	}
+
+	readGate(ctx, &opts, result)
+	if deferral := peekDeferral(stateDir, result.LatestVersion); deferral != nil {
+		result.DeferredReason = deferral.Reason
+		result.DeferredSince = deferral.Since
+	}
+	return result
 }
 
 func clearDeferralForRelease(stateDir, version string) error {
@@ -281,25 +341,8 @@ func clearDeferralForRelease(stateDir, version string) error {
 // This only ever reports, so the gate is asked with nothing to acquire: a check
 // must not stop the user launching something while it answers.
 func noteGate(ctx context.Context, opts *Options, result *Result, stateDir, version string) {
-	if opts.Gate == nil {
-		return
-	}
-	reporting := *opts.Gate
-	reporting.AcquireRestore = nil
-	reporting.AcquireMediaGate = nil
-	decision, err := CanApplyUpdate(ctx, &reporting, ModeManual, false)
-	if err != nil {
-		log.Warn().Err(err).Msg("could not read what is in the way of an update")
-		return
-	}
-	decision.Release()
-	if decision.OK {
-		return
-	}
-	result.BlockedReason = decision.Reason
-	result.BlockedMessage = decision.Message
-	result.BlockedForceable = decision.Forceable
-	if !decision.Expires {
+	decision, reporting, ok := readGate(ctx, opts, result)
+	if !ok || !decision.Expires {
 		return
 	}
 	now := time.Now().UTC()
@@ -309,6 +352,36 @@ func noteGate(ctx context.Context, opts *Options, result *Result, stateDir, vers
 	if err := recordDeferralAt(stateDir, version, decision.Reason, now); err != nil {
 		log.Warn().Err(err).Msg("could not record why an update is waiting")
 	}
+}
+
+// readGate fills in what is currently in the way of installing, and reports
+// whether anything was. It writes nothing, so a caller that only wants to
+// describe the situation can use it on its own.
+//
+// The gate is asked with nothing to acquire: describing what is in the way must
+// not stop the user launching something while it answers.
+func readGate(
+	ctx context.Context, opts *Options, result *Result,
+) (decision GateDecision, reporting GateDeps, blocked bool) {
+	if opts.Gate == nil {
+		return GateDecision{}, GateDeps{}, false
+	}
+	reporting = *opts.Gate
+	reporting.AcquireRestore = nil
+	reporting.AcquireMediaGate = nil
+	decision, err := CanApplyUpdate(ctx, &reporting, ModeManual, false)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not read what is in the way of an update")
+		return GateDecision{}, reporting, false
+	}
+	decision.Release()
+	if decision.OK {
+		return decision, reporting, false
+	}
+	result.BlockedReason = decision.Reason
+	result.BlockedMessage = decision.Message
+	result.BlockedForceable = decision.Forceable
+	return decision, reporting, true
 }
 
 // installAdvice says how this device gets a new release. A package manager

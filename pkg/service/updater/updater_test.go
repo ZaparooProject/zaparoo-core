@@ -562,3 +562,78 @@ func TestNoteGate_ReportsWithoutTakingAnyGate(t *testing.T) {
 	assert.False(t, restoreTaken)
 	assert.False(t, mediaTaken)
 }
+
+// Status answers from disk. The check that produced those findings is the only
+// thing that talks to the network, so nothing here may need it.
+func TestStatus_AnswersFromRecordedFindingsWithoutTheNetwork(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	stateDir := stateDirFor(dataDir)
+	require.NoError(t, recordScheduledCheck(stateDir, true))
+	require.NoError(t, recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}))
+
+	// No manifest, no server, no baseURL: reaching for any of them would fail
+	// rather than quietly fall back.
+	result := Status(t.Context(), Options{DataDir: dataDir, Channel: "stable"})
+	require.NotNil(t, result)
+	assert.Equal(t, "2.10.0", result.CurrentVersion)
+	assert.Equal(t, "2.11.0", result.LatestVersion)
+	assert.True(t, result.UpdateAvailable)
+	assert.Equal(t, "stable", result.Channel)
+	assert.False(t, result.CheckedAt.IsZero(), "must say how old the answer is")
+}
+
+// The recorded findings describe the moment the check ran. Once the update has
+// been installed they would otherwise keep offering a version already running.
+func TestStatus_DoesNotOfferAVersionAlreadyInstalled(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.11.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	require.NoError(t, recordCheckFindings(stateDirFor(dataDir), &lastCheckFindings{
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}))
+
+	result := Status(t.Context(), Options{DataDir: dataDir})
+	require.NotNil(t, result)
+	assert.False(t, result.UpdateAvailable, "recomputed against the running version")
+	assert.Equal(t, "2.11.0", result.LatestVersion)
+}
+
+// A check refuses outright on a development build. Status is what a screen
+// shows, and "this is a dev build so updates do not apply" is the useful answer.
+func TestStatus_ReportsADevelopmentBuildInsteadOfRefusing(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "abc1234-dev"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	_, checkErr := Check(t.Context(), Options{DataDir: t.TempDir()})
+	require.ErrorIs(t, checkErr, ErrDevelopmentVersion, "premise: a check refuses here")
+
+	result := Status(t.Context(), Options{DataDir: t.TempDir()})
+	require.NotNil(t, result)
+	assert.Equal(t, "abc1234-dev", result.CurrentVersion)
+	assert.Equal(t, EligibilityDevelopment, result.Eligibility)
+	assert.False(t, result.UpdateAvailable)
+}
+
+// Nothing has checked yet. Saying so is different from saying it is up to date.
+func TestStatus_SaysNothingIsKnownBeforeTheFirstCheck(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	result := Status(t.Context(), Options{DataDir: t.TempDir()})
+	require.NotNil(t, result)
+	assert.Empty(t, result.LatestVersion)
+	assert.False(t, result.UpdateAvailable)
+	assert.True(t, result.CheckedAt.IsZero(), "no check has happened, so there is no time to report")
+}

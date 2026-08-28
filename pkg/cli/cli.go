@@ -60,6 +60,7 @@ type Flags struct {
 	ShowPicker           *string
 	Reload               *bool
 	Pair                 *bool
+	Update               *bool
 	Backup               *bool
 	Backups              *bool
 	Restore              *string
@@ -110,6 +111,11 @@ func SetupFlags() *Flags {
 			"pair",
 			false,
 			"start pairing flow and display PIN for client to enter",
+		),
+		Update: flag.Bool(
+			"update",
+			false,
+			"show update status, and install one if available",
 		),
 		Backup: flag.Bool(
 			"backup",
@@ -393,6 +399,8 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case *f.Update:
+		os.Exit(runUpdate(context.Background(), cfg, client.LocalClient))
 	case *f.Backup:
 		resp, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsBackup, "")
 		if err != nil {
