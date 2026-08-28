@@ -11,6 +11,11 @@ WorkingDirectory=/media/sd/zaparoo
 ExecStart=/media/sd/zaparoo/zaparoo -daemon
 Restart=on-failure
 RestartSec=5s
+# Core exits 78 when starting again cannot help, currently a user database
+# written by a newer build than the one installed. Retrying that every five
+# seconds buries the explanation under copies of itself; failing here leaves it
+# readable in systemctl status. See docs/ota-runbook.md.
+RestartPreventExitStatus=78
 
 # Logging
 StandardOutput=journal
