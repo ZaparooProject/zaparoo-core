@@ -163,8 +163,7 @@ func NewLutrisLauncher(opts LutrisOptions) platforms.Launcher {
 			}
 			lutrisResults, err := ScanLutrisGames(lutrisDB)
 			if err != nil {
-				log.Warn().Err(err).Msg("failed to scan Lutris games")
-				return results, nil
+				return results, fmt.Errorf("scan Lutris games: %w", err)
 			}
 			return append(results, lutrisResults...), nil
 		},

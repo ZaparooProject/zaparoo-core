@@ -344,7 +344,7 @@ Methods execute actions and return data from Core. This catalog documents **88 n
 | settings.auth.claim             | Claim API credentials from remote server.                                             | All clients |
 | settings.auth.status            | Return credential link status.                                                        | All clients |
 | settings.auth.unlink            | Remove online account credentials.                                                    | Local/admin |
-| settings.auth.link              | Start online account link.                                                            | Local/admin |
+| settings.auth.link              | Start online account link.                                                            | All clients |
 | settings.auth.link.status       | Return online account link flow status.                                               | Tiered |
 | settings.auth.link.cancel       | Cancel online account link flow.                                                      | Local/admin |
 | update.check                    | Check for newer Core version.                                                         | Localhost or any paired client |

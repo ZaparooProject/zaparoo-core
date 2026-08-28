@@ -288,6 +288,10 @@ func ValidateGameListXML(data []byte) error {
 			}
 		case xml.EndElement:
 			depth--
+		case xml.CharData:
+			if depth == 0 && len(bytes.TrimSpace(value)) > 0 {
+				return errors.New("character data outside gameList root element")
+			}
 		}
 	}
 }

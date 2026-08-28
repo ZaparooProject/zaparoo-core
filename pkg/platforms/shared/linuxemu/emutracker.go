@@ -46,6 +46,7 @@ type EmulatorTracker struct {
 	tracked map[int]*EmulatorProcess
 	watchID procscanner.WatchID
 	mu      syncutil.Mutex
+	watchMu syncutil.Mutex
 }
 
 // NewEmulatorTracker creates a tracker using a running process scanner.
@@ -77,6 +78,11 @@ func (t *EmulatorTracker) Start() {
 	if t == nil || t.scanner == nil {
 		return
 	}
+	t.watchMu.Lock()
+	defer t.watchMu.Unlock()
+	if t.watchID != 0 {
+		return
+	}
 	t.watchID = t.scanner.Watch(newEmulatorMatcher(), procscanner.Callbacks{
 		OnStart: t.handleProcessStart, OnStop: t.handleProcessStop,
 	})
@@ -88,7 +94,14 @@ func (t *EmulatorTracker) Stop() {
 	if t == nil || t.scanner == nil {
 		return
 	}
-	t.scanner.Unwatch(t.watchID)
+	t.watchMu.Lock()
+	watchID := t.watchID
+	t.watchID = 0
+	t.watchMu.Unlock()
+	if watchID == 0 {
+		return
+	}
+	t.scanner.Unwatch(watchID)
 	log.Info().Msg("emulator tracker stopped")
 }
 

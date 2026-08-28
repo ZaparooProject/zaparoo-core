@@ -79,3 +79,24 @@ func TestEmulatorTrackerNilScannerAndCallbacks(t *testing.T) {
 	assert.Empty(t, tracker.TrackedEmulators())
 	assert.NotPanics(t, tracker.Stop)
 }
+
+func TestEmulatorTrackerLifecycleIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	scanner := procscanner.New()
+	defer scanner.Stop()
+	tracker := NewEmulatorTracker(scanner, nil, nil)
+
+	tracker.Start()
+	firstWatchID := tracker.watchID
+	require.NotZero(t, firstWatchID)
+	tracker.Start()
+	assert.Equal(t, firstWatchID, tracker.watchID)
+
+	tracker.Stop()
+	assert.Zero(t, tracker.watchID)
+	tracker.Start()
+	assert.NotZero(t, tracker.watchID)
+	assert.NotEqual(t, firstWatchID, tracker.watchID)
+	tracker.Stop()
+}

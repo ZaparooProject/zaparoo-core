@@ -150,6 +150,23 @@ func TestGameListXMLLimits(t *testing.T) {
 		err := ValidateGameListXML([]byte(`<notGameList/>`))
 		require.Error(t, err)
 	})
+
+	t.Run("text before root", func(t *testing.T) {
+		t.Parallel()
+		err := ValidateGameListXML([]byte(`prefix<gameList/>`))
+		require.ErrorContains(t, err, "character data outside gameList root element")
+	})
+
+	t.Run("text after root", func(t *testing.T) {
+		t.Parallel()
+		err := ValidateGameListXML([]byte(`<gameList/>suffix`))
+		require.ErrorContains(t, err, "character data outside gameList root element")
+	})
+
+	t.Run("whitespace around root", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, ValidateGameListXML([]byte(" \n\t<gameList/>\r\n ")))
+	})
 }
 
 func TestReadGameListXMLFSSizeLimit(t *testing.T) {

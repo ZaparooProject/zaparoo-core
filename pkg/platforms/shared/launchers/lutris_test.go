@@ -178,6 +178,40 @@ func TestScanLutrisGames(t *testing.T) {
 		}
 	})
 
+	t.Run("wal_database", func(t *testing.T) {
+		t.Parallel()
+
+		dbPath := filepath.Join(t.TempDir(), "pga.db")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, db.Close())
+		}()
+
+		ctx := context.Background()
+		var journalMode string
+		require.NoError(t, db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journalMode))
+		require.Equal(t, "wal", strings.ToLower(journalMode))
+		_, err = db.ExecContext(ctx, `
+			CREATE TABLE games (
+				id INTEGER PRIMARY KEY,
+				name TEXT,
+				slug TEXT,
+				installed INTEGER
+			);
+			INSERT INTO games (name, slug, installed) VALUES ('WAL Game', 'wal-game', 1);
+		`)
+		require.NoError(t, err)
+		require.FileExists(t, dbPath+"-wal")
+		require.FileExists(t, dbPath+"-shm")
+
+		results, err := ScanLutrisGames(dbPath)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "WAL Game", results[0].Name)
+		assert.Equal(t, "lutris://wal-game/WAL%20Game", results[0].Path)
+	})
+
 	t.Run("empty_database", func(t *testing.T) {
 		t.Parallel()
 
@@ -209,4 +243,25 @@ func TestScanLutrisGames(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
+}
+
+func TestLutrisScannerReturnsDatabaseErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	lutrisDir := filepath.Join(home, ".local", "share", "lutris")
+	require.NoError(t, os.MkdirAll(lutrisDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(lutrisDir, "pga.db"), []byte("not sqlite"), 0o600))
+
+	launcher := NewLutrisLauncher(LutrisOptions{
+		lookPath: func(name string) (string, error) {
+			if name == "lutris" {
+				return "/usr/bin/lutris", nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	initial := []platforms.ScanResult{{Name: "Existing", Path: "/existing"}}
+	results, err := launcher.Scanner(t.Context(), nil, "", initial)
+	require.ErrorContains(t, err, "scan Lutris games")
+	assert.Equal(t, initial, results)
 }

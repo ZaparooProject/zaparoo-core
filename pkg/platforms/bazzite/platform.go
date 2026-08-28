@@ -185,8 +185,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
 	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(ls)), custom...), ls...)
-	ls = append(ls, linuxemu.Launchers(cfg, p.emulationOptions(), existing)...)
-	linuxemu.AttachPlainESDEScanners(cfg, p.emulationOptions(), ls)
+	emuOpts := p.emulationOptions()
+	ls = append(ls, linuxemu.Launchers(cfg, emuOpts, existing)...)
+	linuxemu.AttachPlainESDEScanners(cfg, emuOpts, ls)
 	allLaunchers := make([]platforms.Launcher, 0, len(custom)+len(ls))
 	allLaunchers = append(allLaunchers, custom...)
 	allLaunchers = append(allLaunchers, ls...)

@@ -2620,10 +2620,10 @@ None.
 | updateChannel             | string                                    | Yes      | Release channel used for update checks: `stable` or `beta`. Defaults to `stable`. |
 | updateCheck               | boolean                                   | Yes      | Whether the service looks for new releases on its own. Defaults to true on every platform, including installs a package manager owns. |
 | updateInstall             | boolean                                   | Yes      | Whether the device downloads and installs updates on its own, rather than only telling the user one exists. Defaults to false, and is always false while `updateCheck` is off. |
-| backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and paired admin clients. |
-| playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and paired admin clients. |
-| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and paired admin clients. |
-| backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and paired admin clients. |
+| backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and authenticated admin clients. |
+| playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
+| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
+| backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
 
@@ -2711,9 +2711,9 @@ An object containing any of the following optional keys:
 | updateChannel             | string                                    | No       | Release channel used for update checks: `stable` or `beta`. |
 | updateCheck               | boolean                                   | No       | Whether the service looks for new releases on its own. |
 | updateInstall             | boolean                                   | No       | Whether the device installs updates on its own. Setting it to true while update checking is off is refused; send `updateCheck: true` in the same call to turn both on. |
-| backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires a localhost or paired admin client. |
-| playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires a localhost or paired admin client. |
-| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires a localhost or paired admin client. |
+| backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
+| playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
+| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
 
 #### Result
 
@@ -4775,7 +4775,7 @@ None.
 
 Return effective access, pairing status, paired role, and named capabilities for current connection. This method is available to every connection accepted by API transport.
 
-`access` is one of `localhost`, `member`, `admin`, or `legacy`. A valid static API key reports `access: "admin"` with `paired: false` and `role: null`. `role` remains the stored paired role and is `null` for localhost, API-key admin, and legacy. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage`, `settings.write`, `input`, `screenshot`, and `update.apply`; the array does not enumerate every callable RPC method.
+`access` is one of `localhost`, `member`, `admin`, or `legacy`. A valid static API key reports `access: "admin"` with `paired: false` and `role: null`. `role` remains the stored paired role for authenticated paired connections, including paired localhost connections, and is `null` for unpaired localhost, API-key admin, and legacy. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage`, `settings.write`, `input`, `screenshot`, and `update.apply`; the array does not enumerate every callable RPC method.
 
 #### Parameters
 

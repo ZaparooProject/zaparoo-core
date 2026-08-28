@@ -160,7 +160,7 @@ func scanHeroicLibraryFile(filePath, jsonKey string, defaultRunners ...string) (
 		if runner == "" {
 			runner = defaultRunner
 		}
-		if !validHeroicRunner(runner) || appName == "" || len(appName) > maxHeroicFieldLength ||
+		if !validHeroicRunner(runner) || appName == "" || title == "" || len(appName) > maxHeroicFieldLength ||
 			len(title) > maxHeroicFieldLength || virtualpath.ContainsControlChar(appName) ||
 			virtualpath.ContainsControlChar(title) ||
 			(runner == "gog" && strings.EqualFold(appName, "gog-redist")) {

@@ -477,4 +477,37 @@ func TestScanHeroicLibraryFile(t *testing.T) {
 		assert.Len(t, results, 1)
 		assert.Equal(t, "Valid Game", results[0].Name)
 	})
+
+	t.Run("filters_games_without_title", func(t *testing.T) {
+		t.Parallel()
+
+		filePath := filepath.Join(t.TempDir(), "library.json")
+		library := `{
+			"library": [
+				{
+					"app_name": "ValidGame",
+					"title": "Valid Game",
+					"is_installed": true,
+					"runner": "legendary"
+				},
+				{
+					"app_name": "MissingTitle",
+					"is_installed": true,
+					"runner": "legendary"
+				},
+				{
+					"app_name": "WhitespaceTitle",
+					"title": "   ",
+					"is_installed": true,
+					"runner": "legendary"
+				}
+			]
+		}`
+		require.NoError(t, os.WriteFile(filePath, []byte(library), 0o600))
+
+		results, err := scanHeroicLibraryFile(filePath, "library")
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "Valid Game", results[0].Name)
+	})
 }

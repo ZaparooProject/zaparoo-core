@@ -80,6 +80,19 @@ func TestReadProviderSystemFoldersRejectsExcessiveDirectories(t *testing.T) {
 	require.ErrorContains(t, err, "system limit")
 }
 
+func TestReadProviderSystemFoldersRejectsSymlinks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "nes"), 0o750))
+	target := t.TempDir()
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "linked")))
+
+	folders, err := readProviderSystemFolders(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"nes"}, folders)
+}
+
 func TestReadLauncherTargetRejectsOversizedFile(t *testing.T) {
 	t.Parallel()
 

@@ -13,9 +13,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 )
@@ -43,31 +43,34 @@ func newApplicationResolver(
 		options.isFlatpakInstalled = IsFlatpakInstalled
 	}
 
-	var once sync.Once
+	var mu syncutil.Mutex
 	var installation applicationInstallation
-	var resolveErr error
+	resolved := false
 	return func() (applicationInstallation, error) {
-		once.Do(func() {
-			if path, err := options.lookPath(nativeExecutable); err == nil {
-				installation = applicationInstallation{executable: path}
-				return
+		mu.Lock()
+		defer mu.Unlock()
+		if resolved {
+			return installation, nil
+		}
+		if path, err := options.lookPath(nativeExecutable); err == nil {
+			installation = applicationInstallation{executable: path}
+			resolved = true
+			return installation, nil
+		}
+		if options.checkFlatpak && options.isFlatpakInstalled(flatpakID) {
+			flatpakPath, err := options.lookPath("flatpak")
+			if err != nil {
+				return applicationInstallation{}, fmt.Errorf("resolve flatpak executable: %w", err)
 			}
-			if options.checkFlatpak && options.isFlatpakInstalled(flatpakID) {
-				flatpakPath, err := options.lookPath("flatpak")
-				if err != nil {
-					resolveErr = fmt.Errorf("resolve flatpak executable: %w", err)
-					return
-				}
-				installation = applicationInstallation{
-					executable: flatpakPath,
-					argsPrefix: []string{"run", flatpakID},
-					flatpak:    true,
-				}
-				return
+			installation = applicationInstallation{
+				executable: flatpakPath,
+				argsPrefix: []string{"run", flatpakID},
+				flatpak:    true,
 			}
-			resolveErr = fmt.Errorf("%s is not installed", nativeExecutable)
-		})
-		return installation, resolveErr
+			resolved = true
+			return installation, nil
+		}
+		return applicationInstallation{}, fmt.Errorf("%s is not installed", nativeExecutable)
 	}
 }
 

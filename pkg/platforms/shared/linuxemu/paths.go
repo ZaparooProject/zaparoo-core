@@ -100,7 +100,14 @@ func readProviderSystemFolders(path string) ([]string, error) {
 	for {
 		entries, readErr := directory.ReadDir(128)
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			if entry.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return nil, fmt.Errorf("stat provider ROM entry %q: %w", entry.Name(), infoErr)
+			}
+			if !info.Mode().IsDir() {
 				continue
 			}
 			if len(result) >= maxProviderSystemDirs {
