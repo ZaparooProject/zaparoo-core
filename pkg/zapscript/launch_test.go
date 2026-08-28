@@ -57,6 +57,58 @@ func launchTestAbsPath(parts ...string) string {
 	return filepath.Join(append([]string{root}, parts...)...)
 }
 
+func TestFindLauncherIn_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	cache := &pathhelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "Cache-Only", SystemID: "Audio"},
+	})
+	platformLaunchers := []platforms.Launcher{
+		{ID: "Platform-Launcher", SystemID: "PC"},
+	}
+
+	tests := []struct {
+		name      string
+		launcher  string
+		wantID    string
+		launchers []platforms.Launcher
+	}{
+		{
+			name:      "platform launcher",
+			launchers: platformLaunchers,
+			launcher:  "PLATFORM-LAUNCHER",
+			wantID:    "Platform-Launcher",
+		},
+		{
+			name:     "cache-only launcher",
+			launcher: "CACHE-ONLY",
+			wantID:   "Cache-Only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			launcher := findLauncherIn(tt.launchers, cache, tt.launcher)
+			require.NotNil(t, launcher)
+			assert.Equal(t, tt.wantID, launcher.ID)
+		})
+	}
+}
+
+func TestFindLauncherIn_CaseFoldCollisionIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	cache := &pathhelpers.LauncherCache{}
+	launchers := []platforms.Launcher{
+		{ID: "Steam", SystemID: "PC"},
+		{ID: "steam", SystemID: "PC"},
+	}
+
+	assert.Nil(t, findLauncherIn(launchers, cache, "STEAM"))
+}
+
 func TestMediaIDForHistoryEntry_ResolvesMedia(t *testing.T) {
 	t.Parallel()
 

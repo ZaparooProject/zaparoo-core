@@ -101,16 +101,16 @@ func newFlatpakChecker() func(string) bool {
 func Launchers(cfg *config.Instance, options Options, existing []platforms.Launcher) []platforms.Launcher {
 	options.normalize()
 	result := make([]platforms.Launcher, 0, 64)
-	seen := make(map[string]struct{}, len(existing)+64)
+	seenIDs := make([]string, len(existing), len(existing)+64)
 	for i := range existing {
-		seen[existing[i].ID] = struct{}{}
+		seenIDs[i] = existing[i].ID
 	}
 	appendUnique := func(items ...platforms.Launcher) {
 		for i := range items {
-			if _, duplicate := seen[items[i].ID]; duplicate {
+			if launcherIDInSlice(seenIDs, items[i].ID) {
 				continue
 			}
-			seen[items[i].ID] = struct{}{}
+			seenIDs = append(seenIDs, items[i].ID)
 			result = append(result, items[i])
 		}
 	}
@@ -127,6 +127,15 @@ func Launchers(cfg *config.Instance, options Options, existing []platforms.Launc
 	}
 	configurePlainESDEScanners(cfg, &options, result)
 	return result
+}
+
+func launcherIDInSlice(ids []string, id string) bool {
+	for i := range ids {
+		if strings.EqualFold(ids[i], id) {
+			return true
+		}
+	}
+	return false
 }
 
 func wrapGameMode(options *Options, launcher *platforms.Launcher) {

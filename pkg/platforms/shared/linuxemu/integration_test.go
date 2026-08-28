@@ -143,6 +143,30 @@ func TestStandaloneDiscoversNativeBeforeFlatpak(t *testing.T) {
 	t.Fatal("native ScummVM launcher not discovered")
 }
 
+func TestLaunchersSuppressesCaseInsensitiveExistingID(t *testing.T) {
+	t.Parallel()
+
+	options := NewOptions(t.TempDir(), sharedretroarch.Options{})
+	options.IncludeRetroArch = false
+	options.IncludeProviderDecks = false
+	options.LookPath = func(name string) (string, error) {
+		if name == "scummvm" {
+			return filepath.Join(string(filepath.Separator), "usr", "bin", "scummvm"), nil
+		}
+		return "", errors.New("missing")
+	}
+	options.IsFlatpakInstalled = func(string) bool { return false }
+
+	launchers := Launchers(nil, options, []platforms.Launcher{{ID: "scummvmstandalone"}})
+	assert.NotContains(t, launcherIDs(launchers), "ScummVMStandalone")
+}
+
+func TestLauncherIDInSliceUsesEqualFold(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, launcherIDInSlice([]string{"Σ"}, "ς"))
+}
+
 func TestStandaloneDiscoversEmuDeckAppImage(t *testing.T) {
 	t.Parallel()
 

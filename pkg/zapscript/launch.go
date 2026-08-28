@@ -742,16 +742,38 @@ func searchMediaBySystemTier(
 }
 
 func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID string) *platforms.Launcher {
+	return findLauncherIn(pl.Launchers(cfg.Cfg), helpers.GlobalLauncherCache, launcherID)
+}
+
+func findLauncherIn(
+	launchers []platforms.Launcher,
+	cache *helpers.LauncherCache,
+	launcherID string,
+) *platforms.Launcher {
 	if launcherID == "" {
 		return nil
 	}
-	launchers := pl.Launchers(cfg.Cfg)
+
+	var match *platforms.Launcher
 	for i := range launchers {
-		if strings.EqualFold(launchers[i].ID, launcherID) {
-			return &launchers[i]
+		candidate := &launchers[i]
+		if !strings.EqualFold(candidate.ID, launcherID) {
+			continue
 		}
+		if match != nil {
+			if candidate.ID != match.ID {
+				log.Error().Str("launcherID", launcherID).Str("firstID", match.ID).
+					Str("conflictingID", candidate.ID).Msg("ambiguous case-insensitive launcher ID")
+				return nil
+			}
+			continue
+		}
+		match = candidate
 	}
-	return helpers.GlobalLauncherCache.GetLauncherByID(launcherID)
+	if match != nil {
+		return match
+	}
+	return cache.GetLauncherByID(launcherID)
 }
 
 type launchTarget struct {
