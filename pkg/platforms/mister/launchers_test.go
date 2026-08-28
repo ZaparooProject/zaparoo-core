@@ -574,12 +574,18 @@ func TestCreateLaunchersUsesCatalogScanMetadata(t *testing.T) {
 		byID[launcher.ID] = launcher
 	}
 
+	customScannerSystems := map[string]struct{}{
+		"Amiga":  {},
+		"NeoGeo": {},
+		"ao486":  {},
+	}
 	for _, definition := range catalog.All() {
-		if len(definition.Folders) == 0 && len(definition.Extensions) == 0 {
+		launcher, ok := byID[definition.ID]
+		if !ok {
+			_, customScanner := customScannerSystems[definition.ID]
+			require.True(t, customScanner, "catalog-backed launcher %s missing", definition.ID)
 			continue
 		}
-		launcher, ok := byID[definition.ID]
-		require.True(t, ok, "catalog-backed launcher %s missing", definition.ID)
 		assert.Equal(t, definition.Folders, launcher.Folders, definition.ID)
 		assert.Equal(t, definition.Extensions, launcher.Extensions, definition.ID)
 	}
