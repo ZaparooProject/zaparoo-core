@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -354,6 +355,77 @@ func TestAutoInstallReleaseAllowed(t *testing.T) {
 		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, DeviceID: "device-1"}, held),
 		errAutoInstallIneligible)
 	assert.NoError(t, autoInstallReleaseAllowed(&Options{Mode: ModeAuto}, full))
+}
+
+// A release that already failed to start here must not be installed again on
+// its own. Nothing else declines it, so without this the device repeats the
+// download, snapshot, swap and restore every time it checks.
+func TestAutoInstallReleaseAllowed_RefusesAVersionThisDeviceRolledBack(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	require.NoError(t, recordUpdateResult(stateDirFor(dataDir), &updateResult{
+		At:          time.Date(2026, 8, 28, 9, 21, 0, 0, time.UTC),
+		Outcome:     outcomeRolledBack,
+		FromVersion: "2.90.1",
+		ToVersion:   "2.90.2",
+	}))
+	bad := &otameta.Release{TagName: "v2.90.2", Rollout: 100}
+
+	require.ErrorIs(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeAuto, DataDir: dataDir}, bad),
+		errAutoInstallIneligible,
+		"the automatic path must not retry a version that failed here")
+
+	// A person asking for it again is asking on purpose.
+	assert.NoError(t,
+		autoInstallReleaseAllowed(&Options{Mode: ModeManual, DataDir: dataDir}, bad),
+		"a manual apply must still be able to retry it")
+
+	// A later release has not failed here, so it is offered normally.
+	assert.NoError(t, autoInstallReleaseAllowed(
+		&Options{Mode: ModeAuto, DataDir: dataDir},
+		&otameta.Release{TagName: "v2.90.3", Rollout: 100},
+	), "a newer version is a different release")
+}
+
+func TestRolledBackHere(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	assert.False(t, rolledBackHere(dataDir, "2.90.2"), "no recorded result yet")
+	assert.False(t, rolledBackHere("", "2.90.2"))
+
+	require.NoError(t, recordUpdateResult(stateDirFor(dataDir), &updateResult{
+		Outcome:     outcomeSucceeded,
+		FromVersion: "2.90.0",
+		ToVersion:   "2.90.1",
+	}))
+	assert.False(t, rolledBackHere(dataDir, "2.90.1"), "a version that installed cleanly is not blocked")
+
+	require.NoError(t, recordUpdateResult(stateDirFor(dataDir), &updateResult{
+		Outcome:     outcomeRolledBack,
+		FromVersion: "2.90.1",
+		ToVersion:   "2.90.2",
+	}))
+	assert.True(t, rolledBackHere(dataDir, "2.90.2"))
+	assert.False(t, rolledBackHere(dataDir, "2.90.3"), "only the version that failed is blocked")
+	assert.False(t, rolledBackHere(dataDir, ""))
+}
+
+func TestPreviouslyRolledBack(t *testing.T) {
+	t.Parallel()
+
+	rolledBack := &OutcomeReport{Outcome: string(outcomeRolledBack), ToVersion: "2.90.2"}
+	assert.True(t, PreviouslyRolledBack(&Result{LatestVersion: "2.90.2", LastResult: rolledBack}))
+	assert.False(t, PreviouslyRolledBack(&Result{LatestVersion: "2.90.3", LastResult: rolledBack}),
+		"a newer offer is not the release that failed")
+	assert.False(t, PreviouslyRolledBack(&Result{
+		LatestVersion: "2.90.2",
+		LastResult:    &OutcomeReport{Outcome: string(outcomeSucceeded), ToVersion: "2.90.2"},
+	}))
+	assert.False(t, PreviouslyRolledBack(&Result{LatestVersion: "2.90.2"}))
+	assert.False(t, PreviouslyRolledBack(nil))
 }
 
 func TestApply_UpdateInProgress(t *testing.T) {

@@ -227,7 +227,8 @@ func (s *updaterScheduler) tryCheck(ctx context.Context) {
 
 func autoInstallable(result *updater.Result) bool {
 	return result != nil && result.UpdateAvailable && !result.RolloutHeld &&
-		result.Eligibility == updater.EligibilityEligible
+		result.Eligibility == updater.EligibilityEligible &&
+		!updater.PreviouslyRolledBack(result)
 }
 
 func (s *updaterScheduler) tryInstall(ctx context.Context) {
