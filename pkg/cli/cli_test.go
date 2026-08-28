@@ -23,7 +23,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"syscall"
 	"testing"
 
@@ -34,6 +36,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetupFlags_DoesNotAdvertiseUnsupportedConfigFlag(t *testing.T) {
+	original := flag.CommandLine
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+	t.Cleanup(func() {
+		flag.CommandLine = original
+	})
+
+	SetupFlags()
+
+	assert.Nil(t, flag.Lookup("config"))
+}
 
 func TestReloadCore(t *testing.T) {
 	t.Parallel()
