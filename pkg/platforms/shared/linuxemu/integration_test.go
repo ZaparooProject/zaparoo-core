@@ -216,6 +216,26 @@ func TestStandaloneCommandRequiresExistingAbsoluteMedia(t *testing.T) {
 	require.ErrorContains(t, err, "stat media path")
 }
 
+func TestStandaloneInstallationAvailability(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(t.TempDir(), "emulator")
+	require.NoError(t, os.WriteFile(executable, []byte("binary"), 0o600))
+	require.NoError(t, os.Chmod(executable, 0o700)) //nolint:gosec // Test executable must be runnable.
+	options := NewOptions(t.TempDir(), sharedretroarch.Options{})
+	assert.True(t, standaloneInstallationAvailable(&options, standaloneInstallation{executable: executable}))
+	require.NoError(t, os.Chmod(executable, 0o600))
+	assert.False(t, standaloneInstallationAvailable(&options, standaloneInstallation{executable: executable}))
+
+	options.IsFlatpakInstalled = func(id string) bool { return id == "example.Installed" }
+	assert.True(t, standaloneInstallationAvailable(&options, standaloneInstallation{
+		executable: "flatpak", flatpakID: "example.Installed",
+	}))
+	assert.False(t, standaloneInstallationAvailable(&options, standaloneInstallation{
+		executable: "flatpak", flatpakID: "example.Missing",
+	}))
+}
+
 func TestMAMEArgsUseROMDirectoryAndMachineName(t *testing.T) {
 	t.Parallel()
 
@@ -225,6 +245,27 @@ func TestMAMEArgsUseROMDirectoryAndMachineName(t *testing.T) {
 	assert.Equal(t, []string{"-nowindow", "-rompath", filepath.Dir(path), "outrun"}, args)
 	_, err = mameArgs(filepath.Join(string(filepath.Separator), "roms", "arcade", "outrun.chd"))
 	require.Error(t, err)
+}
+
+func TestStandaloneTargetArguments(t *testing.T) {
+	t.Parallel()
+
+	vitaTarget := filepath.Join(t.TempDir(), "game.psvita")
+	require.NoError(t, os.WriteFile(vitaTarget, []byte("PCSA00001"), 0o600))
+	args, err := vita3KArgs(vitaTarget)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-F", "-r", "PCSA00001"}, args)
+
+	ps3Target := filepath.Join(t.TempDir(), "game.ps3")
+	require.NoError(t, os.WriteFile(ps3Target, []byte("/games/PS3_GAME"), 0o600))
+	args, err = rpcs3Args(ps3Target)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--no-gui", "--fullscreen", "/games/PS3_GAME"}, args)
+
+	romPath := filepath.Join(string(filepath.Separator), "roms", "wiiu", "game.rpx")
+	args, err = cemuArgs(romPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-g", romPath, "-f"}, args)
 }
 
 func TestAuditedStandaloneArguments(t *testing.T) {
