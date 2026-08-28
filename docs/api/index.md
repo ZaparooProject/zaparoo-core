@@ -52,7 +52,7 @@ curl -X POST http://10.0.0.123:7497/api/v0.1 \
   }'
 ```
 
-This would return a response like:
+For release 2.16.1, this would return a response like:
 
 ```json
 {
@@ -64,6 +64,8 @@ This would return a response like:
   }
 }
 ```
+
+The reported version is build-dependent. Core returns `config.AppVersion`, populated from `APP_VERSION` during release builds.
 
 Unlike WebSocket connections, HTTP requests are stateless and do not support notifications. Each request requires a complete JSON-RPC 2.0 payload and will receive a single response.
 
@@ -257,7 +259,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods execute actions and return data from Core. This catalog documents **87 non-deprecated registered methods**. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or authenticated admin, including paired and valid static API-key admins; **Tiered** means fields or availability vary by client and are detailed in method reference.
+Methods execute actions and return data from Core. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or authenticated admin, including paired and valid static API-key admins; **Tiered** means fields or availability vary by client and are detailed in method reference.
 
 | ID                              | Description                                                                           | Access |
 | :------------------------------ | :------------------------------------------------------------------------------------ | :----- |

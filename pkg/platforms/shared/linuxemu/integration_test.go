@@ -150,15 +150,21 @@ func TestLaunchersSuppressesCaseInsensitiveExistingID(t *testing.T) {
 	options.IncludeRetroArch = false
 	options.IncludeProviderDecks = false
 	options.LookPath = func(name string) (string, error) {
-		if name == "pcsx2-qt" {
-			return filepath.Join(string(filepath.Separator), "usr", "bin", "pcsx2-qt"), nil
+		if name == "scummvm" {
+			return filepath.Join(string(filepath.Separator), "usr", "bin", "scummvm"), nil
 		}
 		return "", errors.New("missing")
 	}
 	options.IsFlatpakInstalled = func(string) bool { return false }
 
-	launchers := Launchers(nil, options, []platforms.Launcher{{ID: "pcsx2"}})
-	assert.NotContains(t, launcherIDs(launchers), "PCSX2")
+	launchers := Launchers(nil, options, []platforms.Launcher{{ID: "scummvmstandalone"}})
+	assert.NotContains(t, launcherIDs(launchers), "ScummVMStandalone")
+}
+
+func TestLauncherIDInSliceUsesEqualFold(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, launcherIDInSlice([]string{"Σ"}, "ς"))
 }
 
 func TestStandaloneDiscoversEmuDeckAppImage(t *testing.T) {
