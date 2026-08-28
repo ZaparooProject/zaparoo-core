@@ -73,8 +73,10 @@ promote now verifies the live signature and advances from its generation;
 Do not use it unless the signed live metadata is genuinely unavailable and the
 recovery generation is known to exceed every generation devices may have seen.
 
-Start a significant release at a partial `rollout` — 5, then 25, then 100 over a
-few days — and widen it with **OTA rollout**. Bucketing is salted per release,
+Start a significant release at a partial `rollout` — 5, then 25, then 100 — and
+widen it with **OTA rollout**. Hold each rung long enough to see failures that
+only a real fleet produces: at least 24 hours at 5, 72 hours at 25, and 7 days
+at 100 before the release counts as fully out. Bucketing is salted per release,
 so widening keeps the devices already on it and a different release picks a
 fresh, uncorrelated cohort. No device is permanently a guinea pig.
 
@@ -278,11 +280,15 @@ Contain it with all of these controls:
 
 1. Put controlled devices on a unique precursor version higher than every
    public release.
-2. Set bad release `min_upgrade_from` to that precursor so ordinary beta devices
+2. Give the bad release a version higher than that precursor. `min_upgrade_from`
+   only tests the running version against the floor; a release is separately
+   refused unless it is newer than the version already running, so a bad build
+   at or below the precursor is never installed and the drill proves nothing.
+3. Set bad release `min_upgrade_from` to that precursor so ordinary beta devices
    cannot qualify.
-3. Check release-tag bucketing offline and select intended controlled devices
+4. Check release-tag bucketing offline and select intended controlled devices
    inside a 5% rollout without publishing raw DeviceIDs.
-4. Inspect a promote dry-run before publishing. Never use stable and never widen
+5. Inspect a promote dry-run before publishing. Never use stable and never widen
    the deliberately bad release above 5%.
 
 Require automatic selection/install, failed confirmation, complete binary,
