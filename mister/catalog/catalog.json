@@ -122,6 +122,12 @@
     "Amiga": {
       "id": "Amiga",
       "rbf": "_Computer/Minimig",
+      "folders": [
+        "Amiga"
+      ],
+      "extensions": [
+        ".adf"
+      ],
       "slots": [
         {
           "mgl": {
@@ -2021,6 +2027,12 @@
     "NeoGeo": {
       "id": "NeoGeo",
       "rbf": "_Console/NeoGeo",
+      "folders": [
+        "NEOGEO"
+      ],
+      "extensions": [
+        ".neo"
+      ],
       "slots": [
         {
           "mgl": {
@@ -3594,6 +3606,15 @@
     "ao486": {
       "id": "ao486",
       "rbf": "_Computer/ao486",
+      "folders": [
+        "AO486"
+      ],
+      "extensions": [
+        ".img",
+        ".ima",
+        ".vfd",
+        ".vhd"
+      ],
       "slots": [
         {
           "mgl": {

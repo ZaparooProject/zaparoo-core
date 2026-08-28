@@ -35,6 +35,11 @@ func TestCatalogDefinitions(t *testing.T) {
 	if all[0].ID != "3DO" {
 		t.Fatalf("catalog is not sorted: first ID %q", all[0].ID)
 	}
+	for _, core := range all {
+		if len(core.Folders) == 0 || len(core.Extensions) == 0 {
+			t.Fatalf("standalone scan metadata missing for %s", core.ID)
+		}
+	}
 
 	nes, err := catalog.Get("NES")
 	if err != nil {
