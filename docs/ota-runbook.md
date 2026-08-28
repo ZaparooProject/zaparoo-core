@@ -149,6 +149,48 @@ device was already running; the pending update is unwound on the next start.
 Never put the `-new` file in place by hand: the durable marker still records an
 interrupted install, so recovery must restore the known-good outgoing binary.
 
+### A device will not start after going back to an older version
+
+Core refuses to start when the user database has been migrated by a newer build
+than the one now installed:
+
+```text
+database schema is newer than this binary supports: database is at version
+20260828000000 but this binary only supports up to 20260818120000, update to a
+newer version or reinstall the previous version
+```
+
+This is deliberate. The media database is rebuilt in the same situation because
+a reindex reconstructs it, but the user database holds history, mappings,
+profiles and favourites that nothing can reconstruct, so starting by discarding
+them would be worse than not starting.
+
+Rolling back through Core never causes this: the update snapshot restores the
+database alongside the binary, so the schema goes back with it. What causes it
+is replacing the binary some other way — reinstalling an older release by hand,
+or a package manager moving the install backwards.
+
+On a platform with a service supervisor this presents as a service that keeps
+restarting rather than an error, because each attempt fails the same way. On
+MiSTer there is no journal at all. Either way the explanation is in
+`core.log`, and it names both versions.
+
+Recover in this order:
+
+1. **Reinstall the newer version.** Always works and loses nothing, and is the
+   right answer whenever going back was not deliberate.
+2. **Restore a user database backup taken before the newer build ran**, from
+   `backups/` in the data directory, then start the older version. Check the
+   backup predates the upgrade — restoring one taken *after* it puts the same
+   schema back and fails identically.
+3. If neither is possible, the database has to be moved aside and recreated
+   empty, which loses that data. Keep the file: a later build that understands
+   the schema can still open it.
+
+Automatic backups are pruned to the most recent three, so a device that ran the
+newer build for several boots may no longer hold a backup old enough for step 2.
+Take one before deliberately moving a device back.
+
 ## Automatic installation controls
 
 Automatic installation has two independent controls. Neither one changes the
