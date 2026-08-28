@@ -77,8 +77,10 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), lutrisQueryTimeout)
 	defer cancel()
-	rows, err := db.QueryContext(ctx,
-		"SELECT name, slug FROM games WHERE installed = 1 LIMIT ?", maxLutrisGames+1)
+	rows, err := db.QueryContext(ctx, `
+		SELECT substr(name, 1, ?), substr(slug, 1, ?)
+		FROM games WHERE installed = 1 LIMIT ?
+	`, maxLutrisFieldLength+1, maxLutrisFieldLength+1, maxLutrisGames+1)
 	if err != nil {
 		return nil, fmt.Errorf("query Lutris games: %w", err)
 	}
@@ -89,15 +91,18 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	}()
 
 	for rows.Next() {
-		var name, slug string
-		if err := rows.Scan(&name, &slug); err != nil {
+		var nameValue, slugValue sql.NullString
+		if err := rows.Scan(&nameValue, &slugValue); err != nil {
 			return nil, fmt.Errorf("scan Lutris game row: %w", err)
 		}
 		if len(results) >= maxLutrisGames {
 			return nil, errors.New("lutris game library exceeds entry limit")
 		}
-		name = strings.TrimSpace(name)
-		slug = strings.TrimSpace(slug)
+		if !nameValue.Valid || !slugValue.Valid {
+			continue
+		}
+		name := strings.TrimSpace(nameValue.String)
+		slug := strings.TrimSpace(slugValue.String)
 		if name == "" || slug == "" || len(name) > maxLutrisFieldLength || len(slug) > maxLutrisFieldLength ||
 			virtualpath.ContainsControlChar(name) || virtualpath.ContainsControlChar(slug) {
 			continue

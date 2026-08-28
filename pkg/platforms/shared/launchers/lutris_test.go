@@ -129,8 +129,10 @@ func TestScanLutrisGames(t *testing.T) {
 			{"Cyberpunk 2077", "cyberpunk-2077", 1},
 			{"Portal 2", "portal-2", 0}, // Not installed - should be skipped
 			{"Half-Life 2", "half-life-2", 1},
-			{"Uninstalled Game", "   ", 1},      // Blank slug - should be skipped
-			{"   ", "blank-name", 1},            // Blank name - should be skipped
+			{"Uninstalled Game", "   ", 1}, // Blank slug - should be skipped
+			{"   ", "blank-name", 1},       // Blank name - should be skipped
+			{strings.Repeat("n", maxLutrisFieldLength+1), "oversized-name", 1},
+			{"Oversized Slug", strings.Repeat("s", maxLutrisFieldLength+1), 1},
 			{"No Install Flag", "some-game", 0}, // Not installed - should be skipped
 		}
 
@@ -142,6 +144,11 @@ func TestScanLutrisGames(t *testing.T) {
 			)
 			require.NoError(t, err)
 		}
+		_, err = db.ExecContext(ctx,
+			"INSERT INTO games (name, slug, installed) VALUES (?, ?, 1), (?, ?, 1)",
+			nil, "null-name", "Null Slug", nil,
+		)
+		require.NoError(t, err)
 
 		// Close database before scanning
 		require.NoError(t, db.Close())
