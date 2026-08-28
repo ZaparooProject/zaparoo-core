@@ -407,7 +407,7 @@ func confirmWithOps(
 	defer markerMu.Unlock()
 
 	dir := stateDirFor(dataDir)
-	m, err := loadMarker(dir)
+	m, err := fileOps.load(dir)
 	if err != nil || m == nil {
 		return "", nil //nolint:nilerr // a marker this build cannot read is not ours to commit
 	}
@@ -417,7 +417,7 @@ func confirmWithOps(
 
 	m.Outcome = outcomeSucceeded
 	m.OutcomeAt = time.Now().UTC()
-	if err := saveMarker(dir, m); err != nil {
+	if err := fileOps.save(dir, m); err != nil {
 		return "", fmt.Errorf("recording the confirmed update: %w", err)
 	}
 	if err := finalizeTerminalUpdate(ctx, dataDir, m, fileOps); err != nil {
@@ -550,6 +550,10 @@ func rollBack(
 		return handleRollbackFailure(dir, m, fileOps, err)
 	}
 
+	// The on-disk marker still names the binary restore until this save makes
+	// the terminal outcome durable. If the save fails after the backup rename,
+	// that path proves the missing backup was consumed by this exact restore.
+	m.RestoringPath = ""
 	m.Outcome = outcomeRolledBack
 	m.OutcomeAt = time.Now().UTC()
 	if err := fileOps.save(dir, m); err != nil {
@@ -697,7 +701,7 @@ func restorePayloadFile(
 		return nil
 	}
 
-	return restoreReplacedFileState(dir, m, payload.BackupPath, payload.TargetPath, fileOps, false)
+	return restoreReplacedFileState(dir, m, payload.BackupPath, payload.TargetPath, fileOps)
 }
 
 // restoreReplacedFiles renames what the install displaced back over what it
@@ -712,25 +716,18 @@ func restoreReplacedFiles(dir string, m *pendingMarker, fileOps watchdogFileOps)
 	// replacement the payload extras use.
 	binaryOps := fileOps
 	binaryOps.replace = fileOps.binary.replace
-	return restoreReplacedFile(dir, m, m.BackupPath, m.TargetPath, binaryOps)
+	return restoreReplacedFileState(dir, m, m.BackupPath, m.TargetPath, binaryOps)
 }
 
-// restoreReplacedFile records the path about to move before renaming it. If a
-// power cut lands after the rename but before the marker can advance, a missing
-// backup is then proof that this exact move completed, not a guess based on the
-// rollback's coarse state.
-func restoreReplacedFile(
-	dir string, m *pendingMarker, backupPath, targetPath string, fileOps watchdogFileOps,
-) error {
-	return restoreReplacedFileState(dir, m, backupPath, targetPath, fileOps, true)
-}
-
+// restoreReplacedFileState records the path about to move before renaming it.
+// If a power cut lands after the rename but before the marker can advance, a
+// missing backup is then proof that this exact move completed, not a guess based
+// on the rollback's coarse state.
 func restoreReplacedFileState(
 	dir string,
 	m *pendingMarker,
 	backupPath, targetPath string,
 	fileOps watchdogFileOps,
-	clearRestoringPath bool,
 ) error {
 	if backupPath == "" || targetPath == "" {
 		return fmt.Errorf("%w: the update recorded no backup for a file it replaced", errRollbackPrerequisite)
@@ -741,12 +738,6 @@ func restoreReplacedFileState(
 		if errors.Is(statErr, os.ErrNotExist) && m.RestoringPath == targetPath {
 			if _, targetErr := fileOps.fs.Stat(targetPath); targetErr != nil {
 				return fmt.Errorf("restored backup and target are both unavailable for %q: %w", targetPath, targetErr)
-			}
-			if clearRestoringPath {
-				m.RestoringPath = ""
-				if saveErr := fileOps.save(dir, m); saveErr != nil {
-					return fmt.Errorf("recording the completed file restore: %w", saveErr)
-				}
 			}
 			return nil
 		}
@@ -768,12 +759,6 @@ func restoreReplacedFileState(
 	}
 	if err := fileOps.syncDirectory(filepath.Dir(targetPath)); err != nil {
 		return fmt.Errorf("flushing restored file %q: %w", targetPath, err)
-	}
-	if clearRestoringPath {
-		m.RestoringPath = ""
-		if err := fileOps.save(dir, m); err != nil {
-			return fmt.Errorf("recording the completed file restore: %w", err)
-		}
 	}
 	return nil
 }
