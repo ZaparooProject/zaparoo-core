@@ -29,11 +29,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func TestLutrisBuildLaunchCommandFlatpak(t *testing.T) {
@@ -91,6 +93,24 @@ func TestScanLutrisGames(t *testing.T) {
 		results, err := ScanLutrisGames("/nonexistent/path/pga.db")
 		require.NoError(t, err)
 		assert.Empty(t, results)
+	})
+
+	t.Run("fifo_path", func(t *testing.T) {
+		t.Parallel()
+
+		fifoPath := filepath.Join(t.TempDir(), "pga.db")
+		require.NoError(t, unix.Mkfifo(fifoPath, 0o600))
+		result := make(chan error, 1)
+		go func() {
+			_, err := ScanLutrisGames(fifoPath)
+			result <- err
+		}()
+		select {
+		case err := <-result:
+			require.ErrorContains(t, err, "not a regular file")
+		case <-time.After(time.Second):
+			t.Fatal("FIFO path validation did not return promptly")
+		}
 	})
 
 	t.Run("database_with_games", func(t *testing.T) {
@@ -189,7 +209,8 @@ func TestScanLutrisGames(t *testing.T) {
 	t.Run("wal_database", func(t *testing.T) {
 		t.Parallel()
 
-		dbPath := filepath.Join(t.TempDir(), "pga.db")
+		dbDir := t.TempDir()
+		dbPath := filepath.Join(dbDir, "pga.db")
 		db, err := sql.Open("sqlite3", dbPath)
 		require.NoError(t, err)
 		defer func() {
@@ -210,8 +231,8 @@ func TestScanLutrisGames(t *testing.T) {
 			INSERT INTO games (name, slug, installed) VALUES ('WAL Game', 'wal-game', 1);
 		`)
 		require.NoError(t, err)
-		require.FileExists(t, dbPath+"-wal")
-		require.FileExists(t, dbPath+"-shm")
+		require.FileExists(t, filepath.Join(dbDir, "pga.db-wal"))
+		require.FileExists(t, filepath.Join(dbDir, "pga.db-shm"))
 
 		results, err := ScanLutrisGames(dbPath)
 		require.NoError(t, err)

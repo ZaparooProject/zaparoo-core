@@ -58,8 +58,8 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat Lutris database: %w", err)
 	}
-	if info.IsDir() {
-		return nil, errors.New("lutris database path is a directory")
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("lutris database path is not a regular file")
 	}
 
 	dsn := (&url.URL{
