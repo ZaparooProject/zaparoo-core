@@ -20,6 +20,7 @@
 package updater
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -200,6 +201,175 @@ func TestInstallStaged_RestoresPayloadWhenIncomingVersionNeverRan(t *testing.T) 
 	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
 	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
 	assert.NoFileExists(t, f.snapshotPath, "abort discards the unused snapshot instead of restoring it")
+}
+
+type installPayloadPaths struct {
+	existingStaged string
+	newStaged      string
+	existingTarget string
+	newTarget      string
+}
+
+func addInstallPayloads(t *testing.T, f *installStagedFixture, opts *installOptions) installPayloadPaths {
+	t.Helper()
+
+	installRoot := filepath.Dir(f.targetPath)
+	paths := installPayloadPaths{
+		existingStaged: filepath.Join(f.stagingDir, "scripts", "services", "zaparoo_service"),
+		newStaged:      filepath.Join(f.stagingDir, "scripts", "new-helper.sh"),
+		existingTarget: filepath.Join(installRoot, "services", "zaparoo_service"),
+		newTarget:      filepath.Join(installRoot, "new-helper.sh"),
+	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(paths.existingStaged), 0o750))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(paths.existingStaged, []byte("new service"), 0o755))
+	//nolint:gosec // Executable payload fixtures.
+	require.NoError(t, os.WriteFile(paths.newStaged, []byte("new helper"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(paths.existingTarget), 0o750))
+	//nolint:gosec // Executable payload fixture.
+	require.NoError(t, os.WriteFile(paths.existingTarget, []byte("old service"), 0o700))
+	opts.Staged.payloadFiles = []stagedPayloadFile{
+		{Path: paths.existingStaged, RelativePath: "services/zaparoo_service", Mode: 0o755},
+		{Path: paths.newStaged, RelativePath: "new-helper.sh", Mode: 0o755},
+	}
+	return paths
+}
+
+func assertFailedPayloadInstallUndone(
+	t *testing.T, f *installStagedFixture, paths installPayloadPaths,
+) {
+	t.Helper()
+
+	f.assertInstallUndone(t)
+	assert.Equal(t, "old service", readFileString(t, paths.existingTarget))
+	assert.NoFileExists(t, paths.newTarget)
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+	assert.True(t, f.backupper.resumed)
+}
+
+func TestInstallStaged_PreQuiesceRefusalLeavesLiveFilesUntouched(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	paths := addInstallPayloads(t, f, opts)
+	gateErr := errors.New("power changed")
+	opts.PreQuiesce = func(context.Context) error { return gateErr }
+
+	err := installStaged(t.Context(), opts)
+	require.ErrorIs(t, err, gateErr)
+	assert.False(t, f.backupper.called)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "old service", readFileString(t, paths.existingTarget))
+	assert.NoFileExists(t, paths.newTarget)
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installBackupSuffix))
+	assert.NoDirExists(t, f.stagingDir)
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+}
+
+func TestInstallStaged_PartialPayloadPreparationFailureCleansCandidates(t *testing.T) {
+	f := newInstallStagedFixture(t)
+	opts := f.options()
+	paths := addInstallPayloads(t, f, opts)
+	require.NoError(t, os.Mkdir(paths.newTarget, 0o750))
+
+	err := installStaged(t.Context(), opts)
+	require.ErrorContains(t, err, "not a regular file")
+	assert.False(t, f.backupper.called)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "old service", readFileString(t, paths.existingTarget))
+	assert.NoFileExists(t, installSidecarPath(f.targetPath, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installCandidateSuffix))
+	assert.NoFileExists(t, installSidecarPath(paths.existingTarget, installBackupSuffix))
+	assert.NoDirExists(t, f.stagingDir)
+	assert.NoFileExists(t, markerPath(stateDirFor(f.dataDir)))
+}
+
+func TestInstallStaged_PostMarkerFailuresRestoreEverything(t *testing.T) {
+	tests := map[string]struct {
+		configure func(*testing.T, *installStagedFixture, *installOptions, installPayloadPaths)
+		want      string
+	}{
+		"payload replacement": {
+			want: "installing payload file",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, paths installPayloadPaths) {
+				failed := false
+				opts.payload.replace = func(source, target string) error {
+					if !failed && target == paths.newTarget {
+						failed = true
+						return errors.New("payload rename failed")
+					}
+					return os.Rename(source, target)
+				}
+			},
+		},
+		"payload directory sync": {
+			want: "flushing installed payload file",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, paths installPayloadPaths) {
+				failed := false
+				opts.payload.syncDirectory = func(dir string) error {
+					if !failed && dir == filepath.Dir(paths.existingTarget) {
+						content, readErr := os.ReadFile(paths.existingTarget) //nolint:gosec // test-owned path
+						if readErr == nil && string(content) == "new service" {
+							failed = true
+							return errors.New("payload directory sync failed")
+						}
+					}
+					return syncDir(dir)
+				}
+			},
+		},
+		"binary replacement": {
+			want: "installing the staged binary",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, _ installPayloadPaths) {
+				opts.binary.replaceRunning = func(string, string) error {
+					return errors.New("binary rename failed")
+				}
+			},
+		},
+		"binary directory sync": {
+			want: "flushing the installed binary",
+			configure: func(_ *testing.T, f *installStagedFixture, opts *installOptions, _ installPayloadPaths) {
+				failed := false
+				opts.payload.syncDirectory = func(dir string) error {
+					if !failed && dir == filepath.Dir(f.targetPath) {
+						content, readErr := os.ReadFile(f.targetPath) //nolint:gosec // test-owned path
+						if readErr == nil && string(content) != "old binary" {
+							failed = true
+							return errors.New("binary directory sync failed")
+						}
+					}
+					return syncDir(dir)
+				}
+			},
+		},
+		"final marker": {
+			want: "recording the completed update install",
+			configure: func(_ *testing.T, _ *installStagedFixture, opts *installOptions, _ installPayloadPaths) {
+				failed := false
+				opts.payload.saveMarker = func(dir string, marker *pendingMarker) error {
+					if !failed && marker.State == markerInstalled {
+						failed = true
+						return errors.New("final marker sync failed")
+					}
+					return saveMarker(dir, marker)
+				}
+			},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := newInstallStagedFixture(t)
+			opts := f.options()
+			paths := addInstallPayloads(t, f, opts)
+			tt.configure(t, f, opts, paths)
+
+			err := installStaged(t.Context(), opts)
+			require.ErrorContains(t, err, tt.want)
+			assertFailedPayloadInstallUndone(t, f, paths)
+		})
+	}
 }
 
 func TestPreparePayloadCandidates_UsesInjectedFilesystem(t *testing.T) {
