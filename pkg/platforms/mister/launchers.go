@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/catalog"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
@@ -993,6 +994,18 @@ func enableMGLIndexing(launchers []platforms.Launcher) []platforms.Launcher {
 		launcher.Extensions = append(launcher.Extensions, ".mgl")
 	}
 
+	return launchers
+}
+
+func applyCatalogScanMetadata(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		definition, err := catalog.Get(launchers[i].ID)
+		if err != nil {
+			continue
+		}
+		launchers[i].Folders = definition.Folders
+		launchers[i].Extensions = definition.Extensions
+	}
 	return launchers
 }
 
@@ -2366,5 +2379,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 	}
 
-	return applyDefaultScanExcludes(enableMGLIndexing(applyRetroAchievementsLauncherGroup(launchers)))
+	return applyDefaultScanExcludes(enableMGLIndexing(applyCatalogScanMetadata(
+		applyRetroAchievementsLauncherGroup(launchers),
+	)))
 }
