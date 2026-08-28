@@ -288,12 +288,14 @@ func sqlSystemMediaCountsFromBrowseCache(
 	db sqlQueryable,
 ) ([]database.SystemMediaCount, error) {
 	return querySystemMediaCounts(ctx, db, `
-		SELECT Systems.SystemID, SUM(BrowseDirCounts.FileCount)
-		FROM BrowseDirs
-		INNER JOIN BrowseDirCounts ON BrowseDirCounts.ParentDirDBID = BrowseDirs.DBID
-		INNER JOIN Systems ON Systems.DBID = BrowseDirCounts.SystemDBID
-		WHERE BrowseDirs.Path = '/'
-		GROUP BY BrowseDirCounts.SystemDBID, Systems.SystemID
+		SELECT Systems.SystemID, SUM(counts.FileCount)
+		FROM BrowseDirs parent
+		INNER JOIN BrowseDirCounts counts ON counts.ParentDirDBID = parent.DBID
+		INNER JOIN BrowseDirs child ON child.DBID = counts.ChildDirDBID
+		INNER JOIN Systems ON Systems.DBID = counts.SystemDBID
+		WHERE parent.Path = '/'
+		AND (child.DBID = parent.DBID OR child.IsVirtual = 1)
+		GROUP BY counts.SystemDBID, Systems.SystemID
 		ORDER BY Systems.SystemID`)
 }
 

@@ -48,14 +48,17 @@ func TestFrontendPrerequisiteQueryPlansUseExistingIndexes(t *testing.T) {
 
 	t.Run("cached system counts use root and system indexes", func(t *testing.T) {
 		plan := randomQueryPlan(t, mediaDB.sql.Load(), `
-			SELECT Systems.SystemID, SUM(BrowseDirCounts.FileCount)
-			FROM BrowseDirs
-			INNER JOIN BrowseDirCounts ON BrowseDirCounts.ParentDirDBID = BrowseDirs.DBID
-			INNER JOIN Systems ON Systems.DBID = BrowseDirCounts.SystemDBID
-			WHERE BrowseDirs.Path = '/'
-			GROUP BY BrowseDirCounts.SystemDBID, Systems.SystemID`)
+			SELECT Systems.SystemID, SUM(counts.FileCount)
+			FROM BrowseDirs parent
+			INNER JOIN BrowseDirCounts counts ON counts.ParentDirDBID = parent.DBID
+			INNER JOIN BrowseDirs child ON child.DBID = counts.ChildDirDBID
+			INNER JOIN Systems ON Systems.DBID = counts.SystemDBID
+			WHERE parent.Path = '/'
+			AND (child.DBID = parent.DBID OR child.IsVirtual = 1)
+			GROUP BY counts.SystemDBID, Systems.SystemID`)
 		assertRandomPlanContains(t, plan, "sqlite_autoindex_BrowseDirs_1")
 		assertRandomPlanContains(t, plan, "idx_browsedircounts_parent_system")
+		assertRandomPlanContains(t, plan, "SEARCH child USING INTEGER PRIMARY KEY")
 	})
 
 	t.Run("tagged system facets use reverse tag indexes", func(t *testing.T) {

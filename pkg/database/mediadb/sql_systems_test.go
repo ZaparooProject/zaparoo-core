@@ -133,37 +133,54 @@ func TestSystemMediaCounts_TagScopes(t *testing.T) {
 	assert.Empty(t, multipleNotCounts)
 }
 
-func TestSystemMediaCounts_UsesBrowseCache(t *testing.T) {
+func TestSystemMediaCounts_UsesDisjointBrowseCacheCounts(t *testing.T) {
 	t.Parallel()
 
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	mediaPath := filepath.Join("roms", "nes", "game.nes")
-	system := insertSystemWithMedia(t, mediaDB, "NES", "Game", mediaPath)
-	db := mediaDB.sql.Load()
+	nes := insertSystemWithMedia(
+		t, mediaDB, "NES", "Nested", filepath.Join("roms", "nes", "nested.nes"),
+	)
+	insertSystemMedia(t, mediaDB, nes, "Root", "root.nes")
+	insertSystemMedia(t, mediaDB, nes, "Other Root", filepath.Join("games", "other.nes"))
+	insertSystemMedia(t, mediaDB, nes, "Virtual", "test://virtual-nes")
+	missingPath := filepath.Join("roms", "nes", "missing.nes")
+	insertSystemMedia(t, mediaDB, nes, "Missing", missingPath)
+	_, err := mediaDB.sql.Load().ExecContext(ctx,
+		"UPDATE Media SET IsMissing = 1 WHERE SystemDBID = ? AND Path = ?", nes.DBID, missingPath)
+	require.NoError(t, err)
 
-	_, err := db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO BrowseDirs (Path, Name, IsVirtual) VALUES ('/', '/', 0)`)
+	snes := insertSystemWithMedia(
+		t, mediaDB, "SNES", "Nested", filepath.Join("roms", "snes", "nested.sfc"),
+	)
+	insertSystemMedia(t, mediaDB, snes, "Virtual", "test://virtual-snes")
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql.Load()))
+	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
 	require.NoError(t, err)
-	var rootDirDBID int64
-	require.NoError(t, db.QueryRowContext(ctx,
-		"SELECT DBID FROM BrowseDirs WHERE Path = '/'",
-	).Scan(&rootDirDBID))
-	_, err = db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO BrowseDirCounts
-			(ParentDirDBID, ChildDirDBID, SystemDBID, FileCount)
-		VALUES (?, ?, ?, ?)`, rootDirDBID, rootDirDBID, system.DBID, 42)
-	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)`,
-		DBConfigBrowseIndexVersion, browseCacheSchemaVersion)
-	require.NoError(t, err)
+	assert.Equal(t, []database.SystemMediaCount{
+		{SystemID: "NES", Count: 4},
+		{SystemID: "SNES", Count: 2},
+	}, counts)
+}
+
+func TestSystemMediaCounts_FallsBackWhenBrowseCacheUnavailable(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	system := insertSystemWithMedia(
+		t, mediaDB, "NES", "Nested", filepath.Join("roms", "nes", "nested.nes"),
+	)
+	insertSystemMedia(t, mediaDB, system, "Other Root", filepath.Join("games", "other.nes"))
 
 	counts, err := mediaDB.SystemMediaCounts(ctx, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 42}}, counts)
+	assert.Equal(t, []database.SystemMediaCount{{SystemID: "NES", Count: 2}}, counts)
 }
 
 func TestSystemMediaCounts_CacheIsIsolatedAndInvalidated(t *testing.T) {
