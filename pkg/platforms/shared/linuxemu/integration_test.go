@@ -23,6 +23,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDesktopEmulationOptionsWiresLaunchEnvironment(t *testing.T) {
+	t.Parallel()
+
+	options := DesktopEmulationOptions(nil, sharedretroarch.Options{Exec: []string{"retroarch"}})
+	require.NotNil(t, options.RetroArch)
+	assert.Equal(t, []string{"retroarch"}, options.RetroArch.Exec)
+	assert.NotNil(t, options.LaunchEnv)
+	assert.NotNil(t, options.RetroArch.LaunchEnv)
+}
+
 func TestDefaultEmuDeckPathsReadsSettings(t *testing.T) {
 	t.Parallel()
 

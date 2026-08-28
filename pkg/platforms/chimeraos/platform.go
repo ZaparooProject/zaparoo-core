@@ -24,7 +24,6 @@ package chimeraos
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -186,15 +185,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 }
 
 func (*Platform) retroArchConfigPath() string {
-	return filepath.Join(linuxbase.Settings().ConfigDir, "retroarch-network.cfg")
+	return linuxemu.DesktopRetroArchConfigPath()
 }
 
 func (p *Platform) emulationOptions() linuxemu.Options {
 	if p.emulationOptionsOverride != nil {
 		return *p.emulationOptionsOverride
 	}
-	launchEnv := func() []string { return linuxbase.DesktopSessionEnvOverrides(p.gameMode) }
-	options := linuxemu.NewOptions("", linuxemu.DesktopRetroArchOptions(p.retroArchConfigPath(), launchEnv))
-	options.LaunchEnv = launchEnv
-	return options
+	return linuxemu.DesktopEmulationOptions(
+		p.gameMode, linuxemu.DesktopRetroArchOptions(p.retroArchConfigPath()),
+	)
 }

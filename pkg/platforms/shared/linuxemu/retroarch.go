@@ -18,16 +18,24 @@ import (
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	sharedlaunchers "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/gamescope"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 )
 
 const (
-	RetroArchFlatpakID   = "org.libretro.RetroArch"
-	RetroArchNetworkAddr = "127.0.0.1:55355"
+	RetroArchFlatpakID     = "org.libretro.RetroArch"
+	RetroArchNetworkAddr   = "127.0.0.1:55355"
+	retroArchNetworkConfig = "retroarch-network.cfg"
 )
 
+// DesktopRetroArchConfigPath returns the shared Linux desktop network-command overlay path.
+func DesktopRetroArchConfigPath() string {
+	return filepath.Join(linuxbase.Settings().ConfigDir, retroArchNetworkConfig)
+}
+
 // DesktopRetroArchOptions builds standard Flatpak RetroArch options for Linux desktops.
-func DesktopRetroArchOptions(appendConfigPath string, launchEnv func() []string) sharedretroarch.Options {
+func DesktopRetroArchOptions(appendConfigPath string) sharedretroarch.Options {
 	options := sharedretroarch.Options{
 		Exec: []string{"flatpak", "run", RetroArchFlatpakID},
 		CoresDir: filepath.Join(
@@ -41,8 +49,21 @@ func DesktopRetroArchOptions(appendConfigPath string, launchEnv func() []string)
 			}
 			return EnsureRetroArchNetworkConfig(appendConfigPath)
 		}),
-		LaunchEnv: launchEnv,
 	}
+	return options
+}
+
+// DesktopEmulationOptions applies shared desktop launch-environment wiring.
+//
+//nolint:gocritic // Value API owns a copy so caller-provided RetroArch options remain unchanged.
+func DesktopEmulationOptions(
+	gameMode *gamescope.Manager,
+	retroArch sharedretroarch.Options,
+) Options {
+	launchEnv := func() []string { return linuxbase.DesktopSessionEnvOverrides(gameMode) }
+	retroArch.LaunchEnv = launchEnv
+	options := NewOptions("", retroArch)
+	options.LaunchEnv = launchEnv
 	return options
 }
 

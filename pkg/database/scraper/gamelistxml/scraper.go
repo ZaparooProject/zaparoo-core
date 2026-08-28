@@ -830,6 +830,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			totalProcessed += companion.Processed
 			totalMatched += companion.Matched
 			totalSkipped += companion.Skipped
+			debug.FreeOSMemory()
 			continue
 		}
 

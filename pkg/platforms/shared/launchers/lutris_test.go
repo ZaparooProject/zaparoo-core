@@ -129,7 +129,8 @@ func TestScanLutrisGames(t *testing.T) {
 			{"Cyberpunk 2077", "cyberpunk-2077", 1},
 			{"Portal 2", "portal-2", 0}, // Not installed - should be skipped
 			{"Half-Life 2", "half-life-2", 1},
-			{"Uninstalled Game", "", 1},         // No slug - should be skipped
+			{"Uninstalled Game", "   ", 1},      // Blank slug - should be skipped
+			{"   ", "blank-name", 1},            // Blank name - should be skipped
 			{"No Install Flag", "some-game", 0}, // Not installed - should be skipped
 		}
 

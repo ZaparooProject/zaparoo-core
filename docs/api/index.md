@@ -257,7 +257,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods execute actions and return data from Core. This catalog documents **88 non-deprecated registered methods**. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or paired admin; **Tiered** means fields or availability vary by client and are detailed in method reference.
+Methods execute actions and return data from Core. This catalog documents **88 non-deprecated registered methods**. See [API Methods](./methods) for request and response contracts, complete access details, and examples. **Local/admin** means localhost or authenticated admin, including paired and valid static API-key admins; **Tiered** means fields or availability vary by client and are detailed in method reference.
 
 | ID                              | Description                                                                           | Access |
 | :------------------------------ | :------------------------------------------------------------------------------------ | :----- |

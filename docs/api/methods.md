@@ -2889,7 +2889,7 @@ An object:
 
 Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured remote backup server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup state is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups.
 
-Requires a localhost client or a paired admin client.
+Requires a localhost client or an authenticated admin client, including a valid static API-key admin.
 
 #### Parameters
 
@@ -3026,7 +3026,7 @@ A link status object (see `settings.auth.link`).
 
 **Access:** Localhost or admin.
 
-Cancel the pending link flow. Requires a localhost client or a paired admin client. Returns the terminal `cancelled` status object with user code and verification URLs omitted. When no flow is pending, returns an error (`no active link request`).
+Cancel the pending link flow. Requires a localhost client or an authenticated admin client, including a valid static API-key admin. Returns the terminal `cancelled` status object with user code and verification URLs omitted. When no flow is pending, returns an error (`no active link request`).
 
 #### Parameters
 

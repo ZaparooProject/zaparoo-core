@@ -213,7 +213,6 @@ func NewHeroicLauncher(opts HeroicOptions) platforms.Launcher {
 			return nil, err
 		}
 		if installation.flatpak {
-			installation = withFlatpakDieWithParent(installation)
 			installation.argsPrefix = []string{
 				"run", "--die-with-parent", "--command=sh", FlatpakHeroicID,
 			}

@@ -98,7 +98,7 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 		}
 		name = strings.TrimSpace(name)
 		slug = strings.TrimSpace(slug)
-		if slug == "" || len(name) > maxLutrisFieldLength || len(slug) > maxLutrisFieldLength ||
+		if name == "" || slug == "" || len(name) > maxLutrisFieldLength || len(slug) > maxLutrisFieldLength ||
 			virtualpath.ContainsControlChar(name) || virtualpath.ContainsControlChar(slug) {
 			continue
 		}

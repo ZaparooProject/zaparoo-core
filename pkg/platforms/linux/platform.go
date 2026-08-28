@@ -192,7 +192,5 @@ func (p *Platform) emulationOptions() linuxemu.Options {
 	if p.emulationOptionsOverride != nil {
 		return *p.emulationOptionsOverride
 	}
-	options := linuxemu.NewOptions("", linuxRetroArchOptions())
-	options.LaunchEnv = func() []string { return linuxbase.DesktopSessionEnvOverrides(nil) }
-	return options
+	return linuxemu.DesktopEmulationOptions(nil, linuxRetroArchOptions())
 }
