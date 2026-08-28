@@ -572,13 +572,13 @@ func TestWebSocketRunJobStartsMethodTimeoutAtExecution(t *testing.T) {
 				}
 				deadlineCh <- deadline
 				return map[string]string{"ok": "true"}, nil
-			}))
+			}, true))
 
 			enqueuedCtx, enqueuedCancel := context.WithTimeout(parentCtx, time.Millisecond)
 			defer enqueuedCancel()
 			job := &wsRequestJob{
 				methodMap: &methodMap,
-				env:       &requests.RequestEnv{Context: enqueuedCtx},
+				env:       &requests.RequestEnv{Context: enqueuedCtx, IsLocal: true},
 				method:    tt.method,
 				msg: []byte(fmt.Sprintf(
 					`{"jsonrpc":"2.0","method":%q,"id":1}`,

@@ -20,12 +20,26 @@
 package middleware
 
 import (
+	"context"
 	"crypto/subtle"
 	"net/http"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 )
+
+type apiKeyAuthenticatedContextKey struct{}
+
+func withAPIKeyAuthentication(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), apiKeyAuthenticatedContextKey{}, true))
+}
+
+// APIKeyAuthenticated reports whether static API-key middleware authenticated
+// this request.
+func APIKeyAuthenticated(r *http.Request) bool {
+	authenticated, ok := r.Context().Value(apiKeyAuthenticatedContextKey{}).(bool)
+	return ok && authenticated
+}
 
 // APIKeyProvider is a function that returns the current list of API keys.
 // This allows the auth middleware to dynamically fetch keys on each request,
@@ -115,7 +129,7 @@ func HTTPAuthMiddleware(auth *AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withAPIKeyAuthentication(r))
 		})
 	}
 }
@@ -143,5 +157,6 @@ func WebSocketAuthHandler(auth *AuthConfig, r *http.Request) bool {
 		return false
 	}
 
+	*r = *withAPIKeyAuthentication(r)
 	return true
 }

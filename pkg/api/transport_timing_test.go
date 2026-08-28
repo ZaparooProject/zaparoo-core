@@ -169,7 +169,7 @@ func TestWebSocketDispatcherQueueTimingLogs(t *testing.T) {
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.queue", func(requests.RequestEnv) (any, error) {
 		return map[string]bool{"ok": true}, nil
-	}))
+	}, true))
 	d := &wsSessionDispatcher{ctx: t.Context(), responses: make(chan *wsResponseJob, 1)}
 	job := &wsRequestJob{
 		methodMap:  &methodMap,

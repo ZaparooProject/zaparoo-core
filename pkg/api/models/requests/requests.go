@@ -61,10 +61,14 @@ type RequestEnv struct {
 	// It owns keyboard and gamepad inputs held across requests.
 	InputSession platforms.InputSession
 	ClientID     string
+	PlatformID   string
 	// ClientRole is the paired client's permission role ("admin" or
 	// "member"), or "" when the request carries no paired identity (local
 	// connections, plaintext WebSocket, HTTP). See pkg/api/permissions.
 	ClientRole string
 	Params     json.RawMessage
 	IsLocal    bool
+	// APIKeyAuthenticated is true when static API-key middleware authenticated
+	// this non-paired request. It grants admin authority, not localhost access.
+	APIKeyAuthenticated bool
 }

@@ -25,14 +25,64 @@ package launchers
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
+
+func TestLutrisBuildLaunchCommandFlatpak(t *testing.T) {
+	t.Parallel()
+
+	opts := LutrisOptions{
+		CheckFlatpak: true,
+		lookPath: func(name string) (string, error) {
+			if name == "flatpak" {
+				return "/usr/bin/flatpak", nil
+			}
+			return "", os.ErrNotExist
+		},
+		isFlatpakInstalled: func(id string) bool { return id == FlatpakLutrisID },
+		launchEnv:          func() []string { return []string{"DISPLAY=:1"} },
+	}
+	launcher := NewLutrisLauncher(opts)
+	command, err := launcher.BuildLaunchCommand(nil, "lutris://game-slug/Game", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/bin/flatpak", command.Executable)
+	assert.Equal(t, []string{
+		"run", "--die-with-parent", FlatpakLutrisID, "lutris:rungame/game-slug",
+	}, command.Args)
+	assert.Equal(t, []string{"DISPLAY=:1"}, command.Env)
+	assert.Equal(t, platforms.LifecycleBlocking, launcher.Lifecycle)
+}
+
+func TestLutrisBuildLaunchCommandNative(t *testing.T) {
+	t.Parallel()
+
+	opts := LutrisOptions{
+		CheckFlatpak: true,
+		lookPath: func(name string) (string, error) {
+			if name == "lutris" {
+				return "/usr/bin/lutris", nil
+			}
+			return "", os.ErrNotExist
+		},
+		isFlatpakInstalled: func(string) bool { return true },
+		launchEnv:          func() []string { return nil },
+	}
+	launcher := NewLutrisLauncher(opts)
+	command, err := launcher.BuildLaunchCommand(nil, "lutris://game-slug/Game", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/bin/lutris", command.Executable)
+	assert.Equal(t, []string{"lutris:rungame/game-slug"}, command.Args)
+}
 
 func TestScanLutrisGames(t *testing.T) {
 	t.Parallel()
@@ -43,6 +93,24 @@ func TestScanLutrisGames(t *testing.T) {
 		results, err := ScanLutrisGames("/nonexistent/path/pga.db")
 		require.NoError(t, err)
 		assert.Empty(t, results)
+	})
+
+	t.Run("fifo_path", func(t *testing.T) {
+		t.Parallel()
+
+		fifoPath := filepath.Join(t.TempDir(), "pga.db")
+		require.NoError(t, unix.Mkfifo(fifoPath, 0o600))
+		result := make(chan error, 1)
+		go func() {
+			_, err := ScanLutrisGames(fifoPath)
+			result <- err
+		}()
+		select {
+		case err := <-result:
+			require.ErrorContains(t, err, "not a regular file")
+		case <-time.After(time.Second):
+			t.Fatal("FIFO path validation did not return promptly")
+		}
 	})
 
 	t.Run("database_with_games", func(t *testing.T) {
@@ -81,7 +149,10 @@ func TestScanLutrisGames(t *testing.T) {
 			{"Cyberpunk 2077", "cyberpunk-2077", 1},
 			{"Portal 2", "portal-2", 0}, // Not installed - should be skipped
 			{"Half-Life 2", "half-life-2", 1},
-			{"Uninstalled Game", "", 1},         // No slug - should be skipped
+			{"Uninstalled Game", "   ", 1}, // Blank slug - should be skipped
+			{"   ", "blank-name", 1},       // Blank name - should be skipped
+			{strings.Repeat("n", maxLutrisFieldLength+1), "oversized-name", 1},
+			{"Oversized Slug", strings.Repeat("s", maxLutrisFieldLength+1), 1},
 			{"No Install Flag", "some-game", 0}, // Not installed - should be skipped
 		}
 
@@ -93,6 +164,11 @@ func TestScanLutrisGames(t *testing.T) {
 			)
 			require.NoError(t, err)
 		}
+		_, err = db.ExecContext(ctx,
+			"INSERT INTO games (name, slug, installed) VALUES (?, ?, 1), (?, ?, 1)",
+			nil, "null-name", "Null Slug", nil,
+		)
+		require.NoError(t, err)
 
 		// Close database before scanning
 		require.NoError(t, db.Close())
@@ -130,6 +206,41 @@ func TestScanLutrisGames(t *testing.T) {
 		}
 	})
 
+	t.Run("wal_database", func(t *testing.T) {
+		t.Parallel()
+
+		dbDir := t.TempDir()
+		dbPath := filepath.Join(dbDir, "pga.db")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, db.Close())
+		}()
+
+		ctx := context.Background()
+		var journalMode string
+		require.NoError(t, db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journalMode))
+		require.Equal(t, "wal", strings.ToLower(journalMode))
+		_, err = db.ExecContext(ctx, `
+			CREATE TABLE games (
+				id INTEGER PRIMARY KEY,
+				name TEXT,
+				slug TEXT,
+				installed INTEGER
+			);
+			INSERT INTO games (name, slug, installed) VALUES ('WAL Game', 'wal-game', 1);
+		`)
+		require.NoError(t, err)
+		require.FileExists(t, filepath.Join(dbDir, "pga.db-wal"))
+		require.FileExists(t, filepath.Join(dbDir, "pga.db-shm"))
+
+		results, err := ScanLutrisGames(dbPath)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "WAL Game", results[0].Name)
+		assert.Equal(t, "lutris://wal-game/WAL%20Game", results[0].Path)
+	})
+
 	t.Run("empty_database", func(t *testing.T) {
 		t.Parallel()
 
@@ -161,4 +272,25 @@ func TestScanLutrisGames(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
+}
+
+func TestLutrisScannerReturnsDatabaseErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	lutrisDir := filepath.Join(home, ".local", "share", "lutris")
+	require.NoError(t, os.MkdirAll(lutrisDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(lutrisDir, "pga.db"), []byte("not sqlite"), 0o600))
+
+	launcher := NewLutrisLauncher(LutrisOptions{
+		lookPath: func(name string) (string, error) {
+			if name == "lutris" {
+				return "/usr/bin/lutris", nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	initial := []platforms.ScanResult{{Name: "Existing", Path: "/existing"}}
+	results, err := launcher.Scanner(t.Context(), nil, "", initial)
+	require.ErrorContains(t, err, "scan Lutris games")
+	assert.Equal(t, initial, results)
 }

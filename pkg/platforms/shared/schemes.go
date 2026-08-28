@@ -31,6 +31,8 @@ const (
 	SchemeScummVM    = "scummvm"
 	SchemeLutris     = "lutris"
 	SchemeHeroic     = "heroic"
+	SchemeBottles    = "bottles"
+	SchemeFaugus     = "faugus"
 	SchemeGOG        = "gog"
 )
 
@@ -58,6 +60,8 @@ var customSchemes = []string{
 	SchemeScummVM,
 	SchemeLutris,
 	SchemeHeroic,
+	SchemeBottles,
+	SchemeFaugus,
 	SchemeGOG,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,

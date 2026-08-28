@@ -6,15 +6,18 @@ Methods are used to execute actions and request data back from the API.
 
 Each method below identifies which clients may call it:
 
-- **All clients:** localhost, paired admin, paired member, and unpaired remote clients accepted by the API transport.
-- **Localhost or any paired client:** localhost and any paired client, member included. Unpaired remote clients are rejected.
-- **`profiles.manage`:** localhost and clients with the `profiles.manage` capability. Paired admins have this capability; paired members do not. Unpaired remote clients retain it for backward compatibility when encryption is disabled.
-- **`settings.write`:** localhost and clients with the `settings.write` capability. Paired admins have this capability; paired members do not. Unpaired remote clients retain it for backward compatibility when encryption is disabled.
-- **`update.apply`:** localhost and clients with the `update.apply` capability. Paired admins have this capability; paired members and unpaired remote clients do not.
-- **Localhost or paired admin:** localhost and authenticated paired admins only. Paired members and unpaired remote clients are rejected.
+- **Unauthenticated bootstrap:** JSON-RPC methods `settings.auth.claim`, `settings.auth.status`, `settings.auth.link`, and redacted `settings.auth.link.status` are available before authentication. Remote HTTP POST requires `allowed_ips` and remains rate limited. Separate client-pairing endpoints `/api/pair/start` and `/api/pair/finish` are remotely reachable and strictly rate limited. `/health` is unrestricted and returns only `OK`.
+- **All accepted clients:** localhost, authenticated admin, authenticated member, and legacy clients admitted by platform compatibility policy.
+- **Localhost or any authenticated client:** localhost, paired clients, and API-key admin. Legacy clients are rejected.
+- **`profiles.manage`:** localhost and clients with the capability. Admin has it; member does not. Legacy retains it only on approved appliance platforms.
+- **`settings.write`:** localhost and clients with the capability. Admin has it; member does not. Legacy retains it only on approved appliance platforms.
+- **`input`:** localhost, member, and admin. Legacy input is grandfathered only on MiSTer, MiSTeX, Batocera, and ReplayOS.
+- **`screenshot`:** localhost, member, and admin. Legacy screenshot capture is grandfathered only on MiSTer and ReplayOS.
+- **`update.apply`:** localhost and authenticated admin. Member and legacy do not receive it.
+- **Localhost or admin:** localhost, paired admin, and API-key admin. Member and legacy are rejected.
 - **Localhost only:** requests originating from Core's device. All remote clients are rejected.
 
-Use [`clients.current`](#clientscurrent) to inspect current connection's paired role and effective capabilities. A method may also require a resource-specific credential, such as a profile PIN; those requirements are documented separately from connection access.
+Use [`clients.current`](#clientscurrent) to inspect current connection's access state, paired role, and effective capabilities. A method may also require a resource-specific credential, such as a profile PIN; those requirements are documented separately from connection access.
 
 ## Launching
 
@@ -22,7 +25,7 @@ Use [`clients.current`](#clientscurrent) to inspect current connection's paired 
 
 **Access:** All clients.
 
-Emulate the scanning of a token.
+Emulate the scanning of a token. Access is decided when the API accepts `run`; mapped and expanded ZapScript commands do not re-evaluate connection capabilities during internal execution. Legacy `run` access therefore remains limited to explicitly grandfathered platforms.
 
 #### Parameters
 
@@ -2587,7 +2590,7 @@ See [System object](#system-object).
 
 ### settings
 
-**Access:** All clients. `backupRemoteEnabled`, `backupRemoteSchedule`, `backupRemoteBaseUrl`, and `playtimeSyncEnabled` are returned only to localhost and paired admin clients.
+**Access:** All accepted clients. Online backup, play-history sync, and remote-control fields are returned only to localhost or authenticated admin.
 
 List currently set configuration settings.
 
@@ -2617,10 +2620,10 @@ None.
 | updateChannel             | string                                    | Yes      | Release channel used for update checks: `stable` or `beta`. Defaults to `stable`. |
 | updateCheck               | boolean                                   | Yes      | Whether the service looks for new releases on its own. Defaults to true on every platform, including installs a package manager owns. |
 | updateInstall             | boolean                                   | Yes      | Whether the device downloads and installs updates on its own, rather than only telling the user one exists. Defaults to false, and is always false while `updateCheck` is off. |
-| backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and paired admin clients. |
-| playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and paired admin clients. |
-| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and paired admin clients. |
-| backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and paired admin clients. |
+| backupRemoteEnabled       | boolean                                   | No       | Whether automatic remote backup scheduling is enabled. Only returned to localhost and authenticated admin clients. |
+| playtimeSyncEnabled       | boolean                                   | No       | Whether the user explicitly enabled play history sync. Defaults to false. Only returned to localhost and authenticated admin clients. |
+| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Only returned to localhost and authenticated admin clients. |
+| backupRemoteBaseUrl       | string                                    | No       | Configured remote backup server base URL (read-only). Only returned to localhost and authenticated admin clients. |
 
 ##### Reader connection object
 
@@ -2680,7 +2683,7 @@ None.
 
 ### settings.update
 
-**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup and play-history sync settings require localhost or paired admin, so unpaired remote clients cannot change them.
+**Access:** Requires `settings.write`. Changing `encryption` is localhost only. Online backup, play-history sync, and remote-control settings require localhost or authenticated admin, so legacy clients cannot change them.
 
 Update one or more settings in-memory and save changes to disk.
 
@@ -2708,9 +2711,9 @@ An object containing any of the following optional keys:
 | updateChannel             | string                                    | No       | Release channel used for update checks: `stable` or `beta`. |
 | updateCheck               | boolean                                   | No       | Whether the service looks for new releases on its own. |
 | updateInstall             | boolean                                   | No       | Whether the device installs updates on its own. Setting it to true while update checking is off is refused; send `updateCheck: true` in the same call to turn both on. |
-| backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires a localhost or paired admin client. |
-| playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires a localhost or paired admin client. |
-| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires a localhost or paired admin client. |
+| backupRemoteEnabled       | boolean                                   | No       | Enable automatic remote backup scheduling. Requires localhost or an authenticated admin client. |
+| playtimeSyncEnabled       | boolean                                   | No       | Explicitly enable or disable play history sync. The first enabled sync uploads retained local history. Disabling stops future uploads. Requires localhost or an authenticated admin client. |
+| backupRemoteSchedule      | string                                    | No       | Remote backup schedule: `daily`, `weekly`, or `manual`. Requires localhost or an authenticated admin client. |
 
 #### Result
 
@@ -2779,7 +2782,7 @@ Returns `null` on success.
 
 ### settings.auth.claim
 
-**Access:** All clients.
+**Access:** Unauthenticated bootstrap.
 
 Redeem a claim token against a remote auth server and store the resulting credentials in `auth.toml`.
 
@@ -2833,7 +2836,7 @@ An object:
 
 ### settings.auth.status
 
-**Access:** All clients.
+**Access:** Unauthenticated bootstrap.
 
 Report whether Core holds a stored bearer credential for an auth server URL. The check is local only: the token is never validated against the server and no token material is returned.
 
@@ -2882,11 +2885,11 @@ An object:
 
 ### settings.auth.unlink
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Remove the device's online account credentials — the inverse of `settings.auth.link`. The claim/link flow tags every credential it stores with the root domain that created it (`linked_via` in `auth.toml`), so unlink removes the configured remote backup server's entry plus every entry tagged with it, whatever domains the server's trusted list contained at link time. Credentials for other domains, hand-written basic-auth entries, and API keys are untouched. Remote backup state is marked unlinked so the status UI prompts a re-link and the scheduler stops attempting remote backups.
 
-Requires a localhost client or a paired admin client.
+Requires a localhost client or an authenticated admin client, including a valid static API-key admin.
 
 #### Parameters
 
@@ -2924,11 +2927,11 @@ None.
 
 ### settings.auth.link
 
-**Access:** Localhost or paired admin.
+**Access:** Unauthenticated bootstrap.
 
 Start a reverse device link flow (device-authorization style): Core requests a link from the auth server, returns a user code and verification URLs to display, then polls in the background until the user approves the link in their account. On approval the resulting claim token is redeemed through the same pipeline as `settings.auth.claim` and the credential is stored in `auth.toml`.
 
-Requires a localhost client or a paired admin client. Only one link flow can be pending at a time; starting another while one is pending returns an error. Progress is pushed via the [`auth.link.status`](./notifications.md#authlinkstatus) notification (with user code and verification URLs omitted) and can be polled with `settings.auth.link.status`.
+This method is deliberately available before client authentication. Remote HTTP POST still requires an address allowed by `allowed_ips`. Only one link flow can be pending at a time; starting another while one is pending returns an error. Progress is pushed via the [`auth.link.status`](./notifications.md#authlinkstatus) notification (with user code and verification URLs omitted) and can be polled with `settings.auth.link.status`.
 
 #### Parameters
 
@@ -2981,11 +2984,11 @@ A link status object:
 
 ### settings.auth.link.status
 
-**Access:** Localhost and paired admin clients receive full status. Unpaired remote clients receive redacted status. Paired members are rejected.
+**Access:** Unauthenticated bootstrap with redacted output; localhost and admin receive full output. Members are rejected.
 
 Return the state of the active link flow as a link status object (see `settings.auth.link`). When no flow has been started, `status` is `none`.
 
-Access is tiered: localhost clients and paired admin clients receive the full object including `userCode` and verification URLs; unpaired remote clients receive only the redacted state; paired member clients are forbidden.
+Access is tiered: localhost, paired admin, and API-key admin receive the full object including `userCode` and verification URLs. Unauthenticated callers receive only flow state; `userCode`, `verificationUrl`, and `verificationUrlComplete` are omitted. Paired member clients are forbidden.
 
 #### Parameters
 
@@ -3021,9 +3024,9 @@ A link status object (see `settings.auth.link`).
 
 ### settings.auth.link.cancel
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
-Cancel the pending link flow. Requires a localhost client or a paired admin client. Returns the terminal `cancelled` status object with user code and verification URLs omitted. When no flow is pending, returns an error (`no active link request`).
+Cancel the pending link flow. Requires a localhost client or an authenticated admin client, including a valid static API-key admin. Returns the terminal `cancelled` status object with user code and verification URLs omitted. When no flow is pending, returns an error (`no active link request`).
 
 #### Parameters
 
@@ -3158,7 +3161,7 @@ Local backups are ZIP archives using known categories (`zaparoo`, `settings`, `i
 
 ### settings.backup
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Create a local full-device ZIP backup.
 
@@ -3200,7 +3203,7 @@ A [local backup object](#local-backup-object). Newly created backups report `int
 
 ### settings.backup.list
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 List local backup ZIP metadata without reading archive manifests.
 
@@ -3239,7 +3242,7 @@ An array of objects with `name`, `createdAt`, `size`, and optional device-local 
 
 ### settings.backup.inspect
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Read and validate local backup manifest metadata without hashing every payload.
 
@@ -3280,7 +3283,7 @@ A [local backup object](#local-backup-object). Successful inspection reports `in
 
 ### settings.backup.delete
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Delete a local backup ZIP.
 
@@ -3315,7 +3318,7 @@ Returns an empty object `{}` on success.
 
 ### settings.backup.restore
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Transactionally restore a local backup. Restore is rejected while media is active or launching. Core creates a pre-restore safety backup, writes the response, then restarts.
 
@@ -3423,7 +3426,7 @@ None.
 
 ### settings.backup.remote.run
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Create a manual remote backup. Manual backups remain available when automatic scheduling is disabled. Upload and scheduling require remote service availability.
 
@@ -3482,7 +3485,7 @@ None.
 
 ### settings.backup.remote.list
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 List remote backups and account quota. Listing existing backups remains available when uploads are unavailable.
 
@@ -3522,7 +3525,7 @@ None.
 
 ### settings.backup.remote.restore
 
-**Access:** Localhost or paired admin.
+**Access:** Localhost or admin.
 
 Transactionally restore an opaque remote backup ID. Listing and restoring existing backups remain available when uploads are unavailable. Restore is rejected while media is active or launching. Core writes response, then restarts.
 
@@ -4770,9 +4773,9 @@ None.
 
 **Access:** All clients.
 
-Return pairing status, authenticated role, and effective capabilities for the current connection. This method is available to every connection accepted by the API transport.
+Return effective access, pairing status, paired role, and named capabilities for current connection. This method is available to every connection accepted by API transport.
 
-`role` is `admin` or `member` for paired connections and `null` otherwise. Unpaired plaintext connections retain their legacy effective capabilities, except those that require an authenticated connection — currently `update.apply`, which such a connection never receives. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage`, `settings.write`, and `update.apply`; the array does not enumerate every callable RPC method.
+`access` is one of `localhost`, `member`, `admin`, or `legacy`. A valid static API key reports `access: "admin"` with `paired: false` and `role: null`. `role` remains the stored paired role for authenticated paired connections, including paired localhost connections, and is `null` for unpaired localhost, API-key admin, and legacy. Clients should use capability presence for corresponding UI gates and treat role as display-only. Capability names currently include `profiles.manage`, `settings.write`, `input`, `screenshot`, and `update.apply`; the array does not enumerate every callable RPC method.
 
 #### Parameters
 
@@ -4780,11 +4783,12 @@ None.
 
 #### Result
 
-| Key          | Type               | Description                                                    |
-| :----------- | :----------------- | :------------------------------------------------------------- |
-| paired       | boolean            | Whether connection carries an authenticated paired identity.   |
-| role         | string or `null`   | Paired client role, or `null` for an unpaired connection.       |
-| capabilities | array of strings   | Effective named capabilities granted to current connection.     |
+| Key          | Type               | Description                                                  |
+| :----------- | :----------------- | :----------------------------------------------------------- |
+| access       | string             | Effective public authority: `localhost`, `member`, `admin`, or `legacy`. |
+| paired       | boolean            | Whether connection carries an authenticated paired identity. |
+| role         | string or `null`   | Paired client role, otherwise `null`.                        |
+| capabilities | array of strings   | Effective named capabilities granted to current connection.  |
 
 #### Example
 
@@ -4805,9 +4809,10 @@ None.
   "jsonrpc": "2.0",
   "id": "1f9a258e-2f86-4bc9-a31b-ec842eb79a42",
   "result": {
+    "access": "member",
     "paired": true,
     "role": "member",
-    "capabilities": []
+    "capabilities": ["input", "screenshot"]
   }
 }
 ```
@@ -4934,7 +4939,7 @@ Persistent `{press:key}` and `{release:key}` input is available only over suppor
 
 ### input.keyboard
 
-**Access:** All clients.
+**Access:** Requires `input`.
 
 Press keyboard keys using the ZapScript input macro format.
 
@@ -4977,7 +4982,7 @@ Returns `null` on success.
 
 ### input.gamepad
 
-**Access:** All clients.
+**Access:** Requires `input`.
 
 Press gamepad buttons using the ZapScript input macro format.
 
@@ -5022,11 +5027,11 @@ Returns `null` on success.
 
 ### screenshot
 
-**Access:** All clients.
+**Access:** Requires `screenshot`.
 
 Capture a screenshot of the current platform display. Returns the image as base64-encoded data and the path where it was saved on disk.
 
-Currently supported on MiSTer only. Other platforms will return an error.
+Currently supported on MiSTer and ReplayOS. Other platforms return an error. ReplayOS requires active storage and a loaded libretro core.
 
 #### Parameters
 

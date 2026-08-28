@@ -43,6 +43,7 @@ import (
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -74,8 +75,9 @@ var allowedOrigins = []string{
 }
 
 const (
-	websocketMaxMessageSize = 4 * 1024 * 1024
-	maxLoggedRequestIDLen   = 128
+	websocketMaxMessageSize        = 4 * 1024 * 1024
+	webSocketAuthenticationTimeout = 10 * time.Second
+	maxLoggedRequestIDLen          = 128
 )
 
 var JSONRPCErrorParseError = models.ErrorObject{
@@ -187,8 +189,66 @@ type RequestTracker interface {
 	RequestEnded()
 }
 
+type methodDefinition struct {
+	handler       func(requests.RequestEnv) (any, error)
+	legacyAllowed bool
+}
+
 type MethodMap struct {
 	sync.Map
+}
+
+// unauthenticatedBootstrapMethods lists JSON-RPC authentication bootstrap
+// methods reachable before authentication on every platform. Transport-level
+// network restrictions still apply.
+//
+//nolint:gochecknoglobals // immutable authentication bootstrap policy
+var unauthenticatedBootstrapMethods = map[string]bool{
+	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthStatus: true,
+	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
+}
+
+// legacyAllowedMethods freezes methods reachable by compatibility clients on
+// approved appliance platforms. Missing and newly added methods fail closed.
+//
+//nolint:gochecknoglobals // immutable compatibility policy
+var legacyAllowedMethods = map[string]bool{
+	models.MethodLaunch: true, models.MethodRun: true, models.MethodStop: true,
+	models.MethodConfirm: true, models.MethodUI: true, models.MethodUIRespond: true,
+	models.MethodTokens: true, models.MethodHistory: true,
+	models.MethodMedia: true, models.MethodMediaGenerate: true,
+	models.MethodMediaGenerateCancel: true, models.MethodMediaGenerateResume: true,
+	models.MethodMediaIndex: true, models.MethodMediaSearch: true, models.MethodMediaBrowse: true,
+	models.MethodMediaBrowseIndex: true, models.MethodMediaTags: true,
+	models.MethodMediaTagsUpdate: true, models.MethodMediaMetaUpdate: true,
+	models.MethodMediaActive: true, models.MethodMediaActiveUpdate: true,
+	models.MethodMediaCleanOrphans: true, models.MethodMediaHistory: true,
+	models.MethodMediaHistoryLatest: true, models.MethodMediaHistoryTop: true,
+	models.MethodMediaLookup: true, models.MethodMediaMeta: true, models.MethodMediaImage: true,
+	models.MethodScrapers: true, models.MethodMediaScrape: true,
+	models.MethodMediaScrapeStatus: true, models.MethodMediaScrapeCancel: true,
+	models.MethodMediaScrapeResume: true, models.MethodMediaControl: true,
+	models.MethodMediaTitleParse: true,
+	models.MethodSettings:        true, models.MethodSettingsUpdate: true,
+	models.MethodSettingsReload: true, models.MethodSettingsLogsDownload: true,
+	models.MethodSettingsBackupStatus: true, models.MethodPlaytimeLimits: true,
+	models.MethodPlaytimeLimitsUpdate: true, models.MethodPlaytime: true,
+	models.MethodSystems: true, models.MethodLaunchers: true, models.MethodLaunchersRefresh: true,
+	models.MethodMappings: true, models.MethodMappingsNew: true,
+	models.MethodMappingsDelete: true, models.MethodMappingsUpdate: true,
+	models.MethodMappingsReload: true,
+	models.MethodReaders:        true, models.MethodReadersWrite: true,
+	models.MethodReadersWriteCancel: true,
+	models.MethodInputKeyboard:      true, models.MethodInputGamepad: true,
+	models.MethodScreenshot: true, models.MethodVersion: true, models.MethodHealthCheck: true,
+	models.MethodInbox: true, models.MethodInboxDelete: true, models.MethodInboxClear: true,
+	models.MethodClientsCurrent: true,
+	models.MethodProfiles:       true, models.MethodProfilesNew: true,
+	models.MethodProfilesUpdate: true, models.MethodProfilesDelete: true,
+	models.MethodProfilesActive: true, models.MethodProfilesSwitch: true,
+	models.MethodProfilesVerify:    true,
+	models.MethodSettingsAuthClaim: true, models.MethodSettingsAuthStatus: true,
+	models.MethodSettingsAuthLink: true, models.MethodSettingsAuthLinkStatus: true,
 }
 
 func (m *MethodMap) Store(key, value any) {
@@ -215,6 +275,7 @@ func isValidMethodName(name string) bool {
 func (m *MethodMap) AddMethod(
 	name string,
 	handler func(requests.RequestEnv) (any, error),
+	legacyAccess ...bool,
 ) error {
 	if name == "" {
 		return errors.New("method name cannot be empty")
@@ -222,21 +283,38 @@ func (m *MethodMap) AddMethod(
 		return fmt.Errorf("method name contains invalid characters: %s", name)
 	} else if _, exists := m.GetMethod(name); exists {
 		return fmt.Errorf("method already exists: %s", name)
+	} else if len(legacyAccess) > 1 {
+		return errors.New("method legacy access accepts at most one value")
 	}
-	m.Store(strings.ToLower(name), handler)
+	legacyAllowed := len(legacyAccess) == 1 && legacyAccess[0]
+	m.Store(strings.ToLower(name), methodDefinition{
+		handler:       handler,
+		legacyAllowed: legacyAllowed,
+	})
 	return nil
 }
 
+func (m *MethodMap) getDefinition(name string) (methodDefinition, bool) {
+	value, ok := m.Load(strings.ToLower(name))
+	if !ok {
+		return methodDefinition{}, false
+	}
+	definition, ok := value.(methodDefinition)
+	if ok {
+		return definition, true
+	}
+	// Direct Store is retained for focused tests and extension compatibility,
+	// but fails closed for legacy authority.
+	handler, ok := value.(func(requests.RequestEnv) (any, error))
+	if !ok {
+		return methodDefinition{}, false
+	}
+	return methodDefinition{handler: handler}, true
+}
+
 func (m *MethodMap) GetMethod(name string) (func(requests.RequestEnv) (any, error), bool) {
-	fn, ok := m.Load(strings.ToLower(name))
-	if !ok {
-		return nil, false
-	}
-	method, ok := fn.(func(requests.RequestEnv) (any, error))
-	if !ok {
-		return nil, false
-	}
-	return method, true
+	definition, ok := m.getDefinition(name)
+	return definition.handler, ok
 }
 
 func (m *MethodMap) ListMethods() []string {
@@ -384,7 +462,7 @@ func NewMethodMap() *MethodMap {
 	}
 
 	for name, fn := range defaultMethods {
-		err := m.AddMethod(name, fn)
+		err := m.AddMethod(name, fn, legacyAllowedMethods[name])
 		if err != nil {
 			log.Error().Err(err).Msgf("error adding default method: %s", name)
 		}
@@ -415,6 +493,22 @@ func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Hand
 	}
 }
 
+// legacyAdmissionMiddleware rejects unauthenticated remote API transports on
+// platforms without an explicit compatibility policy. It runs after API-key
+// middleware so a valid key is recognized as admin authority.
+func legacyAdmissionMiddleware(platformID string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if apimiddleware.IsLoopbackAddr(r.RemoteAddr) ||
+				apimiddleware.APIKeyAuthenticated(r) || permissions.LegacyEnabled(platformID) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+		})
+	}
+}
+
 // apiMethodManagesRestoreAccess lists methods that coordinate with the
 // backup-restore gate themselves instead of taking the shared read lock:
 // the restore methods hold the write side, and media.active.update resolves
@@ -436,10 +530,19 @@ func handleRequest(
 ) (any, *models.ErrorObject) {
 	logSafeRequest(&req)
 
-	fn, ok := methodMap.GetMethod(req.Method)
+	definition, ok := methodMap.getDefinition(req.Method)
 	if !ok {
 		log.Warn().Str("method", req.Method).Msg("unknown method")
 		return nil, &JSONRPCErrorMethodNotFound
+	}
+	grant := methods.GrantForRequest(&env)
+	if grant.Access() == permissions.AccessLegacy {
+		bootstrapAllowed := unauthenticatedBootstrapMethods[strings.ToLower(req.Method)]
+		legacyAllowed := permissions.LegacyEnabled(env.PlatformID) && definition.legacyAllowed
+		if !bootstrapAllowed && !legacyAllowed {
+			rpcError := makeJSONRPCError(1, methods.ErrForbidden.Error())
+			return nil, &rpcError
+		}
 	}
 
 	if env.State != nil && !apiMethodManagesRestoreAccess(req.Method) {
@@ -454,7 +557,7 @@ func handleRequest(
 
 	env.Params = req.Params
 
-	resp, err := fn(env)
+	resp, err := definition.handler(env)
 	if err != nil {
 		var quietErr *models.QuietClientError
 		var clientErr *models.ClientError
@@ -906,16 +1009,28 @@ func broadcastToSessions(session *melody.Melody, plaintext []byte) {
 // On any send-side encryption failure (counter exhaustion, AEAD setup
 // error, write failure) the session is closed: a desynced session
 // cannot recover and keeping it open hides the bug from the client.
+func writeNotificationFrame(
+	writeFn func([]byte) error,
+	cs *apimiddleware.ClientSession,
+	authState webSocketAuthState,
+	plaintext []byte,
+) error {
+	if cs != nil {
+		if err := cs.SendEncryptedFrame(plaintext, writeFn); err != nil {
+			return fmt.Errorf("encrypt notification: %w", err)
+		}
+		return nil
+	}
+	if authState != webSocketAuthPlaintext {
+		return nil
+	}
+	return writeFn(plaintext)
+}
+
 func writeNotificationToSession(s *melody.Session, plaintext []byte) {
 	cs := getClientSession(s)
-	if cs == nil {
-		if err := s.Write(plaintext); err != nil {
-			logWSWriteError(err, "broadcasting plaintext notification")
-		}
-		return
-	}
-	if err := cs.SendEncryptedFrame(plaintext, s.Write); err != nil {
-		logWSWriteError(err, "broadcasting encrypted notification")
+	if err := writeNotificationFrame(s.Write, cs, getWebSocketAuthState(s), plaintext); err != nil {
+		logWSWriteError(err, "broadcasting notification")
 		closeMelodySession(s)
 	}
 }
@@ -1116,6 +1231,10 @@ func handleWSMessage(
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
 		isLocal := apimiddleware.IsLoopbackAddr(session.Request.RemoteAddr)
+		platformID := ""
+		if !isLocal {
+			platformID = platform.ID()
+		}
 		var sourceIP string
 		if clientIP != nil {
 			sourceIP = clientIP.String()
@@ -1193,12 +1312,14 @@ func handleWSMessage(
 			ScrapePauser:    scrapePauser,
 			BackupPauser:    backupPauser,
 			InputSession:    dispatcher.inputSession,
+			PlatformID:      platformID,
 			IsLocal:         isLocal,
 			ClientID:        session.Request.RemoteAddr,
 		}
 		if cs != nil {
 			env.ClientRole = cs.ClientRole()
 		}
+		env.APIKeyAuthenticated = apimiddleware.APIKeyAuthenticated(session.Request)
 
 		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
 			var queueFullErr *wsRequestQueueFullError
@@ -1302,6 +1423,7 @@ func decryptIncomingFrame(
 			return nil, nil, false
 		}
 		setClientSession(session, newSession)
+		setWebSocketAuthState(session, webSocketAuthEncrypted)
 		return pt, newSession, true
 	}
 
@@ -1484,25 +1606,32 @@ func handlePostRequest(
 			reqCancel()
 		}()
 
+		isLocal := apimiddleware.IsLoopbackAddr(r.RemoteAddr)
+		platformID := ""
+		if !isLocal {
+			platformID = platform.ID()
+		}
 		env := requests.RequestEnv{
-			Context:         reqCtx,
-			Platform:        platform,
-			Config:          cfg,
-			State:           st,
-			Database:        db,
-			LimitsManager:   limitsManager,
-			Profiles:        profilesSvc,
-			LauncherCache:   helpers.GlobalLauncherCache,
-			Player:          player,
-			PlaybackManager: playbackManager,
-			UI:              st.UIEvents(),
-			TokenQueue:      inTokenQueue,
-			ConfirmQueue:    confirmQueue,
-			IndexPauser:     indexPauser,
-			ScrapePauser:    scrapePauser,
-			BackupPauser:    backupPauser,
-			IsLocal:         apimiddleware.IsLoopbackAddr(r.RemoteAddr),
-			ClientID:        r.RemoteAddr,
+			Context:             reqCtx,
+			Platform:            platform,
+			Config:              cfg,
+			State:               st,
+			Database:            db,
+			LimitsManager:       limitsManager,
+			Profiles:            profilesSvc,
+			LauncherCache:       helpers.GlobalLauncherCache,
+			Player:              player,
+			PlaybackManager:     playbackManager,
+			UI:                  st.UIEvents(),
+			TokenQueue:          inTokenQueue,
+			ConfirmQueue:        confirmQueue,
+			IndexPauser:         indexPauser,
+			ScrapePauser:        scrapePauser,
+			BackupPauser:        backupPauser,
+			PlatformID:          platformID,
+			IsLocal:             isLocal,
+			ClientID:            r.RemoteAddr,
+			APIKeyAuthenticated: apimiddleware.APIKeyAuthenticated(r),
 		}
 
 		result := processRequestObject(methodMap, env, body)
@@ -1724,11 +1853,11 @@ func StartWithReady(
 	// Register pairing RPC methods. These close over the pairingMgr so
 	// they must be added after it is created, not in NewMethodMap().
 	if err := methodMap.AddMethod(models.MethodClientsPairStart,
-		methods.HandleClientsPairStart(pairingMgr)); err != nil {
+		methods.HandleClientsPairStart(pairingMgr), false); err != nil {
 		log.Error().Err(err).Msg("error adding clients.pair.start method")
 	}
 	if err := methodMap.AddMethod(models.MethodClientsPairCancel,
-		methods.HandleClientsPairCancel(pairingMgr)); err != nil {
+		methods.HandleClientsPairCancel(pairingMgr), false); err != nil {
 		log.Error().Err(err).Msg("error adding clients.pair.cancel method")
 	}
 
@@ -1769,7 +1898,11 @@ func StartWithReady(
 	// this errorHandler in an infinite recursion. Closing the underlying
 	// conn directly causes writePump to fail on its next write, exit, and
 	// run the normal session close path.
+	session.HandleConnect(func(s *melody.Session) {
+		startWebSocketAuthDeadline(s, webSocketAuthenticationTimeout)
+	})
 	session.HandleDisconnect(func(s *melody.Session) {
+		stopWebSocketAuthDeadline(s)
 		closeWSDispatcher(s)
 	})
 	session.HandleError(func(s *melody.Session, herr error) {
@@ -1832,8 +1965,19 @@ func StartWithReady(
 				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
 				return
 			}
+			if !apimiddleware.IsLoopbackAddr(r.RemoteAddr) &&
+				!apimiddleware.APIKeyAuthenticated(r) && !permissions.LegacyEnabled(platform.ID()) {
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
 		}
-		err := session.HandleRequest(w, r)
+		authState := webSocketAuthPlaintext
+		if cfg.EncryptionEnabled() && !apimiddleware.IsLoopbackAddr(r.RemoteAddr) {
+			authState = webSocketAuthPending
+		}
+		err := session.HandleRequestWithKeys(w, r, map[string]any{
+			melodySessionAuthStateKey: authState,
+		})
 		if err != nil {
 			log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
 		}
@@ -1870,6 +2014,10 @@ func StartWithReady(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		// JSON-RPC method policy is the authority boundary here. Keeping POST
+		// dispatch reachable preserves explicitly open authentication bootstrap
+		// methods; all missing or newly registered methods still fail closed in
+		// handleRequest.
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 		// Method handlers apply their own deadline after parsing JSON-RPC.
@@ -1908,6 +2056,7 @@ func StartWithReady(
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(legacyAdmissionMiddleware(platform.ID()))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 

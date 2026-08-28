@@ -26,7 +26,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -41,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
@@ -68,9 +68,10 @@ type Platform struct {
 	fs                        afero.Fs
 	procScanner               *procscanner.Scanner
 	steamTracker              *steamtracker.PlatformIntegration
-	emuTracker                *EmulatorTracker
+	emuTracker                *linuxemu.EmulatorTracker
 	steamRuntime              runtimeBroker
 	setActiveMedia            func(*models.ActiveMedia)
+	emulationOptionsOverride  *linuxemu.Options
 	retroArchAppendConfigPath string
 }
 
@@ -83,36 +84,15 @@ func NewPlatform() *Platform {
 }
 
 func steamOSSessionEnvOverrides() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, "systemctl", "--user", "show-environment").Output()
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to read current SteamOS session environment")
-		return nil
-	}
-
-	return parseSteamOSSessionEnv(string(output))
+	return linuxbase.DesktopSessionEnvOverrides(nil)
 }
 
 func isSteamOSSessionEnvKey(key string) bool {
-	switch key {
-	case "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE",
-		"XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS":
-		return true
-	default:
-		return false
-	}
+	return linuxbase.IsDesktopSessionEnvKey(key)
 }
 
 func parseSteamOSSessionEnv(output string) []string {
-	result := make([]string, 0, 8)
-	for line := range strings.SplitSeq(output, "\n") {
-		key, _, found := strings.Cut(line, "=")
-		if found && isSteamOSSessionEnvKey(key) {
-			result = append(result, line)
-		}
-	}
-	return result
+	return linuxbase.ParseDesktopSessionEnv(output)
 }
 
 func steamRuntimeEnvOverrides(env []string) []string {
@@ -138,11 +118,7 @@ func steamOSLaunchEnv() []string {
 	return helpers.MergeEnviron(os.Environ(), steamOSLaunchEnvOverrides())
 }
 
-// StartPre writes the Zaparoo-owned native RetroArch profile.
-func (p *Platform) StartPre(cfg *config.Instance) error {
-	if err := p.Base.StartPre(cfg); err != nil {
-		return fmt.Errorf("start SteamOS base: %w", err)
-	}
+func (p *Platform) prepareRetroArchConfigs() error {
 	if err := sharedretroarch.EnsureConfigProfile(
 		p.fileSystem(), p.retroArchConfigPath(), sharedretroarch.ConfigProfileLowLatency,
 	); err != nil {
@@ -235,7 +211,7 @@ func (p *Platform) StartPost(
 	p.steamTracker.Start()
 
 	// Start emulator tracker for EmuDeck/RetroDECK game detection
-	p.emuTracker = NewEmulatorTracker(
+	p.emuTracker = linuxemu.NewEmulatorTracker(
 		p.procScanner,
 		p.onEmulatorStart,
 		p.onEmulatorStop,
@@ -408,7 +384,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Steam may present cloud-sync or compatibility UI before starting a game.
 	// Publish ActiveMedia only after Steam's process tracker observes a real session.
 	steamLauncher.Lifecycle = platforms.LifecycleExternal
-	ls := []platforms.Launcher{
+	ls := make([]platforms.Launcher, 0, 10+len(sharedretroarch.CoreLaunches(sharedretroarch.ProfileDesktop)))
+	ls = append(ls, []platforms.Launcher{
 		// Kodi launchers (8 types)
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
@@ -422,31 +399,51 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		// Steam with Steam Deck optimizations
 		steamLauncher,
 
+		// Optional Linux game managers and remote streaming
+		launchers.NewBottlesLauncher(),
+		launchers.NewFaugusLauncher(),
+		launchers.NewMoonlightLauncher(),
+
 		// Generic for custom scripts
 		launchers.NewGenericLauncher(),
-	}
+	}...)
 
 	// Prefer installed standalone emulators for systems where they provide the
 	// strongest Steam Deck integration, then fall back to native RetroArch.
-	ls = append(ls, nativeStandaloneLaunchers()...)
 	retroArchOpts := steamOSRetroArchOptions(p.retroArchConfigPath())
+	basePreflight := retroArchOpts.Preflight
+	retroArchOpts.Preflight = sharedretroarch.MemoizePreflight(func(corePath string) error {
+		if basePreflight != nil {
+			if err := basePreflight(corePath); err != nil {
+				return err
+			}
+		}
+		return p.prepareRetroArchConfigs()
+	})
 	ls = append(ls, nativeRetroArchLaunchers(&retroArchOpts)...)
+	custom := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	existing := append(append(make([]platforms.Launcher, 0, len(custom)+len(ls)), custom...), ls...)
+	integrationOpts := p.emulationOptions(&retroArchOpts)
+	ls = append(ls, linuxemu.Launchers(cfg, integrationOpts, existing)...)
 
-	// Add RetroDECK launchers if available
-	if retrodeckLaunchers := GetRetroDECKLaunchers(cfg); len(retrodeckLaunchers) > 0 {
-		ls = append(ls, retrodeckLaunchers...)
-	}
-
-	// Add EmuDeck launchers if available
-	if emudeckLaunchers := buildEmuDeckLaunchers(cfg, &retroArchOpts); len(emudeckLaunchers) > 0 {
-		ls = append(ls, emudeckLaunchers...)
-	}
-
-	allLaunchers := append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+	allLaunchers := make([]platforms.Launcher, 0, len(custom)+len(ls))
+	allLaunchers = append(allLaunchers, custom...)
+	allLaunchers = append(allLaunchers, ls...)
 	if p.steamRuntime != nil && p.steamRuntime.Available() && steamOSGameMode.IsGamingMode() {
 		for i := range allLaunchers {
 			p.wrapSteamRuntime(&allLaunchers[i])
 		}
 	}
 	return allLaunchers
+}
+
+func (p *Platform) emulationOptions(retroArchOpts *sharedretroarch.Options) linuxemu.Options {
+	if p.emulationOptionsOverride != nil {
+		return *p.emulationOptionsOverride
+	}
+	options := linuxemu.NewOptions("", *retroArchOpts)
+	options.IncludeRetroArch = false
+	options.GameMode = steamOSGameMode
+	options.LaunchEnv = steamOSLaunchEnvOverrides
+	return options
 }

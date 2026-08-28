@@ -88,11 +88,22 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 		"/opt/steam",
 	)
 
+	firstExisting := ""
 	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if firstExisting == "" {
+			firstExisting = path
+		}
+		if info, err := os.Stat(filepath.Join(path, "steamapps")); err == nil && info.IsDir() {
 			log.Debug().Msgf("found Steam installation: %s", path)
 			return path
 		}
+	}
+	if firstExisting != "" {
+		log.Debug().Msgf("found Steam installation without steamapps: %s", firstExisting)
+		return firstExisting
 	}
 
 	log.Debug().Msgf("Steam detection failed, using fallback: %s", c.opts.FallbackPath)

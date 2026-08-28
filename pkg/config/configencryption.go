@@ -19,24 +19,41 @@
 
 package config
 
+// cloneEncryptionValue copies the optional encryption value so unmarshalling
+// into active values cannot mutate the stored platform default through a
+// shared pointer.
+//
+//nolint:gocritic // Values is intentionally copied before replacing one pointer.
+func cloneEncryptionValue(values Values) Values {
+	if values.Service.Encryption != nil {
+		enabled := *values.Service.Encryption
+		values.Service.Encryption = &enabled
+	}
+	return values
+}
+
 // EncryptionEnabled returns whether WebSocket encryption is enabled. When
 // true, remote WebSocket clients must send an encrypted first frame derived
 // from a paired key; plaintext WebSocket connections from non-loopback
-// addresses are rejected. When false (the default), plaintext and encrypted
-// WebSocket connections are both accepted.
+// addresses are rejected. A nil value uses the platform default supplied to
+// the config instance; the base default is false.
 //
 // Localhost connections are always allowed plaintext regardless of this
 // setting.
 func (c *Instance) EncryptionEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Service.Encryption
+	if c.vals.Service.Encryption == nil {
+		return false
+	}
+	return *c.vals.Service.Encryption
 }
 
-// SetEncryptionEnabled toggles WebSocket encryption. The caller is
-// responsible for calling Save() to persist the change.
+// SetEncryptionEnabled toggles WebSocket encryption. The explicit value is
+// retained even when false so it can override a platform default of true. The
+// caller is responsible for calling Save() to persist the change.
 func (c *Instance) SetEncryptionEnabled(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Service.Encryption = enabled
+	c.vals.Service.Encryption = &enabled
 }

@@ -27,21 +27,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 // Common Flatpak app IDs.
 const (
-	FlatpakSteamID  = "com.valvesoftware.Steam"
-	FlatpakLutrisID = "net.lutris.Lutris"
-	FlatpakHeroicID = "com.heroicgameslauncher.hgl"
+	flatpakInfoTimeout = 2 * time.Second
+	FlatpakSteamID     = "com.valvesoftware.Steam"
+	FlatpakLutrisID    = "net.lutris.Lutris"
+	FlatpakHeroicID    = "com.heroicgameslauncher.hgl"
+	FlatpakBottlesID   = "com.usebottles.bottles"
+	FlatpakFaugusID    = "io.github.Faugus.faugus-launcher"
+	FlatpakMoonlightID = "com.moonlight_stream.Moonlight"
 )
 
 // IsFlatpakInstalled checks if a Flatpak application is installed by querying flatpak info.
 func IsFlatpakInstalled(appID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), flatpakInfoTimeout)
+	defer cancel()
 	//nolint:gosec // G204: appID from hardcoded constants
-	cmd := exec.CommandContext(context.Background(), "flatpak", "info", appID)
+	cmd := exec.CommandContext(ctx, "flatpak", "info", appID)
 	return cmd.Run() == nil
 }
 

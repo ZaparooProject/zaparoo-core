@@ -22,6 +22,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	apimiddleware "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -29,8 +30,62 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// melodySessionEncryptionKey attaches ClientSession to melody session storage.
-const melodySessionEncryptionKey = "encryption_session"
+const (
+	// melodySessionEncryptionKey attaches ClientSession to melody session storage.
+	melodySessionEncryptionKey   = "encryption_session"
+	melodySessionAuthStateKey    = "authentication_state"
+	melodySessionAuthDeadlineKey = "authentication_deadline"
+)
+
+type webSocketAuthState string
+
+const (
+	webSocketAuthPending   webSocketAuthState = "pending"
+	webSocketAuthPlaintext webSocketAuthState = "plaintext"
+	webSocketAuthEncrypted webSocketAuthState = "encrypted"
+)
+
+func getWebSocketAuthState(session *melody.Session) webSocketAuthState {
+	value, ok := session.Get(melodySessionAuthStateKey)
+	if !ok {
+		return webSocketAuthPending
+	}
+	state, ok := value.(webSocketAuthState)
+	if !ok {
+		return webSocketAuthPending
+	}
+	return state
+}
+
+func setWebSocketAuthState(session *melody.Session, state webSocketAuthState) {
+	session.Set(melodySessionAuthStateKey, state)
+	if state != webSocketAuthPending {
+		stopWebSocketAuthDeadline(session)
+	}
+}
+
+func startWebSocketAuthDeadline(session *melody.Session, timeout time.Duration) {
+	if getWebSocketAuthState(session) != webSocketAuthPending {
+		return
+	}
+	timer := time.AfterFunc(timeout, func() {
+		if getWebSocketAuthState(session) == webSocketAuthPending {
+			closeMelodySession(session)
+		}
+	})
+	session.Set(melodySessionAuthDeadlineKey, timer)
+}
+
+func stopWebSocketAuthDeadline(session *melody.Session) {
+	value, ok := session.Get(melodySessionAuthDeadlineKey)
+	if !ok {
+		return
+	}
+	timer, ok := value.(*time.Timer)
+	if ok {
+		timer.Stop()
+	}
+}
 
 // getClientSession returns the encryption session (or nil for plaintext).
 func getClientSession(session *melody.Session) *apimiddleware.ClientSession {

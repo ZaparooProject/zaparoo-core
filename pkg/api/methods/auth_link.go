@@ -124,9 +124,6 @@ func (e *authLinkTerminalError) Error() string { return e.reason }
 //
 //nolint:gocritic // API dispatch requires RequestEnv by value.
 func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (any, error) {
-	if !isLocalOrAdmin(&env) {
-		return nil, models.ClientErrf("device linking requires a local or admin client")
-	}
 	var params models.SettingsAuthLinkParams
 	if len(env.Params) > 0 {
 		if err := json.Unmarshal(env.Params, &params); err != nil {
@@ -208,8 +205,9 @@ func HandleSettingsAuthLink(env requests.RequestEnv, fetchWK wellKnownFetcher) (
 //
 //nolint:gocritic // API dispatch requires RequestEnv by value.
 func HandleSettingsAuthLinkStatus(env requests.RequestEnv) (any, error) {
-	unpairedRemote := !env.IsLocal && env.ClientRole == ""
-	if !env.IsLocal && !unpairedRemote {
+	access := requestGrant(&env).Access()
+	legacy := access == permissions.AccessLegacy
+	if access == permissions.AccessMember {
 		if err := requireCapability(&env, permissions.CapSettingsWrite); err != nil {
 			return nil, err
 		}
@@ -220,7 +218,7 @@ func HandleSettingsAuthLinkStatus(env requests.RequestEnv) (any, error) {
 		return models.AuthLinkStatusResponse{Status: models.AuthLinkStatusNone}, nil
 	}
 	status := activeAuthLink.status
-	if unpairedRemote {
+	if legacy {
 		redactAuthLinkStatus(&status)
 	}
 	return status, nil

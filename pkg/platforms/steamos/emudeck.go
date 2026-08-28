@@ -19,6 +19,7 @@ import (
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	sharedretroarch "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	"github.com/rs/zerolog/log"
 )
@@ -42,10 +43,7 @@ type EmulatorConfig struct {
 }
 
 // EmuDeckPaths holds EmuDeck library paths.
-type EmuDeckPaths struct {
-	RomsPath     string
-	GamelistPath string
-}
+type EmuDeckPaths = linuxemu.EmuDeckPaths
 
 // emulatorMapping combines standalone EmuDeck applications with RetroArch's
 // shared core map. Standalone applications intentionally win system overlaps.
@@ -92,10 +90,7 @@ func DefaultEmuDeckPaths() EmuDeckPaths {
 	if err != nil {
 		homeDir = os.Getenv("HOME")
 	}
-	return EmuDeckPaths{
-		RomsPath:     filepath.Join(homeDir, "Emulation", "roms"),
-		GamelistPath: filepath.Join(homeDir, "ES-DE", "gamelists"),
-	}
+	return linuxemu.DefaultEmuDeckPaths(homeDir)
 }
 
 // IsEmuDeckAvailable reports whether EmuDeck's ROM directory exists.
@@ -217,6 +212,7 @@ func emuDeckPathTest(romsPath, systemFolder string) func(*config.Instance, strin
 	}
 }
 
+//nolint:unused // Retained for package compatibility; platform wiring uses shared linuxemu discovery.
 func buildEmuDeckLaunchers(
 	_ *config.Instance,
 	retroArchOpts *sharedretroarch.Options,

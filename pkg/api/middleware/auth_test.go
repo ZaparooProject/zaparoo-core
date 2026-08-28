@@ -250,7 +250,9 @@ func TestHTTPAuthMiddleware(t *testing.T) {
 			cfg := NewAuthConfig(keysProvider(tt.keys))
 			middleware := HTTPAuthMiddleware(cfg)
 
-			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			var apiKeyAuthenticated bool
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				apiKeyAuthenticated = APIKeyAuthenticated(r)
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte("OK"))
 			})
@@ -275,6 +277,9 @@ func TestHTTPAuthMiddleware(t *testing.T) {
 				"expected status %d, got %d", tt.expectedStatus, recorder.Code)
 			assert.Equal(t, tt.expectedBody, recorder.Body.String(),
 				"expected body %q, got %q", tt.expectedBody, recorder.Body.String())
+			if tt.expectedStatus == http.StatusOK {
+				assert.Equal(t, len(tt.keys) > 0, apiKeyAuthenticated)
+			}
 		})
 	}
 }
@@ -347,6 +352,7 @@ func TestWebSocketAuthHandler(t *testing.T) {
 
 			assert.Equal(t, tt.expected, result,
 				"WebSocketAuthHandler expected %v, got %v", tt.expected, result)
+			assert.Equal(t, tt.expected && len(tt.keys) > 0, APIKeyAuthenticated(req))
 		})
 	}
 }

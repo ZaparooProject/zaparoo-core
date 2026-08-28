@@ -118,29 +118,33 @@ func TestHandleClientsCurrent(t *testing.T) {
 	t.Parallel()
 
 	adminCapabilities := []string{
+		string(permissions.CapInput),
 		string(permissions.CapProfilesManage),
+		string(permissions.CapScreenshot),
 		string(permissions.CapSettingsWrite),
 		string(permissions.CapUpdateApply),
 	}
-	// An unpaired remote client gets the admin capabilities apart from
-	// update.apply.
-	unpairedCapabilities := []string{
-		string(permissions.CapProfilesManage),
-		string(permissions.CapSettingsWrite),
+	memberCapabilities := []string{
+		string(permissions.CapInput),
+		string(permissions.CapScreenshot),
 	}
+	//nolint:govet // Test table field order favors readability.
 	tests := []struct {
-		name             string
-		clientRole       string
-		wantRole         string
-		wantCapabilities []string
-		isLocal          bool
-		wantPaired       bool
+		name                string
+		clientRole          string
+		wantRole            string
+		wantCapabilities    []string
+		wantAccess          permissions.Access
+		isLocal             bool
+		apiKeyAuthenticated bool
+		wantPaired          bool
 	}{
 		{
 			name:             "remote paired member",
 			clientRole:       string(permissions.RoleMember),
 			wantRole:         string(permissions.RoleMember),
-			wantCapabilities: []string{},
+			wantCapabilities: memberCapabilities,
+			wantAccess:       permissions.AccessMember,
 			wantPaired:       true,
 		},
 		{
@@ -148,15 +152,24 @@ func TestHandleClientsCurrent(t *testing.T) {
 			clientRole:       string(permissions.RoleAdmin),
 			wantRole:         string(permissions.RoleAdmin),
 			wantCapabilities: adminCapabilities,
+			wantAccess:       permissions.AccessAdmin,
 			wantPaired:       true,
 		},
 		{
-			name:             "remote unpaired has no update.apply",
-			wantCapabilities: unpairedCapabilities,
+			name:             "remote legacy is fail closed",
+			wantCapabilities: []string{},
+			wantAccess:       permissions.AccessLegacy,
+		},
+		{
+			name:                "API key is unpaired admin",
+			wantCapabilities:    adminCapabilities,
+			wantAccess:          permissions.AccessAdmin,
+			apiKeyAuthenticated: true,
 		},
 		{
 			name:             "local unpaired gets local grant",
 			wantCapabilities: adminCapabilities,
+			wantAccess:       permissions.AccessLocalhost,
 			isLocal:          true,
 		},
 		{
@@ -164,15 +177,15 @@ func TestHandleClientsCurrent(t *testing.T) {
 			clientRole:       string(permissions.RoleMember),
 			wantRole:         string(permissions.RoleMember),
 			wantCapabilities: adminCapabilities,
+			wantAccess:       permissions.AccessLocalhost,
 			isLocal:          true,
 			wantPaired:       true,
 		},
 		{
 			name:             "unknown paired role degrades to member",
 			clientRole:       "superuser",
-			wantRole:         string(permissions.RoleMember),
-			wantCapabilities: []string{},
-			wantPaired:       true,
+			wantCapabilities: memberCapabilities,
+			wantAccess:       permissions.AccessMember,
 		},
 	}
 
@@ -181,13 +194,15 @@ func TestHandleClientsCurrent(t *testing.T) {
 			t.Parallel()
 
 			result, err := HandleClientsCurrent(requests.RequestEnv{
-				ClientRole: tt.clientRole,
-				IsLocal:    tt.isLocal,
+				ClientRole:          tt.clientRole,
+				IsLocal:             tt.isLocal,
+				APIKeyAuthenticated: tt.apiKeyAuthenticated,
 			})
 			require.NoError(t, err)
 			resp, ok := result.(models.ClientsCurrentResponse)
 			require.True(t, ok)
 			assert.Equal(t, tt.wantPaired, resp.Paired)
+			assert.Equal(t, string(tt.wantAccess), resp.Access)
 			assert.Equal(t, tt.wantCapabilities, resp.Capabilities)
 			assert.NotNil(t, resp.Capabilities)
 			if tt.wantPaired {

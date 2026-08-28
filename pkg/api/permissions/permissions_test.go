@@ -22,6 +22,7 @@ package permissions
 import (
 	"testing"
 
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,8 @@ func TestGrant_EffectiveRole(t *testing.T) {
 		{name: "paired admin", grant: Grant{Role: RoleAdmin}, want: RoleAdmin},
 		{name: "paired member", grant: Grant{Role: RoleMember}, want: RoleMember},
 		{name: "unknown role degrades to member", grant: Grant{Role: "superuser"}, want: RoleMember},
-		{name: "unpaired remote is admin (transitional)", grant: Grant{}, want: RoleAdmin},
+		{name: "unpaired remote is legacy", grant: Grant{}, want: RoleLegacy},
+		{name: "API key is admin", grant: Grant{APIKeyAuthenticated: true}, want: RoleAdmin},
 		{
 			name:  "session downgrade wins over local",
 			grant: Grant{IsLocal: true, SessionRole: RoleMember},
@@ -70,35 +72,40 @@ func TestGrant_Has(t *testing.T) {
 	assert.True(t, admin.Has(CapUpdateApply))
 	assert.False(t, member.Has(CapProfilesManage))
 	assert.False(t, member.Has(CapSettingsWrite))
+	assert.True(t, member.Has(CapScreenshot))
+	assert.True(t, member.Has(CapInput))
 	assert.False(t, member.Has(CapUpdateApply))
 }
 
-// An unpaired remote request resolves to admin, so without
-// authenticatedCapabilities it would be able to replace the binary. Its other
-// capabilities are unaffected.
-func TestGrant_UnpairedRemoteCannotApplyUpdates(t *testing.T) {
+func TestGrant_AuthenticationAndAccess(t *testing.T) {
 	t.Parallel()
 
-	unpaired := Grant{}
-	require.Equal(t, RoleAdmin, unpaired.EffectiveRole())
-	assert.False(t, unpaired.Authenticated())
-	assert.False(t, unpaired.Has(CapUpdateApply))
-	assert.True(t, unpaired.Has(CapProfilesManage))
-	assert.True(t, unpaired.Has(CapSettingsWrite))
-
-	for _, grant := range []Grant{
-		{IsLocal: true},
-		{IsLocal: true, Role: RoleMember},
-		{Role: RoleAdmin},
-	} {
-		assert.True(t, grant.Authenticated())
+	//nolint:govet // Test table field order favors readability.
+	tests := []struct {
+		name          string
+		grant         Grant
+		access        Access
+		authenticated bool
+	}{
+		{name: "localhost", grant: Grant{IsLocal: true}, access: AccessLocalhost, authenticated: true},
+		{name: "paired member", grant: Grant{Role: RoleMember}, access: AccessMember, authenticated: true},
+		{name: "paired admin", grant: Grant{Role: RoleAdmin}, access: AccessAdmin, authenticated: true},
+		{name: "API key admin", grant: Grant{APIKeyAuthenticated: true}, access: AccessAdmin, authenticated: true},
+		{name: "legacy", grant: Grant{}, access: AccessLegacy, authenticated: false},
+		{name: "internal remote", grant: Grant{Role: RoleRemote}, access: AccessRemote, authenticated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.access, tt.grant.Access())
+			assert.Equal(t, tt.authenticated, tt.grant.Authenticated())
+		})
 	}
 
-	// Being on the device and being paired are each enough on their own.
 	assert.True(t, Grant{IsLocal: true}.Has(CapUpdateApply))
 	assert.True(t, Grant{Role: RoleAdmin}.Has(CapUpdateApply))
-	// The role still has to allow it: a paired member is refused, and a
-	// voluntary session downgrade still wins.
+	assert.True(t, Grant{APIKeyAuthenticated: true}.Has(CapUpdateApply))
+	assert.False(t, Grant{}.Has(CapUpdateApply))
 	assert.False(t, Grant{Role: RoleMember}.Has(CapUpdateApply))
 	assert.False(t, Grant{IsLocal: true, SessionRole: RoleMember}.Has(CapUpdateApply))
 }
@@ -114,32 +121,37 @@ func TestGrant_Capabilities(t *testing.T) {
 		{
 			name:  "paired admin is sorted",
 			grant: Grant{Role: RoleAdmin},
-			want:  []Capability{CapProfilesManage, CapSettingsWrite, CapUpdateApply},
+			want:  []Capability{CapInput, CapProfilesManage, CapScreenshot, CapSettingsWrite, CapUpdateApply},
 		},
 		{
-			name:  "paired member is empty",
+			name:  "paired member has day-to-day capabilities",
 			grant: Grant{Role: RoleMember},
+			want:  []Capability{CapInput, CapScreenshot},
+		},
+		{
+			name:  "legacy risky platform is empty",
+			grant: Grant{PlatformID: platformids.Linux},
 			want:  []Capability{},
 		},
 		{
-			name:  "unpaired remote has no update.apply",
-			grant: Grant{},
-			want:  []Capability{CapProfilesManage, CapSettingsWrite},
+			name:  "legacy MiSTer preserves capabilities",
+			grant: Grant{PlatformID: platformids.Mister},
+			want:  []Capability{CapInput, CapProfilesManage, CapScreenshot, CapSettingsWrite},
 		},
 		{
 			name:  "local member gets local capabilities",
 			grant: Grant{Role: RoleMember, IsLocal: true},
-			want:  []Capability{CapProfilesManage, CapSettingsWrite, CapUpdateApply},
+			want:  []Capability{CapInput, CapProfilesManage, CapScreenshot, CapSettingsWrite, CapUpdateApply},
 		},
 		{
 			name:  "unknown role degrades to member",
 			grant: Grant{Role: "superuser"},
-			want:  []Capability{},
+			want:  []Capability{CapInput, CapScreenshot},
 		},
 		{
-			name:  "session downgrade removes capabilities",
+			name:  "session downgrade uses member capabilities",
 			grant: Grant{Role: RoleAdmin, SessionRole: RoleMember},
-			want:  []Capability{},
+			want:  []Capability{CapInput, CapScreenshot},
 		},
 	}
 
@@ -153,6 +165,60 @@ func TestGrant_Capabilities(t *testing.T) {
 	}
 }
 
+func TestLegacyPlatformPolicy(t *testing.T) {
+	t.Parallel()
+
+	for _, platformID := range []string{
+		platformids.Mister,
+		platformids.Mistex,
+		platformids.Batocera,
+		platformids.LibreELEC,
+		platformids.ReplayOS,
+	} {
+		assert.True(t, LegacyEnabled(platformID), platformID)
+	}
+	for _, platformID := range []string{
+		platformids.Linux,
+		platformids.SteamOS,
+		platformids.Bazzite,
+		platformids.ChimeraOS,
+		platformids.Windows,
+		platformids.Mac,
+		platformids.ZapOS,
+		platformids.Recalbox,
+		platformids.RetroPie,
+		"future-platform",
+	} {
+		assert.False(t, LegacyEnabled(platformID), platformID)
+	}
+
+	assert.False(t, Grant{PlatformID: platformids.LibreELEC}.Has(CapInput))
+	assert.False(t, Grant{PlatformID: platformids.LibreELEC}.Has(CapScreenshot))
+	assert.True(t, Grant{PlatformID: platformids.ReplayOS}.Has(CapScreenshot))
+}
+
+// TestLegacyZapScriptCapabilityMatrix pins the API-layer invariant that makes
+// command-level API checks unnecessary: every released legacy platform with a
+// functional sensitive ZapScript command retains that command's capability.
+func TestLegacyZapScriptCapabilityMatrix(t *testing.T) {
+	t.Parallel()
+
+	for _, platformID := range []string{
+		platformids.Mister,
+		platformids.Mistex,
+		platformids.Batocera,
+		platformids.ReplayOS,
+	} {
+		assert.True(t, Grant{PlatformID: platformID}.Has(CapInput), platformID)
+	}
+	for _, platformID := range []string{
+		platformids.Mister,
+		platformids.ReplayOS,
+	} {
+		assert.True(t, Grant{PlatformID: platformID}.Has(CapScreenshot), platformID)
+	}
+}
+
 func TestValidRole(t *testing.T) {
 	t.Parallel()
 
@@ -160,6 +226,7 @@ func TestValidRole(t *testing.T) {
 	assert.True(t, ValidRole("member"))
 	assert.False(t, ValidRole(""))
 	assert.False(t, ValidRole("root"))
+	assert.False(t, ValidRole("legacy"))
 	// RoleRemote is assigned only by the device's own remote-operations
 	// dispatcher; a client must never be able to pair as it.
 	assert.False(t, ValidRole("remote"))

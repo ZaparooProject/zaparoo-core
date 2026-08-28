@@ -243,8 +243,8 @@ func (b *Base) claimProcessWaiterLocked(proc *os.Process) <-chan struct{} {
 	return done
 }
 
-// StopActiveLauncher stops the tracked process tree and clears active media.
-// Launcher-specific shutdown runs first, followed by SIGTERM and SIGKILL fallback.
+// StopActiveLauncher runs launcher-specific shutdown, stops any tracked process tree,
+// and clears active media. Tracked processes receive SIGTERM and SIGKILL fallback.
 func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 	if b.launcherManager != nil {
 		b.launcherManager.NewContext()
@@ -262,16 +262,21 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 	}
 	b.processMu.Unlock()
 
+	customKilled := false
+	if customKill != nil {
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := customKill(cfg); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed, falling back to signals")
+		} else {
+			customKilled = true
+		}
+	}
+
 	if proc != nil {
 		pid := int32(proc.Pid) //nolint:gosec // PID fits in int32
 		exited := false
-		if customKill != nil {
-			log.Debug().Msg("using custom Kill function for launcher")
-			if err := customKill(cfg); err != nil {
-				log.Warn().Err(err).Msg("custom Kill function failed, falling back to signals")
-			} else {
-				exited = b.waitForExit(done, CustomKillTimeout)
-			}
+		if customKilled {
+			exited = b.waitForExit(done, CustomKillTimeout)
 		}
 
 		if !exited {

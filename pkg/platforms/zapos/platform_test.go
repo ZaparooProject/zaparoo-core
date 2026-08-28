@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/retroarch"
 	testinghelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -26,6 +27,12 @@ func TestNewPlatform(t *testing.T) {
 
 	require.NotNil(t, platform.Base)
 	assert.Equal(t, platformids.ZapOS, platform.ID())
+}
+
+func TestPlatformStartPreDoesNotRequireEmulators(t *testing.T) {
+	t.Parallel()
+
+	assert.NoError(t, NewPlatform().StartPre(nil))
 }
 
 func TestSettings(t *testing.T) {
@@ -68,11 +75,41 @@ file_exts = [".chd"]
 execute = "echo [[media_path]]"
 `))
 
-	launchers := NewPlatform().Launchers(cfg)
+	options := linuxemu.NewOptions(t.TempDir(), applianceRetroArchOptions())
+	options.IncludeRetroArch = false
+	options.IsFlatpakInstalled = func(string) bool { return false }
+	options.LookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	platform := NewPlatform()
+	platform.emulationOptionsOverride = &options
+	launchers := platform.Launchers(cfg)
 
 	require.Len(t, launchers, len(retroarch.CoreLaunches(retroarch.ProfileApplianceARM))+1)
 	assert.Equal(t, "CustomPSX", launchers[0].ID)
 	assert.Equal(t, "RetroArchOpera", launchers[1].ID)
+}
+
+func TestLaunchersKeepApplianceRetroArchDefaultsWithoutDuplicates(t *testing.T) {
+	t.Parallel()
+
+	fs := testinghelpers.NewMemoryFS()
+	cfg, err := testinghelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	options := linuxemu.NewOptions(t.TempDir(), retroarch.Options{})
+	options.IncludeStandalone = false
+	options.IncludeProviderDecks = false
+	options.IsFlatpakInstalled = func(id string) bool { return id == linuxemu.RetroArchFlatpakID }
+	platform := NewPlatform()
+	platform.emulationOptionsOverride = &options
+
+	counts := make(map[string]int)
+	for _, launcher := range platform.Launchers(cfg) {
+		counts[launcher.ID]++
+	}
+	assert.Equal(t, 1, counts["RetroArchSNES9x"])
+	assert.Equal(t,
+		filepath.Join(userdataPath("runtime", "retroarch"), "retroarch"),
+		applianceRetroArchOptions().Exec[0],
+	)
 }
 
 func TestApplianceRetroArchOptions(t *testing.T) {

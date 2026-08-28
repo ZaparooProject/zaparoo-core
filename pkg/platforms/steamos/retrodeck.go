@@ -34,21 +34,17 @@ import (
 	platformshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxemu"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	// RetroDECKFlatpakID is the Flatpak application ID for RetroDECK
-	RetroDECKFlatpakID = "net.retrodeck.retrodeck"
+	// RetroDECKFlatpakID is the Flatpak application ID for RetroDECK.
+	RetroDECKFlatpakID = linuxemu.RetroDECKFlatpakID
 )
 
 // RetroDECKPaths holds the paths for RetroDECK installation.
-type RetroDECKPaths struct {
-	// RomsPath is the base path for ROMs (e.g., ~/retrodeck/roms/)
-	RomsPath string
-	// GamelistPath is the base path for ES-DE gamelists (e.g., ~/retrodeck/ES-DE/gamelists/)
-	GamelistPath string
-}
+type RetroDECKPaths = linuxemu.RetroDECKPaths
 
 // DefaultRetroDECKPaths returns the default paths for RetroDECK.
 func DefaultRetroDECKPaths() RetroDECKPaths {
@@ -56,11 +52,7 @@ func DefaultRetroDECKPaths() RetroDECKPaths {
 	if err != nil {
 		homeDir = os.Getenv("HOME")
 	}
-
-	return RetroDECKPaths{
-		RomsPath:     filepath.Join(homeDir, "retrodeck", "roms"),
-		GamelistPath: filepath.Join(homeDir, "retrodeck", "ES-DE", "gamelists"),
-	}
+	return linuxemu.DefaultRetroDECKPaths(homeDir)
 }
 
 // IsRetroDECKInstalled checks if RetroDECK is installed via Flatpak.

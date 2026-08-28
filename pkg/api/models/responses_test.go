@@ -337,24 +337,29 @@ func TestClientsCurrentResponse_JSONShape(t *testing.T) {
 		role := "member"
 		resp := ClientsCurrentResponse{
 			Role:         &role,
-			Capabilities: []string{},
+			Capabilities: []string{"input", "screenshot"},
+			Access:       "member",
 			Paired:       true,
 		}
 		raw, err := json.Marshal(resp)
 		require.NoError(t, err)
-		assert.JSONEq(t, `{"role":"member","capabilities":[],"paired":true}`, string(raw))
+		assert.JSONEq(t,
+			`{"role":"member","capabilities":["input","screenshot"],"access":"member","paired":true}`,
+			string(raw),
+		)
 	})
 
 	t.Run("unpaired", func(t *testing.T) {
 		t.Parallel()
 
 		resp := ClientsCurrentResponse{
-			Capabilities: []string{"profiles.manage", "settings.write"},
+			Capabilities: []string{},
+			Access:       "legacy",
 		}
 		raw, err := json.Marshal(resp)
 		require.NoError(t, err)
 		assert.JSONEq(t,
-			`{"role":null,"capabilities":["profiles.manage","settings.write"],"paired":false}`,
+			`{"role":null,"capabilities":[],"access":"legacy","paired":false}`,
 			string(raw),
 		)
 	})

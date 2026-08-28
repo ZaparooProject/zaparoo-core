@@ -20,11 +20,31 @@
 package retroarch
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestMemoizePreflightRetriesAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	preflight := MemoizePreflight(func(_ string) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("temporary failure")
+		}
+		return nil
+	})
+
+	require.Error(t, preflight("first-core"))
+	assert.NoError(t, preflight("second-core"))
+	assert.NoError(t, preflight("third-core"))
+	assert.Equal(t, 2, attempts)
+}
 
 func TestBuildCommand_Direct(t *testing.T) {
 	t.Parallel()

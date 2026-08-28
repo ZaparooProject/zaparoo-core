@@ -26,7 +26,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -51,6 +53,7 @@ func TestHandleScreenshot_Success(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  context.Background(),
 		Platform: pl,
+		IsLocal:  true,
 	}
 
 	result, err := HandleScreenshot(env)
@@ -62,6 +65,23 @@ func TestHandleScreenshot_Success(t *testing.T) {
 	assert.Equal(t, base64.StdEncoding.EncodeToString(imgData), resp.Data)
 	assert.Equal(t, len(imgData), resp.Size)
 	pl.AssertCalled(t, "Screenshot")
+}
+
+func TestHandleScreenshot_LegacyPolicy(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	pl.On("Screenshot").Return(&platforms.ScreenshotResult{}, nil)
+
+	_, err := HandleScreenshot(requests.RequestEnv{Platform: pl, PlatformID: platformids.Linux})
+	require.ErrorIs(t, err, ErrForbidden)
+	pl.AssertNotCalled(t, "Screenshot")
+
+	result, err := HandleScreenshot(requests.RequestEnv{Platform: pl, PlatformID: platformids.ReplayOS})
+	require.NoError(t, err)
+	assert.IsType(t, models.ScreenshotResponse{}, result)
+	assert.True(t, permissions.LegacyEnabled(platformids.ReplayOS))
 }
 
 func TestHandleScreenshot_PlatformError(t *testing.T) {
@@ -78,6 +98,7 @@ func TestHandleScreenshot_PlatformError(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  context.Background(),
 		Platform: pl,
+		IsLocal:  true,
 	}
 
 	_, err := HandleScreenshot(env)

@@ -31,10 +31,9 @@ import (
 func TestSteamOSDefaults(t *testing.T) {
 	t.Parallel()
 
-	fresh := steamOSDefaults(true)
-	existing := steamOSDefaults(false)
+	defaults := steamOSDefaults()
 
-	assert.True(t, fresh.Service.Encryption)
-	assert.False(t, existing.Service.Encryption)
-	assert.False(t, config.BaseDefaults.Service.Encryption, "must not mutate shared platform defaults")
+	assert.NotNil(t, defaults.Service.Encryption)
+	assert.True(t, *defaults.Service.Encryption)
+	assert.Nil(t, config.BaseDefaults.Service.Encryption, "must not mutate shared platform defaults")
 }

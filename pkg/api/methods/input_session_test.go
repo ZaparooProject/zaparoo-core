@@ -74,6 +74,7 @@ func TestHandleInputKeyboard_UsesDurableInputSession(t *testing.T) {
 		Context:      t.Context(),
 		InputSession: session,
 		Params:       json.RawMessage(`{"keys":"{press:up}"}`),
+		IsLocal:      true,
 	}
 
 	result, err := HandleInputKeyboard(env)
@@ -92,6 +93,7 @@ func TestHandleInputGamepad_UsesDurableInputSession(t *testing.T) {
 		Context:      t.Context(),
 		InputSession: session,
 		Params:       json.RawMessage(`{"buttons":"{press:start}"}`),
+		IsLocal:      true,
 	}
 
 	result, err := HandleInputGamepad(env)
@@ -107,6 +109,7 @@ func TestHandleInputKeyboard_RejectsPersistentInputWithoutSession(t *testing.T) 
 	env := requests.RequestEnv{
 		Context: t.Context(),
 		Params:  json.RawMessage(`{"keys":"{press:up}"}`),
+		IsLocal: true,
 	}
 
 	_, err := HandleInputKeyboard(env)
@@ -122,6 +125,7 @@ func TestHandleInputGamepad_RejectsPersistentInputWithoutSession(t *testing.T) {
 	env := requests.RequestEnv{
 		Context: t.Context(),
 		Params:  json.RawMessage(`{"buttons":"{release:start}"}`),
+		IsLocal: true,
 	}
 
 	_, err := HandleInputGamepad(env)

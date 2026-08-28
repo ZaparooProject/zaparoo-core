@@ -50,9 +50,10 @@ func main() {
 	}
 }
 
-func steamOSDefaults(freshInstall bool) config.Values {
+func steamOSDefaults() config.Values {
 	defaults := config.BaseDefaults
-	defaults.Service.Encryption = freshInstall
+	enabled := true
+	defaults.Service.Encryption = &enabled
 	return defaults
 }
 
@@ -163,14 +164,13 @@ func run() error {
 	configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
 	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
 	migrationRequired := migrate.Required(iniPath, configPath)
-	_, configErr := os.Stat(configPath)
-	freshInstall := errors.Is(configErr, os.ErrNotExist) && !migrationRequired
-	defaults := steamOSDefaults(freshInstall)
+	defaults := steamOSDefaults()
 	if migrationRequired {
 		migrated, migrateErr := migrate.IniToToml(iniPath)
 		if migrateErr != nil {
 			return fmt.Errorf("error migrating config: %w", migrateErr)
 		}
+		migrated.Service.Encryption = defaults.Service.Encryption
 		defaults = migrated
 	}
 

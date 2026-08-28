@@ -54,7 +54,7 @@ func TestEnsureSharedRetroArchNetworkConfig(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestPlatformStartPreWritesRetroArchConfig(t *testing.T) {
+func TestPlatformPreparesRetroArchConfig(t *testing.T) {
 	t.Parallel()
 
 	fs := afero.NewMemMapFs()
@@ -63,12 +63,23 @@ func TestPlatformStartPreWritesRetroArchConfig(t *testing.T) {
 	platform.fs = fs
 	platform.retroArchAppendConfigPath = path
 
-	require.NoError(t, platform.StartPre(nil))
+	require.NoError(t, platform.prepareRetroArchConfigs())
 	data, err := afero.ReadFile(fs, path)
 	require.NoError(t, err)
 	expected, err := sharedretroarch.ConfigForProfile(sharedretroarch.ConfigProfileLowLatency)
 	require.NoError(t, err)
 	assert.Equal(t, expected, string(data))
+}
+
+func TestPlatformStartPreDoesNotRequireWritableRetroArchConfig(t *testing.T) {
+	t.Parallel()
+
+	platform := NewPlatform()
+	platform.fs = afero.NewReadOnlyFs(afero.NewMemMapFs())
+	platform.retroArchAppendConfigPath = filepath.Join("config", retroArchNativeConfig)
+
+	require.Error(t, platform.prepareRetroArchConfigs())
+	assert.NoError(t, platform.StartPre(nil))
 }
 
 func TestNativeRetroArchLaunchers(t *testing.T) {

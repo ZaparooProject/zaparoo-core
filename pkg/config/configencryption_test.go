@@ -20,9 +20,11 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
 	toml "github.com/pelletier/go-toml/v2"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,29 +48,57 @@ func TestSetEncryptionEnabled(t *testing.T) {
 	assert.False(t, cfg.EncryptionEnabled())
 }
 
-// TestServiceEncryption_OmitEmpty pins the omitempty behavior of the
-// Service.Encryption field. A fresh install (or a config with encryption
-// disabled) must NOT write `encryption = false` into config.toml. Without
-// this test, an accidental drop of the omitempty tag would silently change
-// config file contents for every user on the next save.
-func TestServiceEncryption_OmitEmpty(t *testing.T) {
+func TestEncryptionExplicitFalseOverridesTrueDefault(t *testing.T) {
+	t.Setenv(CfgEnv, "")
+
+	fs := afero.NewMemMapFs()
+	configDir := "/config"
+	require.NoError(t, fs.MkdirAll(configDir, 0o750))
+	configPath := filepath.Join(configDir, CfgFile)
+	require.NoError(t, afero.WriteFile(fs, configPath, []byte("[service]\nencryption = false\n"), 0o600))
+
+	enabled := true
+	defaults := BaseDefaults
+	defaults.Service.Encryption = &enabled
+	cfg, err := NewConfigWithFs(configDir, defaults, fs)
+	require.NoError(t, err)
+	assert.False(t, cfg.EncryptionEnabled())
+
+	require.NoError(t, cfg.Save())
+	data, err := afero.ReadFile(fs, configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "encryption = false")
+
+	// Removing the explicit override restores the unmutated platform default.
+	require.NoError(t, afero.WriteFile(fs, configPath, []byte("[service]\n"), 0o600))
+	require.NoError(t, cfg.Load())
+	assert.True(t, cfg.EncryptionEnabled())
+}
+
+func TestServiceEncryption_ExplicitValues(t *testing.T) {
 	t.Parallel()
 
-	// Case 1: zero-value Service must not emit encryption.
 	data, err := toml.Marshal(Service{})
 	require.NoError(t, err)
-	assert.NotContains(t, string(data), "encryption",
-		"zero-value Service must omit the encryption field")
+	assert.NotContains(t, string(data), "encryption")
 
-	// Case 2: Service{Encryption: true} must emit encryption = true.
-	data, err = toml.Marshal(Service{Encryption: true})
+	enabled := true
+	data, err = toml.Marshal(Service{Encryption: &enabled})
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "encryption = true",
-		"Service{Encryption: true} must emit encryption = true")
+	assert.Contains(t, string(data), "encryption = true")
 
-	// Case 3: round-trip — marshalling then unmarshalling must preserve
-	// the enabled state.
 	var got Service
 	require.NoError(t, toml.Unmarshal(data, &got))
-	assert.True(t, got.Encryption, "round-trip must preserve encryption = true")
+	require.NotNil(t, got.Encryption)
+	assert.True(t, *got.Encryption)
+
+	disabled := false
+	data, err = toml.Marshal(Service{Encryption: &disabled})
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "encryption = false")
+
+	got = Service{}
+	require.NoError(t, toml.Unmarshal(data, &got))
+	require.NotNil(t, got.Encryption)
+	assert.False(t, *got.Encryption)
 }

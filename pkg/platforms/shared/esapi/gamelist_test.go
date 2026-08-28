@@ -23,9 +23,11 @@ import (
 	"encoding/xml"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,6 +103,82 @@ func TestReadGameListXML(t *testing.T) {
 	assert.Equal(t, "./media/sonic.png", gameList.Games[0].Image)
 	assert.Equal(t, "./Hacks", gameList.Folders[0].Path)
 	assert.Equal(t, "Hacks", gameList.Folders[0].Name)
+}
+
+func TestReadGameReferencesXMLFS(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := filepath.Join("lists", "gamelist.xml")
+	require.NoError(t, fs.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, afero.WriteFile(fs, path, []byte(`<gameList>
+  <game><name>Game</name><path>./game.rom</path><desc>ignored</desc></game>
+  <folder><name>Folder</name><path>./folder</path></folder>
+</gameList>`), 0o600))
+
+	references, err := ReadGameReferencesXMLFS(fs, path)
+	require.NoError(t, err)
+	assert.Equal(t, []GameReference{{Name: "Game", Path: "./game.rom"}}, references)
+}
+
+func TestGameListXMLLimits(t *testing.T) {
+	t.Parallel()
+
+	t.Run("size", func(t *testing.T) {
+		t.Parallel()
+		err := ValidateGameListXML([]byte(strings.Repeat(" ", MaxGameListXMLSize+1)))
+		require.ErrorIs(t, err, ErrGameListTooLarge)
+	})
+
+	t.Run("depth", func(t *testing.T) {
+		t.Parallel()
+		data := []byte("<gameList>" + strings.Repeat("<group>", MaxGameListXMLDepth) +
+			strings.Repeat("</group>", MaxGameListXMLDepth) + "</gameList>")
+		err := ValidateGameListXML(data)
+		require.ErrorIs(t, err, ErrGameListTooDeep)
+	})
+
+	t.Run("entries", func(t *testing.T) {
+		t.Parallel()
+		data := []byte("<gameList>" + strings.Repeat("<game/>", MaxGameListEntries+1) + "</gameList>")
+		err := ValidateGameListXML(data)
+		require.ErrorIs(t, err, ErrGameListTooManyItems)
+	})
+
+	t.Run("root", func(t *testing.T) {
+		t.Parallel()
+		err := ValidateGameListXML([]byte(`<notGameList/>`))
+		require.Error(t, err)
+	})
+
+	t.Run("text before root", func(t *testing.T) {
+		t.Parallel()
+		err := ValidateGameListXML([]byte(`prefix<gameList/>`))
+		require.ErrorContains(t, err, "character data outside gameList root element")
+	})
+
+	t.Run("text after root", func(t *testing.T) {
+		t.Parallel()
+		err := ValidateGameListXML([]byte(`<gameList/>suffix`))
+		require.ErrorContains(t, err, "character data outside gameList root element")
+	})
+
+	t.Run("whitespace around root", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, ValidateGameListXML([]byte(" \n\t<gameList/>\r\n ")))
+	})
+}
+
+func TestReadGameListXMLFSSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	path := "gamelist.xml"
+	require.NoError(t, afero.WriteFile(fs, path, []byte(strings.Repeat(" ", MaxGameListXMLSize+1)), 0o600))
+
+	_, err := ReadGameListXMLFS(fs, path)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrGameListTooLarge)
 }
 
 func TestReadGameListXMLErrors(t *testing.T) {

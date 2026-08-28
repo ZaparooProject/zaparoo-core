@@ -50,7 +50,7 @@ func TestHandleRequestRejectsOtherMethodsDuringRestore(t *testing.T) {
 	blocked := make(chan handleResult, 1)
 	go func() {
 		result, rpcErr := handleRequest(methodMap, requests.RequestEnv{
-			Context: context.Background(), State: st,
+			Context: context.Background(), State: st, IsLocal: true,
 		}, models.RequestObject{JSONRPC: "2.0", Method: models.MethodSettingsUpdate})
 		blocked <- handleResult{result: result, err: rpcErr}
 	}()
@@ -62,7 +62,7 @@ func TestHandleRequestRejectsOtherMethodsDuringRestore(t *testing.T) {
 
 	finishRestore(false)
 	result, rpcErr := handleRequest(methodMap, requests.RequestEnv{
-		Context: context.Background(), State: st,
+		Context: context.Background(), State: st, IsLocal: true,
 	}, models.RequestObject{JSONRPC: "2.0", Method: models.MethodSettingsUpdate})
 	require.Nil(t, rpcErr)
 	assert.Equal(t, "ok", result)
@@ -83,7 +83,7 @@ func TestHandleRequestAllowsRestoreMethodToOwnExclusiveGate(t *testing.T) {
 	defer finishRestore(false)
 
 	result, rpcErr := handleRequest(methodMap, requests.RequestEnv{
-		Context: context.Background(), State: st,
+		Context: context.Background(), State: st, IsLocal: true,
 	}, models.RequestObject{JSONRPC: "2.0", Method: models.MethodSettingsBackupRestore})
 	require.Nil(t, rpcErr)
 	assert.Equal(t, "restore", result)

@@ -25,10 +25,14 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/rs/zerolog/log"
 )
 
 func HandleScreenshot(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	if err := requireCapability(&env, permissions.CapScreenshot); err != nil {
+		return nil, err
+	}
 	log.Info().Msg("received screenshot request")
 
 	result, err := env.Platform.Screenshot()

@@ -76,12 +76,9 @@ func PreserveRestoreOverrides(data []byte, deviceID string, encryption bool) ([]
 	}
 	// The encryption requirement belongs to the destination's paired
 	// clients (which restore preserves), so the backup's value must not
-	// silently reopen or lock down the device.
-	if encryption {
-		service["encryption"] = true
-	} else {
-		delete(service, "encryption")
-	}
+	// silently reopen or lock down the device. False remains explicit because
+	// some platforms default to true.
+	service["encryption"] = encryption
 	encoded, err := toml.Marshal(values)
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply restore overrides to config: %w", err)
@@ -252,8 +249,8 @@ func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance,
 		mu:       syncutil.RWMutex{},
 		appPath:  os.Getenv(AppEnv),
 		cfgPath:  cfgPath,
-		vals:     defaults,
-		defaults: defaults,
+		vals:     cloneEncryptionValue(defaults),
+		defaults: cloneEncryptionValue(defaults),
 	}
 
 	if _, err := fs.Stat(cfgPath); os.IsNotExist(err) {
@@ -304,7 +301,7 @@ func (c *Instance) Load() error {
 	// Save old vals so we can restore on error (Load is called at runtime for
 	// config reloads — a bad file must not destroy the running config).
 	oldVals := c.vals
-	c.vals = c.defaults
+	c.vals = cloneEncryptionValue(c.defaults)
 
 	// Save mappings — they're normally loaded from separate files via
 	// LoadMappings, not config.toml. Save() strips them before marshal, so
