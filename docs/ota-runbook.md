@@ -266,9 +266,18 @@ UserDB. A managed installation must remain payload-ineligible and untouched.
 ### Cross-platform confirmation cycle
 
 Observe one complete signed check → automatic install → restart → confirmation
-on MiSTer, SteamOS, writable Windows, unmanaged Batocera and one musl platform.
-Verify generation/asset selection, gates, restarted version, update result,
-marker/sidecar cleanup and retained UserDB data on each.
+on MiSTer, SteamOS, writable Windows, unmanaged Batocera, and one install that
+is not package-manager managed. Verify generation/asset selection, gates,
+restarted version, update result, marker/sidecar cleanup and retained UserDB
+data on each.
+
+Pick that set for the differences that actually reach the updater: a target
+filesystem where `chmod` is a no-op and directory fsync is unsupported
+(MiSTer's exfat), a battery-backed device (Steam Deck), the rename-aside
+replacement backend (Windows), platform-owned payload extras (Batocera), and an
+install `ManagedByPackageManager` reports false for, since that is the only
+shape where automatic installation is permitted at all. Every release is built
+against glibc, so libc variance is not one of the axes.
 
 ## Controlled beta rollback and withdrawal drill
 
