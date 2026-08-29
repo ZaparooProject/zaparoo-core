@@ -146,6 +146,11 @@ func TestUpdateMenuTitle(t *testing.T) {
 			want:      "Development build",
 			clickable: false,
 		},
+		"an install that cannot replace itself cannot act": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityUnsupported},
+			want:      "Updates unavailable here",
+			clickable: false,
+		},
 		"a rollback is worth surfacing over anything else": {
 			status: &models.UpdateCheckResponse{
 				Eligibility:     updater.EligibilityEligible,

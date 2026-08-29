@@ -76,6 +76,26 @@ func updateMenuClickable(status *models.UpdateCheckResponse) bool {
 	return updater.EligibilityCanOfferUpdates(status.Eligibility)
 }
 
+// menuEntry is the part of a tray item this file drives. *systray.MenuItem
+// satisfies it, and a test can substitute something that records what was set.
+type menuEntry interface {
+	SetTitle(string)
+	Enable()
+	Disable()
+}
+
+// apiCaller is how these entries reach Core, and showDialog is how they get a
+// message in front of someone. Both are injected so the menu's decisions can be
+// tested without a running service or a native window.
+type (
+	apiCaller  func(ctx context.Context, cfg *config.Instance, method, params string) (string, error)
+	showDialog func(title, message string)
+)
+
+func nativeDialog(title, message string) {
+	dialog.Message("%s", message).Title(title).Info()
+}
+
 func watchUpdateStatus(cfg *config.Instance, item *systray.MenuItem) {
 	for {
 		refreshUpdateMenu(cfg, item)
@@ -83,8 +103,12 @@ func watchUpdateStatus(cfg *config.Instance, item *systray.MenuItem) {
 	}
 }
 
-func refreshUpdateMenu(cfg *config.Instance, item *systray.MenuItem) {
-	status, err := readUpdateStatus(cfg)
+func refreshUpdateMenu(cfg *config.Instance, item menuEntry) {
+	refreshUpdateMenuWith(cfg, item, client.LocalClient)
+}
+
+func refreshUpdateMenuWith(cfg *config.Instance, item menuEntry, call apiCaller) {
+	status, err := readUpdateStatus(cfg, call)
 	if err != nil {
 		// Leave the entry as it was. Core may simply not be up yet, and
 		// replacing a true answer with an error is worse than a stale one.
@@ -102,8 +126,14 @@ func refreshUpdateMenu(cfg *config.Instance, item *systray.MenuItem) {
 // applyUpdateFromMenu installs an update if there is one, and otherwise checks
 // for one. Unlike the CLI this never blocks the caller: the menu has to stay
 // responsive, so the outcome arrives as a notification.
-func applyUpdateFromMenu(cfg *config.Instance, item *systray.MenuItem, notify func(string)) {
-	status, err := readUpdateStatus(cfg)
+func applyUpdateFromMenu(cfg *config.Instance, item menuEntry, notify func(string)) {
+	applyUpdateFromMenuWith(cfg, item, notify, client.LocalClient, nativeDialog)
+}
+
+func applyUpdateFromMenuWith(
+	cfg *config.Instance, item menuEntry, notify func(string), call apiCaller, show showDialog,
+) {
+	status, err := readUpdateStatus(cfg, call)
 	if err != nil {
 		log.Error().Err(err).Msg("could not read update status")
 		notify("Could not read update status.")
@@ -114,13 +144,13 @@ func applyUpdateFromMenu(cfg *config.Instance, item *systray.MenuItem, notify fu
 		// Nothing known to install, so go and look. This is the one path that
 		// costs a network request, and it only happens because someone asked.
 		notify("Checking for updates...")
-		checked, checkErr := requestUpdateCheck(cfg)
+		checked, checkErr := requestUpdateCheck(cfg, call)
 		if checkErr != nil {
 			log.Error().Err(checkErr).Msg("update check failed")
 			notify("Could not check for updates.")
 			return
 		}
-		refreshUpdateMenu(cfg, item)
+		refreshUpdateMenuWith(cfg, item, call)
 		if !checked.UpdateAvailable {
 			notify("Zaparoo Core is up to date.")
 			return
@@ -134,25 +164,28 @@ func applyUpdateFromMenu(cfg *config.Instance, item *systray.MenuItem, notify fu
 	}
 
 	notify("Installing " + status.LatestVersion + "...")
-	applied, err := requestUpdateApply(cfg)
+	applied, err := requestUpdateApply(cfg, call)
 	if err != nil {
 		log.Error().Err(err).Msg("update install failed")
 		notify("Update failed. The previous version is still installed.")
 		return
 	}
-	dialog.Message(
+	show("Update Installed", fmt.Sprintf(
 		"Zaparoo Core %s is installed and will restart now.\n\n"+
 			"If it does not start correctly the previous version is restored automatically.",
-		applied.NewVersion,
-	).Title("Update Installed").Info()
+		applied.NewVersion))
 }
 
 // startPairing shows the PIN a client needs. The pairing flow already exists as
 // a CLI flag; on a desktop the tray is where someone will look for it, and
 // there is no terminal open to read a PIN out of.
 func startPairing(cfg *config.Instance, notify func(string)) {
+	startPairingWith(cfg, notify, client.LocalClient, nativeDialog)
+}
+
+func startPairingWith(cfg *config.Instance, notify func(string), call apiCaller, show showDialog) {
 	ctx := context.Background()
-	raw, err := client.LocalClient(ctx, cfg, models.MethodClientsPairStart, "")
+	raw, err := call(ctx, cfg, models.MethodClientsPairStart, "")
 	if err != nil {
 		log.Error().Err(err).Msg("could not start pairing")
 		notify("Could not start pairing.")
@@ -165,30 +198,28 @@ func startPairing(cfg *config.Instance, notify func(string)) {
 		return
 	}
 
-	dialog.Message(
+	show("Pair a Device", fmt.Sprintf(
 		"Enter this PIN in the Zaparoo app to pair it with this device:\n\n%s\n\n"+
-			"The PIN stops working once it is used or this dialog is closed.",
-		resp.PIN,
-	).Title("Pair a Device").Info()
+			"The PIN stops working once it is used or this dialog is closed.", resp.PIN))
 
 	// Closing the dialog is the person saying they are done, whether or not a
 	// client got there first. Leaving the PIN live afterwards would keep a
 	// credential valid that nobody is watching any more.
-	if _, err := client.LocalClient(ctx, cfg, models.MethodClientsPairCancel, ""); err != nil {
+	if _, err := call(ctx, cfg, models.MethodClientsPairCancel, ""); err != nil {
 		log.Debug().Err(err).Msg("could not cancel pairing after the dialog closed")
 	}
 }
 
-func readUpdateStatus(cfg *config.Instance) (*models.UpdateCheckResponse, error) {
-	return updateCall(cfg, models.MethodUpdateStatus)
+func readUpdateStatus(cfg *config.Instance, call apiCaller) (*models.UpdateCheckResponse, error) {
+	return updateCall(cfg, models.MethodUpdateStatus, call)
 }
 
-func requestUpdateCheck(cfg *config.Instance) (*models.UpdateCheckResponse, error) {
-	return updateCall(cfg, models.MethodUpdateCheck)
+func requestUpdateCheck(cfg *config.Instance, call apiCaller) (*models.UpdateCheckResponse, error) {
+	return updateCall(cfg, models.MethodUpdateCheck, call)
 }
 
-func updateCall(cfg *config.Instance, method string) (*models.UpdateCheckResponse, error) {
-	raw, err := client.LocalClient(context.Background(), cfg, method, "")
+func updateCall(cfg *config.Instance, method string, call apiCaller) (*models.UpdateCheckResponse, error) {
+	raw, err := call(context.Background(), cfg, method, "")
 	if err != nil {
 		return nil, fmt.Errorf("calling %s: %w", method, err)
 	}
@@ -199,8 +230,8 @@ func updateCall(cfg *config.Instance, method string) (*models.UpdateCheckRespons
 	return &resp, nil
 }
 
-func requestUpdateApply(cfg *config.Instance) (*models.UpdateApplyResponse, error) {
-	raw, err := client.LocalClient(context.Background(), cfg, models.MethodUpdateApply, "")
+func requestUpdateApply(cfg *config.Instance, call apiCaller) (*models.UpdateApplyResponse, error) {
+	raw, err := call(context.Background(), cfg, models.MethodUpdateApply, "")
 	if err != nil {
 		return nil, fmt.Errorf("calling %s: %w", models.MethodUpdateApply, err)
 	}

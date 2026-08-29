@@ -38,7 +38,11 @@ import (
 // rather than a request and a flash write. A check still happens on its own
 // every twelve hours behind it.
 func updateStatusLine(cfg *config.Instance) string {
-	status, err := readUpdateStatus(cfg)
+	return updateStatusLineWith(cfg, client.LocalClient)
+}
+
+func updateStatusLineWith(cfg *config.Instance, call apiCaller) string {
+	status, err := readUpdateStatus(cfg, call)
 	if err != nil {
 		// The daemon may not be up yet, which is normal while the TUI is
 		// starting. The running version is still worth showing on its own.
@@ -83,8 +87,12 @@ func formatUpdateStatus(status *models.UpdateCheckResponse) string {
 	}
 }
 
-func readUpdateStatus(cfg *config.Instance) (*models.UpdateCheckResponse, error) {
-	raw, err := client.LocalClient(context.Background(), cfg, models.MethodUpdateStatus, "")
+// apiCaller is how the line reaches Core, injected so the fallback behaviour
+// can be tested without a running service.
+type apiCaller func(ctx context.Context, cfg *config.Instance, method, params string) (string, error)
+
+func readUpdateStatus(cfg *config.Instance, call apiCaller) (*models.UpdateCheckResponse, error) {
+	raw, err := call(context.Background(), cfg, models.MethodUpdateStatus, "")
 	if err != nil {
 		return nil, fmt.Errorf("calling %s: %w", models.MethodUpdateStatus, err)
 	}

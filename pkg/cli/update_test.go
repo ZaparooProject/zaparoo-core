@@ -282,6 +282,13 @@ func TestDescribeLastCheck_SaysHowOldTheAnswerIs(t *testing.T) {
 
 	stale := time.Now().Add(-6 * 24 * time.Hour)
 	assert.Contains(t, describeLastCheck(&stale), "6 days ago")
+
+	// A device with no clock can produce a check stamped in the future. Saying
+	// it was checked "-3 hours ago" would read as a fault that is not there.
+	future := time.Now().Add(3 * time.Hour)
+	assert.Equal(t, "Up to date.", describeLastCheck(&future))
+
+	assert.Contains(t, describeLastCheck(&time.Time{}), "No update check has completed")
 }
 
 // Only automatic installs decline the version that already failed here, so
@@ -316,4 +323,125 @@ func TestDescribeInstallIntent_SaysWhenItIsRetryingTheVersionThatFailed(t *testi
 	})
 	assert.Contains(t, ordinary, "Installing 2.12.0.")
 	assert.NotContains(t, ordinary, "already failed")
+}
+
+// A status that cannot be read is a failure, not a device with no update: going
+// ahead on it would install against an unknown state.
+func TestRunUpdate_StopsWhenStatusCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	called := []string{}
+	call := func(_ context.Context, _ *config.Instance, method, _ string) (string, error) {
+		called = append(called, method)
+		return "", errors.New("connection refused")
+	}
+	var out, errOut bytes.Buffer
+
+	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
+	assert.Equal(t, 1, code)
+	assert.Equal(t, []string{models.MethodUpdateStatus}, called)
+	assert.Contains(t, errOut.String(), "Error reading update status")
+}
+
+// The check is what the command acts on, so failing it has to stop the run
+// rather than fall back to the stored answer it was meant to replace.
+func TestRunUpdate_StopsWhenTheCheckFails(t *testing.T) {
+	t.Parallel()
+
+	called := []string{}
+	call := func(_ context.Context, _ *config.Instance, method, _ string) (string, error) {
+		called = append(called, method)
+		if method == models.MethodUpdateCheck {
+			return "", errors.New("no route to host")
+		}
+		body, err := json.Marshal(models.UpdateCheckResponse{
+			CurrentVersion: "2.10.0",
+			Eligibility:    updater.EligibilityEligible,
+		})
+		require.NoError(t, err)
+		return string(body), nil
+	}
+	var out, errOut bytes.Buffer
+
+	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
+	assert.Equal(t, 1, code)
+	assert.Equal(t, []string{models.MethodUpdateStatus, models.MethodUpdateCheck}, called,
+		"must not call apply")
+	assert.Contains(t, errOut.String(), "Error checking for updates")
+}
+
+func TestRunUpdate_ReportsAFailedInstall(t *testing.T) {
+	t.Parallel()
+
+	available := models.UpdateCheckResponse{
+		CurrentVersion:  "2.10.0",
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+		Eligibility:     updater.EligibilityEligible,
+	}
+	call := func(_ context.Context, _ *config.Instance, method, _ string) (string, error) {
+		if method == models.MethodUpdateApply {
+			return "", errors.New("install failed")
+		}
+		body, err := json.Marshal(available)
+		require.NoError(t, err)
+		return string(body), nil
+	}
+	var out, errOut bytes.Buffer
+
+	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut.String(), "Error installing update")
+}
+
+// A response that arrives but cannot be read must not be mistaken for an empty
+// one, which would read as a device with nothing to install.
+func TestFetchUpdate_RejectsAResponseItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	garbage := func(context.Context, *config.Instance, string, string) (string, error) {
+		return "not json", nil
+	}
+	_, err := fetchUpdateStatus(t.Context(), nil, garbage, models.MethodUpdateStatus)
+	require.Error(t, err)
+
+	_, err = fetchUpdateApply(t.Context(), nil, garbage)
+	require.Error(t, err)
+}
+
+// The states where an update did not simply work each need their own sentence;
+// a success deliberately produces none.
+func TestDescribeLastUpdate(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, describeLastUpdate(nil))
+	assert.Empty(t, describeLastUpdate(&models.UpdateLastResult{
+		Outcome: updater.OutcomeSucceeded, ToVersion: "2.11.0",
+	}))
+	assert.Contains(t, describeLastUpdate(&models.UpdateLastResult{
+		Outcome: updater.OutcomeRollbackBlocked, ToVersion: "2.11.0",
+	}), "could not be undone")
+	assert.Contains(t, describeLastUpdate(&models.UpdateLastResult{
+		Outcome: updater.OutcomeRecoveryRequired,
+	}), "interrupted update")
+}
+
+func TestDescribeAvailableUpdate_ExplainsWhyItIsWaiting(t *testing.T) {
+	t.Parallel()
+
+	base := models.UpdateCheckResponse{
+		CurrentVersion:  "2.10.0",
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}
+
+	blocked := base
+	blocked.BlockedBy = &models.UpdateBlockedBy{Message: "a token is being written"}
+	assert.Contains(t, describeAvailableUpdate(&blocked), "a token is being written")
+
+	deferred := base
+	deferred.DeferredReason = "media is running"
+	assert.Contains(t, describeAvailableUpdate(&deferred), "quiet moment")
+
+	assert.Equal(t, "2.11.0 is available. Running 2.10.0.", describeAvailableUpdate(&base))
 }

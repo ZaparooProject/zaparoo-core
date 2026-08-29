@@ -20,11 +20,16 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatUpdateStatus(t *testing.T) {
@@ -82,6 +87,38 @@ func TestFormatUpdateStatus(t *testing.T) {
 			},
 			want: "2.11.0 (managed externally)",
 		},
+		// Nothing read yet still has to draw, because the line exists before
+		// the first check completes.
+		"nothing known falls back to the running version": {
+			status: nil,
+			want:   config.AppVersion,
+		},
+		"a status with no version of its own uses the running one": {
+			status: &models.UpdateCheckResponse{Eligibility: updater.EligibilityEligible},
+			want:   config.AppVersion,
+		},
+		// An update that failed and could not be undone is the one state where
+		// the device is running something nobody chose.
+		"a rollback that could not be completed": {
+			status: &models.UpdateCheckResponse{
+				CurrentVersion: "2.11.0",
+				Eligibility:    updater.EligibilityEligible,
+				LastResult: &models.UpdateLastResult{
+					Outcome: updater.OutcomeRollbackBlocked, ToVersion: "2.11.0",
+				},
+			},
+			want: "2.11.0 (update failed and could not be undone)",
+		},
+		"an interrupted update still needs attention": {
+			status: &models.UpdateCheckResponse{
+				CurrentVersion: "2.10.0",
+				Eligibility:    updater.EligibilityEligible,
+				LastResult: &models.UpdateLastResult{
+					Outcome: updater.OutcomeRecoveryRequired,
+				},
+			},
+			want: "2.10.0 (an interrupted update needs attention)",
+		},
 	}
 
 	for name, tt := range tests {
@@ -90,4 +127,40 @@ func TestFormatUpdateStatus(t *testing.T) {
 			assert.Equal(t, tt.want, formatUpdateStatus(tt.status))
 		})
 	}
+}
+
+// The daemon may not be up yet while the TUI is starting. The running version
+// is still worth showing on its own, so a failed read must not blank the line.
+func TestUpdateStatusLine_FallsBackToTheRunningVersion(t *testing.T) {
+	t.Parallel()
+
+	line := updateStatusLineWith(nil,
+		func(context.Context, *config.Instance, string, string) (string, error) {
+			return "", errors.New("connection refused")
+		})
+	assert.Equal(t, config.AppVersion, line)
+
+	// A response that arrives but cannot be read is the same situation.
+	line = updateStatusLineWith(nil,
+		func(context.Context, *config.Instance, string, string) (string, error) {
+			return "not json", nil
+		})
+	assert.Equal(t, config.AppVersion, line)
+}
+
+func TestUpdateStatusLine_ShowsWhatStatusReported(t *testing.T) {
+	t.Parallel()
+
+	line := updateStatusLineWith(nil,
+		func(context.Context, *config.Instance, string, string) (string, error) {
+			body, err := json.Marshal(models.UpdateCheckResponse{
+				CurrentVersion:  "2.10.0",
+				LatestVersion:   "2.11.0",
+				UpdateAvailable: true,
+				Eligibility:     updater.EligibilityEligible,
+			})
+			require.NoError(t, err)
+			return string(body), nil
+		})
+	assert.Equal(t, "2.10.0 (2.11.0 available)", line)
 }
