@@ -199,11 +199,18 @@ func BenchmarkMediaScanner_StageAndReconcile_FreshDB(b *testing.B) {
 
 // BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB re-indexes the same 1k
 // files against databases of growing size. This is the memory-scaling
-// regression guard for the staging rearchitecture: allocations must stay flat
-// as the existing row count grows (the old pipeline preloaded every existing
-// row into Go maps, so its footprint scaled with the database instead of the
-// scan). The n-1k rows outside the scan flip to missing on the first
+// regression guard for the staging rearchitecture: retained memory must stay
+// flat as the existing row count grows (the old pipeline preloaded every
+// existing row into Go maps, so its footprint scaled with the database instead
+// of the scan). The n-1k rows outside the scan flip to missing on the first
 // reconcile, before the timer starts; timed iterations are steady-state.
+//
+// Since #1317 the steady-state iterations are skipped reconciles, and the
+// skip's stored-state digest streams one row per media of the system through
+// the driver (sqlScanStoredStateDigest). B/op and allocs/op therefore grow
+// with the system's row count here — that is transient per-row garbage from
+// the driver, not retained state, and it is why the digest is a single
+// one-column query rather than a scan per table.
 func BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB(b *testing.B) {
 	const scanSize = 1_000
 	sizes := []struct {
@@ -259,7 +266,10 @@ func BenchmarkMediaScanner_Reconcile_FixedScanGrowingDB(b *testing.B) {
 // BenchmarkMediaScanner_Reconcile_ExistingRows measures an unchanged full
 // re-index against a database that already holds the same rows. Cost is
 // expected to scale linearly with scan size (per-file parse + staging), never
-// super-linearly with the database.
+// super-linearly with the database. Since #1317 the reconcile itself is
+// skipped here: the staged-set fingerprint matches the stored one, so the
+// timed work is staging plus the two digests (staged set, stored state) that
+// prove the skip is safe.
 func BenchmarkMediaScanner_Reconcile_ExistingRows(b *testing.B) {
 	sizes := []struct {
 		name string

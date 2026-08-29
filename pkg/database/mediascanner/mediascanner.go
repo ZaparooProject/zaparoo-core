@@ -1402,12 +1402,6 @@ func NewNamesIndex(
 		return err
 	}
 
-	// TODO: skip unchanged systems via a per-system fingerprint — store
-	// hash(sorted walked paths) + parser version + media row count after each
-	// system completes; on match at the next run, skip the state load, parse,
-	// and reconcile phases entirely. Needs its own design pass for
-	// invalidation rules (parser/config changes) and a forced-reindex path.
-	//
 	// Unified loop: each system is processed exactly once regardless of source.
 	// Filesystem scan, per-system launcher scanners, and any-scanners are all
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
@@ -1806,6 +1800,7 @@ func NewNamesIndex(
 		if reconcileStats.SystemKnown {
 			log.Debug().
 				Str("system", systemID).
+				Bool("unchanged", reconcileStats.Unchanged).
 				Int64("titlesInserted", reconcileStats.TitlesInserted).
 				Int64("titlesRenamed", reconcileStats.TitlesRenamed).
 				Int64("mediaUpserted", reconcileStats.MediaUpserted).

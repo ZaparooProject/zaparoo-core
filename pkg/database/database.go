@@ -834,6 +834,11 @@ type ScanReconcileStats struct {
 	// SystemKnown is false when the system has no DB row and nothing was staged,
 	// meaning the reconcile was a no-op and no Systems row was created.
 	SystemKnown bool
+	// Unchanged is true when the staged set matched the fingerprint stored by
+	// the previous successful reconcile and its durable-state guards held, so
+	// every reconcile statement was skipped as provably a no-op. The staging
+	// tables are still cleared and the counts above are all zero.
+	Unchanged bool
 }
 
 // JournalMode represents SQLite journal mode

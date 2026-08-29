@@ -49,6 +49,10 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 
 	// Delete in reverse dependency order (children first, parents last)
 	// to avoid any cascading overhead and minimize index updates
+	//
+	// The canonical tag vocabulary stamp goes with Tags and TagTypes: it records
+	// that the vocabulary rows exist, and leaving it behind would make the next
+	// index run skip seeding them into the now-empty tables.
 	sqlStmt := `
 	delete from MediaProperties;
 	delete from MediaTitleProperties;
@@ -59,10 +63,12 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from MediaTitles;
 	delete from Tags;
 	delete from TagTypes;
+	delete from ScanSystemFingerprints;
 	delete from Systems;
 	delete from SlugResolutionCache;
 	delete from BrowseDirCounts;
 	delete from BrowseDirs;
+	delete from DBConfig where Name = '` + DBConfigCanonicalTagVocabHash + `';
 	`
 	_, err = db.ExecContext(ctx, sqlStmt)
 	if err != nil {
@@ -203,6 +209,17 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	if _, err = conn.ExecContext(ctx,
 		fmt.Sprintf("DELETE FROM MediaTitles WHERE SystemDBID IN (%s)", dbidPlaceholders), systemDBIDs...); err != nil {
 		return fmt.Errorf("failed to delete MediaTitles: %w", err)
+	}
+	// Explicit because foreign keys are off here, so the ON DELETE CASCADE on
+	// the fingerprint row would not fire. A stale row must not survive: the
+	// next scan of this system creates a fresh Systems row whose DBID can be
+	// reused, and a matching fingerprint would then describe rows that no
+	// longer exist.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM ScanSystemFingerprints WHERE SystemDBID IN (%s)", dbidPlaceholders,
+	), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete scan fingerprints: %w", err)
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx,

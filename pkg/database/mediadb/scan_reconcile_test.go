@@ -228,13 +228,17 @@ func TestReconcileStagedSystem_IdempotentRescanIsNoOp(t *testing.T) {
 // pre-existing rows, which necessarily removes their yields too. Fewer yields on
 // a fresh reconcile is the intended consequence, not a pacing regression: there
 // are fewer statements to pace between. The re-index count is the one that must
-// stay high, since that is the long path.
+// stay high, since that is the long path — so the re-index stages a changed set;
+// an identical one would be skipped outright (#1317) and pace only its
+// fingerprint read, which TestReconcileStagedSystem_UnchangedRescanYieldsOnce
+// covers.
 func TestReconcileStagedSystem_YieldsBetweenSQLSteps(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
 	t.Cleanup(cleanup)
 
 	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	addedPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Other Game.sfc"))
 
 	freshYields := 0
 	scantest.IndexMediaPathsWithOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{
@@ -250,14 +254,37 @@ func TestReconcileStagedSystem_YieldsBetweenSQLSteps(t *testing.T) {
 			rescanYields++
 			return nil
 		},
-	}, gamePath)
+	}, gamePath, addedPath)
 
 	assert.GreaterOrEqual(t, freshYields, 5,
 		"a fresh reconcile should still pace between the steps it does run")
 	assert.GreaterOrEqual(t, rescanYields, 10,
-		"a re-index runs every step and should pace between them")
+		"a changed re-index runs every step and should pace between them")
 	assert.Greater(t, rescanYields, freshYields,
 		"a fresh system skips pre-existing-state steps, so it should yield fewer times")
+}
+
+// TestReconcileStagedSystem_UnchangedRescanYieldsOnce pins the pacing shape of
+// a skipped reconcile: the staged-set digest is a real read of the staging
+// tables, so it yields once after it, and nothing else runs.
+func TestReconcileStagedSystem_UnchangedRescanYieldsOnce(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	gamePath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "SNES", "Game.sfc"))
+	scantest.IndexMediaPaths(t, mediaDB, "SNES", gamePath)
+
+	rescanYields := 0
+	stats := scantest.IndexMediaPathsWithOpts(t, mediaDB, "SNES", database.ScanReconcileOpts{
+		Yield: func() error {
+			rescanYields++
+			return nil
+		},
+	}, gamePath)
+
+	assert.True(t, stats.Unchanged, "an identical re-index must be skipped")
+	assert.Equal(t, 1, rescanYields, "a skipped reconcile paces only after its fingerprint read")
 }
 
 func TestReconcileStagedSystem_PropagatesYieldError(t *testing.T) {
@@ -282,7 +309,8 @@ func TestReconcileStagedSystem_PropagatesYieldError(t *testing.T) {
 		Yield: func() error { return yieldErr },
 	})
 	require.ErrorIs(t, err, yieldErr)
-	assert.Contains(t, err.Error(), "scan reconcile pacing after insert titles failed")
+	// The staged-set fingerprint is the first paced step of a full scan.
+	assert.Contains(t, err.Error(), "scan reconcile pacing after fingerprint failed")
 }
 
 // TestReconcileStagedSystem_IncompleteScanPreservesMissingState pins

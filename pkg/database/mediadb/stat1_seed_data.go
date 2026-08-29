@@ -42,10 +42,11 @@ var stat1SeedRows = []struct{ tbl, idx, stat string }{
 	{tbl: "MediaTitles", idx: "mediatitles_secondary_slug_idx", stat: "99000 99000"},
 	{tbl: "MediaTitles", idx: "mediatitles_slug_idx", stat: "99000 7"},
 	{tbl: "MediaTitles", idx: "mediatitles_system_slug_idx", stat: "99000 3300 1"},
+	{tbl: "ScanSystemFingerprints", idx: "", stat: "30"},
 	{tbl: "Systems", idx: "sqlite_autoindex_Systems_1", stat: "30 1"},
 	{tbl: "TagTypes", idx: "sqlite_autoindex_TagTypes_1", stat: "50 1"},
 	{tbl: "Tags", idx: "tags_tag_idx", stat: "1220 1"},
 	{tbl: "Tags", idx: "tags_tagtype_idx", stat: "1220 31"},
 	{tbl: "Tags", idx: "tags_type_tag_idx", stat: "1220 31 1"},
-	{tbl: "goose_db_version", idx: "", stat: "15"},
+	{tbl: "goose_db_version", idx: "", stat: "16"},
 }

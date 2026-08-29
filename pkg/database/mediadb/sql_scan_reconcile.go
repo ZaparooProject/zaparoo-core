@@ -617,6 +617,93 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 			Msg("scan reconcile fresh system: skipping pre-existing-state steps")
 	}
 
+	// Digest the staged set before any statement consumes it. Reconcile is a
+	// pure function of (ScanStage, ScanStageTags, stored state), and the stored
+	// state is by definition what the previous reconcile produced from its own
+	// staged set — so a byte-identical staged set against unchanged stored rows
+	// provably has nothing to do, and every step below is skipped. On the #1279
+	// device that was 45% of indexing wall time spent proving zero rows
+	// changed (#1317). The digest is computed on every reconcile, not just the
+	// ones that may skip, because it is what gets stored for the next run.
+	//
+	// An incomplete scan never fingerprints: its staged set is a subset of the
+	// library, so neither comparing against it nor remembering it is sound,
+	// and the stored row is cleared at the end so the next full scan
+	// reconciles. A digest failure is treated the same way — fail open.
+	var staged scanStagedSet
+	fingerprinted := false
+	if !opts.IncompleteScan {
+		fingerprintStart := time.Now()
+		staged, err = sqlScanStagedFingerprint(ctx, db)
+		recordStep("fingerprint", time.Since(fingerprintStart))
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return stats, err
+			}
+			log.Warn().Err(err).Str("system", systemID).
+				Msg("scan fingerprint unavailable; reconciling without it")
+		} else {
+			fingerprinted = true
+		}
+		if opts.Yield != nil {
+			pacingStart := time.Now()
+			if yieldErr := opts.Yield(); yieldErr != nil {
+				return stats, fmt.Errorf("scan reconcile pacing after fingerprint failed: %w", yieldErr)
+			}
+			pacingTotal += time.Since(pacingStart)
+		}
+	}
+	// A fresh system has no previous reconcile to compare against; its row is
+	// written below so the next scan can skip. The stored-state digest is only
+	// computed once the cheaper staged-set comparison has already matched.
+	if fingerprinted && !freshSystem {
+		decideStart := time.Now()
+		stored, found, loadErr := sqlLoadScanFingerprint(ctx, db, systemDBID)
+		if loadErr != nil {
+			return stats, loadErr
+		}
+		reason := ""
+		switch {
+		case !found:
+			reason = "no fingerprint from a previous reconcile"
+		case staged.properties > 0:
+			reason = "staged properties present"
+		case stored.fingerprint != staged.fingerprint:
+			reason = "staged set changed"
+		default:
+			state, stateErr := sqlScanStoredStateDigest(ctx, db, systemDBID)
+			if stateErr != nil {
+				return stats, stateErr
+			}
+			if stored.stateDigest != state.digest {
+				reason = "stored media state changed"
+			}
+		}
+		recordStep("fingerprint decision", time.Since(decideStart))
+		if reason == "" {
+			stats.Unchanged = true
+			log.Info().
+				Str("system", systemID).
+				Int64("stagedFiles", staged.files).
+				Int64("stagedTags", staged.tagRows).
+				Int64("media", stored.mediaCount).
+				Int64("titles", stored.titleCount).
+				Int64("lastReconcileMs", stored.reconcileMs).
+				Msg("scan reconcile skipped: staged set and stored state unchanged since last reconcile")
+			clearStart := time.Now()
+			clearErr := sqlClearScanStage(ctx, db)
+			recordStep("clear scan stage", time.Since(clearStart))
+			return stats, clearErr
+		}
+		log.Debug().
+			Str("system", systemID).
+			Str("reason", reason).
+			Int64("stagedFiles", staged.files).
+			Int64("stagedTags", staged.tagRows).
+			Int64("stagedProperties", staged.properties).
+			Msg("scan reconcile running: staged set not skippable")
+	}
+
 	// New titles: one row per staged slug not yet present for this system. The
 	// per-slug representative row is the lowest path, so multi-file titles pick
 	// their metadata deterministically.
@@ -977,6 +1064,33 @@ func sqlReconcileStagedSystem( //nolint:gocognit,funlen // linear statement sequ
 	if clearErr != nil {
 		return stats, clearErr
 	}
+
+	// Remember this reconcile's input and the state it left behind, inside the
+	// same transaction, so a rollback or crash before commit discards the
+	// fingerprint together with the work it describes. Without a usable
+	// fingerprint (incomplete scan, digest failure) any stale row is removed
+	// instead, so the next full scan cannot match against state this reconcile
+	// may have changed.
+	storeStart := time.Now()
+	if fingerprinted {
+		state, stateErr := sqlScanStoredStateDigest(ctx, db, systemDBID)
+		if stateErr != nil {
+			return stats, stateErr
+		}
+		err = sqlStoreScanFingerprint(ctx, db, systemDBID, scanFingerprintRow{
+			fingerprint: staged.fingerprint,
+			stateDigest: state.digest,
+			mediaCount:  state.media,
+			titleCount:  state.titles,
+			reconcileMs: time.Since(started).Milliseconds(),
+		})
+	} else {
+		err = sqlDeleteScanFingerprint(ctx, db, systemDBID)
+	}
+	recordStep("store fingerprint", time.Since(storeStart))
+	if err != nil {
+		return stats, err
+	}
 	return stats, nil
 }
 
@@ -1066,40 +1180,7 @@ func invalidateCanonicalTagVocabStampIfDeleted(ctx context.Context, db sqlQuerya
 // of the vocabulary hash short-circuits the whole pass when a previous run
 // already seeded this exact vocabulary.
 func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
-	// Dedupe within the statement: the NOT EXISTS anti-join only sees rows
-	// already in the table, not other rows of the same INSERT ... SELECT.
-	seenTypes := map[string]struct{}{}
-	typeRows := make([]canonicalTypeRow, 0, len(tags.CanonicalTagDefinitions)+2)
-	addType := func(tagType tags.TagType) {
-		name := string(tagType)
-		if _, ok := seenTypes[name]; ok {
-			return
-		}
-		seenTypes[name] = struct{}{}
-		typeRows = append(typeRows, canonicalTypeRow{name, tags.IsExclusiveType(tagType)})
-	}
-	addType(tags.TagTypeUnknown)
-	addType(tags.TagTypeExtension)
-	for tagType := range tags.CanonicalTagDefinitions {
-		addType(tagType)
-	}
-
-	seenTags := map[string]struct{}{}
-	tagRows := make([]canonicalTagRow, 0, 1400)
-	addTag := func(typeName, value string) {
-		key := typeName + "\x00" + value
-		if _, ok := seenTags[key]; ok {
-			return
-		}
-		seenTags[key] = struct{}{}
-		tagRows = append(tagRows, canonicalTagRow{typeName: typeName, value: value})
-	}
-	addTag(string(tags.TagTypeUnknown), "unknown")
-	for tagType, values := range tags.CanonicalTagDefinitions {
-		for _, value := range values {
-			addTag(string(tagType), tags.PadTagValue(strings.ToLower(string(value))))
-		}
-	}
+	typeRows, tagRows := canonicalTagVocabRows()
 
 	// The vocabulary is compiled into the binary, so once a run has seeded it
 	// the anti-joined inserts are guaranteed no-ops until a release changes the
@@ -1170,4 +1251,47 @@ func sqlSeedCanonicalTags(ctx context.Context, db sqlQueryable) error {
 		log.Warn().Err(err).Msg("failed to write canonical tag vocabulary stamp")
 	}
 	return nil
+}
+
+// canonicalTagVocabRows builds the compiled-in canonical tag vocabulary as the
+// type and value rows sqlSeedCanonicalTags inserts. Shared with the scan
+// fingerprint, which folds the vocabulary's digest into every stored
+// fingerprint so a release that adds a canonical tag reconciles every system
+// once instead of silently never linking the new tag.
+func canonicalTagVocabRows() ([]canonicalTypeRow, []canonicalTagRow) {
+	// Dedupe within the statement: the NOT EXISTS anti-join only sees rows
+	// already in the table, not other rows of the same INSERT ... SELECT.
+	seenTypes := map[string]struct{}{}
+	typeRows := make([]canonicalTypeRow, 0, len(tags.CanonicalTagDefinitions)+2)
+	addType := func(tagType tags.TagType) {
+		name := string(tagType)
+		if _, ok := seenTypes[name]; ok {
+			return
+		}
+		seenTypes[name] = struct{}{}
+		typeRows = append(typeRows, canonicalTypeRow{name, tags.IsExclusiveType(tagType)})
+	}
+	addType(tags.TagTypeUnknown)
+	addType(tags.TagTypeExtension)
+	for tagType := range tags.CanonicalTagDefinitions {
+		addType(tagType)
+	}
+
+	seenTags := map[string]struct{}{}
+	tagRows := make([]canonicalTagRow, 0, 1400)
+	addTag := func(typeName, value string) {
+		key := typeName + "\x00" + value
+		if _, ok := seenTags[key]; ok {
+			return
+		}
+		seenTags[key] = struct{}{}
+		tagRows = append(tagRows, canonicalTagRow{typeName: typeName, value: value})
+	}
+	addTag(string(tags.TagTypeUnknown), "unknown")
+	for tagType, values := range tags.CanonicalTagDefinitions {
+		for _, value := range values {
+			addTag(string(tagType), tags.PadTagValue(strings.ToLower(string(value))))
+		}
+	}
+	return typeRows, tagRows
 }
