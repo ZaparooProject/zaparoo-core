@@ -281,12 +281,22 @@ doubt. Do not widen based only on elapsed time.
 Run this only after updater code, transaction-boundary tests, documentation and
 post-merge CI are complete.
 
+Stopping Core within the confirmation window counts as a failed start and rolls
+the update back. That is correct — a process killed partway through is
+indistinguishable from one that crashed — but it means a device stopped by hand
+between the restart and the confirmation will report a rollback that nothing
+was actually wrong with. Let an install confirm before stopping it, and read any
+rollback that follows a manual stop as an artifact of the stop.
+
 ### Windows
 
 On a writable portable or per-user install, cover apply/confirm, forced startup
 rollback, failed incoming rename with successful undo, sharing/scanner
 violations, repeated swaps, sidecar cleanup and a read-only outgoing executable.
 Exercise the double-failure/manual-recovery path only with local recovery access.
+Confirm the restart actually happens: a Windows install replaces the binary and
+stops the service well before anything re-execs, so an update that installs and
+never comes back looks from the outside like one that simply took a while.
 On an installer-owned protected location, verify unsupported eligibility and
 installer guidance with no elevation or mutation. On battery-equipped hardware,
 include the 20% manual and 40% automatic thresholds.
