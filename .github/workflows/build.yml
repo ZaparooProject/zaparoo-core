@@ -11,7 +11,7 @@ on:
         type: string
         default: ""
       test_build:
-        description: "Test build only (no release created, uses test-signing)"
+        description: "Test build only: build every target, publish and sign nothing"
         required: false
         type: boolean
         default: false
@@ -27,7 +27,7 @@ on:
         type: boolean
         default: false
       test_build:
-        description: "Test build only (no release created)"
+        description: "Test build only: build every target, publish and sign nothing"
         required: false
         type: boolean
         default: false
@@ -185,26 +185,26 @@ jobs:
           GOFLAGS: "-buildvcs=false"
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Upload unsigned Windows exe
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-exe-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Zaparoo.exe
           retention-days: 30
       - name: Copy installer to consistent name
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         run: |
           cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
              "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Upload unsigned Windows installer
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-installer-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
       - name: Upload Windows distribution files
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-dist-${{matrix.arch}}
@@ -259,7 +259,10 @@ jobs:
     timeout-minutes: 30
     name: Sign all Windows binaries
     needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # Skipped for a test build: signing needs the release policy and its
+    # credentials, and a build that publishes nothing has no artifact worth
+    # spending a signature on.
+    if: ${{ !cancelled() && needs.build.result == 'success' && !inputs.test_build }}
     permissions:
       contents: write
       actions: read
