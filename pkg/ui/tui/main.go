@@ -547,9 +547,10 @@ func BuildMainPage(
 	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.APIPort())
 
 	statusText.SetText(fmt.Sprintf(
-		"%s %s\n%s %s\n%s\n[:::%s]%s[:::-]",
+		"%s %s\n%s %s\n%s %s\n%s\n[:::%s]%s[:::-]",
 		FormatLabel("Service"), svcStatus,
 		FormatLabel("Address"), ipDisplay,
+		FormatLabel("Version"), updateStatusLine(cfg),
 		FormatLabel("Web UI"),
 		webUI, webUI,
 	))

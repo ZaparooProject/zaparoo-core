@@ -22,6 +22,7 @@ package updater
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -561,4 +562,144 @@ func TestNoteGate_ReportsWithoutTakingAnyGate(t *testing.T) {
 	// launches every time a client asked whether an update was available.
 	assert.False(t, restoreTaken)
 	assert.False(t, mediaTaken)
+}
+
+// Status answers from disk. The check that produced those findings is the only
+// thing that talks to the network, so nothing here may need it.
+func TestStatus_AnswersFromRecordedFindingsWithoutTheNetwork(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	stateDir := stateDirFor(dataDir)
+	require.NoError(t, recordScheduledCheck(stateDir, true))
+	require.NoError(t, recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}))
+
+	// No manifest, no server, no baseURL: reaching for any of them would fail
+	// rather than quietly fall back.
+	result := Status(t.Context(), Options{DataDir: dataDir, Channel: "stable"})
+	require.NotNil(t, result)
+	assert.Equal(t, "2.10.0", result.CurrentVersion)
+	assert.Equal(t, "2.11.0", result.LatestVersion)
+	assert.True(t, result.UpdateAvailable)
+	assert.Equal(t, "stable", result.Channel)
+	assert.False(t, result.CheckedAt.IsZero(), "must say how old the answer is")
+}
+
+// The recorded findings describe the moment the check ran. Once the update has
+// been installed they would otherwise keep offering a version already running.
+func TestStatus_DoesNotOfferAVersionAlreadyInstalled(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.11.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	require.NoError(t, recordCheckFindings(stateDirFor(dataDir), &lastCheckFindings{
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+	}))
+
+	result := Status(t.Context(), Options{DataDir: dataDir})
+	require.NotNil(t, result)
+	assert.False(t, result.UpdateAvailable, "recomputed against the running version")
+	assert.Equal(t, "2.11.0", result.LatestVersion)
+}
+
+// A check refuses outright on a development build. Status is what a screen
+// shows, and "this is a dev build so updates do not apply" is the useful answer.
+func TestStatus_ReportsADevelopmentBuildInsteadOfRefusing(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "abc1234-dev"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	_, checkErr := Check(t.Context(), Options{DataDir: t.TempDir()})
+	require.ErrorIs(t, checkErr, ErrDevelopmentVersion, "premise: a check refuses here")
+
+	result := Status(t.Context(), Options{DataDir: t.TempDir()})
+	require.NotNil(t, result)
+	assert.Equal(t, "abc1234-dev", result.CurrentVersion)
+	assert.Equal(t, EligibilityDevelopment, result.Eligibility)
+	assert.False(t, result.UpdateAvailable)
+}
+
+// Nothing has checked yet. Saying so is different from saying it is up to date.
+func TestStatus_SaysNothingIsKnownBeforeTheFirstCheck(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	result := Status(t.Context(), Options{DataDir: t.TempDir()})
+	require.NotNil(t, result)
+	assert.Empty(t, result.LatestVersion)
+	assert.False(t, result.UpdateAvailable)
+	assert.True(t, result.CheckedAt.IsZero(), "no check has happened, so there is no time to report")
+}
+
+// withdrawnManifest is a manifest whose only release cannot be installed here,
+// which is what a device sees once a release has been withdrawn.
+func withdrawnManifest(generation int64) string {
+	return fmt.Sprintf(`manifest_version: 1
+generation: %d
+issued_at: 2026-08-17T02:00:00Z
+key_id: test1
+last_release_id: 1
+last_asset_id: 10
+releases:
+  - id: 1
+    name: v2.16.1
+    tag_name: v2.16.1
+    channel: stable
+    published_at: 2026-08-10T00:00:00Z
+    assets:
+      - id: 10
+        name: zaparoo-zapos_arm64-2.16.1.tar.gz
+        size: 8123456
+        sha256: aaaa
+        url: https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.16.1/zaparoo-zapos_arm64-2.16.1.tar.gz
+`, generation)
+}
+
+// Withdrawing a release is the emergency stop, so a check that finds nothing
+// left to install has to say so durably. Recording only when a release was
+// found would leave the previous offer standing, and Status would keep offering
+// a version that no longer exists until some later check happened to find a
+// different one.
+func TestCheck_ForgetsAnOfferOnceTheReleaseIsWithdrawn(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	stateDir := stateDirFor(dataDir)
+	require.NoError(t, recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   "2.16.1",
+		UpdateAvailable: true,
+	}))
+	require.True(t, Status(t.Context(), Options{DataDir: dataDir}).UpdateAvailable,
+		"the offer has to be there before the check that should clear it")
+
+	ms := newManifestServer(t, withdrawnManifest(9))
+	src := ms.source(stateDir, "linux", "amd64")
+	previous := newSession
+	newSession = func(Options) (*session, error) {
+		return &session{source: src, close: func() {}}, nil
+	}
+	t.Cleanup(func() { newSession = previous })
+
+	result, err := Check(t.Context(), Options{
+		DataDir: dataDir, Channel: "stable", PlatformID: "linux",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.LatestVersion)
+	assert.False(t, result.UpdateAvailable)
+
+	// The result alone is not the fix: what Status reports afterwards is.
+	status := Status(t.Context(), Options{DataDir: dataDir, Channel: "stable"})
+	require.NotNil(t, status)
+	assert.Empty(t, status.LatestVersion, "the withdrawn version must stop being offered")
+	assert.False(t, status.UpdateAvailable)
 }

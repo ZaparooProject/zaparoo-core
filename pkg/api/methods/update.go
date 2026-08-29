@@ -193,6 +193,40 @@ func HandleUpdateCheck(
 		return nil, fmt.Errorf("update check failed: %w", err)
 	}
 
+	return updateResponse(result, autoInstall), nil
+}
+
+// HandleUpdateStatus reports what the device already knows about updates.
+//
+// It exists because a check is not free: it fetches and verifies signed
+// metadata and writes the outcome to the data directory, so anything that shows
+// update state whenever a screen is drawn would drive repeated flash writes and
+// outbound requests. Both a status line that refreshes on its own and a "check
+// now" button are wanted, and they are not the same request.
+//
+// The same authorization as a check. It reads no less about the device, and the
+// difference in cost is not a difference in who should see it.
+func HandleUpdateStatus(
+	env requests.RequestEnv, //nolint:gocritic // hugeParam
+	statusFn func(ctx context.Context, opts updater.Options) *updater.Result,
+) (any, error) {
+	if err := requireAuthenticated(&env); err != nil {
+		return nil, err
+	}
+
+	opts := updaterOptions(&env, updater.ModeManual)
+	opts.Gate = updateGateDeps(&env)
+	return updateResponse(statusFn(env.Context, opts), env.Config.UpdateInstall()), nil
+}
+
+func updateResponse(result *updater.Result, autoInstall bool) models.UpdateCheckResponse {
+	if result == nil {
+		return models.UpdateCheckResponse{
+			CurrentVersion: config.AppVersion,
+			AutoInstall:    autoInstall,
+		}
+	}
+
 	resp := models.UpdateCheckResponse{
 		CurrentVersion:  result.CurrentVersion,
 		LatestVersion:   result.LatestVersion,
@@ -228,7 +262,7 @@ func HandleUpdateCheck(
 			Detail:      result.LastResult.Detail,
 		}
 	}
-	return resp, nil
+	return resp
 }
 
 func HandleUpdateApply(

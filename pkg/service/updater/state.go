@@ -55,17 +55,33 @@ var stateMu syncutil.Mutex
 //
 //nolint:govet // Field order keeps persisted state grouped by manifest, check, and outcome.
 type updaterState struct {
-	ManifestSeenAt       time.Time       `json:"manifestSeenAt"`
-	LastCheckAt          *time.Time      `json:"lastCheckAt,omitempty"`
-	LastResult           *updateResult   `json:"lastResult,omitempty"`
-	Deferral             *updateDeferral `json:"deferral,omitempty"`
-	ManifestETag         string          `json:"manifestETag"`
-	ManifestLastModified string          `json:"manifestLastModified"`
-	LastOfferedVersion   string          `json:"lastOfferedVersion,omitempty"`
-	ManifestGeneration   int64           `json:"manifestGeneration"`
-	CheckFailures        int             `json:"checkFailures,omitempty"`
-	StateVersion         int             `json:"stateVersion"`
-	LastCheckOK          *bool           `json:"lastCheckOK,omitempty"` //nolint:tagliatelle // Established initialism.
+	ManifestSeenAt       time.Time          `json:"manifestSeenAt"`
+	LastCheckAt          *time.Time         `json:"lastCheckAt,omitempty"`
+	LastResult           *updateResult      `json:"lastResult,omitempty"`
+	Deferral             *updateDeferral    `json:"deferral,omitempty"`
+	ManifestETag         string             `json:"manifestETag"`
+	ManifestLastModified string             `json:"manifestLastModified"`
+	LastOfferedVersion   string             `json:"lastOfferedVersion,omitempty"`
+	LastCheck            *lastCheckFindings `json:"lastCheck,omitempty"`
+	ManifestGeneration   int64              `json:"manifestGeneration"`
+	CheckFailures        int                `json:"checkFailures,omitempty"`
+	StateVersion         int                `json:"stateVersion"`
+	//nolint:tagliatelle // Established initialism.
+	LastCheckOK *bool `json:"lastCheckOK,omitempty"`
+}
+
+// lastCheckFindings is what the most recent completed check concluded, kept so
+// something can be said about updates without going to the network.
+//
+// It is not derived from the cached manifest. That copy is stored without its
+// signature — the signature is always fetched fresh, because the cache is a
+// bandwidth optimisation and never a trust boundary — so nothing offline can
+// verify it. These are the conclusions Core already drew from metadata it did
+// verify, which is a different and honest thing to report.
+type lastCheckFindings struct {
+	LatestVersion   string `json:"latestVersion,omitempty"`
+	UpdateAvailable bool   `json:"updateAvailable,omitempty"`
+	RolloutHeld     bool   `json:"rolloutHeld,omitempty"`
 }
 
 // updateDeferral records that an automatic install has been putting a version
@@ -273,6 +289,36 @@ func lastOfferedVersion(dir string) string {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	return loadState(dir).LastOfferedVersion
+}
+
+// stateSnapshot reads the whole of the persisted state at once, for a caller
+// that wants several fields and would otherwise take the lock once per field
+// and risk describing two different moments in one answer.
+func stateSnapshot(dir string) updaterState {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return loadState(dir)
+}
+
+// recordCheckFindings stores what a completed check concluded. A check that
+// could not reach the manifest records nothing, so the previous findings stay
+// as the last thing actually known rather than being replaced by silence.
+func recordCheckFindings(dir string, findings *lastCheckFindings) error {
+	if dir == "" || findings == nil {
+		return nil
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	st, err := loadStateWithError(dir)
+	if err != nil {
+		return fmt.Errorf("loading updater state before recording check findings: %w", err)
+	}
+	st.LastCheck = findings
+	if err := saveState(dir, &st); err != nil {
+		return fmt.Errorf("recording update check findings: %w", err)
+	}
+	return nil
 }
 
 func recordOfferedVersion(dir, version string) error {

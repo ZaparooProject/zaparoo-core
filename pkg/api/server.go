@@ -456,6 +456,9 @@ func NewMethodMap() *MethodMap {
 		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateCheck(env, updater.Check)
 		},
+		models.MethodUpdateStatus: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateStatus(env, updater.Status)
+		},
 		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleUpdateApply(env, updater.Apply, env.State.RestartService)
 		},
