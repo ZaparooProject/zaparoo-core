@@ -3087,6 +3087,24 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBIDs(
 	return scanGroupedTagInfos(rows)
 }
 
+// GetMediaTagsByMediaRefs returns the merged file-level and title-level tags
+// for each referenced media row, keyed by MediaDBID, matching the tag view
+// media.search attaches to results.
+func (db *MediaDB) GetMediaTagsByMediaRefs(
+	ctx context.Context, refs []database.MediaRef,
+) (map[int64][]database.TagInfo, error) {
+	if len(refs) == 0 {
+		return map[int64][]database.TagInfo{}, nil
+	}
+	sqlDB := db.sql.Load()
+	if sqlDB == nil {
+		return nil, ErrNullSQL
+	}
+	merged, err := fetchTagsByRefs(ctx, sqlDB, refs)
+	db.NoteCorruption(err)
+	return merged, err
+}
+
 type propertyGroupMode int
 
 const (
