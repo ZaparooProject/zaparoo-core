@@ -1084,6 +1084,106 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 	}
 }
 
+// TestAltCoreLauncherGroups pins every alt core family to its config group.
+// The counts are exact: a new alt core launcher that the path classifier does
+// not recognise fails here rather than silently missing from preference.
+func TestAltCoreLauncherGroups(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	counts := map[string]int{}
+	for i := range launchers {
+		for _, group := range launchers[i].Groups {
+			counts[group]++
+		}
+	}
+
+	cases := []struct {
+		group string
+		want  int
+	}{
+		{platformshared.LauncherGroupRetroAchievements, 21},
+		{platformshared.LauncherGroupDB9, 32},
+		{platformshared.LauncherGroupLLAPI, 18},
+		{platformshared.LauncherGroupSinden, 7},
+		{platformshared.LauncherGroupPWM, 5},
+		{platformshared.LauncherGroupDualRAM, 7},
+		{platformshared.LauncherGroupUnstable, 45},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, counts[tc.group], "launcher count for group %s", tc.group)
+	}
+
+	members := []struct {
+		id    string
+		group string
+	}{
+		{"LLAPISNES", platformshared.LauncherGroupLLAPI},
+		{"LLAPI80MHzNintendo64", platformshared.LauncherGroupLLAPI},
+		{"DB9MegaDrive", platformshared.LauncherGroupDB9},
+		{"DB9GBAAccuracy", platformshared.LauncherGroupDB9},
+		{"SindenNES", platformshared.LauncherGroupSinden},
+		{"PWMPSX", platformshared.LauncherGroupPWM},
+		{"PWM2XPSX", platformshared.LauncherGroupPWM},
+		{"DualRAMJaguar", platformshared.LauncherGroupDualRAM},
+		{"RASNES", platformshared.LauncherGroupRetroAchievements},
+	}
+	for _, tc := range members {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, tc.id)
+			require.NotNil(t, found, "%s launcher should exist", tc.id)
+			assert.Contains(t, found.Groups, tc.group)
+		})
+	}
+}
+
+// TestDB9DualRAMLaunchersAreInBothGroups covers the reason classification reads
+// registered RBF paths instead of ID prefixes: these cores are a DB9 fork build
+// *and* a dual-SDRAM build, and no prefix rule can say both.
+func TestDB9DualRAMLaunchersAreInBothGroups(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for _, id := range []string{"DB9DualRAMPSX", "DB9DualRAMSaturn"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, id)
+			require.NotNil(t, found)
+			assert.Equal(t,
+				[]string{platformshared.LauncherGroupDB9, platformshared.LauncherGroupDualRAM},
+				found.Groups,
+				"the family group must come first so Groups[0] identifies the distribution",
+			)
+		})
+	}
+}
+
+// TestStockLaunchersHaveNoGroup keeps the stock cores out of every group, so a
+// preference entry naming a family never resolves to the default core.
+func TestStockLaunchersHaveNoGroup(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for _, id := range []string{"SNES", "NES", "PSX", "Saturn", "Genesis", "2XPSX", "80MHzNintendo64"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			found := findLauncher(launchers, id)
+			require.NotNil(t, found, "%s launcher should exist", id)
+			assert.Empty(t, found.Groups)
+		})
+	}
+}
+
 func TestRetroAchievementsAtari2600LauncherMetadata(t *testing.T) {
 	t.Parallel()
 
