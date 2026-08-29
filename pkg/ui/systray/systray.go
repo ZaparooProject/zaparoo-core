@@ -94,13 +94,11 @@ func systrayOnReady(
 			for {
 				select {
 				case <-mAddress.ClickedCh:
-					err := clipboard.Init()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to initialize clipboard")
+					if err := copyToClipboard(ip, clipboard.Init, clipboard.Write); err != nil {
+						log.Error().Err(err).Msg("failed to copy address to clipboard")
 						notify("Error copying address to clipboard.")
 						continue
 					}
-					clipboard.Write(clipboard.FmtText, []byte(ip))
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
@@ -163,6 +161,30 @@ func systrayOnReady(
 			}
 		}()
 	}
+}
+
+// clipboardWriter is the signature of clipboard.Write, taken as a parameter so
+// the failure paths can be tested without a display server.
+type clipboardWriter func(
+	ctx context.Context, format clipboard.Format, buf []byte, opts ...clipboard.Option,
+) (<-chan struct{}, error)
+
+// copyToClipboard puts text on the system clipboard.
+//
+// Both steps can fail for the same reason — a machine with no clipboard to
+// write to — and the caller says the same thing either way, so they are
+// reported as one error rather than two branches.
+func copyToClipboard(text string, initFn func() error, writeFn clipboardWriter) error {
+	if err := initFn(); err != nil {
+		return fmt.Errorf("initialising the clipboard: %w", err)
+	}
+	// The returned channel only fires if something else later overwrites the
+	// clipboard, which is not this menu's business; the text is on the
+	// clipboard as soon as Write returns.
+	if _, err := writeFn(context.Background(), clipboard.FmtText, []byte(text)); err != nil {
+		return fmt.Errorf("writing to the clipboard: %w", err)
+	}
+	return nil
 }
 
 // reloadCore reloads settings and mappings, then reloads the custom launcher
