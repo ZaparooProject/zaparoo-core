@@ -170,6 +170,10 @@ func reloadCore(
 	return nil
 }
 
+// Run shows the tray icon and does not return until the tray quits, because the
+// native event loop it starts owns the calling thread. Anything that has to
+// react to the service ending has to watch for it on another goroutine and call
+// Quit.
 func Run(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -178,4 +182,10 @@ func Run(
 	exit func(),
 ) {
 	systray.Run(systrayOnReady(cfg, pl, icon, notify), exit)
+}
+
+// Quit ends the tray's event loop, which lets Run return. It is safe to call
+// from another goroutine and does nothing if the tray has already quit.
+func Quit() {
+	systray.Quit()
 }

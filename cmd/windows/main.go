@@ -226,11 +226,14 @@ func run() error {
 	}
 
 	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	exit := make(chan bool, 1)
-	defer close(exit)
+
+	// The tray owns the main thread until it quits, so the service has to be
+	// watched alongside it rather than after it.
+	restarting := restart.WaitForShutdown(
+		sigs, exit, svcResult.Done, svcResult.RestartRequested, systray.Quit)
 
 	systray.Run(cfg, pl, icon,
 		func(msg string) {
@@ -241,24 +244,16 @@ func run() error {
 		},
 	)
 
-	select {
-	case <-sigs:
-		err = svcResult.Stop()
-		if err != nil {
-			log.Error().Msgf("error stopping service: %s", err)
+	if <-restarting {
+		// The service stopped itself on the way to being replaced. Stopping it
+		// again would only delay the binary that replaced it.
+		if err := restartAfterReleasing(instance, restart.Exec); err != nil {
+			return fmt.Errorf("failed to re-exec for restart: %w", err)
 		}
-	case <-exit:
-		err = svcResult.Stop()
-		if err != nil {
-			log.Error().Msgf("error stopping service: %s", err)
-		}
-	case <-svcResult.Done:
-		log.Info().Msg("service shut down internally")
-		if svcResult.RestartRequested != nil && svcResult.RestartRequested() {
-			if err := restartAfterReleasing(instance, restart.Exec); err != nil {
-				return fmt.Errorf("failed to re-exec for restart: %w", err)
-			}
-		}
+		return nil
+	}
+	if err := svcResult.Stop(); err != nil {
+		log.Error().Msgf("error stopping service: %s", err)
 	}
 
 	return nil
