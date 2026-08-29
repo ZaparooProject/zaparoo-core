@@ -80,7 +80,7 @@ func runUpdateTo(
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "Installing %s. Core will restart when it finishes.\n", status.LatestVersion)
+	_, _ = fmt.Fprintln(stdout, describeInstallIntent(status))
 	applied, err := fetchUpdateApply(ctx, cfg, call)
 	if err != nil {
 		logClientCommandError(err, "error installing update")
@@ -121,6 +121,23 @@ func describeUpdateStatus(s *models.UpdateCheckResponse) string {
 		return describeAvailableUpdate(s)
 	}
 	return fmt.Sprintf("Running %s. %s", s.CurrentVersion, describeLastCheck(s.CheckedAt))
+}
+
+// describeInstallIntent says what is about to happen, and says it differently
+// when the release on offer is the one that already failed to start here.
+//
+// Only automatic installs decline that version; asking for it by hand is taken
+// as asking on purpose. But this flag is also how someone just looks at where
+// the device stands, so reinstalling the build that broke it should be stated
+// rather than done quietly under a line that reads like any other update.
+func describeInstallIntent(s *models.UpdateCheckResponse) string {
+	if s.LastResult != nil &&
+		s.LastResult.Outcome == updater.OutcomeRolledBack &&
+		s.LastResult.ToVersion == s.LatestVersion {
+		return fmt.Sprintf("Installing %s again, the version that already failed to start here. "+
+			"If it fails again, %s is restored as before.", s.LatestVersion, s.CurrentVersion)
+	}
+	return fmt.Sprintf("Installing %s. Core will restart when it finishes.", s.LatestVersion)
 }
 
 // describeLastUpdate reports an update that did not simply work. A success is

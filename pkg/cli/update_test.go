@@ -283,3 +283,37 @@ func TestDescribeLastCheck_SaysHowOldTheAnswerIs(t *testing.T) {
 	stale := time.Now().Add(-6 * 24 * time.Hour)
 	assert.Contains(t, describeLastCheck(&stale), "6 days ago")
 }
+
+// Only automatic installs decline the version that already failed here, so
+// asking by hand still installs it. This flag is also how someone just looks at
+// where the device stands, so it has to say that is what it is doing.
+func TestDescribeInstallIntent_SaysWhenItIsRetryingTheVersionThatFailed(t *testing.T) {
+	t.Parallel()
+
+	retry := describeInstallIntent(&models.UpdateCheckResponse{
+		CurrentVersion:  "2.10.0",
+		LatestVersion:   "2.11.0",
+		UpdateAvailable: true,
+		LastResult: &models.UpdateLastResult{
+			Outcome:     updater.OutcomeRolledBack,
+			FromVersion: "2.10.0",
+			ToVersion:   "2.11.0",
+		},
+	})
+	assert.Contains(t, retry, "already failed to start here")
+	assert.Contains(t, retry, "2.10.0 is restored")
+
+	// A newer release is a different release, and has not failed here.
+	ordinary := describeInstallIntent(&models.UpdateCheckResponse{
+		CurrentVersion:  "2.10.0",
+		LatestVersion:   "2.12.0",
+		UpdateAvailable: true,
+		LastResult: &models.UpdateLastResult{
+			Outcome:     updater.OutcomeRolledBack,
+			FromVersion: "2.10.0",
+			ToVersion:   "2.11.0",
+		},
+	})
+	assert.Contains(t, ordinary, "Installing 2.12.0.")
+	assert.NotContains(t, ordinary, "already failed")
+}
