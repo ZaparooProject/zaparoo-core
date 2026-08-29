@@ -1009,9 +1009,12 @@ func (db *MediaDB) AnalyzeApproximate() error {
 	return nil
 }
 
+const browseSortIndexName = "idx_media_browse_sort"
+
 type secondaryIndex struct {
-	name string
-	ddl  string
+	name               string
+	ddl                string
+	replaceWhenEnsured bool
 }
 
 // secondaryIndexes lists all secondary indexes that can be dropped before bulk
@@ -1096,8 +1099,10 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",
 	},
 	{
-		name: "idx_media_browse_sort",
-		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName, DBID)",
+		name: browseSortIndexName,
+		ddl: "CREATE INDEX IF NOT EXISTS " + browseSortIndexName +
+			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
+		replaceWhenEnsured: true,
 	},
 }
 
@@ -1135,18 +1140,68 @@ func (db *MediaDB) secondaryIndexExists(indexName string) (bool, error) {
 	return true, nil
 }
 
+func (db *MediaDB) secondaryIndexCurrent(idx secondaryIndex) (bool, error) {
+	exists, err := db.secondaryIndexExists(idx.name)
+	if err != nil || !exists {
+		return exists, err
+	}
+	if idx.name != browseSortIndexName {
+		return true, nil
+	}
+
+	rows, err := db.conn().QueryContext(db.ctx,
+		"SELECT name, coll FROM pragma_index_xinfo(?) WHERE key = 1", idx.name)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect index %s: %w", idx.name, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var column, collation sql.NullString
+		if scanErr := rows.Scan(&column, &collation); scanErr != nil {
+			return false, fmt.Errorf("failed to scan index %s columns: %w", idx.name, scanErr)
+		}
+		if column.String == "SortName" {
+			return strings.EqualFold(collation.String, browseTitleCollationName), nil
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return false, fmt.Errorf("failed to read index %s columns: %w", idx.name, rowsErr)
+	}
+	return false, nil
+}
+
 func (db *MediaDB) missingSecondaryIndexes() ([]secondaryIndex, error) {
 	missing := make([]secondaryIndex, 0)
 	for _, idx := range secondaryIndexes {
-		exists, err := db.secondaryIndexExists(idx.name)
+		current, err := db.secondaryIndexCurrent(idx)
 		if err != nil {
 			return nil, err
 		}
-		if !exists {
+		if !current {
 			missing = append(missing, idx)
 		}
 	}
 	return missing, nil
+}
+
+func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
+	tx, err := db.sql.Load().BeginTx(db.ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin replacement of index %s: %w", idx.name, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err = tx.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+idx.name); err != nil {
+		return fmt.Errorf("failed to drop old index %s: %w", idx.name, err)
+	}
+	if _, err = tx.ExecContext(db.ctx, idx.ddl); err != nil {
+		return fmt.Errorf("failed to create replacement index %s: %w", idx.name, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit replacement index %s: %w", idx.name, err)
+	}
+	return nil
 }
 
 // CreateSecondaryIndexes recreates dropped secondary indexes after bulk inserts
@@ -1176,7 +1231,12 @@ func (db *MediaDB) CreateSecondaryIndexes() error {
 
 	for _, idx := range indexesToEnsure {
 		started := time.Now()
-		_, err := db.sql.Load().ExecContext(db.ctx, idx.ddl)
+		var err error
+		if idx.replaceWhenEnsured {
+			err = db.replaceSecondaryIndex(idx)
+		} else {
+			_, err = db.sql.Load().ExecContext(db.ctx, idx.ddl)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to create index %s: %w", idx.name, err)
 		}

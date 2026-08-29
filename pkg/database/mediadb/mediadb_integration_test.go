@@ -3943,16 +3943,46 @@ func TestMediaDB_CreateSecondaryIndexes_RecreatesMissingIndexes_Integration(t *t
 		_, err := mediaDB.UnsafeGetSQLDb().ExecContext(ctx, "DROP INDEX IF EXISTS "+indexName)
 		require.NoError(t, err)
 	}
+	replaceBrowseSortIndexWithBinary(t, mediaDB)
+	current, err := mediaDB.secondaryIndexCurrent(browseSortIndexForTest(t))
+	require.NoError(t, err)
+	require.False(t, current, "fixture should carry the legacy binary browse index")
 
 	mediaDB.needsIndexRebuild.Store(false)
 
-	err := mediaDB.CreateSecondaryIndexes()
+	err = mediaDB.CreateSecondaryIndexes()
 	require.NoError(t, err)
 	assert.False(t, mediaDB.needsIndexRebuild.Load())
 
 	for _, indexName := range []string{"media_path_idx", "idx_media_parentdir"} {
 		assertIndexExists(t, mediaDB, indexName)
 	}
+	current, err = mediaDB.secondaryIndexCurrent(browseSortIndexForTest(t))
+	require.NoError(t, err)
+	assert.True(t, current, "legacy browse index should be replaced with natural collation")
+}
+
+func TestMediaDB_ReplaceSecondaryIndexFailureKeepsOldIndex_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	replaceBrowseSortIndexWithBinary(t, mediaDB)
+	bad := secondaryIndex{
+		name:               browseSortIndexName,
+		ddl:                "CREATE INDEX idx_media_browse_sort ON Media(NoSuchColumn)",
+		replaceWhenEnsured: true,
+	}
+	err := mediaDB.replaceSecondaryIndex(bad)
+	require.Error(t, err)
+
+	assertIndexExists(t, mediaDB, browseSortIndexName)
+	current, err := mediaDB.secondaryIndexCurrent(browseSortIndexForTest(t))
+	require.NoError(t, err)
+	assert.False(t, current, "failed atomic replacement should roll back to the legacy index")
 }
 
 func TestMediaDB_RebuildTagCache_SelectiveIndexingWarmsTouchedAndUntouchedSystems_Integration(t *testing.T) {

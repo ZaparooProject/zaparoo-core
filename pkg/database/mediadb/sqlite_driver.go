@@ -17,12 +17,29 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-//go:build !sqlite_trace && !trace
-
 package mediadb
 
-func sqliteDriverName() string {
-	return sqliteMediaDriver
+import (
+	"database/sql"
+	"fmt"
+
+	sqlite3 "github.com/mattn/go-sqlite3"
+)
+
+const sqliteMediaDriver = "sqlite3_zaparoo_media"
+
+func init() {
+	sql.Register(sqliteMediaDriver, &sqlite3.SQLiteDriver{
+		ConnectHook: registerMediaSQLiteCollations,
+	})
 }
 
-func logSQLTraceSummary() {}
+func registerMediaSQLiteCollations(conn *sqlite3.SQLiteConn) error {
+	if err := conn.RegisterCollation(browseTitleCollationName, compareBrowseTitles); err != nil {
+		return fmt.Errorf("register media title collation: %w", err)
+	}
+	if err := conn.RegisterCollation(browseDirectoryCollationName, compareBrowseDirectoryNames); err != nil {
+		return fmt.Errorf("register media directory collation: %w", err)
+	}
+	return nil
+}
