@@ -50,7 +50,7 @@ var platformDocs = map[string]string{
 	"mistex":    "mistex.md",
 	"recalbox":  "recalbox.mdx",
 	"replayos":  "replayos.md",
-	"steamos":   "steamos.md",
+	"steamos":   "steamos/index.md",
 	"windows":   "windows/index.md",
 	// Interim packaging fallback until dedicated ZapOS docs are published.
 	"zapos": "linux/index.md",
