@@ -267,6 +267,12 @@ func (c *arcadeSystemCache) scanFiles(
 ) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 	matcher := helpers.NewLauncherMatcher(cfg, c.platform)
+	// afero.Walk reports symlinks without following them, so an Organizer
+	// alias arrives here as a file entry and must be filtered by its target.
+	var readLink func(string) (string, error)
+	if linkReader, ok := c.platform.filesystem().(afero.LinkReader); ok {
+		readLink = linkReader.ReadlinkIfPossible
+	}
 	for _, root := range c.platform.RootDirs(cfg) {
 		select {
 		case <-ctx.Done():
@@ -297,6 +303,16 @@ func (c *arcadeSystemCache) scanFiles(
 						return filepath.SkipDir
 					}
 					return nil
+				}
+				if info.Mode()&os.ModeSymlink != 0 && readLink != nil {
+					skip, skipErr := matcher.ShouldSkipScanSymlink(
+						systemdefs.SystemArcade, path, func() (string, error) { return readLink(path) },
+					)
+					if skipErr != nil {
+						log.Debug().Err(skipErr).Str("path", path).Msg("unable to read MiSTer arcade symlink")
+					} else if skip {
+						return nil
+					}
 				}
 				ext := filepath.Ext(path)
 				if strings.EqualFold(ext, ".mra") || strings.EqualFold(ext, ".mgl") {

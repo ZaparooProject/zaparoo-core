@@ -318,6 +318,18 @@ func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
 	}
 	aliasPath := filepath.Join(organizedDir, "Pooyan.mra")
 	require.NoError(t, os.Symlink(canonicalPath, aliasPath))
+	// Organizer output written straight into _Arcade, plus a PREPEND_YEAR
+	// alias at the Organizer root and a link to media outside _Arcade.
+	inPlaceDir := filepath.Join(arcadeRoot, "_1 A-E")
+	require.NoError(t, os.MkdirAll(inPlaceDir, 0o750))
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(inPlaceDir, "Pooyan.mra")))
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(arcadeRoot, "}82 Pooyan.mra")))
+	externalDir := filepath.Join(root, "external")
+	require.NoError(t, os.MkdirAll(externalDir, 0o750))
+	externalTarget := filepath.Join(externalDir, "External.mra")
+	require.NoError(t, os.WriteFile(externalTarget, []byte("test"), 0o600))
+	externalAlias := filepath.Join(arcadeRoot, "External.mra")
+	require.NoError(t, os.Symlink(externalTarget, externalAlias))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[launchers]\nindex_root = [%q]\n", root)))
@@ -335,6 +347,7 @@ func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
 		{Path: mraPath},
 		{Path: mglPath},
 		{Path: canonicalPath},
+		{Path: externalAlias},
 	}, results)
 }
 

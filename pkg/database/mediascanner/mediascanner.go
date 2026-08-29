@@ -708,6 +708,26 @@ func shouldSkipExcludedSymlink(
 	return false, nil
 }
 
+// shouldSkipSymlinkAlias reports whether a symlink must be kept out of the
+// walk because it aliases media already scanned under its target path. A
+// timeout while reading the link leaves its target unknown, but letting
+// fastwalk continue would immediately repeat the blocking call without a
+// timeout, so the link is skipped. Any other read error keeps the link in the
+// walk so ordinary handling applies. Context cancellation takes precedence.
+func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bool, error) {
+	skip, err := check()
+	if err == nil {
+		return skip, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if errors.Is(err, ErrFsTimeout) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -727,6 +747,7 @@ func GetFiles(
 	var entriesScanned atomic.Int64
 	var symlinksEncountered atomic.Int64
 	var directoriesExcluded atomic.Int64
+	var symlinkAliasesSkipped atomic.Int64
 	walkStartTime := time.Now()
 
 	var mu syncutil.Mutex
@@ -782,6 +803,25 @@ func GetFiles(
 					Str("system", systemID).
 					Str("path", p).
 					Msg("skipping launcher-excluded scan directory")
+				return filepath.SkipDir
+			}
+		}
+
+		if isSymlink {
+			skip, skipErr := shouldSkipSymlinkAlias(ctx, func() (bool, error) {
+				return matcher.ShouldSkipScanSymlink(system.ID, p, func() (string, error) {
+					return readlinkWithContext(ctx, p)
+				})
+			})
+			if skipErr != nil {
+				return skipErr
+			}
+			if skip {
+				symlinkAliasesSkipped.Add(1)
+				log.Debug().
+					Str("system", systemID).
+					Str("path", p).
+					Msg("skipping symlink alias of scanned media")
 				return filepath.SkipDir
 			}
 		}
@@ -879,6 +919,7 @@ func GetFiles(
 		Int64("entriesScanned", scanned).
 		Int64("symlinksEncountered", symlinksEncountered.Load()).
 		Int64("directoriesExcluded", directoriesExcluded.Load()).
+		Int64("symlinkAliasesSkipped", symlinkAliasesSkipped.Load()).
 		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")

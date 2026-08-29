@@ -580,7 +580,12 @@ func TestArcadeLauncherExtensions(t *testing.T) {
 
 	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
 	assert.Equal(t, []string{"_Arcade"}, arcadeLauncher.Folders)
-	assert.Equal(t, []string{"_Organized"}, arcadeLauncher.ScanDirectoryExcludes)
+	assert.Equal(t, arcadeOrganizerScanDirectoryExcludes, arcadeLauncher.ScanDirectoryExcludes)
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_Organized")
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_1 A-E")
+	assert.Contains(t, arcadeLauncher.ScanDirectoryExcludes, "_4 Video & Inputs")
+	assert.True(t, arcadeLauncher.ScanSkipInternalSymlinks,
+		"Arcade Organizer aliases resolve inside _Arcade and must not be indexed twice")
 	assert.Contains(t, arcadeLauncher.Extensions, ".mra")
 	assert.Contains(t, arcadeLauncher.Extensions, ".mgl")
 }
