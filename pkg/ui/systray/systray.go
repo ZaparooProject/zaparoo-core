@@ -100,7 +100,17 @@ func systrayOnReady(
 						notify("Error copying address to clipboard.")
 						continue
 					}
-					clipboard.Write(clipboard.FmtText, []byte(ip))
+					// The returned channel only fires if something else later
+					// overwrites the clipboard, which is not this menu's
+					// business; the address is on the clipboard once Write
+					// returns.
+					if _, err := clipboard.Write(
+						context.Background(), clipboard.FmtText, []byte(ip),
+					); err != nil {
+						log.Error().Err(err).Msg("failed to copy address to clipboard")
+						notify("Error copying address to clipboard.")
+						continue
+					}
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
