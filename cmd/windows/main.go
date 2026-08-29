@@ -143,41 +143,6 @@ func restartAfterReleasing(instance *singleInstance, restartFn func() error) err
 	return restartFn()
 }
 
-// watchForShutdown waits for whatever ends this run and calls quit so the tray's
-// event loop lets go of the main thread. The returned channel yields whether the
-// process should re-exec into the binary that replaced it.
-//
-// The watching has to happen here rather than after the tray, because the tray's
-// loop blocks until it quits and an update stops the service from underneath it.
-// Waiting afterwards meant an installed update never restarted: the service shut
-// down, the tray stayed up in front of nothing, and the new binary only ran if
-// someone quit or rebooted.
-func watchForShutdown(
-	sigs <-chan os.Signal,
-	exit <-chan bool,
-	done <-chan struct{},
-	restartRequested func() bool,
-	quit func(),
-) <-chan bool {
-	restarting := make(chan bool, 1)
-	go func() {
-		reExec := false
-		select {
-		case <-sigs:
-		case <-exit:
-		case <-done:
-			log.Info().Msg("service shut down internally")
-			reExec = restartRequested != nil && restartRequested()
-		}
-		restarting <- reExec
-		// Always quit the tray, including when the tray is what ended the run:
-		// calling it a second time is a no-op and skipping it would leave the
-		// loop running when the service is the thing that stopped.
-		quit()
-	}()
-	return restarting
-}
-
 func main() {
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
@@ -265,7 +230,10 @@ func run() error {
 
 	exit := make(chan bool, 1)
 
-	restarting := watchForShutdown(sigs, exit, svcResult.Done, svcResult.RestartRequested, systray.Quit)
+	// The tray owns the main thread until it quits, so the service has to be
+	// watched alongside it rather than after it.
+	restarting := restart.WaitForShutdown(
+		sigs, exit, svcResult.Done, svcResult.RestartRequested, systray.Quit)
 
 	systray.Run(cfg, pl, icon,
 		func(msg string) {

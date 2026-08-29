@@ -40,6 +40,46 @@ func ExecIfRequested(restartRequested func() bool) error {
 	return Exec()
 }
 
+// WaitForShutdown waits for whatever ends a run and calls quit, so a UI that
+// owns the main thread lets go of it. The returned channel yields whether the
+// process should re-exec into the binary that replaced it.
+//
+// This has to run alongside the UI rather than after it. A tray or a terminal UI
+// blocks its caller until the user closes it, and an update stops the service
+// from underneath that loop. Waiting for the service afterwards means an
+// installed update never restarts: the service shuts down, the UI stays up in
+// front of nothing, and the new binary only runs if someone quits or reboots.
+//
+// A nil done or sigs channel simply never fires, which is what a mode with no
+// service of its own wants.
+func WaitForShutdown(
+	sigs <-chan os.Signal,
+	exit <-chan bool,
+	done <-chan struct{},
+	restartRequested func() bool,
+	quit func(),
+) <-chan bool {
+	restarting := make(chan bool, 1)
+	go func() {
+		reExec := false
+		select {
+		case <-sigs:
+		case <-exit:
+		case <-done:
+			log.Info().Msg("service shut down internally")
+			reExec = restartRequested != nil && restartRequested()
+		}
+		restarting <- reExec
+		// Always quit, including when the UI is what ended the run: quitting an
+		// already-stopped UI does nothing, while skipping it would leave the
+		// loop running whenever the service is the thing that stopped.
+		if quit != nil {
+			quit()
+		}
+	}()
+	return restarting
+}
+
 // ExecAfterRollback re-execs the restored binary. A successful Exec never
 // returns, so every return preserves the rollback error for diagnosis.
 func ExecAfterRollback(rollbackErr error) error {
