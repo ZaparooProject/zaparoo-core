@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -306,6 +307,7 @@ func mediaByPath(rows ...database.Media) loadRecordIndexes {
 			indexes.MediaByFilename[filenameKey] = append(indexes.MediaByFilename[filenameKey], row)
 		}
 	}
+	indexes.Containers = container.NewIndex(rows)
 	return indexes
 }
 
@@ -4139,4 +4141,142 @@ func TestScrapeLoop_CompanionSkipsAlreadyScrapedMedia(t *testing.T) {
 	assert.Equal(t, 1, done.Skipped)
 	mockDB.AssertNotCalled(t, "ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything)
 	mockDB.AssertExpectations(t)
+}
+
+// EmulationStation writes <folder> entries for a per-game disc folder. Core has
+// no folder row to hold that metadata, so it lands on the media the folder
+// launches. Reported in issue #1263.
+func TestLoadRecords_FolderEntryMatchesContainerTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Cool Game")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <folder>
+    <path>./Cool Game</path>
+    <name>Cool Game</name>
+    <desc>A game on two discs.</desc>
+    <image>./media/covers/Cool Game.png</image>
+  </folder>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.cue")},
+			database.Media{DBID: 12, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.bin")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(11), records[0].MatchedMediaDBID, "the cue sheet is the folder's launch target")
+	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+	assert.Equal(t, "A game on two discs.", records[0].Game.Desc)
+	assert.Equal(t, "./media/covers/Cool Game.png", records[0].Game.Image)
+}
+
+func TestLoadRecords_FolderEntrySkippedWhenContainerIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	collection := filepath.Join(root, "RPGs")
+	require.NoError(t, os.MkdirAll(collection, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <folder><path>./RPGs</path><name>RPGs</name><desc>My favourites.</desc></folder>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(collection, "One.chd")},
+			database.Media{DBID: 12, MediaTitleDBID: 23, Path: filepath.Join(collection, "Two.chd")},
+		),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, records, "an ordinary collection has no row to carry folder metadata")
+}
+
+// ES-DE names a disc folder with a ROM extension so it reads as one game, and
+// writes an ordinary <game> entry whose path is that directory.
+func TestLoadRecords_GameEntryWithDirectoryPathResolvesContainer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Cool Game.cue")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Cool Game.cue</path><name>Cool Game</name><desc>Boxed.</desc></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 31, MediaTitleDBID: 41, Path: filepath.Join(gameDir, "Disc 1.cue")},
+			database.Media{DBID: 32, MediaTitleDBID: 41, Path: filepath.Join(gameDir, "Disc 1.bin")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(31), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchPathOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe, "media-level artwork must survive a container match")
+}
+
+func TestLoadRecords_GameEntryWinsOverFolderEntryForSameTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Cool Game")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Cool Game/Cool Game.cue</path><name>Cool Game</name><desc>From the game entry.</desc></game>
+  <folder><path>./Cool Game</path><name>Cool Game</name><desc>From the folder entry.</desc></folder>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.cue")},
+			database.Media{DBID: 12, MediaTitleDBID: 22, Path: filepath.Join(gameDir, "Cool Game.bin")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "From the game entry.", records[0].Game.Desc)
+}
+
+func TestMapToDB_FolderEntryFindsFolderNamedArtwork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	coverDir := filepath.Join(root, "media", "covers")
+	require.NoError(t, os.MkdirAll(coverDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(coverDir, "Cool Game.png"), []byte("cover"), 0o600))
+
+	folder := esapi.Folder{Path: "./Cool Game", Name: "Cool Game", Desc: "Two discs."}
+	record := &GamelistRecord{
+		SystemRootPath:  root,
+		MediaDirsByRoot: []map[string]string{esmedia.StatMediaDirs(root)},
+		Game:            folderAsGame(&folder),
+		MatchKind:       gamelistMatchPathOnly,
+	}
+
+	mapped := (&GamelistXMLScraper{}).MapToDB(record)
+
+	desc, ok := propertyByType(mapped.TitleProps, tags.PropertyTypeTag(tags.TagPropertyDescription))
+	require.True(t, ok)
+	assert.Equal(t, "Two discs.", desc.Text)
+	boxart, ok := propertyByType(mapped.MediaProps, tags.PropertyTypeTag(tags.TagPropertyImageBoxart))
+	require.True(t, ok, "folder artwork is named after the folder, which is the entry path stem")
+	assert.Equal(t, filepath.ToSlash(filepath.Join(coverDir, "Cool Game.png")), boxart.Text)
 }

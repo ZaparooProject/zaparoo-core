@@ -317,3 +317,48 @@ func TestArtworkDirCandidates_ContainsExpectedESDirs(t *testing.T) {
 	assert.Contains(t, ArtworkDirCandidates[string(tags.TagPropertyImageScreenshot)], "screenshots")
 	assert.Contains(t, ArtworkDirCandidates[string(tags.TagPropertyImageTitleshot)], "titlescreens")
 }
+
+func TestContainerArtworkFallbackNames_FlatDiscFolder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	names := ContainerArtworkFallbackNames(filepath.Join(root, "Cool Game", "Disc 1.cue"), root)
+
+	assert.Contains(t, names, "Cool Game.png")
+	assert.Contains(t, names, "Cool Game.jpg")
+	assert.NotContains(t, names, "Disc 1.png", "the file's own names are not this helper's job")
+}
+
+// ES-DE names a disc folder with a ROM extension so it reads as one game, and
+// stores its art under the extensionless stem.
+func TestContainerArtworkFallbackNames_StripsFolderExtension(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	names := ContainerArtworkFallbackNames(filepath.Join(root, "Cool Game.cue", "Disc 1.cue"), root)
+
+	assert.Contains(t, names, "Cool Game.png")
+	assert.Contains(t, names, "Cool Game.cue.png",
+		"a folder name may legitimately contain a dot, so the raw name is offered too")
+}
+
+func TestContainerArtworkFallbackNames_MirrorsNestedPathFirst(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	names := ContainerArtworkFallbackNames(filepath.Join(root, "RPGs", "Cool Game", "Disc 1.cue"), root)
+
+	require.NotEmpty(t, names)
+	assert.Equal(t, filepath.Join("RPGs", "Cool Game.png"), names[0])
+	assert.Contains(t, names, "Cool Game.png")
+}
+
+func TestContainerArtworkFallbackNames_IgnoresFilesAtTheRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	assert.Empty(t, ContainerArtworkFallbackNames(filepath.Join(root, "Game.chd"), root))
+	assert.Empty(t, ContainerArtworkFallbackNames("", root))
+	assert.Empty(t, ContainerArtworkFallbackNames(
+		filepath.Join(filepath.Dir(root), "Other", "Game.chd"), root))
+}

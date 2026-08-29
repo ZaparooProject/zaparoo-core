@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/container"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
@@ -237,7 +238,7 @@ func (db *MediaDB) FindSingleContainerLaunchMedia(
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("failed to iterate FindSingleContainerLaunchMedia: %w", rowsErr)
 	}
-	return selectContainerLaunchMedia(matches), nil
+	return container.SelectLaunchMedia(matches), nil
 }
 
 func containerHasNestedMedia(ctx context.Context, db sqlQueryable, systemDBID int64, prefix string) (bool, error) {
@@ -269,85 +270,6 @@ func containerHasNestedMedia(ctx context.Context, db sqlQueryable, systemDBID in
 		return false, fmt.Errorf("failed to check nested container media: %w", err)
 	}
 	return true, nil
-}
-
-func selectContainerLaunchMedia(rows []database.Media) *database.Media {
-	if len(rows) == 0 {
-		return nil
-	}
-	if len(rows) == 1 {
-		return &rows[0]
-	}
-
-	m3u := singleMediaWithExt(rows, ".m3u")
-	if m3u != nil && allOtherExtsMatch(rows, m3u.DBID, isM3UCompanionExt) {
-		return m3u
-	}
-
-	cue := singleMediaWithExt(rows, ".cue")
-	if cue != nil && allOtherExtsMatch(rows, cue.DBID, isCueCompanionExt) {
-		return cue
-	}
-
-	return nil
-}
-
-func singleMediaWithExt(rows []database.Media, ext string) *database.Media {
-	var match *database.Media
-	for i := range rows {
-		if mediaExt(rows[i].Path) != ext {
-			continue
-		}
-		if match != nil {
-			return nil
-		}
-		match = &rows[i]
-	}
-	return match
-}
-
-func allOtherExtsMatch(rows []database.Media, mediaDBID int64, allowed func(string) bool) bool {
-	for i := range rows {
-		if rows[i].DBID == mediaDBID {
-			continue
-		}
-		if !allowed(mediaExt(rows[i].Path)) {
-			return false
-		}
-	}
-	return true
-}
-
-func mediaExt(mediaPath string) string {
-	name := mediaPath
-	if idx := strings.LastIndex(name, "/"); idx >= 0 {
-		name = name[idx+1:]
-	}
-	if idx := strings.LastIndex(name, "."); idx >= 0 {
-		return strings.ToLower(name[idx:])
-	}
-	return ""
-}
-
-func isCueCompanionExt(ext string) bool {
-	switch ext {
-	case ".bin", ".wav", ".mp3", ".ogg", ".flac", ".ape":
-		return true
-	default:
-		return false
-	}
-}
-
-func isM3UCompanionExt(ext string) bool {
-	if isCueCompanionExt(ext) {
-		return true
-	}
-	switch ext {
-	case ".cue", ".chd", ".iso":
-		return true
-	default:
-		return false
-	}
 }
 
 func stringPrefixUpperBound(prefix string) string {
@@ -3417,7 +3339,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 
 	// For each candidate dir: skip if the recursive FileCount exceeds the
 	// direct rows (media in nested subdirectories). Otherwise apply
-	// selectContainerLaunchMedia to pick the launch target (mirrors the logic
+	// container.SelectLaunchMedia to pick the launch target (mirrors the logic
 	// in FindSingleContainerLaunchMedia).
 	type resolved struct {
 		childDir string
@@ -3428,7 +3350,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		if len(directRows) != expectedCounts[childDir] {
 			continue
 		}
-		chosen := selectContainerLaunchMedia(directRows)
+		chosen := container.SelectLaunchMedia(directRows)
 		if chosen == nil {
 			continue
 		}

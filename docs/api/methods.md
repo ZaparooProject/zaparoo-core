@@ -721,6 +721,8 @@ When called without a `path` parameter (or with an empty path), returns top-leve
 
 Set `rootView` to `contents` with exactly one system to replace its filesystem routes with a one-level view of their immediate contents. This is display-only: entries retain physical paths, and browsing a returned directory uses ordinary single-path behavior. Root priority follows platform order (first root wins); exact, case-sensitive filesystem basenames define collisions. Virtual URI routes remain separate.
 
+A directory whose direct contents collapse to a single logical launch target is returned with that target's `mediaId`, display name, `zapScript`, `tags`, and `hasCover`, so a per-game disc folder appears as one launchable game. A directory qualifies when it holds one media file, one `.m3u` plus its discs, or one `.cue` plus its companion tracks, and holds no media in subdirectories. Its `type` stays `directory` and it keeps its own `path` and `fileCount`, so clients can still navigate into it. Directories that hold nested media or an ambiguous file set stay plain directories.
+
 Tags filter direct media files in the current path. Directories remain visible for navigation with unfiltered `fileCount` values, while `totalFiles`, file pagination, and cursors reflect only matching files. Tagged directory entries remain plain directories rather than being promoted to logical single-game aliases.
 
 #### Parameters
@@ -753,7 +755,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
-| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -761,9 +763,9 @@ All parameters are optional. When called with no parameters, returns root entrie
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
-| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries. |
 | relativePath | string   | No       | Launcher-relative convenience path (for example `SNES/Game.sfc`) when portable conversion succeeds. Present on media and logical single-game container entries; omitted for unmatched absolute paths and virtual URIs. Not a stable media identity. |
-| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries. |
 | disambiguatingTags | object[] | No | Subset of `tags` whose values differ across same-named siblings of this title, ordered by display importance. Same object shape as `tags`. Omitted when the title has nothing to disambiguate. |
 | hasCover     | boolean  | Yes      | Whether media-level or title-level image properties are available. Meaningful for media-capable entries; clients can skip image requests when false. |
 

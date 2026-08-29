@@ -160,7 +160,7 @@ func TestDeleteStaleLocalMediaProps_DeletesOnlyMissingLocalConventionProps(t *te
 	deleted, err := s.deleteStaleLocalMediaProps(context.Background(), media, []string{root}, []database.MediaProperty{{
 		TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
 		Text:    filepath.ToSlash(keptLocalPath),
-	}})
+	}}, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
@@ -272,7 +272,7 @@ func TestMediaPropsForPath_UsesFlatFallbackAfterMirroredPath(t *testing.T) {
 	require.NoError(t, afero.WriteFile(fs, flatCoverPath, []byte("cover"), 0o600))
 
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, []string{root}, s.availableDirsByRoot([]string{root}))
+	props := s.mediaPropsForPath(romPath, []string{root}, s.availableDirsByRoot([]string{root}), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
@@ -295,7 +295,7 @@ func TestMediaPropsForPath_FindsArtworkOnDifferentRoot(t *testing.T) {
 
 	roots := []string{romRoot, artRoot}
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots))
+	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
@@ -319,7 +319,7 @@ func TestMediaPropsForPath_PrefersEarlierRootInOrder(t *testing.T) {
 
 	roots := []string{firstRoot, secondRoot}
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots))
+	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, filepath.ToSlash(firstBoxart), props[0].Text)
@@ -341,7 +341,7 @@ func TestMediaPropsForPath_MirroredSubfolderCrossRoot(t *testing.T) {
 
 	roots := []string{romRoot, artRoot}
 	s := &scraperImpl{fs: fs}
-	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots))
+	props := s.mediaPropsForPath(romPath, roots, s.availableDirsByRoot(roots), false)
 
 	require.Len(t, props, 1)
 	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageImage), props[0].TypeTag)
@@ -370,10 +370,70 @@ func TestDeleteStaleLocalMediaProps_DeletesStaleCrossRootProp(t *testing.T) {
 	s := &scraperImpl{db: mockDB, fs: afero.NewMemMapFs()}
 	media := &database.MediaWithFullPath{DBID: 11, MediaTitleDBID: 101, Path: mediaPath, SystemID: "NES"}
 	deleted, err := s.deleteStaleLocalMediaProps(
-		context.Background(), media, []string{romRoot, artRoot}, nil,
+		context.Background(), media, []string{romRoot, artRoot}, nil, false,
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
 	mockDB.AssertExpectations(t)
+}
+
+// A disc folder's artwork is stored under the folder's name, not the inner
+// file's, so the file the folder launches has to answer to both. See #1263.
+func TestMediaPropsForPath_FindsFolderNamedArtworkForContainerTarget(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cuePath := filepath.Join(root, "Cool Game", "Disc 1.cue")
+	boxartPath := filepath.Join(root, "media", "boxart", "Cool Game.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(cuePath), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(boxartPath), 0o750))
+	require.NoError(t, afero.WriteFile(fs, boxartPath, []byte("boxart"), 0o600))
+
+	s := &scraperImpl{fs: fs}
+	roots := []string{root}
+
+	assert.Empty(t, s.mediaPropsForPath(cuePath, roots, s.availableDirsByRoot(roots), false),
+		"an ordinary file must not borrow its folder's artwork")
+
+	props := s.mediaPropsForPath(cuePath, roots, s.availableDirsByRoot(roots), true)
+	require.Len(t, props, 1)
+	assert.Equal(t, tags.PropertyTypeTag(tags.TagPropertyImageBoxart), props[0].TypeTag)
+	assert.Equal(t, filepath.ToSlash(boxartPath), props[0].Text)
+}
+
+func TestMediaPropsForPath_PrefersOwnArtworkOverFolderArtwork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cuePath := filepath.Join(root, "Cool Game", "Disc 1.cue")
+	ownArt := filepath.Join(root, "media", "boxart", "Cool Game", "Disc 1.png")
+	folderArt := filepath.Join(root, "media", "boxart", "Cool Game.png")
+	fs := afero.NewMemMapFs()
+	require.NoError(t, fs.MkdirAll(filepath.Dir(cuePath), 0o750))
+	require.NoError(t, fs.MkdirAll(filepath.Dir(ownArt), 0o750))
+	require.NoError(t, afero.WriteFile(fs, ownArt, []byte("own"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, folderArt, []byte("folder"), 0o600))
+
+	s := &scraperImpl{fs: fs}
+	roots := []string{root}
+	props := s.mediaPropsForPath(cuePath, roots, s.availableDirsByRoot(roots), true)
+	require.Len(t, props, 1)
+	assert.Equal(t, filepath.ToSlash(ownArt), props[0].Text)
+}
+
+func TestIsContainerLaunchTarget(t *testing.T) {
+	t.Parallel()
+
+	root := "/roms/PSX"
+	cue := database.MediaWithFullPath{DBID: 1, Path: root + "/Cool Game/Disc 1.cue"}
+	bin := database.MediaWithFullPath{DBID: 2, Path: root + "/Cool Game/Disc 1.bin"}
+	loose := database.MediaWithFullPath{DBID: 3, Path: root + "/Other.chd"}
+	containers := containerIndexForMedia([]database.MediaWithFullPath{cue, bin, loose})
+
+	assert.True(t, isContainerLaunchTarget(containers, &cue))
+	assert.False(t, isContainerLaunchTarget(containers, &bin))
+	assert.False(t, isContainerLaunchTarget(containers, &loose),
+		"the system root holds nested media, so it is not a container")
 }

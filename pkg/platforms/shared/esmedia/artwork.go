@@ -126,6 +126,60 @@ func ArtworkFallbackNames(gamePath, systemRootPath string) []string {
 	return fallbackNames
 }
 
+// ContainerArtworkFallbackNames returns candidate artwork filenames named after
+// the directory holding gamePath rather than the file itself. EmulationStation
+// stores art for a folder shown as one game under the folder's own name, so a
+// disc folder whose inner file is named differently is only found this way.
+// Both the folder name with any extension stripped (the ES-DE convention of
+// naming a folder "Game.cue") and the raw folder name are offered, because a
+// folder name may legitimately contain a dot.
+func ContainerArtworkFallbackNames(gamePath, systemRootPath string) []string {
+	resolved := ResolvePath(gamePath, systemRootPath)
+	if resolved == "" {
+		return nil
+	}
+
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
+	dir := filepath.Dir(rel)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	base := filepath.Base(dir)
+	if base == "." || base == "" {
+		return nil
+	}
+
+	stems := []string{strings.TrimSuffix(base, filepath.Ext(base))}
+	if stems[0] != base {
+		stems = append(stems, base)
+	}
+
+	parent := filepath.Dir(dir)
+	names := make([]string, 0, len(stems)*len(ArtworkExtensions)*2)
+	for _, stem := range stems {
+		flatNames := FallbackArtworkNames(stem)
+		if parent == "." || parent == "" {
+			names = append(names, flatNames...)
+			continue
+		}
+		for _, flat := range flatNames {
+			if nested := filepath.Join(parent, flat); nested != flat {
+				names = append(names, nested)
+			}
+		}
+		names = append(names, flatNames...)
+	}
+	return names
+}
+
 // FallbackArtworkNames returns <stem> plus each supported artwork extension.
 func FallbackArtworkNames(stem string) []string {
 	if stem == "" || stem == "." {
