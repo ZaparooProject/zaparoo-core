@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -26,13 +27,23 @@ const (
 
 // EmuDeckPaths holds discovered EmuDeck library paths.
 type EmuDeckPaths struct {
-	RomsPath     string
-	GamelistPath string
+	EmulationPath string
+	RomsPath      string
+	ToolsPath     string
+	BiosPath      string
+	SavesPath     string
+	StoragePath   string
+	GamelistPath  string
 }
 
 // RetroDECKPaths holds discovered RetroDECK library paths.
 type RetroDECKPaths struct {
+	HomePath     string
 	RomsPath     string
+	SavesPath    string
+	StatesPath   string
+	BiosPath     string
+	StoragePath  string
 	GamelistPath string
 }
 
@@ -40,52 +51,70 @@ type retroDECKConfig struct {
 	Paths map[string]string `json:"paths"`
 }
 
-// DefaultEmuDeckPaths discovers EmuDeck's configured ROM root and standard
-// ES-DE gamelist directory without executing its shell settings file.
+// DefaultEmuDeckPaths discovers EmuDeck's independently configurable data
+// roots without executing its shell settings file.
 func DefaultEmuDeckPaths(homeDir string) EmuDeckPaths {
 	if homeDir == "" {
 		return EmuDeckPaths{}
 	}
-	romsPath := filepath.Join(homeDir, "Emulation", "roms")
+	paths := EmuDeckPaths{EmulationPath: filepath.Join(homeDir, "Emulation")}
 	settingsPath := filepath.Join(homeDir, filepath.FromSlash(emuDeckSettingsDir), "settings.sh")
+	contents := ""
 	if data, err := readLimitedFile(settingsPath); err == nil {
-		if configured := parseShellPathAssignment(string(data), "romsPath", homeDir); configured != "" {
-			romsPath = configured
+		contents = string(data)
+		if configured := parseShellPathAssignment(contents, "emulationPath", homeDir); configured != "" {
+			paths.EmulationPath = configured
 		}
 	}
-	return EmuDeckPaths{
-		RomsPath:     romsPath,
-		GamelistPath: filepath.Join(homeDir, "ES-DE", "gamelists"),
-	}
+	paths.RomsPath = configuredShellPath(contents, "romsPath", homeDir, filepath.Join(paths.EmulationPath, "roms"))
+	paths.ToolsPath = configuredShellPath(contents, "toolsPath", homeDir, filepath.Join(paths.EmulationPath, "tools"))
+	paths.BiosPath = configuredShellPath(contents, "biosPath", homeDir, filepath.Join(paths.EmulationPath, "bios"))
+	paths.SavesPath = configuredShellPath(contents, "savesPath", homeDir, filepath.Join(paths.EmulationPath, "saves"))
+	paths.StoragePath = configuredShellPath(
+		contents, "storagePath", homeDir, filepath.Join(paths.EmulationPath, "storage"),
+	)
+	paths.GamelistPath = filepath.Join(homeDir, "ES-DE", "gamelists")
+	return paths
 }
 
-// DefaultRetroDECKPaths discovers RetroDECK's configurable userdata paths from
-// its Flatpak JSON config, falling back to documented defaults.
+func configuredShellPath(contents, key, homeDir, fallback string) string {
+	if configured := parseShellPathAssignment(contents, key, homeDir); configured != "" {
+		return configured
+	}
+	return fallback
+}
+
+// DefaultRetroDECKPaths discovers RetroDECK's independently configurable
+// userdata paths from its Flatpak JSON config, falling back to documented defaults.
 func DefaultRetroDECKPaths(homeDir string) RetroDECKPaths {
 	if homeDir == "" {
 		return RetroDECKPaths{}
 	}
-	homePath := filepath.Join(homeDir, "retrodeck")
-	romsPath := filepath.Join(homePath, "roms")
+	configured := make(map[string]string)
 	configPath := filepath.Join(homeDir, filepath.FromSlash(retroDECKConfigDir), "retrodeck.json")
 	if data, err := readLimitedFile(configPath); err == nil {
 		var parsed retroDECKConfig
 		if json.Unmarshal(data, &parsed) == nil {
-			paths := parsed.Paths
-			if validConfiguredPath(paths["rd_home_path"], homeDir) {
-				homePath = filepath.Clean(paths["rd_home_path"])
-			}
-			if validConfiguredPath(paths["roms_path"], homeDir) {
-				romsPath = filepath.Clean(paths["roms_path"])
-			} else {
-				romsPath = filepath.Join(homePath, "roms")
-			}
+			configured = parsed.Paths
 		}
 	}
+	homePath := configuredJSONPath(configured, "rd_home_path", homeDir, filepath.Join(homeDir, "retrodeck"))
 	return RetroDECKPaths{
-		RomsPath:     romsPath,
+		HomePath:     homePath,
+		RomsPath:     configuredJSONPath(configured, "roms_path", homeDir, filepath.Join(homePath, "roms")),
+		SavesPath:    configuredJSONPath(configured, "saves_path", homeDir, filepath.Join(homePath, "saves")),
+		StatesPath:   configuredJSONPath(configured, "states_path", homeDir, filepath.Join(homePath, "states")),
+		BiosPath:     configuredJSONPath(configured, "bios_path", homeDir, filepath.Join(homePath, "bios")),
+		StoragePath:  configuredJSONPath(configured, "storage_path", homeDir, filepath.Join(homePath, "storage")),
 		GamelistPath: filepath.Join(homePath, "ES-DE", "gamelists"),
 	}
+}
+
+func configuredJSONPath(paths map[string]string, key, homeDir, fallback string) string {
+	if validConfiguredPath(paths[key], homeDir) {
+		return filepath.Clean(paths[key])
+	}
+	return fallback
 }
 
 func readProviderSystemFolders(path string) ([]string, error) {
@@ -152,8 +181,13 @@ func parseShellPathAssignment(contents, key, homeDir string) string {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') ||
-			(value[0] == '\'' && value[len(value)-1] == '\'')) {
+		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+			unquoted, err := strconv.Unquote(value)
+			if err != nil {
+				return ""
+			}
+			value = unquoted
+		} else if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
 			value = value[1 : len(value)-1]
 		}
 		value = strings.ReplaceAll(value, "${HOME}", homeDir)
@@ -177,5 +211,76 @@ func validConfiguredPath(path, homeDir string) bool {
 		return false
 	}
 	clean := filepath.Clean(path)
-	return clean != string(filepath.Separator) && clean != filepath.Clean(homeDir)
+	if clean == string(filepath.Separator) || clean == filepath.Clean(homeDir) {
+		return false
+	}
+	resolved, existingRoot, ok := resolvedPathFromExistingAncestor(clean)
+	if !ok || existingRoot == string(filepath.Separator) {
+		return false
+	}
+	return resolved != string(filepath.Separator) && resolved != filepath.Clean(homeDir)
+}
+
+func hasAncestorResolvingSymlink(candidate string) bool {
+	absolute, err := filepath.Abs(candidate)
+	if err != nil {
+		return true
+	}
+	volume := filepath.VolumeName(absolute)
+	current := volume + string(filepath.Separator)
+	parts := strings.Split(strings.TrimPrefix(absolute, current), string(filepath.Separator))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return false
+		}
+		if statErr != nil {
+			return true
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr != nil {
+			return true
+		}
+		rel, relErr := filepath.Rel(filepath.Clean(resolved), current)
+		if relErr != nil || rel == "." || rel == ".." ||
+			(!filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedPathFromExistingAncestor(candidate string) (resolved, existingRoot string, ok bool) {
+	if hasAncestorResolvingSymlink(candidate) {
+		return "", "", false
+	}
+	current := filepath.Clean(candidate)
+	var suffix []string
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			root, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				return "", "", false
+			}
+			root = filepath.Clean(root)
+			return filepath.Clean(filepath.Join(append([]string{root}, suffix...)...)), root, true
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", false
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", "", false
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		current = parent
+	}
 }
