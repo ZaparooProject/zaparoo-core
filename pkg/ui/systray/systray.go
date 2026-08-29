@@ -64,6 +64,15 @@ func systrayOnReady(
 		mReloadConfig := systray.AddMenuItem("Reload", "Reload Core settings and files")
 		mOpenLog := systray.AddMenuItem("View Log", "View Core log file")
 
+		systray.AddSeparator()
+		mPair := systray.AddMenuItem("Pair Device...", "Show a PIN to pair a phone or tablet")
+		// Titled from status rather than fixed, so the menu says whether there
+		// is anything to install before it is opened. Refreshed on a timer from
+		// update.status, which reads the last check off disk instead of asking
+		// the release server every time the menu is drawn.
+		mUpdate := systray.AddMenuItem(updateMenuTitle(nil), "")
+		go watchUpdateStatus(cfg, mUpdate)
+
 		if cfg.DebugLogging() {
 			systray.AddSeparator()
 		}
@@ -85,13 +94,11 @@ func systrayOnReady(
 			for {
 				select {
 				case <-mAddress.ClickedCh:
-					err := clipboard.Init()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to initialize clipboard")
+					if err := copyToClipboard(ip, clipboard.Init, clipboard.Write); err != nil {
+						log.Error().Err(err).Msg("failed to copy address to clipboard")
 						notify("Error copying address to clipboard.")
 						continue
 					}
-					clipboard.Write(clipboard.FmtText, []byte(ip))
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
@@ -137,6 +144,10 @@ func systrayOnReady(
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")
 					}
+				case <-mPair.ClickedCh:
+					go startPairing(cfg, notify)
+				case <-mUpdate.ClickedCh:
+					go applyUpdateFromMenu(cfg, mUpdate, notify)
 				case <-mAbout.ClickedCh:
 					msg := "Zaparoo Core\n" +
 						"Version v%s\n\n" +
@@ -150,6 +161,30 @@ func systrayOnReady(
 			}
 		}()
 	}
+}
+
+// clipboardWriter is the signature of clipboard.Write, taken as a parameter so
+// the failure paths can be tested without a display server.
+type clipboardWriter func(
+	ctx context.Context, format clipboard.Format, buf []byte, opts ...clipboard.Option,
+) (<-chan struct{}, error)
+
+// copyToClipboard puts text on the system clipboard.
+//
+// Both steps can fail for the same reason — a machine with no clipboard to
+// write to — and the caller says the same thing either way, so they are
+// reported as one error rather than two branches.
+func copyToClipboard(text string, initFn func() error, writeFn clipboardWriter) error {
+	if err := initFn(); err != nil {
+		return fmt.Errorf("initialising the clipboard: %w", err)
+	}
+	// The returned channel only fires if something else later overwrites the
+	// clipboard, which is not this menu's business; the text is on the
+	// clipboard as soon as Write returns.
+	if _, err := writeFn(context.Background(), clipboard.FmtText, []byte(text)); err != nil {
+		return fmt.Errorf("writing to the clipboard: %w", err)
+	}
+	return nil
 }
 
 // reloadCore reloads settings and mappings, then reloads the custom launcher
@@ -170,6 +205,10 @@ func reloadCore(
 	return nil
 }
 
+// Run shows the tray icon and does not return until the tray quits, because the
+// native event loop it starts owns the calling thread. Anything that has to
+// react to the service ending has to watch for it on another goroutine and call
+// Quit.
 func Run(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -178,4 +217,10 @@ func Run(
 	exit func(),
 ) {
 	systray.Run(systrayOnReady(cfg, pl, icon, notify), exit)
+}
+
+// Quit ends the tray's event loop, which lets Run return. It is safe to call
+// from another goroutine and does nothing if the tray has already quit.
+func Quit() {
+	systray.Quit()
 }

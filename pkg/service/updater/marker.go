@@ -77,15 +77,25 @@ const (
 // updateOutcome is written once an update reaches a terminal state.
 type updateOutcome string
 
+// The outcomes as they appear in API responses and on disk. Exported because
+// anything rendering an update's result has to match on them, and a client
+// spelling one out by hand compiles perfectly and then never matches.
 const (
-	outcomeSucceeded        updateOutcome = "succeeded"
-	outcomeRolledBack       updateOutcome = "rolledBack"
-	outcomeRecoveryRequired updateOutcome = "recoveryRequired"
-	// outcomeRollbackBlocked means the binary was rolled back but the user
+	OutcomeSucceeded        = "succeeded"
+	OutcomeRolledBack       = "rolledBack"
+	OutcomeRecoveryRequired = "recoveryRequired"
+	// OutcomeRollbackBlocked means the binary was rolled back but the user
 	// database snapshot could not be restored, or the rollback could not be
 	// completed at all, and the new binary was left installed instead. A device
 	// running a suspect version beats one that will not boot.
-	outcomeRollbackBlocked updateOutcome = "rollbackBlocked"
+	OutcomeRollbackBlocked = "rollbackBlocked"
+)
+
+const (
+	outcomeSucceeded        updateOutcome = OutcomeSucceeded
+	outcomeRolledBack       updateOutcome = OutcomeRolledBack
+	outcomeRecoveryRequired updateOutcome = OutcomeRecoveryRequired
+	outcomeRollbackBlocked  updateOutcome = OutcomeRollbackBlocked
 )
 
 var (

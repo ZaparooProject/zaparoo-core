@@ -1146,3 +1146,94 @@ func TestHandleUpdateApply_NoParamsIsNotForced(t *testing.T) {
 	assert.Nil(t, result)
 	assert.False(t, applied)
 }
+
+// Status reports what the last check concluded without contacting anything, so
+// a client can draw update state whenever a screen is painted.
+func TestHandleUpdateStatus_ReportsWhatTheLastCheckFound(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+		IsLocal:  true,
+	}
+
+	checkedAt := time.Now().Add(-3 * time.Hour)
+	var gotMode updater.Mode
+	statusFn := func(_ context.Context, opts updater.Options) *updater.Result {
+		gotMode = opts.Mode
+		return &updater.Result{
+			CurrentVersion:  "2.9.0",
+			LatestVersion:   "2.10.0",
+			UpdateAvailable: true,
+			Eligibility:     updater.EligibilityEligible,
+			CheckedAt:       checkedAt,
+		}
+	}
+
+	result, err := HandleUpdateStatus(env, statusFn)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.UpdateCheckResponse)
+	require.True(t, ok)
+	assert.Equal(t, "2.9.0", resp.CurrentVersion)
+	assert.Equal(t, "2.10.0", resp.LatestVersion)
+	assert.True(t, resp.UpdateAvailable)
+	assert.Equal(t, updater.ModeManual, gotMode)
+	require.NotNil(t, resp.CheckedAt)
+	assert.WithinDuration(t, checkedAt, *resp.CheckedAt, time.Second)
+}
+
+// A device that has never completed a check still has to answer, because the
+// screen asking is drawn before the first check runs.
+func TestHandleUpdateStatus_AnswersBeforeAnyCheckHasRun(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+		IsLocal:  true,
+	}
+
+	result, err := HandleUpdateStatus(env, func(context.Context, updater.Options) *updater.Result {
+		return nil
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(models.UpdateCheckResponse)
+	require.True(t, ok)
+	assert.Equal(t, config.AppVersion, resp.CurrentVersion)
+	assert.False(t, resp.UpdateAvailable)
+	assert.Nil(t, resp.CheckedAt)
+}
+
+// Status reads device state, so it needs the same authorization a check does.
+func TestHandleUpdateStatus_RefusesAnUnauthenticatedClient(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   &config.Instance{},
+		IsLocal:  false,
+	}
+
+	called := false
+	_, err := HandleUpdateStatus(env, func(context.Context, updater.Options) *updater.Result {
+		called = true
+		return nil
+	})
+	require.Error(t, err)
+	assert.False(t, called, "an unauthorized request must not reach the updater")
+}

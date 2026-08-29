@@ -559,6 +559,81 @@ func TestConfirm_RetriesFailedBinaryBackupCleanup(t *testing.T) {
 	assert.NoFileExists(t, f.snapshotPath)
 }
 
+func TestConfirm_FailedOutcomeSaveKeepsRecoveryFiles(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	saveErr := errors.New("marker storage unavailable")
+	ops := defaultWatchdogFileOps()
+	ops.marker.save = func(string, *pendingMarker) error { return saveErr }
+	version, err := confirmWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, saveErr)
+	assert.Empty(t, version)
+	assert.FileExists(t, f.backupPath)
+	assert.FileExists(t, f.snapshotPath)
+
+	onDisk, loadErr := loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, onDisk)
+	assert.Empty(t, onDisk.Outcome)
+
+	version, err = Confirm(t.Context(), f.dataDir, testTargetVersion)
+	require.NoError(t, err)
+	assert.Equal(t, testTargetVersion, version)
+	assert.NoFileExists(t, markerPath(dir))
+}
+
+func TestConfirm_FailedResultWriteRetainsTerminalMarker(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	recordErr := errors.New("result storage unavailable")
+	ops := defaultWatchdogFileOps()
+	ops.marker.record = func(string, *pendingMarker) error { return recordErr }
+	version, err := confirmWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, recordErr)
+	assert.Equal(t, testTargetVersion, version)
+	assert.FileExists(t, f.backupPath)
+	assert.FileExists(t, f.snapshotPath)
+
+	onDisk, loadErr := loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, onDisk)
+	assert.Equal(t, outcomeSucceeded, onDisk.Outcome)
+
+	require.NoError(t, RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion))
+	assert.NoFileExists(t, markerPath(dir))
+	assert.NoFileExists(t, f.backupPath)
+	assert.NoFileExists(t, f.snapshotPath)
+}
+
+func TestConfirm_FailedMarkerClearRetriesTerminalCleanup(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	clearErr := errors.New("marker removal unavailable")
+	ops := defaultWatchdogFileOps()
+	ops.marker.clear = func(string) error { return clearErr }
+	version, err := confirmWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, clearErr)
+	assert.Equal(t, testTargetVersion, version)
+	assert.FileExists(t, markerPath(dir))
+	assert.NoFileExists(t, f.backupPath)
+	assert.NoFileExists(t, f.snapshotPath)
+
+	require.NoError(t, RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion))
+	assert.NoFileExists(t, markerPath(dir))
+}
+
 func TestConfirm_IgnoresAMarkerItDoesNotOwn(t *testing.T) {
 	t.Parallel()
 
@@ -734,6 +809,72 @@ func TestRunStartupWatchdog_AbortsInterruptedInstallWithoutRestoringDB(t *testin
 	assert.True(t, cleared)
 	assert.NoFileExists(t, f.snapshotPath)
 	assert.NoDirExists(t, f.stagingDir)
+}
+
+func TestRunStartupWatchdog_AbortsInterruptedPayloadInstallShapes(t *testing.T) {
+	for _, allPayloadsInstalled := range []bool{false, true} {
+		name := "subset installed"
+		if allPayloadsInstalled {
+			name = "all installed before binary"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newInstallFixture(t)
+			dir := stateDirFor(f.dataDir)
+			// The outgoing binary still owns the target name, so this is an abort,
+			// not a rollback of a version that opened the database.
+			//nolint:gosec // executable stand-in owned by this test
+			require.NoError(t, os.WriteFile(f.targetPath, []byte("old binary"), 0o755))
+
+			payloadDir := filepath.Join(filepath.Dir(f.targetPath), "services")
+			require.NoError(t, os.MkdirAll(payloadDir, 0o750))
+			existingTarget := filepath.Join(payloadDir, "service")
+			existingBackup := installSidecarPath(existingTarget, installBackupSuffix)
+			newTarget := filepath.Join(payloadDir, "new-helper")
+			newCandidate := installSidecarPath(newTarget, installCandidateSuffix)
+			require.NoError(t, os.WriteFile(existingTarget, []byte("new service"), 0o600))
+			require.NoError(t, os.WriteFile(existingBackup, []byte("old service"), 0o600))
+			if allPayloadsInstalled {
+				require.NoError(t, os.WriteFile(newTarget, []byte("new helper"), 0o600))
+			} else {
+				require.NoError(t, os.WriteFile(newCandidate, []byte("new helper"), 0o600))
+			}
+
+			m := f.marker(markerInstalling)
+			m.BinaryReplaced = false
+			m.PayloadBackups = []payloadBackup{
+				{TargetPath: existingTarget, BackupPath: existingBackup},
+				{TargetPath: newTarget, CandidatePath: newCandidate, OriginalMissing: true},
+			}
+			require.NoError(t, saveMarker(dir, m))
+
+			require.NoError(t, RunStartupWatchdog(t.Context(), f.dataDir, testPrevVersion))
+			assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+			assert.Equal(t, "old service", readFileString(t, existingTarget))
+			assert.NoFileExists(t, newTarget)
+			assert.NoFileExists(t, newCandidate)
+			assert.Equal(t, "after the update", readTestDBNote(t, f.dbPath),
+				"an incoming version that never ran must not restore UserDB")
+			assert.NoFileExists(t, markerPath(dir))
+		})
+	}
+}
+
+func TestRunStartupWatchdog_RollsBackBinaryLeftInstalling(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerInstalling)))
+
+	err := RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion)
+	require.ErrorIs(t, err, ErrRolledBack)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "before the update", readTestDBNote(t, f.dbPath))
+	assert.NoFileExists(t, markerPath(dir))
+
+	res := peekUpdateResult(dir)
+	require.NotNil(t, res)
+	assert.Equal(t, outcomeRolledBack, res.Outcome)
 }
 
 func TestRestoreUserDB_UsesSuppliedFilesystem(t *testing.T) {
@@ -1222,6 +1363,45 @@ func TestRunStartupWatchdog_StopsStartupWhenRestoredDatabaseCannotBeRecorded(t *
 	require.NotNil(t, onDisk)
 	assert.False(t, onDisk.UserDBRestored)
 	assert.Equal(t, markerRollingBack, onDisk.State)
+}
+
+func TestRunStartupWatchdog_RetriesWhenRollbackOutcomeCannotBeSaved(t *testing.T) {
+	t.Parallel()
+
+	f := newInstallFixture(t)
+	dir := stateDirFor(f.dataDir)
+	require.NoError(t, saveMarker(dir, f.marker(markerConfirming)))
+
+	saveErr := errors.New("terminal marker storage unavailable")
+	ops := defaultWatchdogFileOps()
+	realSave := ops.marker.save
+	saveCalls := 0
+	ops.marker.save = func(gotDir string, marker *pendingMarker) error {
+		saveCalls++
+		if saveCalls == 4 {
+			return saveErr
+		}
+		return realSave(gotDir, marker)
+	}
+
+	err := runStartupWatchdogWithOps(t.Context(), f.dataDir, testTargetVersion, ops)
+	require.ErrorIs(t, err, ErrRolledBack)
+	require.ErrorIs(t, err, saveErr)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.NoFileExists(t, f.backupPath)
+
+	onDisk, loadErr := loadMarker(dir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, onDisk)
+	assert.Equal(t, markerRollingBack, onDisk.State)
+	assert.Equal(t, f.targetPath, onDisk.RestoringPath)
+	assert.Empty(t, onDisk.Outcome)
+
+	err = RunStartupWatchdog(t.Context(), f.dataDir, testTargetVersion)
+	require.ErrorIs(t, err, ErrRolledBack)
+	assert.Equal(t, "old binary", readFileString(t, f.targetPath))
+	assert.Equal(t, "before the update", readTestDBNote(t, f.dbPath))
+	assert.NoFileExists(t, markerPath(dir))
 }
 
 // The failed-start hook runs after the startup watchdog in the same Start call.

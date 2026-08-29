@@ -254,7 +254,7 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 		removeInstallArtifacts(ctx, m, candidatePath, opts.binary, payloadOps)
 		return fmt.Errorf("preserving the current binary: %w", err)
 	}
-	if err := saveMarker(dir, m); err != nil {
+	if err := payloadOps.saveMarker(dir, m); err != nil {
 		removeInstallArtifacts(ctx, m, candidatePath, opts.binary, payloadOps)
 		return fmt.Errorf("recording the start of the update install: %w", err)
 	}
@@ -283,13 +283,13 @@ func installStaged(ctx context.Context, opts *installOptions) (retErr error) {
 	// to do. Before it, a failed swap left the old one exactly where it was and
 	// the unwind has to leave it alone.
 	m.BinaryReplaced = true
-	if err := syncDir(filepath.Dir(opts.TargetPath)); err != nil {
+	if err := payloadOps.syncDirectory(filepath.Dir(opts.TargetPath)); err != nil {
 		return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
 			fmt.Errorf("flushing the installed binary: %w", err))
 	}
 
 	m.State = markerInstalled
-	if err := saveMarker(dir, m); err != nil {
+	if err := payloadOps.saveMarker(dir, m); err != nil {
 		return abortInstallAfterErrorWithOps(ctx, opts.DataDir, m, candidatePath, opts.binary, payloadOps,
 			fmt.Errorf("recording the completed update install: %w", err))
 	}

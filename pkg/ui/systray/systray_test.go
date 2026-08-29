@@ -26,8 +26,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.design/x/clipboard"
 )
 
 func TestReloadCore(t *testing.T) {
@@ -94,4 +96,130 @@ func TestReloadCore(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The tray entry has to answer "is there anything to do" from its own label,
+// because that is what someone opened the menu to find out.
+func TestUpdateMenuTitle(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		status    *models.UpdateCheckResponse
+		want      string
+		clickable bool
+	}{
+		"nothing read yet": {
+			status: nil, want: "Check for Updates", clickable: true,
+		},
+		"up to date": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityEligible},
+			want:      "Up to date",
+			clickable: true,
+		},
+		"available": {
+			status: &models.UpdateCheckResponse{
+				Eligibility:     updater.EligibilityEligible,
+				UpdateAvailable: true,
+				LatestVersion:   "2.11.0",
+			},
+			want:      "Install 2.11.0",
+			clickable: true,
+		},
+		"available but not rolled out here": {
+			status: &models.UpdateCheckResponse{
+				Eligibility:     updater.EligibilityEligible,
+				UpdateAvailable: true,
+				RolloutHeld:     true,
+				LatestVersion:   "2.11.0",
+			},
+			want:      "not yet rolled out",
+			clickable: true,
+		},
+		// Says so rather than going quiet: an install entry that does nothing
+		// is more confusing than one that explains itself.
+		"managed install cannot act": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityManaged},
+			want:      "Updates managed externally",
+			clickable: false,
+		},
+		"development build cannot act": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityDevelopment},
+			want:      "Development build",
+			clickable: false,
+		},
+		"an install that cannot replace itself cannot act": {
+			status:    &models.UpdateCheckResponse{Eligibility: updater.EligibilityUnsupported},
+			want:      "Updates unavailable here",
+			clickable: false,
+		},
+		"a rollback is worth surfacing over anything else": {
+			status: &models.UpdateCheckResponse{
+				Eligibility:     updater.EligibilityEligible,
+				UpdateAvailable: true,
+				LatestVersion:   "2.11.0",
+				LastResult:      &models.UpdateLastResult{Outcome: updater.OutcomeRolledBack},
+			},
+			want:      "rolled back",
+			clickable: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, updateMenuTitle(tt.status), tt.want)
+			assert.Equal(t, tt.clickable, updateMenuClickable(tt.status))
+		})
+	}
+}
+
+// The address entry is one of the few things in the tray that can fail on a
+// machine that is otherwise fine — a session with no clipboard to write to —
+// and the person clicking it has to be told rather than left guessing.
+func TestCopyToClipboard(t *testing.T) {
+	t.Parallel()
+
+	t.Run("puts the text on the clipboard", func(t *testing.T) {
+		t.Parallel()
+		var got []byte
+		var gotFormat clipboard.Format
+		err := copyToClipboard("10.0.0.5",
+			func() error { return nil },
+			func(_ context.Context, format clipboard.Format, buf []byte,
+				_ ...clipboard.Option,
+			) (<-chan struct{}, error) {
+				gotFormat, got = format, buf
+				return make(chan struct{}), nil
+			})
+		require.NoError(t, err)
+		assert.Equal(t, "10.0.0.5", string(got))
+		assert.Equal(t, clipboard.FmtText, gotFormat)
+	})
+
+	t.Run("reports a clipboard that cannot be opened", func(t *testing.T) {
+		t.Parallel()
+		written := false
+		err := copyToClipboard("10.0.0.5",
+			func() error { return errors.New("no display") },
+			func(context.Context, clipboard.Format, []byte,
+				...clipboard.Option,
+			) (<-chan struct{}, error) {
+				written = true
+				return make(chan struct{}), nil
+			})
+		require.Error(t, err)
+		assert.False(t, written, "nothing should be written to a clipboard that would not open")
+	})
+
+	t.Run("reports a write that fails", func(t *testing.T) {
+		t.Parallel()
+		err := copyToClipboard("10.0.0.5",
+			func() error { return nil },
+			func(context.Context, clipboard.Format, []byte,
+				...clipboard.Option,
+			) (<-chan struct{}, error) {
+				return nil, errors.New("clipboard unavailable")
+			})
+		require.Error(t, err)
+	})
 }

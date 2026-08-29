@@ -177,6 +177,7 @@ const (
 	MethodSettingsAuthLinkStatus      = "settings.auth.link.status"
 	MethodSettingsAuthLinkCancel      = "settings.auth.link.cancel"
 	MethodUpdateCheck                 = "update.check"
+	MethodUpdateStatus                = "update.status"
 	MethodUpdateApply                 = "update.apply"
 	MethodInputKeyboard               = "input.keyboard"
 	MethodInputGamepad                = "input.gamepad"

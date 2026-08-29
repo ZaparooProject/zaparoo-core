@@ -349,6 +349,7 @@ Methods execute actions and return data from Core. See [API Methods](./methods) 
 | settings.auth.link              | Start online account link.                                                            | All clients |
 | settings.auth.link.status       | Return online account link flow status.                                               | Tiered |
 | settings.auth.link.cancel       | Cancel online account link flow.                                                      | Local/admin |
+| update.status                   | Report the last known update state without contacting the release server.             | Localhost or any paired client |
 | update.check                    | Check for newer Core version.                                                         | Localhost or any paired client |
 | update.apply                    | Apply latest update and restart gracefully.                                           | `update.apply` |
 

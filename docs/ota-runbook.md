@@ -67,17 +67,16 @@ Promote downloads every archive to the runner and hashes it there. GitHub's
 reported digests are cross-checked against those hashes in both directions, but
 what gets signed is always the bytes on disk.
 
-The first promote is different. The manifest currently live predates signing, so
-there is no `manifest.yaml.sig` to verify and no `generation` to advance from.
-Publishing on top of an unsigned manifest is refused by default — a stripped
-signature would otherwise rewind the counter and stall updates for every device
-holding a watermark. To bootstrap, dispatch that one promote with
-`generation_floor` set above any generation already published (0 has never been
-published, so any positive value works). Every promote after it verifies a
-signature and needs no floor.
+The signed manifest was bootstrapped at generation 1 on 2026-08-17. Every
+promote now verifies the live signature and advances from its generation;
+`generation_floor` is disaster-recovery input, not part of a normal promote.
+Do not use it unless the signed live metadata is genuinely unavailable and the
+recovery generation is known to exceed every generation devices may have seen.
 
-Start a significant release at a partial `rollout` — 5, then 25, then 100 over a
-few days — and widen it with **OTA rollout**. Bucketing is salted per release,
+Start a significant release at a partial `rollout` — 5, then 25, then 100 — and
+widen it with **OTA rollout**. Hold each rung long enough to see failures that
+only a real fleet produces: at least 24 hours at 5, 72 hours at 25, and 7 days
+at 100 before the release counts as fully out. Bucketing is salted per release,
 so widening keeps the devices already on it and a different release picks a
 fresh, uncorrelated cohort. No device is permanently a guinea pig.
 
@@ -149,6 +148,234 @@ or copy the backup there, then start the service. That restores the version the
 device was already running; the pending update is unwound on the next start.
 Never put the `-new` file in place by hand: the durable marker still records an
 interrupted install, so recovery must restore the known-good outgoing binary.
+
+### A device will not start after going back to an older version
+
+Core refuses to start when the user database has been migrated by a newer build
+than the one now installed:
+
+```text
+database schema is newer than this binary supports: database is at version
+20260828000000 but this binary only supports up to 20260818120000, update to a
+newer version or reinstall the previous version
+```
+
+This is deliberate. The media database is rebuilt in the same situation because
+a reindex reconstructs it, but the user database holds history, mappings,
+profiles and favourites that nothing can reconstruct, so starting by discarding
+them would be worse than not starting.
+
+Rolling back through Core never causes this: the update snapshot restores the
+database alongside the binary, so the schema goes back with it. What causes it
+is replacing the binary some other way — reinstalling an older release by hand,
+or a package manager moving the install backwards.
+
+On a platform with a service supervisor this presents as a service that keeps
+restarting rather than an error, because each attempt fails the same way. On
+MiSTer there is no journal at all. Either way the explanation is in
+`core.log`, and it names both versions.
+
+Recover in this order:
+
+1. **Reinstall the newer version.** Always works and loses nothing, and is the
+   right answer whenever going back was not deliberate.
+2. **Restore a user database backup taken before the newer build ran**, from
+   `backups/` in the data directory, then start the older version. Check the
+   backup predates the upgrade — restoring one taken *after* it puts the same
+   schema back and fails identically.
+3. If neither is possible, the database has to be moved aside and recreated
+   empty, which loses that data. Keep the file: a later build that understands
+   the schema can still open it.
+
+Automatic backups are pruned to the most recent three, so a device that ran the
+newer build for several boots may no longer hold a backup old enough for step 2.
+Take one before deliberately moving a device back.
+
+## Automatic installation controls
+
+Automatic installation has two independent controls. Neither one changes the
+other:
+
+- `[updates] install = true` is an explicit per-device opt-in. Its default is
+  `false` and remains off when update checking is disabled.
+- `rollout` is a signed field on one release. It limits which opted-in devices
+  may install that release automatically. It never enables installation.
+
+| Device `install` | Release `rollout` | Result |
+|---|---:|---|
+| `false` | 0–100 | Check/notification only; no automatic install |
+| `true` | 0 | Automatic install held for every device |
+| `true` | 5 | Deterministically selected 5% of opted-in devices may install |
+| `true` | 100 | Every opted-in eligible device may install |
+
+The bucket is stable for one device and release, widens monotonically for that
+release, and is re-salted by a different release tag. Manual `update.apply`
+ignores rollout; authorization, platform, power, storage and activity gates
+still apply.
+
+### Platform support
+
+Raw-binary automatic installation is intended for non-package-managed Windows,
+Linux, SteamOS, Bazzite, ChimeraOS, ReplayOS, RetroPie, Recalbox, ZapOS, MiSTeX,
+LibreELEC, MiSTer and Batocera installs that pass platform preflight.
+
+- Windows must be able to create/remove an install-directory probe and open the
+  target for rename. Protected installer-owned locations remain on the Windows
+  installer path; Core reports `eligibility: unsupported` and never elevates.
+- Managed MiSTer/Batocera installations remain on their package-manager path.
+  Batocera payload files are installed only for unmanaged archive installs.
+- macOS is excluded. Its supported update path must operate on a signed app
+  bundle or App Store installation, not replace one raw executable.
+
+### Readiness checklist
+
+Before changing a device or publishing test metadata:
+
+1. Confirm OTA validate passed and inspect an OTA promote dry-run artifact.
+2. Record tag, channel, rollout, `min_upgrade_from`, manifest generation and
+   asset digest/size.
+3. Confirm device version, platform/architecture, channel, managed status,
+   `updates.check`, `updates.install`, install target and preflight eligibility.
+4. Confirm free space and power state. Automatic installs require charging,
+   external power, or at least 40% battery where battery status is available.
+5. Read current update result and ensure no unresolved pending or quarantined
+   marker exists.
+6. Take a recoverable UserDB backup and confirm local console, SSH, removable
+   media or installer recovery access before any destructive test.
+7. Test one device at a time. Device changes and workflow dispatches require
+   explicit approval.
+
+### Observation and evidence
+
+Use `update.check` to record selected version, eligibility, `autoInstall`,
+`rolloutHeld`, deferral reason/time and previous update outcome. Device
+`updater/state.json` also carries `lastCheckAt`, `lastCheckOK`, `checkFailures`
+and `lastOfferedVersion`; these are diagnostics, not permission to install.
+Collect updater logs and relevant Sentry/support reports. Sentry reporting is
+opt-in and support reports are incomplete, so absence of either is not proof of
+fleet health.
+
+For every validation record:
+
+```text
+operator/date:
+release tag/channel/generation/rollout/floor:
+device label/platform/arch/from/to:
+DeviceID bucket result (never publish raw DeviceID):
+power/free-space/managed status:
+check, install, restart and confirmation timestamps:
+outcome and deferral details:
+binary/payload/database/marker/sidecar checks:
+logs, screenshots or downloaded evidence:
+go/no-go decision:
+```
+
+Stop immediately on `rollbackBlocked`, `recoveryRequired`, an empty Windows
+boot target, unrecovered database, payload mismatch, signature/generation
+inconsistency, or repeated unexplained check/install failure. Set rollout to 0
+while investigating. Withdraw when release safety or metadata integrity is in
+doubt. Do not widen based only on elapsed time.
+
+## Final validation matrix
+
+Run this only after updater code, transaction-boundary tests, documentation and
+post-merge CI are complete.
+
+Stopping Core within the confirmation window counts as a failed start and rolls
+the update back. That is correct — a process killed partway through is
+indistinguishable from one that crashed — but it means a device stopped by hand
+between the restart and the confirmation will report a rollback that nothing
+was actually wrong with. Let an install confirm before stopping it, and read any
+rollback that follows a manual stop as an artifact of the stop.
+
+### Windows
+
+On a writable portable or per-user install, cover apply/confirm, forced startup
+rollback, failed incoming rename with successful undo, sharing/scanner
+violations, repeated swaps, sidecar cleanup and a read-only outgoing executable.
+Exercise the double-failure/manual-recovery path only with local recovery access.
+Confirm the restart actually happens: a Windows install replaces the binary and
+stops the service well before anything re-execs, so an update that installs and
+never comes back looks from the outside like one that simply took a while.
+On an installer-owned protected location, verify unsupported eligibility and
+installer guidance with no elevation or mutation. On battery-equipped hardware,
+include the 20% manual and 40% automatic thresholds.
+
+### Steam Deck / SteamOS
+
+Verify checking while charging/discharging, automatic rejection at 39%,
+acceptance at 40%, charger removal after staging but before the immediate
+pre-install check, normal confirmation, and failed-start rollback without a
+supervisor restart loop.
+
+### Batocera
+
+For an unmanaged archive install, verify all seven payload destinations and
+modes, backup of existing files, original-absence handling for new files,
+confirmation cleanup and failed-start restoration of binary, payload and
+UserDB. A managed installation must remain payload-ineligible and untouched.
+
+### Cross-platform confirmation cycle
+
+Observe one complete signed check → automatic install → restart → confirmation
+on MiSTer, SteamOS, writable Windows, unmanaged Batocera, and one install that
+is not package-manager managed. Verify generation/asset selection, gates,
+restarted version, update result, marker/sidecar cleanup and retained UserDB
+data on each.
+
+Pick that set for the differences that actually reach the updater: a target
+filesystem where `chmod` is a no-op and directory fsync is unsupported
+(MiSTer's exfat), a battery-backed device (Steam Deck), the rename-aside
+replacement backend (Windows), platform-owned payload extras (Batocera), and an
+install `ManagedByPackageManager` reports false for, since that is the only
+shape where automatic installation is permitted at all. Every release is built
+against glibc, so libc variance is not one of the axes.
+
+## Controlled beta rollback and withdrawal drill
+
+Run a deliberately bad build only on beta after the normal hardware matrix
+passes. Build it so `-version` succeeds but normal service startup fails; this
+exercises watchdog rollback rather than archive/probe rejection.
+
+Contain it with all of these controls:
+
+1. Put controlled devices on a unique precursor version higher than every
+   public release.
+2. Give the bad release a version higher than that precursor. `min_upgrade_from`
+   only tests the running version against the floor; a release is separately
+   refused unless it is newer than the version already running, so a bad build
+   at or below the precursor is never installed and the drill proves nothing.
+3. Set bad release `min_upgrade_from` to that precursor so ordinary beta devices
+   cannot qualify.
+4. Check release-tag bucketing offline and select intended controlled devices
+   inside a 5% rollout without publishing raw DeviceIDs.
+5. Inspect a promote dry-run before publishing. Never use stable and never widen
+   the deliberately bad release above 5%.
+
+Require automatic selection/install, failed confirmation, complete binary,
+payload and UserDB rollback, durable `rolledBack` result and return to the
+precursor. Then dispatch OTA withdraw and verify signed public metadata advances
+and no longer offers the release. Record decision-to-verification time against
+the under-five-minute target. Confirm a non-qualifying beta device never
+installs it.
+
+## Opt-in beta rollout evidence gates
+
+After withdrawing the bad build, use a good beta release to exercise 5% → 25%
+→ 100% rollout among devices whose owners explicitly enabled
+`[updates] install = true`. Dry-run and review each metadata change first.
+
+- Dwell at least 24 hours at 5%, 72 hours at 25%, and 7 days at 100%.
+- Require explained outcomes from controlled matrix devices at each rung.
+- Require zero unexplained `rollbackBlocked`/`recoveryRequired` outcomes,
+  Windows empty-target incidents, updater-related Sentry regressions or
+  corroborated support failures.
+- Confirm expected deferrals/backoff recover without intervention.
+- Record explicit go/no-go before widening.
+
+At any blocker, set rollout to 0, preserve evidence and withdraw if safety is in
+doubt. This validates opt-in operation only; automatic installation remains off
+by default.
 
 ## Setup
 

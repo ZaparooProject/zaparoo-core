@@ -305,4 +305,15 @@ func TestAutoInstallable(t *testing.T) {
 	copyResult.UpdateAvailable = false
 	assert.False(t, autoInstallable(&copyResult))
 	assert.False(t, autoInstallable(nil))
+
+	// A release this device already rolled back is not scheduled again. Apply
+	// refuses it anyway; skipping here avoids arranging work that cannot run.
+	copyResult = *eligible
+	copyResult.LatestVersion = "2.90.2"
+	copyResult.LastResult = &updater.OutcomeReport{Outcome: "rolledBack", ToVersion: "2.90.2"}
+	assert.False(t, autoInstallable(&copyResult))
+
+	// The version after it has not failed here.
+	copyResult.LatestVersion = "2.90.3"
+	assert.True(t, autoInstallable(&copyResult))
 }

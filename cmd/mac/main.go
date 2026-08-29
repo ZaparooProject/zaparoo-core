@@ -128,17 +128,32 @@ func run() error {
 	}
 
 	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	exit := make(chan bool, 1)
-	defer close(exit)
+
+	var (
+		svcDone          <-chan struct{}
+		restartRequested func() bool
+	)
+	if svcResult != nil {
+		svcDone = svcResult.Done
+		restartRequested = svcResult.RestartRequested
+	}
+
+	// The tray and the TUI each own the main thread until the user closes them,
+	// so the service is watched alongside whichever one is running rather than
+	// after it. Each mode passes the call that ends its own loop.
+	var restarting <-chan bool
 
 	// Handle application modes
 	switch {
 	case *daemonMode:
 		log.Info().Msg("started in daemon mode")
+		// Nothing to end here, so this blocks below on its own.
+		restarting = restart.WaitForShutdown(sigs, exit, svcDone, restartRequested, nil)
 	case *guiMode:
+		restarting = restart.WaitForShutdown(sigs, exit, svcDone, restartRequested, systray.Quit)
 		systray.Run(cfg, pl, systrayIcon, func(string) {}, func() {
 			exit <- true
 		})
@@ -155,6 +170,7 @@ func run() error {
 			return fmt.Errorf("error building UI: %w", err)
 		}
 
+		restarting = restart.WaitForShutdown(sigs, exit, svcDone, restartRequested, app.Stop)
 		err = app.Run()
 		if err != nil {
 			log.Error().Err(err).Msg("error running UI")
@@ -164,30 +180,16 @@ func run() error {
 		exit <- true
 	}
 
-	var svcDone <-chan struct{}
-	if svcResult != nil {
-		svcDone = svcResult.Done
-	}
-
-	stopSvc := func() {
-		if svcResult != nil {
-			if err := svcResult.Stop(); err != nil {
-				log.Error().Msgf("error stopping service: %s", err)
-			}
+	if <-restarting {
+		// The service already stopped itself on the way to being replaced.
+		if err := restart.Exec(); err != nil {
+			return fmt.Errorf("failed to re-exec for restart: %w", err)
 		}
+		return nil
 	}
-
-	select {
-	case <-sigs:
-		stopSvc()
-	case <-exit:
-		stopSvc()
-	case <-svcDone:
-		log.Info().Msg("service shut down internally")
-		if svcResult != nil {
-			if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
-				return fmt.Errorf("failed to re-exec for restart: %w", err)
-			}
+	if svcResult != nil {
+		if err := svcResult.Stop(); err != nil {
+			log.Error().Msgf("error stopping service: %s", err)
 		}
 	}
 
