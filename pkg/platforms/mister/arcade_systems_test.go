@@ -25,6 +25,12 @@ func TestArcadeSetSystemsMapsCuratedPlatforms(t *testing.T) {
 	t.Parallel()
 
 	setSystems := arcadeSetSystems([]arcadedb.ArcadeDbEntry{
+		{Setname: "donpachi", Platform: "CAVE 68000"},
+		{Setname: "DDONPACH", Platform: "CAVE 68000"},
+		{Setname: "donpachihk", Platform: "CAVE 68000"},
+		{Setname: "esprade_fp", Platform: "CAVE 68000"},
+		{Setname: "mazinger", Platform: "CAVE 68000"},
+		{Setname: "uopoko", Platform: "CAVE 68000"},
 		{Setname: "CPS1GAME", Platform: "Capcom CPS-1"},
 		{Setname: "cps15game", Platform: "Capcom CPS-1.5"},
 		{Setname: "cps2game", Platform: "Capcom CPS-2"},
@@ -41,6 +47,12 @@ func TestArcadeSetSystemsMapsCuratedPlatforms(t *testing.T) {
 		{Setname: "unknown", Platform: "Unique hardware"},
 	})
 
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["donpachi"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["ddonpach"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["donpachihk"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["esprade_fp"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["mazinger"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["uopoko"])
 	assert.Equal(t, systemdefs.SystemCPS1, setSystems["cps1game"])
 	assert.Equal(t, systemdefs.SystemCPS1, setSystems["cps15game"])
 	assert.Equal(t, systemdefs.SystemCPS2, setSystems["cps2game"])
@@ -164,6 +176,130 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, classifiedPath, results[0].Path)
 	assert.Equal(t, 2, mraReads, "second demand serves from memory")
+}
+
+// TestArcadeSystemCacheClassifiesCave68000MRAFiles covers the CAVE 68000
+// system through the shared classification pass: representative sets, an
+// alternate region set, a Free Play variant, an uppercase MRA setname, sets
+// from another board, and sets missing from the arcade DB.
+func TestArcadeSystemCacheClassifiesCave68000MRAFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeMRA := func(name, setName string) string {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(
+			"<misterromdescription><setname>%s</setname></misterromdescription>", setName,
+		)), 0o600))
+		return path
+	}
+	donpachiPath := writeMRA("DonPachi.mra", "donpachi")
+	ddonpachPath := writeMRA("DoDonPachi.mra", "DDONPACH")
+	donpachihkPath := writeMRA("DonPachi (HK).mra", "donpachihk")
+	espradeFPPath := writeMRA("ESP RaDe (Free Play).mra", "esprade_fp")
+	cps1Path := writeMRA("1941.mra", "1941")
+	unknownPath := writeMRA("Homebrew.mra", "notinarcadedb")
+
+	cache := newTestArcadeSystemCache(t)
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return []arcadedb.ArcadeDbEntry{
+			{Setname: "donpachi", Platform: "CAVE 68000"},
+			// Repeated setname: a duplicated arcade DB row must not classify
+			// the same MRA twice.
+			{Setname: "donpachi", Platform: "CAVE 68000"},
+			{Setname: "ddonpach", Platform: "CAVE 68000"},
+			{Setname: "donpachihk", Platform: "CAVE 68000"},
+			{Setname: "esprade_fp", Platform: "CAVE 68000"},
+			{Setname: "1941", Platform: "Capcom CPS-1"},
+			{Setname: "twincobr", Platform: "Toaplan 1"},
+		}, nil
+	}
+
+	input := []platforms.ScanResult{
+		{Path: donpachiPath},
+		{Path: ddonpachPath},
+		{Path: donpachihkPath},
+		{Path: espradeFPPath},
+		{Path: cps1Path},
+		{Path: unknownPath},
+	}
+	inputBefore := append([]platforms.ScanResult(nil), input...)
+
+	// The ordinary Arcade system still receives every MRA: a granular system
+	// is an additional filtered view, not a replacement.
+	arcadeResults, err := cache.captureScanner(
+		context.Background(), &config.Instance{}, systemdefs.SystemArcade, input,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, inputBefore, arcadeResults)
+
+	caveResults, err := cache.scanner(systemdefs.SystemCave68000)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCave68000, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.ScanResult{
+		{Path: donpachiPath}, {Path: ddonpachPath}, {Path: donpachihkPath}, {Path: espradeFPPath},
+	}, caveResults, "each CAVE 68000 set is classified exactly once, in capture order")
+
+	// A set from another board must not land in CAVE 68000, and a CAVE set
+	// must not leak into another granular system.
+	cps1Results, err := cache.scanner(systemdefs.SystemCPS1)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.ScanResult{{Path: cps1Path}}, cps1Results)
+}
+
+// TestArcadeSystemCacheReusesPersistedCaveClassification proves CAVE 68000
+// rides on the existing persisted classification cache instead of re-reading
+// unchanged MRA files on every index.
+func TestArcadeSystemCacheReusesPersistedCaveClassification(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	guwangePath := filepath.Join(dir, "Guwange.mra")
+	require.NoError(t, os.WriteFile(guwangePath, []byte(
+		"<misterromdescription><setname>guwange</setname></misterromdescription>",
+	), 0o600))
+	uopokoPath := filepath.Join(dir, "Puzzle Uo Poko.mra")
+	require.NoError(t, os.WriteFile(uopokoPath, []byte(
+		"<misterromdescription><setname>uopoko</setname></misterromdescription>",
+	), 0o600))
+	persistPath := filepath.Join(t.TempDir(), arcadeClassCacheFileName)
+	input := []platforms.ScanResult{{Path: guwangePath}, {Path: uopokoPath}}
+
+	classify := func(mraReads *int) []platforms.ScanResult {
+		cache := newArcadeSystemCache(NewPlatform())
+		cache.persistPath = persistPath
+		cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+			return []arcadedb.ArcadeDbEntry{
+				{Setname: "guwange", Platform: "CAVE 68000"},
+				{Setname: "uopoko", Platform: "CAVE 68000"},
+			}, nil
+		}
+		baseReadMRA := cache.readMRA
+		cache.readMRA = func(path string) (mgls.MRA, error) {
+			*mraReads++
+			return baseReadMRA(path)
+		}
+		_, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, input)
+		require.NoError(t, err)
+		results, err := cache.scanner(systemdefs.SystemCave68000)(
+			context.Background(), &config.Instance{}, systemdefs.SystemCave68000, nil,
+		)
+		require.NoError(t, err)
+		return results
+	}
+
+	coldReads := 0
+	cold := classify(&coldReads)
+	assert.Equal(t, input, cold)
+	assert.Equal(t, 2, coldReads, "cold cache parses every CAVE MRA")
+
+	warmReads := 0
+	warm := classify(&warmReads)
+	assert.Equal(t, cold, warm)
+	assert.Zero(t, warmReads, "unchanged CAVE MRAs are served from the persisted cache")
 }
 
 func TestArcadeSystemCachePersistedCacheSkipsUnchangedMRAReads(t *testing.T) {
