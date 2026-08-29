@@ -63,9 +63,11 @@ func recordingCallerWithCheck(
 			require.NoError(t, err)
 			return string(body), nil
 		case models.MethodUpdateApply:
+			// The checked status is what apply installs, since the command acts
+			// on the check rather than on the stored answer.
 			body, err := json.Marshal(models.UpdateApplyResponse{
-				PreviousVersion: status.CurrentVersion,
-				NewVersion:      status.LatestVersion,
+				PreviousVersion: checked.CurrentVersion,
+				NewVersion:      checked.LatestVersion,
 			})
 			require.NoError(t, err)
 			return string(body), nil
@@ -143,6 +145,7 @@ func TestRunUpdate_LooksAgainWhenTheStoredAnswerIsNothing(t *testing.T) {
 		[]string{models.MethodUpdateStatus, models.MethodUpdateCheck, models.MethodUpdateApply},
 		*called)
 	assert.Contains(t, out.String(), "2.11.0 is available")
+	assert.Contains(t, out.String(), "Installed 2.11.0")
 	assert.NotContains(t, out.String(), "Up to date")
 }
 

@@ -22,6 +22,7 @@ package updater
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -636,4 +637,69 @@ func TestStatus_SaysNothingIsKnownBeforeTheFirstCheck(t *testing.T) {
 	assert.Empty(t, result.LatestVersion)
 	assert.False(t, result.UpdateAvailable)
 	assert.True(t, result.CheckedAt.IsZero(), "no check has happened, so there is no time to report")
+}
+
+// withdrawnManifest is a manifest whose only release cannot be installed here,
+// which is what a device sees once a release has been withdrawn.
+func withdrawnManifest(generation int64) string {
+	return fmt.Sprintf(`manifest_version: 1
+generation: %d
+issued_at: 2026-08-17T02:00:00Z
+key_id: test1
+last_release_id: 1
+last_asset_id: 10
+releases:
+  - id: 1
+    name: v2.16.1
+    tag_name: v2.16.1
+    channel: stable
+    published_at: 2026-08-10T00:00:00Z
+    assets:
+      - id: 10
+        name: zaparoo-zapos_arm64-2.16.1.tar.gz
+        size: 8123456
+        sha256: aaaa
+        url: https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.16.1/zaparoo-zapos_arm64-2.16.1.tar.gz
+`, generation)
+}
+
+// Withdrawing a release is the emergency stop, so a check that finds nothing
+// left to install has to say so durably. Recording only when a release was
+// found would leave the previous offer standing, and Status would keep offering
+// a version that no longer exists until some later check happened to find a
+// different one.
+func TestCheck_ForgetsAnOfferOnceTheReleaseIsWithdrawn(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "2.10.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	dataDir := t.TempDir()
+	stateDir := stateDirFor(dataDir)
+	require.NoError(t, recordCheckFindings(stateDir, &lastCheckFindings{
+		LatestVersion:   "2.16.1",
+		UpdateAvailable: true,
+	}))
+	require.True(t, Status(t.Context(), Options{DataDir: dataDir}).UpdateAvailable,
+		"the offer has to be there before the check that should clear it")
+
+	ms := newManifestServer(t, withdrawnManifest(9))
+	src := ms.source(stateDir, "linux", "amd64")
+	previous := newSession
+	newSession = func(Options) (*session, error) {
+		return &session{source: src, close: func() {}}, nil
+	}
+	t.Cleanup(func() { newSession = previous })
+
+	result, err := Check(t.Context(), Options{
+		DataDir: dataDir, Channel: "stable", PlatformID: "linux",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.LatestVersion)
+	assert.False(t, result.UpdateAvailable)
+
+	// The result alone is not the fix: what Status reports afterwards is.
+	status := Status(t.Context(), Options{DataDir: dataDir, Channel: "stable"})
+	require.NotNil(t, status)
+	assert.Empty(t, status.LatestVersion, "the withdrawn version must stop being offered")
+	assert.False(t, status.UpdateAvailable)
 }

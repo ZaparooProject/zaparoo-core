@@ -182,6 +182,11 @@ type session struct {
 	close func()
 }
 
+// newSession builds the source an operation reads signed metadata from. It is a
+// variable so a test can supply one backed by a local server; nothing in the
+// product ever assigns to it.
+var newSession = makeUpdater
+
 func makeUpdater(opts Options) (*session, error) { //nolint:gocritic // hugeParam
 	// tlsroots hands back a transport this updater owns outright, so setting the
 	// header timeout here does not affect anything else in the process.
@@ -234,7 +239,7 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 		return nil, ErrDevelopmentVersion
 	}
 
-	s, err := makeUpdater(opts)
+	s, err := newSession(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -254,31 +259,35 @@ func Check(ctx context.Context, opts Options) (*Result, error) { //nolint:gocrit
 		LastResult:     lastOutcome(stateDir),
 	}
 
-	if release == nil {
-		return result, nil
-	}
+	if release != nil {
+		version := otameta.VersionFromTag(release.TagName)
+		upgrade, err := newerThanCurrent(version)
+		if err != nil {
+			return nil, err
+		}
+		result.LatestVersion = version
+		if err := clearDeferralForRelease(stateDir, result.LatestVersion); err != nil {
+			log.Warn().Err(err).Msg("could not clear deferral for a superseded update")
+		}
+		result.UpdateAvailable = upgrade
+		result.ReleaseNotes = release.ReleaseNotes
 
-	version := otameta.VersionFromTag(release.TagName)
-	upgrade, err := newerThanCurrent(version)
-	if err != nil {
-		return nil, err
-	}
-	result.LatestVersion = version
-	if err := clearDeferralForRelease(stateDir, result.LatestVersion); err != nil {
-		log.Warn().Err(err).Msg("could not clear deferral for a superseded update")
-	}
-	result.UpdateAvailable = upgrade
-	result.ReleaseNotes = release.ReleaseNotes
-
-	if result.UpdateAvailable {
-		result.RolloutHeld = rolloutHeld(opts.DeviceID, release)
-		noteGate(ctx, &opts, result, stateDir, version)
-		if deferral := peekDeferral(stateDir, version); deferral != nil {
-			result.DeferredReason = deferral.Reason
-			result.DeferredSince = deferral.Since
+		if result.UpdateAvailable {
+			result.RolloutHeld = rolloutHeld(opts.DeviceID, release)
+			noteGate(ctx, &opts, result, stateDir, version)
+			if deferral := peekDeferral(stateDir, version); deferral != nil {
+				result.DeferredReason = deferral.Reason
+				result.DeferredSince = deferral.Since
+			}
 		}
 	}
 
+	// Recorded even when nothing applies, because "nothing applies" is a
+	// conclusion this check reached and not a check that failed. Returning
+	// before this would leave the previous findings standing, so a release that
+	// has since been withdrawn would keep being offered by Status for as long
+	// as no later check found a different one — which is exactly the situation
+	// withdrawing a release exists to end.
 	if err := recordCheckFindings(stateDir, &lastCheckFindings{
 		LatestVersion:   result.LatestVersion,
 		UpdateAvailable: result.UpdateAvailable,
@@ -526,7 +535,7 @@ func Apply(ctx context.Context, opts Options) (string, error) { //nolint:gocriti
 		return fail(err)
 	}
 
-	s, err := makeUpdater(opts)
+	s, err := newSession(opts)
 	if err != nil {
 		return fail(err)
 	}
