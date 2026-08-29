@@ -227,13 +227,24 @@ func (s *updaterScheduler) tryCheck(ctx context.Context) {
 
 func autoInstallable(result *updater.Result) bool {
 	return result != nil && result.UpdateAvailable && !result.RolloutHeld &&
-		result.Eligibility == updater.EligibilityEligible
+		result.Eligibility == updater.EligibilityEligible &&
+		!updater.PreviouslyRolledBack(result)
 }
 
 func (s *updaterScheduler) tryInstall(ctx context.Context) {
 	result := s.pending.Load()
 	if s.cfg == nil || !s.cfg.UpdateCheck() || !s.cfg.UpdateInstall() ||
 		s.installScheduled.Load() || !s.installDue(s.clock.Now()) || !autoInstallable(result) {
+		// Every other reason here is visible elsewhere: the settings are the
+		// operator's own, and the rest are reported by update.check. A version
+		// held back because it already failed on this device is not, and an
+		// update that stops arriving with no explanation is the hardest kind to
+		// diagnose from a log.
+		if updater.PreviouslyRolledBack(result) {
+			log.Info().
+				Str("version", result.LatestVersion).
+				Msg("not installing a version that already failed to start here; apply it manually to retry")
+		}
 		return
 	}
 

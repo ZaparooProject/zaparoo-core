@@ -470,7 +470,49 @@ func autoInstallReleaseAllowed(opts *Options, release *otameta.Release) error {
 	if rolloutHeld(opts.DeviceID, release) {
 		return fmt.Errorf("%w: release is not rolled out to this device", errAutoInstallIneligible)
 	}
+	if version := releaseVersion(release); rolledBackHere(opts.DataDir, version) {
+		return fmt.Errorf("%w: %s already failed to start on this device",
+			errAutoInstallIneligible, version)
+	}
 	return nil
+}
+
+func releaseVersion(release *otameta.Release) string {
+	if release == nil {
+		return ""
+	}
+	return otameta.VersionFromTag(release.TagName)
+}
+
+// rolledBackHere reports whether this exact version was already installed here
+// and had to be rolled back.
+//
+// Nothing else declines it. Without this an automatic install repeats the whole
+// download, snapshot, swap and restore on every check for as long as the bad
+// release stays published, which on a device whose owner is not watching is a
+// loop nobody sees: the inbox keeps one row per category, so the tenth failure
+// looks exactly like the first.
+//
+// Only automatic installs are declined. A person asking for it again is asking
+// on purpose, and a later version is a different release that has not failed.
+func rolledBackHere(dataDir, version string) bool {
+	if dataDir == "" || version == "" {
+		return false
+	}
+	last := lastOutcome(stateDirFor(dataDir))
+	if last == nil {
+		return false
+	}
+	return last.Outcome == string(outcomeRolledBack) && last.ToVersion == version
+}
+
+// PreviouslyRolledBack reports the same refusal as the one Apply enforces, from
+// a check result a caller already has. Apply is the authority; this lets a
+// scheduler skip the work instead of arranging an install that will be refused.
+func PreviouslyRolledBack(result *Result) bool {
+	return result != nil && result.LastResult != nil &&
+		result.LastResult.Outcome == string(outcomeRolledBack) &&
+		result.LastResult.ToVersion == result.LatestVersion
 }
 
 func rolloutHeld(deviceID string, release *otameta.Release) bool {
