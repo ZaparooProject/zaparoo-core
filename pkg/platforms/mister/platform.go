@@ -1109,6 +1109,8 @@ func collectNeoGeoRomsetEntries(
 		if isZip {
 			candidateID = strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
 		} else if !isDirectory {
+			// Plain files such as .neo are already in the walked results;
+			// applyNeoGeoRomsetNames names those in place.
 			return nil
 		}
 
@@ -1191,6 +1193,33 @@ func filterNeoGeoGameContents(
 		filtered = append(filtered, r)
 	}
 	return filtered
+}
+
+// applyNeoGeoRomsetNames sets Name on .neo results whose filename stem
+// matches a romsets.xml entry, so a standalone mslug.neo gets the same
+// title as mslug.zip. It must run after filterNeoGeoGameContents so .neo
+// files inside romset zips and folders are already gone. NoExt is left
+// false so the extension tag is kept, and Path is never changed. Results
+// are updated in place; the return value is the number of entries named.
+func applyNeoGeoRomsetNames(results []platforms.ScanResult, romsetNames map[string]string) int {
+	named := 0
+	for i := range results {
+		if results[i].Name != "" {
+			continue
+		}
+		base := filepath.Base(results[i].Path)
+		ext := filepath.Ext(base)
+		if !strings.EqualFold(ext, ".neo") {
+			continue
+		}
+		altName, ok := romsetNames[strings.ToLower(strings.TrimSuffix(base, ext))]
+		if !ok {
+			continue
+		}
+		results[i].Name = altName
+		named++
+	}
+	return named
 }
 
 // filterNeoGeoZipToNeoOnly filters results when no romsets.xml is available.
@@ -1578,6 +1607,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			log.Info().Msg("starting neogeo scan")
 			inputResultCount := len(results)
 			filteredResultCount := 0
+			namedResultCount := 0
 			addedResultCount := 0
 			romsetDefinitionCount := 0
 			romsetsFilename := "romsets.xml"
@@ -1636,6 +1666,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				results = filterNeoGeoZipToNeoOnly(results)
 			} else {
 				results = filterNeoGeoGameContents(results, names, neogeoPaths)
+				namedResultCount = applyNeoGeoRomsetNames(results, names)
 			}
 			if removed := resultsBeforeFilter - len(results); removed > 0 {
 				filteredResultCount = removed
@@ -1671,7 +1702,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			log.Debug().Int("roots", len(sfs)).Int("romsets", romsetDefinitionCount).
 				Int("aliases", len(names)).Int("input", inputResultCount).Int("filtered", filteredResultCount).
-				Int("added", addedResultCount).Int("results", len(results)).
+				Int("named", namedResultCount).Int("added", addedResultCount).Int("results", len(results)).
 				Msg("neogeo scan completed")
 
 			return results, nil

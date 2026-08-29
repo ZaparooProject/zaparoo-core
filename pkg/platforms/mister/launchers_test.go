@@ -49,6 +49,7 @@ func TestCheckInZip_NonZipPath(t *testing.T) {
 		"/path/to/game.rom",
 		"/path/to/game.bin",
 		"/path/to/game.ZIP.backup",
+		"/media/fat/games/NEOGEO/mslug.neo",
 		"",
 	}
 
