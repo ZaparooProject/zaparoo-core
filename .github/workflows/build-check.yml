@@ -1,0 +1,39 @@
+name: Build check
+
+# Builds every release target and throws the results away.
+#
+# The release build is otherwise only exercised by cutting a tag, so a change
+# that breaks it goes unnoticed until someone tries to release. That is how the
+# archive tool's platform-package import survived: pull request CI never runs
+# the release path, and developer machines have the libraries it needs.
+#
+# This publishes nothing. test_build skips creating the release, uploading
+# assets and signing, so there are no tags and no notifications — it speaks up
+# only when a target stops building.
+
+on:
+  schedule:
+    # Weekly. The release build changes rarely, and what matters is that a break
+    # survives days rather than reaching a release.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+# Declared once for the whole workflow: a job-level block would replace this
+# rather than add to it. Enough to build and reach the zigcc image, and nothing
+# that could publish.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-check
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      # Names the archives this build discards. No release is created and
+      # nothing looks this up, so it is not a real tag.
+      tag: v0.0.0-buildcheck
+      test_build: true
