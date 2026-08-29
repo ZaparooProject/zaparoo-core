@@ -26,11 +26,14 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -45,6 +48,35 @@ func newTestBroker(ctx context.Context, source <-chan models.Notification) *brok
 	b := broker.NewBroker(ctx, source)
 	b.Start()
 	return b
+}
+
+// waitForServerReady blocks until the API server has bound its listener and
+// written the resolved port back to the config, then returns that port.
+func waitForServerReady(t *testing.T, cfg *config.Instance) int {
+	t.Helper()
+
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	for range 100 {
+		port := cfg.APIPort()
+		if port == 0 {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		healthURL := fmt.Sprintf("http://localhost:%d/health", port)
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
+		if reqErr != nil {
+			continue
+		}
+		resp, connErr := client.Do(req) //nolint:gosec // test hitting local test server
+		if connErr == nil {
+			_ = resp.Body.Close()
+			return port
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatal("API server did not become ready")
+	return 0
 }
 
 func TestStartWithReadyReportsBindFailure(t *testing.T) {
@@ -78,7 +110,7 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	go func() {
 		serverErr <- StartWithReady(
 			platform, cfg, st, tokenQueue, nil, db,
-			nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil, ready,
+			nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
 		)
 	}()
 
@@ -143,7 +175,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 				defer close(serverDone)
 				serverErr <- StartWithReady(
 					platform, cfg, st, tokenQueue, nil, db,
-					nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil, ready,
+					nil, nil, notifBroker, nil, nil, nil, nil, nil, nil, ready,
 				)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
@@ -226,7 +258,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	go func() {
 		defer close(serverDone)
 		serverErr <- Start(
-			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil,
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
@@ -313,7 +345,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 	go func() {
 		defer close(done)
 		serverErr <- Start(
-			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil,
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 
@@ -649,6 +681,172 @@ func TestOriginPolicy_DelayedLocalIPAvailability(t *testing.T) {
 	))
 }
 
+func TestLocalHostNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		hostname string
+		expected []string
+	}{
+		{
+			name:     "short hostname gains its mDNS name",
+			hostname: "MiSTer",
+			expected: []string{"MiSTer", "MiSTer.local"},
+		},
+		{
+			name:     "hostname already under .local is not doubled up",
+			hostname: "macbook.local",
+			expected: []string{"macbook.local"},
+		},
+		{
+			name:     "fully qualified hostname also covers its short label",
+			hostname: "mister.lan",
+			expected: []string{"mister.lan", "mister.lan.local", "mister.local"},
+		},
+		{
+			name:     "trailing dot is trimmed",
+			hostname: "mister.",
+			expected: []string{"mister", "mister.local"},
+		},
+		{
+			name:     "empty hostname contributes nothing",
+			hostname: "",
+			expected: nil,
+		},
+		{
+			name:     "whitespace hostname contributes nothing",
+			hostname: "   ",
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, localHostNames(tt.hostname))
+		})
+	}
+}
+
+func TestExpandHostNameOrigins(t *testing.T) {
+	t.Parallel()
+
+	result := expandHostNameOrigins([]string{"mister.local"}, 7497)
+
+	assert.Equal(t, []string{
+		"http://mister.local",
+		"https://mister.local",
+		"http://mister.local:7497",
+		"https://mister.local:7497",
+	}, result)
+}
+
+func TestOriginPolicy_MDNSHostname(t *testing.T) {
+	t.Parallel()
+
+	port := 7497
+	staticOrigins := buildStaticAllowedOrigins(allowedOrigins, nil, port)
+	staticOrigins = append(staticOrigins, expandHostNameOrigins(localHostNames("mister"), port)...)
+	localIPsProvider := func() []string { return nil }
+	customOriginsProvider := func() []string { return nil }
+
+	// Browsing the web UI at the device's mDNS name is the common case: the
+	// page connects back over a WebSocket carrying that origin.
+	assert.True(t, isAllowedOrigin(
+		"http://mister.local:7497", staticOrigins, localIPsProvider, customOriginsProvider, port, true, "websocket",
+	))
+	assert.True(t, isAllowedOrigin(
+		"http://mister.local:7497", staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors",
+	))
+	// A reverse proxy in front of Core serves the name on a default port.
+	assert.True(t, isAllowedOrigin(
+		"https://mister.local", staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors",
+	))
+	// Another device on the same network is still not trusted.
+	assert.False(t, isAllowedOrigin(
+		"http://batocera.local:7497", staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors",
+	))
+}
+
+// TestServerTrustsOwnHostnameOrigins is a regression test for the mDNS hostname
+// origins never reaching the allowlist: they were built from the discovery
+// service's instance name, which only resolves once discovery starts, and
+// discovery starts after the API server has already built its static origins.
+// Browsing the web UI at http://<hostname>.local:<port> then failed to connect.
+func TestServerTrustsOwnHostnameOrigins(t *testing.T) {
+	t.Parallel()
+
+	hostname, err := os.Hostname()
+	require.NoError(t, err)
+	hostNames := localHostNames(hostname)
+	require.NotEmpty(t, hostNames, "test host must have a usable hostname")
+	require.True(t, slices.ContainsFunc(hostNames, func(name string) bool {
+		return strings.HasSuffix(strings.ToLower(name), ".local")
+	}), "host names must include an mDNS name")
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+
+	fs := helpers.NewMemoryFS()
+	configDir := t.TempDir()
+	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+
+	db := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+
+	tokenQueue := make(chan tokens.Token, 1)
+
+	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	go func() {
+		defer close(serverDone)
+		serverErr <- Start(
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
+		)
+	}()
+	defer func() {
+		st.StopService()
+		close(tokenQueue)
+		<-serverDone
+		require.NoError(t, <-serverErr)
+	}()
+
+	// The listener takes an OS-assigned port, so this checks the port-less
+	// origin forms. Port-bearing forms are covered by TestOriginPolicy_MDNSHostname.
+	port := waitForServerReady(t, cfg)
+
+	client := &http.Client{Timeout: time.Second}
+	healthURL := fmt.Sprintf("http://localhost:%d/health", port)
+
+	checkOrigin := func(origin string) string {
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
+		require.NoError(t, reqErr)
+		req.Header.Set("Origin", origin)
+
+		resp, doErr := client.Do(req) //nolint:gosec // test hitting local test server
+		require.NoError(t, doErr)
+		defer func() { _ = resp.Body.Close() }()
+
+		return resp.Header.Get("Access-Control-Allow-Origin")
+	}
+
+	for _, name := range hostNames {
+		for _, origin := range []string{"http://" + name, "https://" + name} {
+			assert.Equal(t, origin, checkOrigin(origin), "origin %s should be allowed", origin)
+		}
+	}
+
+	assert.Empty(t, checkOrigin("http://not-this-device.invalid"), "unrelated origins must stay rejected")
+}
+
 // TestServerBindFailureStopsService verifies that when the API server fails to bind
 // to its port (e.g., port already in use), it calls StopService() to trigger a
 // graceful shutdown of the entire service. This is a regression test for issue #448.
@@ -679,7 +877,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	go func() {
 		defer close(server1Done)
 		server1Err <- Start(
-			platform1, cfg1, st1, tokenQueue1, nil, db1, nil, nil, notifBroker1, "", nil, nil, nil, nil, nil, nil,
+			platform1, cfg1, st1, tokenQueue1, nil, db1, nil, nil, notifBroker1, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 
@@ -725,7 +923,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	go func() {
 		defer close(server2Done)
 		server2Err <- Start(
-			platform2, cfg2, st2, tokenQueue2, nil, db2, nil, nil, notifBroker2, "", nil, nil, nil, nil, nil, nil,
+			platform2, cfg2, st2, tokenQueue2, nil, db2, nil, nil, notifBroker2, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 
@@ -1000,7 +1198,7 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	go func() {
 		defer close(serverDone)
 		serverErr <- Start(
-			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, "", nil, nil, nil, nil, nil, nil,
+			platform, cfg, st, tokenQueue, nil, db, nil, nil, notifBroker, nil, nil, nil, nil, nil, nil,
 		)
 	}()
 	defer func() {
