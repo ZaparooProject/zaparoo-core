@@ -1499,12 +1499,6 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	}
 	defer db.recreating.Store(false)
 
-	if keepBackup {
-		database.PreserveCorruptFile(db.dbPath, "media")
-		database.PreserveCorruptFile(db.dbPath+"-wal", "media")
-		database.PreserveCorruptFile(db.dbPath+"-shm", "media")
-	}
-
 	if err := db.Close(); err != nil {
 		log.Warn().Err(err).Msg("error closing media database before recreate")
 	}
@@ -1514,16 +1508,33 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// dereference. A guard check (Load() == nil) followed by a second Load() for the
 	// query would otherwise race the swap-to-nil and panic.
 
+	// Preserved after the close, not before it, because renaming a file SQLite
+	// still has open fails on Windows: the main database and WAL are opened
+	// without FILE_SHARE_DELETE and the -shm is memory-mapped, so every rename
+	// here returned a sharing violation and the forensic copy was silently
+	// skipped — then the corrupt database was removed below with no backup at
+	// all. Nothing is lost by waiting: either the close checkpointed the WAL
+	// into the main database, which is the file being preserved, or it could
+	// not, and the WAL is still on disk to be preserved with it.
+	//
+	// The -shm is deliberately not preserved. It is a shared-memory index
+	// rebuilt from the WAL on demand, holds nothing durable, and is the one
+	// file whose mapping Windows would refuse to rename anyway.
+	if keepBackup {
+		database.PreserveCorruptFile(db.dbPath, "media")
+		database.PreserveCorruptFile(db.dbPath+"-wal", "media")
+	}
+
 	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
 	// the reopen below. Close has already rolled back and released any writer connection.
 	db.tx = nil
 	db.txConn = nil
 	db.inTransaction = false
 
-	// PreserveCorruptFile above is best-effort: on a rename failure it logs and
-	// leaves the file in place. Whether or not keepBackup ran (or partially
-	// succeeded), db.dbPath must not still exist here — otherwise Open() below
-	// would reopen the corrupt database instead of allocating a fresh one.
+	// PreserveCorruptFile is best-effort: on a rename failure it logs and leaves
+	// the file in place. Whether or not keepBackup ran (or partially succeeded),
+	// db.dbPath must not still exist here — otherwise Open() below would reopen
+	// the corrupt database instead of allocating a fresh one.
 	if err := os.Remove(db.dbPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to remove corrupt media database: %w", err)
 	}

@@ -171,23 +171,18 @@ func TestMediaDB_Recreate_KeepBackup(t *testing.T) {
 	mediaDB.MarkCorrupt("test")
 	path := mediaDB.GetDBPath()
 
-	// Write deterministic sidecars so the WAL/SHM preservation assertions below
-	// don't depend on incidental SQLite checkpoint timing at Close().
-	require.NoError(t, os.WriteFile(path+"-wal", []byte("wal contents"), 0o600))
-	require.NoError(t, os.WriteFile(path+"-shm", []byte("shm contents"), 0o600))
-
 	require.NoError(t, mediaDB.Recreate(true))
 
-	// Forensic backup kept for the database and both sidecars, marker cleared.
-	// (The reopened WAL database creates fresh -wal/-shm sidecars; the point is
-	// the stale corrupt ones don't survive into it, which the empty+queryable
-	// check below confirms.)
+	// The corrupt database is kept for a post-mortem, and the marker is cleared.
+	//
+	// Only the database file is asserted on. The sidecars are preserved after
+	// the close, by which point either SQLite checkpointed the WAL into this
+	// file or it did not, so whether a -wal backup exists depends on what the
+	// close managed — a real condition, not something a test should pin. What
+	// PreserveCorruptFile does with a sidecar that is there is covered by its
+	// own tests, against plain files and no live database.
 	_, backupErr := os.Stat(path + database.CorruptMarkerSuffix + ".bak")
 	require.NoError(t, backupErr, "database backup copy should be kept when keepBackup=true")
-	_, walBackupErr := os.Stat(path + "-wal" + database.CorruptMarkerSuffix + ".bak")
-	require.NoError(t, walBackupErr, "WAL backup copy should be kept when keepBackup=true")
-	_, shmBackupErr := os.Stat(path + "-shm" + database.CorruptMarkerSuffix + ".bak")
-	require.NoError(t, shmBackupErr, "SHM backup copy should be kept when keepBackup=true")
 	assert.False(t, mediaDB.IsMarkedCorrupt(), "marker should be cleared after recreate")
 
 	// Fresh schema: queryable and empty, with durable intent to rebuild it.
