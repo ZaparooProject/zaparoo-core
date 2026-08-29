@@ -53,6 +53,21 @@ func runUpdateTo(
 		return 1
 	}
 
+	// Status answers from the last scheduled check, which runs every twelve
+	// hours. Someone typing this command is asking now, so look again rather
+	// than acting on an answer that old: it decides both whether anything is
+	// installed and which version this says it is installing. The stored answer
+	// is kept only where looking again could not change it.
+	if updater.EligibilityCanOfferUpdates(status.Eligibility) {
+		checked, checkErr := fetchUpdateStatus(ctx, cfg, call, models.MethodUpdateCheck)
+		if checkErr != nil {
+			logClientCommandError(checkErr, "error checking for updates")
+			_, _ = fmt.Fprintf(stderr, "Error checking for updates: %v\n", checkErr)
+			return 1
+		}
+		status = checked
+	}
+
 	_, _ = fmt.Fprintln(stdout, describeUpdateStatus(status))
 
 	if !status.UpdateAvailable {

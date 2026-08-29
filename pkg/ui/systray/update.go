@@ -73,12 +73,7 @@ func updateMenuClickable(status *models.UpdateCheckResponse) bool {
 	if status == nil {
 		return true
 	}
-	switch status.Eligibility {
-	case updater.EligibilityDevelopment, updater.EligibilityManaged, updater.EligibilityUnsupported:
-		return false
-	default:
-		return true
-	}
+	return updater.EligibilityCanOfferUpdates(status.Eligibility)
 }
 
 func watchUpdateStatus(cfg *config.Instance, item *systray.MenuItem) {

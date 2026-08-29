@@ -36,8 +36,18 @@ import (
 
 // recordingCaller answers the update methods and remembers what was asked, so a
 // test can tell "showed the status" from "went ahead and installed".
+//
+// update.check answers the same as update.status unless a test overrides it,
+// which stands for a check that found nothing new.
 func recordingCaller(
 	t *testing.T, status *models.UpdateCheckResponse,
+) (call reloadAPICaller, called *[]string) {
+	t.Helper()
+	return recordingCallerWithCheck(t, status, status)
+}
+
+func recordingCallerWithCheck(
+	t *testing.T, status, checked *models.UpdateCheckResponse,
 ) (call reloadAPICaller, called *[]string) {
 	t.Helper()
 	called = &[]string{}
@@ -46,6 +56,10 @@ func recordingCaller(
 		switch method {
 		case models.MethodUpdateStatus:
 			body, err := json.Marshal(status)
+			require.NoError(t, err)
+			return string(body), nil
+		case models.MethodUpdateCheck:
+			body, err := json.Marshal(checked)
 			require.NoError(t, err)
 			return string(body), nil
 		case models.MethodUpdateApply:
@@ -74,7 +88,9 @@ func TestRunUpdate_ShowsStatusAndInstallsWhenOneIsAvailable(t *testing.T) {
 
 	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
 	assert.Equal(t, 0, code)
-	assert.Equal(t, []string{models.MethodUpdateStatus, models.MethodUpdateApply}, *called)
+	assert.Equal(t,
+		[]string{models.MethodUpdateStatus, models.MethodUpdateCheck, models.MethodUpdateApply},
+		*called)
 	assert.Contains(t, out.String(), "2.11.0 is available")
 	assert.Contains(t, out.String(), "Installed 2.11.0")
 	assert.Empty(t, errOut.String())
@@ -95,8 +111,65 @@ func TestRunUpdate_ReportsAndStopsWhenNothingIsAvailable(t *testing.T) {
 
 	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
 	assert.Equal(t, 0, code)
-	assert.Equal(t, []string{models.MethodUpdateStatus}, *called, "must not call apply")
+	assert.Equal(t, []string{models.MethodUpdateStatus, models.MethodUpdateCheck}, *called,
+		"must not call apply")
 	assert.Contains(t, out.String(), "Up to date")
+}
+
+// The stored status is whatever the last scheduled check found, and that runs
+// every twelve hours. Someone typing the command is asking now, so a release
+// published since then has to be found rather than reported as up to date.
+func TestRunUpdate_LooksAgainWhenTheStoredAnswerIsNothing(t *testing.T) {
+	t.Parallel()
+
+	checkedAt := time.Now().Add(-6 * time.Hour)
+	call, called := recordingCallerWithCheck(t,
+		&models.UpdateCheckResponse{
+			CurrentVersion: "2.10.0",
+			Eligibility:    updater.EligibilityEligible,
+			CheckedAt:      &checkedAt,
+		},
+		&models.UpdateCheckResponse{
+			CurrentVersion:  "2.10.0",
+			LatestVersion:   "2.11.0",
+			UpdateAvailable: true,
+			Eligibility:     updater.EligibilityEligible,
+		})
+	var out, errOut bytes.Buffer
+
+	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
+	assert.Equal(t, 0, code)
+	assert.Equal(t,
+		[]string{models.MethodUpdateStatus, models.MethodUpdateCheck, models.MethodUpdateApply},
+		*called)
+	assert.Contains(t, out.String(), "2.11.0 is available")
+	assert.NotContains(t, out.String(), "Up to date")
+}
+
+// Checking costs a network request and a write. The states whose answer comes
+// from what the install is, rather than from what has been released, cannot be
+// changed by looking, so they must not pay for it.
+func TestRunUpdate_DoesNotLookAgainWhenNoReleaseCouldApply(t *testing.T) {
+	t.Parallel()
+
+	for name, eligibility := range map[string]string{
+		"development build": updater.EligibilityDevelopment,
+		"managed install":   updater.EligibilityManaged,
+		"unsupported":       updater.EligibilityUnsupported,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			call, called := recordingCaller(t, &models.UpdateCheckResponse{
+				CurrentVersion: "2.11.0",
+				Eligibility:    eligibility,
+			})
+			var out, errOut bytes.Buffer
+
+			code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
+			assert.Equal(t, 0, code)
+			assert.Equal(t, []string{models.MethodUpdateStatus}, *called)
+		})
+	}
 }
 
 // The gate already explained itself. Trying anyway would only produce the same
@@ -119,7 +192,8 @@ func TestRunUpdate_DoesNotInstallThroughAGateThatCannotBeForced(t *testing.T) {
 
 	code := runUpdateTo(t.Context(), &out, &errOut, nil, call)
 	assert.Equal(t, 1, code)
-	assert.Equal(t, []string{models.MethodUpdateStatus}, *called, "must not call apply")
+	assert.Equal(t, []string{models.MethodUpdateStatus, models.MethodUpdateCheck}, *called,
+		"must not call apply")
 	assert.Contains(t, out.String(), "the media database is being indexed")
 }
 

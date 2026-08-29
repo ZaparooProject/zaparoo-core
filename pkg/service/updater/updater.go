@@ -96,6 +96,23 @@ const (
 	EligibilityUnsupported = "unsupported"
 )
 
+// EligibilityCanOfferUpdates reports whether looking for a release could change
+// what this device is told. It is false for the states whose answer is fixed by
+// what the install is rather than by what has been released, so a caller can
+// skip a request whose result it would have to discard.
+//
+// Shared because the answer decides whether a person's explicit "update now"
+// contacts the network, and two copies of that rule drifting apart would mean
+// one entry point silently reporting a stale answer.
+func EligibilityCanOfferUpdates(eligibility string) bool {
+	switch eligibility {
+	case EligibilityDevelopment, EligibilityManaged, EligibilityUnsupported:
+		return false
+	default:
+		return true
+	}
+}
+
 // Options describes the device an update is being resolved for.
 //
 //nolint:govet // Field order groups updater dependencies and device settings.
