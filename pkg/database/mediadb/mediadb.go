@@ -1477,20 +1477,19 @@ func (db *MediaDB) IntegrityReport() []string {
 	return database.IntegrityReport(db.ctx, sqlDB, database.DefaultIntegrityReportRows)
 }
 
-// Recreate discards the database file and reopens a fresh one. The main file and
-// its -wal/-shm sidecars are either preserved together as <db>{,-wal,-shm}.corrupt.bak
-// forensic copies (keepBackup — development builds only) or deleted outright; the
-// connection is then closed; and Open() allocates a fresh schema. Preservation happens
-// before Close() deliberately: in WAL mode, SQLite's own close-time checkpoint deletes
-// the live -wal/-shm files outright (verified empirically — nothing survives a rename
-// attempted afterward), so capturing a consistent three-file forensic set from a single
-// point in time requires renaming them aside while the connection is still open. A
-// sidecar surviving on disk next to the freshly allocated database would re-corrupt it,
-// so every path still ends with RemoveSidecars regardless of whether keepBackup
-// succeeded. Before any corrupt marker is cleared, the fresh database is marked pending
-// for reindex and stale search caches are removed. This durable handoff lets startup
-// resume if the process exits before the caller starts indexing. Callers: corruption
-// recovery and the user-requested fresh-start rebuild (media.index with rebuild:true).
+// Recreate discards the database file and reopens a fresh one. The connection is
+// closed first; then the main file and its -wal/-shm sidecars are either preserved
+// together as <db>{,-wal,-shm}.corrupt.bak forensic copies (keepBackup — development
+// builds only) or deleted outright; and Open() allocates a fresh schema. Preservation
+// happens after Close() so the three files are a stopped, consistent set: nothing is
+// writing to any of them when they are renamed, and renaming a file SQLite still has
+// open fails on Windows (see the comment at the call site). A sidecar surviving on disk
+// next to the freshly allocated database would re-corrupt it, so every path still ends
+// with RemoveSidecars regardless of whether keepBackup succeeded. Before any corrupt
+// marker is cleared, the fresh database is marked pending for reindex and stale search
+// caches are removed. This durable handoff lets startup resume if the process exits
+// before the caller starts indexing. Callers: corruption recovery and the
+// user-requested fresh-start rebuild (media.index with rebuild:true).
 func (db *MediaDB) Recreate(keepBackup bool) error {
 	// Serialize recreates: a user-triggered rebuild must never interleave its
 	// close/delete/reopen with corruption recovery's (or another rebuild's).
@@ -1517,12 +1516,15 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// into the main database, which is the file being preserved, or it could
 	// not, and the WAL is still on disk to be preserved with it.
 	//
-	// The -shm is deliberately not preserved. It is a shared-memory index
-	// rebuilt from the WAL on demand, holds nothing durable, and is the one
-	// file whose mapping Windows would refuse to rename anyway.
+	// All three files are kept as one set. The -shm holds nothing durable (it
+	// is the WAL index, rebuilt from the WAL on demand), but a post-mortem of a
+	// torn write wants the files exactly as the process last saw them, and once
+	// the connection is closed its mapping is released so the rename succeeds
+	// everywhere. The user database's recovery preserves the same three.
 	if keepBackup {
-		database.PreserveCorruptFile(db.dbPath, "media")
-		database.PreserveCorruptFile(db.dbPath+"-wal", "media")
+		for _, path := range []string{db.dbPath, db.dbPath + "-wal", db.dbPath + "-shm"} {
+			database.PreserveCorruptFile(path, "media")
+		}
 	}
 
 	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
