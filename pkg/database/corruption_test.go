@@ -212,3 +212,52 @@ func TestConnLoadStore(t *testing.T) {
 	c.Store(nil)
 	assert.Nil(t, c.Load())
 }
+
+// A corrupt database is renamed aside so it survives the rebuild that replaces
+// it. That copy is the only evidence of what went wrong, and the caller removes
+// the original immediately afterwards, so a preserve that quietly does nothing
+// destroys the thing it exists to keep.
+func TestPreserveCorruptFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renames the file aside", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "media.db")
+		require.NoError(t, os.WriteFile(path, []byte("corrupt pages"), 0o600))
+
+		PreserveCorruptFile(path, "media")
+
+		assert.NoFileExists(t, path, "the original is renamed, not copied")
+		kept, err := os.ReadFile(CorruptBackupPath(path))
+		require.NoError(t, err)
+		assert.Equal(t, "corrupt pages", string(kept))
+	})
+
+	t.Run("keeps the newest of repeated failures", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "media.db")
+		require.NoError(t, os.WriteFile(CorruptBackupPath(path), []byte("older"), 0o600))
+		require.NoError(t, os.WriteFile(path, []byte("newer"), 0o600))
+
+		PreserveCorruptFile(path, "media")
+
+		kept, err := os.ReadFile(CorruptBackupPath(path))
+		require.NoError(t, err)
+		assert.Equal(t, "newer", string(kept),
+			"a second corruption must not be dropped in favour of the first")
+	})
+
+	// Sidecars come and go depending on what the close managed to checkpoint, so
+	// being asked to preserve one that is not there is ordinary.
+	t.Run("does nothing for a file that is not there", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "media.db-wal")
+
+		PreserveCorruptFile(path, "media")
+
+		assert.NoFileExists(t, CorruptBackupPath(path))
+	})
+}
