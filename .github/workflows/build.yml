@@ -269,9 +269,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Every repository package makezip imports has to be listed here, or
+          # the repackage step below cannot build it. TestSigningCheckoutCovers
+          # Imports keeps this in step with what the tool actually imports.
           sparse-checkout: |
             scripts/
-            pkg/platforms/batocera/payload.go
+            pkg/platforms/batocera/payload/
             pkg/platforms/updatepayload/
             go.mod
             go.sum
