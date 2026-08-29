@@ -1,5 +1,3 @@
-//go:build linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -21,13 +19,20 @@
 
 package main
 
-import "testing"
+import (
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/batocera/payload"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/updatepayload"
+)
 
-func TestPayloadFilesLinux(t *testing.T) {
-	t.Parallel()
-
-	assertBatoceraPayloadFiles(t)
-	if got := payloadFiles("linux"); got != nil {
-		t.Fatalf("linux payload files = %v, want nil", got)
+// payloadFiles returns the platform-owned files to pack alongside the binary.
+//
+// This reads the list from its own package rather than from the platform one.
+// Importing any symbol from a platform package compiles all of it, which
+// reaches the libnfc binding and its pkg-config lookup — and this runs on the
+// machine assembling the archives, which has no libnfc and no reason to.
+func payloadFiles(platform string) []updatepayload.File {
+	if platform != "batocera" {
+		return nil
 	}
+	return payload.Files()
 }

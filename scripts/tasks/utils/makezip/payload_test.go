@@ -1,5 +1,3 @@
-//go:build !linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -23,11 +21,15 @@ package main
 
 import "testing"
 
-func TestPayloadFilesOther(t *testing.T) {
+// The list is the same on every host: this runs where the archives are
+// assembled, which is not the platform being packaged.
+func TestPayloadFiles(t *testing.T) {
 	t.Parallel()
 
 	assertBatoceraPayloadFiles(t)
-	if got := payloadFiles("windows"); got != nil {
-		t.Fatalf("windows payload files = %v, want nil", got)
+	for _, platform := range []string{"linux", "windows", "mac", ""} {
+		if got := payloadFiles(platform); got != nil {
+			t.Fatalf("%s payload files = %v, want nil", platform, got)
+		}
 	}
 }
