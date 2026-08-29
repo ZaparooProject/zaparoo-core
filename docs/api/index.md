@@ -197,6 +197,7 @@ If a method fails, it will populate the `error` key in the response object with 
 | :------ | :----- | :------- | :---------------------------------------------------------------------------------------- |
 | code    | number | Yes      | An integer specifying the general error category. **Error codes are not yet formalised.** |
 | message | string | Yes      | Short human readable message explaining the error cause, if possible.                     |
+| data    | object | No       | Optional structured detail. Methods that emit it document its shape; [`run`](methods.md#run) emits `{ "category": string }`. |
 
 #### Protocol Errors
 
@@ -256,6 +257,8 @@ GET http://10.0.0.123:7497/run/_Arcade/Youjyuden%20%28JP%29.mra
 This runs `_Arcade/Youjyuden (JP).mra`.
 
 Requests from the local device are allowed without restriction. Remote requests must be explicitly allowed using the `allow_run` config setting.
+
+These endpoints respond as soon as the token is accepted and do not report execution failures. Use the JSON-RPC [`run`](methods.md#run) method to wait for execution and receive its result.
 
 ## Methods
 

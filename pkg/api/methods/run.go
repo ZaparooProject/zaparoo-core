@@ -35,9 +35,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/text/unicode/norm"
@@ -114,16 +118,94 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 
 	t.ScanTime = time.Now()
 	t.Source = tokens.SourceAPI
+	t.Completion = tokens.NewCompletion()
 
-	// TODO: how do we report back errors? put channel in queue
 	env.State.SetActiveCard(t)
 	select {
 	case env.TokenQueue <- t:
 	case <-env.Context.Done():
-		return nil, env.Context.Err()
+		return nil, runContextError(&env, env.Context.Err())
 	}
 
-	return NoContent{}, nil
+	// The worker completes every queued token exactly once (preflight
+	// rejection, execution result, or recovered panic), so waiting here is
+	// safe. Cancellation, timeout, or shutdown only stop the wait: the
+	// worker's buffered completion still succeeds and execution that has
+	// already started is not rolled back.
+	select {
+	case err := <-t.Completion.Done():
+		return runResult(err)
+	case <-env.Context.Done():
+		// A result that landed at the same instant wins, so the caller never
+		// sees "cancelled" for a script that actually finished.
+		select {
+		case err := <-t.Completion.Done():
+			return runResult(err)
+		default:
+		}
+		return nil, runContextError(&env, env.Context.Err())
+	}
+}
+
+func runResult(err error) (any, error) {
+	if err == nil {
+		return NoContent{}, nil
+	}
+	return nil, runError(err)
+}
+
+// runContextError explains why run stopped waiting. Shutdown is checked first
+// because it also cancels the request context, and the caller should learn
+// the service is going away rather than that its own request was cancelled.
+func runContextError(env *requests.RequestEnv, ctxErr error) error {
+	switch {
+	case env.State.GetContext().Err() != nil:
+		return models.CategorizedErr(models.ErrorCategoryUnavailable,
+			"service is shutting down", ctxErr)
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		return models.CategorizedErr(models.ErrorCategoryTimeout,
+			"timed out waiting for ZapScript to complete; execution continues", ctxErr)
+	default:
+		return models.CategorizedErr(models.ErrorCategoryCancelled,
+			"request cancelled; execution continues", ctxErr)
+	}
+}
+
+// runError maps a terminal execution error onto a stable category with a
+// message that carries no filesystem paths or token contents. The cause is
+// kept for logging and errors.Is.
+func runError(err error) error {
+	switch {
+	case errors.Is(err, state.ErrLaunchInProgress),
+		errors.Is(err, state.ErrMediaLaunchInProgress):
+		return models.CategorizedErr(models.ErrorCategoryBusy,
+			"another launch is in progress", err)
+	case errors.Is(err, zapscript.ErrFileNotFound),
+		errors.Is(err, titles.ErrNoMatch),
+		errors.Is(err, titles.ErrLowConfidence):
+		return models.CategorizedErr(models.ErrorCategoryMediaNotFound,
+			"media not found", err)
+	case errors.Is(err, state.ErrRunZapScriptDisabled):
+		return models.CategorizedErr(models.ErrorCategoryDisabled,
+			"ZapScript execution is disabled", err)
+	case errors.Is(err, zapscript.ErrInvalidScript),
+		errors.Is(err, zapscript.ErrUnknownCommand),
+		errors.Is(err, systemdefs.ErrUnknownSystem),
+		errors.Is(err, state.ErrInvalidNextAction):
+		return models.CategorizedErr(models.ErrorCategoryInvalidScript,
+			"ZapScript is invalid", err)
+	case errors.Is(err, zapscript.ErrCommandBlocked),
+		errors.Is(err, state.ErrLaunchBlockedByHook),
+		errors.Is(err, state.ErrLaunchRequiresProfile):
+		return models.CategorizedErr(models.ErrorCategoryBlocked,
+			"ZapScript execution was blocked", err)
+	case errors.Is(err, playtime.ErrLimitReached):
+		return models.CategorizedErr(models.ErrorCategoryPlaytimeLimit,
+			"playtime limit reached", err)
+	default:
+		return models.CategorizedErr(models.ErrorCategoryExecutionFailed,
+			"ZapScript execution failed", err)
+	}
 }
 
 func isLocalRequest(r *http.Request) bool {

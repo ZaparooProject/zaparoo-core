@@ -148,6 +148,7 @@ func TestHandleRunRestDecodesPath(t *testing.T) {
 			select {
 			case token := <-tokenQueue:
 				assert.Equal(t, tt.wantText, token.Text)
+				assert.Nil(t, token.Completion, "REST run stays fire-and-forget")
 			default:
 				t.Fatal("REST run handler did not send token to queue")
 			}
