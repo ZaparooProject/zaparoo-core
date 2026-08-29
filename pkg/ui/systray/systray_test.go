@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.design/x/clipboard"
 )
 
 func TestReloadCore(t *testing.T) {
@@ -170,4 +171,55 @@ func TestUpdateMenuTitle(t *testing.T) {
 			assert.Equal(t, tt.clickable, updateMenuClickable(tt.status))
 		})
 	}
+}
+
+// The address entry is one of the few things in the tray that can fail on a
+// machine that is otherwise fine — a session with no clipboard to write to —
+// and the person clicking it has to be told rather than left guessing.
+func TestCopyToClipboard(t *testing.T) {
+	t.Parallel()
+
+	t.Run("puts the text on the clipboard", func(t *testing.T) {
+		t.Parallel()
+		var got []byte
+		var gotFormat clipboard.Format
+		err := copyToClipboard("10.0.0.5",
+			func() error { return nil },
+			func(_ context.Context, format clipboard.Format, buf []byte,
+				_ ...clipboard.Option,
+			) (<-chan struct{}, error) {
+				gotFormat, got = format, buf
+				return make(chan struct{}), nil
+			})
+		require.NoError(t, err)
+		assert.Equal(t, "10.0.0.5", string(got))
+		assert.Equal(t, clipboard.FmtText, gotFormat)
+	})
+
+	t.Run("reports a clipboard that cannot be opened", func(t *testing.T) {
+		t.Parallel()
+		written := false
+		err := copyToClipboard("10.0.0.5",
+			func() error { return errors.New("no display") },
+			func(context.Context, clipboard.Format, []byte,
+				...clipboard.Option,
+			) (<-chan struct{}, error) {
+				written = true
+				return make(chan struct{}), nil
+			})
+		require.Error(t, err)
+		assert.False(t, written, "nothing should be written to a clipboard that would not open")
+	})
+
+	t.Run("reports a write that fails", func(t *testing.T) {
+		t.Parallel()
+		err := copyToClipboard("10.0.0.5",
+			func() error { return nil },
+			func(context.Context, clipboard.Format, []byte,
+				...clipboard.Option,
+			) (<-chan struct{}, error) {
+				return nil, errors.New("clipboard unavailable")
+			})
+		require.Error(t, err)
+	})
 }
