@@ -160,14 +160,16 @@ func TestTokenCompletion_PlaytimeLimitRejectsBeforeLaunch(t *testing.T) {
 func TestTokenCompletion_NextActionOutcomes(t *testing.T) {
 	t.Parallel()
 
-	t.Run("blocked single command is rejected in preflight", func(t *testing.T) {
+	t.Run("blocked single command reports a configuration denial", func(t *testing.T) {
 		t.Parallel()
 		env := setupScanBehavior(t, "tap", 0)
 		require.NoError(t, env.cfg.LoadTOML(`[zapscript]
 block_commands = ["input.keyboard"]`))
 
+		// Preflight rejects this before RunCommand sees it, so it has to
+		// report the same category a multi-command script would.
 		c := env.sendAPIToken(t, "**input.keyboard:a")
-		require.ErrorIs(t, assertCompletedOnce(t, c), state.ErrInvalidNextAction)
+		require.ErrorIs(t, assertCompletedOnce(t, c), zapscript.ErrCommandBlocked)
 	})
 
 	t.Run("arming a next-card write is success", func(t *testing.T) {
@@ -187,7 +189,7 @@ func TestTokenCompletion_BlockedCommandInsideScript(t *testing.T) {
 block_commands = ["input.keyboard"]`))
 
 	// Two commands skip next-action preflight, so the block surfaces from
-	// RunCommand instead.
+	// RunCommand instead of the preflight path above.
 	c := env.sendAPIToken(t, "**input.keyboard:a||**input.keyboard:b")
 	require.ErrorIs(t, assertCompletedOnce(t, c), zapscript.ErrCommandBlocked)
 }

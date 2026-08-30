@@ -58,8 +58,8 @@ If execution fails, the response carries an [error](index.md#response-errors) wh
 | `invalid_script`   | The script could not be parsed, or names an unknown command or system.                        |
 | `blocked`          | Execution was refused by configuration, a profile requirement or a hook.                      |
 | `playtime_limit`   | A playtime limit prevented the launch.                                                        |
-| `timeout`          | Core stopped waiting after the request timeout (30 seconds). Execution continues regardless. |
-| `cancelled`        | The request was cancelled, for example because the connection closed. Execution continues.   |
+| `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
+| `cancelled`        | The request was cancelled, for example because the connection closed. Anything already started continues. |
 | `unavailable`      | The service is shutting down.                                                                 |
 | `execution_failed` | Any other execution failure.                                                                  |
 

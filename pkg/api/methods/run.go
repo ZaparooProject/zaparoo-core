@@ -164,10 +164,10 @@ func runContextError(env *requests.RequestEnv, ctxErr error) error {
 			"service is shutting down", ctxErr)
 	case errors.Is(ctxErr, context.DeadlineExceeded):
 		return models.CategorizedErr(models.ErrorCategoryTimeout,
-			"timed out waiting for ZapScript to complete; execution continues", ctxErr)
+			"timed out waiting for ZapScript to complete; anything already started continues", ctxErr)
 	default:
 		return models.CategorizedErr(models.ErrorCategoryCancelled,
-			"request cancelled; execution continues", ctxErr)
+			"request cancelled; anything already started continues", ctxErr)
 	}
 }
 

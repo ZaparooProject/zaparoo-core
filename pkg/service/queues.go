@@ -693,7 +693,7 @@ func handleQueuedToken(
 	}
 
 	if parseErr == nil {
-		switch handleNextActionPreflight(svc, &t, &script) {
+		switch preflight := handleNextActionPreflight(svc, &t, &script); preflight {
 		case nextActionArmed:
 			he.Success = true
 			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
@@ -702,14 +702,18 @@ func handleQueuedToken(
 			// Arming the next action is this token's whole job.
 			t.Completion.Complete(nil)
 			return
-		case nextActionInvalid:
+		case nextActionInvalid, nextActionBlocked:
 			he.Success = false
 			if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
 				log.Error().Err(histErr).Msgf("error adding history")
 			}
 			path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
-			t.Completion.Complete(state.ErrInvalidNextAction)
+			if preflight == nextActionBlocked {
+				t.Completion.Complete(fmt.Errorf("%w: %s", zapscript.ErrCommandBlocked, script.Cmds[0].Name))
+			} else {
+				t.Completion.Complete(state.ErrInvalidNextAction)
+			}
 			return
 		case nextActionNone:
 		}
