@@ -143,6 +143,66 @@ func TestResolveStorageRelativePath(t *testing.T) {
 // ended. That re-notification must not read as a new launch: it resurrected
 // the closed game, which then accrued playtime forever because no further core
 // change was coming.
+// resolveSelectedLaunchPath is where the staleness rule actually runs, so the
+// regression is pinned here rather than only on the predicate: without the
+// gate, exiting a core republished the game that had just closed.
+func TestResolveSelectedLaunchPath(t *testing.T) {
+	t.Parallel()
+
+	build := func(t *testing.T, gameName string, statusAge, pathAge time.Duration) (selectionFiles, string) {
+		t.Helper()
+		dir := t.TempDir()
+		gamesDir := filepath.Join(dir, "games")
+		require.NoError(t, os.MkdirAll(gamesDir, 0o750))
+		gamePath := filepath.Join(gamesDir, gameName)
+		require.NoError(t, os.WriteFile(gamePath, []byte("rom"), 0o600))
+
+		files := selectionFiles{
+			status:      filepath.Join(dir, "FILESELECT"),
+			fullPath:    filepath.Join(dir, "FULLPATH"),
+			currentPath: filepath.Join(dir, "CURRENTPATH"),
+			deviceBin:   filepath.Join(dir, "device.bin"),
+		}
+		require.NoError(t, os.WriteFile(files.status, []byte("selected"), 0o600))
+		require.NoError(t, os.WriteFile(files.fullPath, []byte(gamePath), 0o600))
+		require.NoError(t, os.WriteFile(files.currentPath, []byte(gameName), 0o600))
+
+		now := time.Now()
+		require.NoError(t, os.Chtimes(files.status, now.Add(-statusAge), now.Add(-statusAge)))
+		for _, f := range []string{files.fullPath, files.currentPath} {
+			require.NoError(t, os.Chtimes(f, now.Add(-pathAge), now.Add(-pathAge)))
+		}
+		return files, gamePath
+	}
+
+	t.Run("a settled selection resolves", func(t *testing.T) {
+		t.Parallel()
+		files, gamePath := build(t, "Blockade.mra", 10*time.Second, 10*time.Second)
+		path, ok := resolveSelectedLaunchPath(files, selectionStaleWindow)
+		require.True(t, ok, "a selection written with its paths is a real launch")
+		assert.Equal(t, gamePath, path)
+	})
+
+	t.Run("a status re-notified after a core exit is ignored", func(t *testing.T) {
+		t.Parallel()
+		// MiSTer rewrites FILESELECT on exit and leaves it at "selected", while
+		// FULLPATH and CURRENTPATH still name the game that just ended.
+		files, _ := build(t, "Blockade.mra", 0, 31*time.Second)
+		_, ok := resolveSelectedLaunchPath(files, selectionStaleWindow)
+		assert.False(t, ok, "the exit re-notification must not read as a launch")
+	})
+
+	t.Run("an unreadable timestamp fails open", func(t *testing.T) {
+		t.Parallel()
+		files, gamePath := build(t, "Blockade.mra", 0, 31*time.Second)
+		require.NoError(t, os.Remove(files.currentPath))
+		require.NoError(t, os.WriteFile(files.currentPath, []byte("Blockade.mra"), 0o600))
+		path, ok := resolveSelectedLaunchPath(files, time.Hour)
+		require.True(t, ok, "a window that cannot be exceeded still resolves")
+		assert.Equal(t, gamePath, path)
+	})
+}
+
 func TestSelectionIsStale(t *testing.T) {
 	t.Parallel()
 
