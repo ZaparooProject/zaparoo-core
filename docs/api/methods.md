@@ -2641,7 +2641,7 @@ None.
 | :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
 | system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
 | launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
-| beforeExit | string | No       | ZapScript to run when a media instance for this system is exiting (before the new launch starts). |
+| beforeExit | string | No       | ZapScript to run just before media for this system stops or is replaced: tapping another card, `**stop`, `**playlist.stop`, the `media.stop` method, a playtime limit, or a hold-mode card removal. Does not run when media exits on its own, and applies to primary media only. Failures are logged and never block the exit, the script is bounded to 30 seconds, and only one runs at a time. |
 
 #### Example
 

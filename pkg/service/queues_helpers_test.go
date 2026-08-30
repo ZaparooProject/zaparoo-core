@@ -670,3 +670,54 @@ func TestPlaylistNeedsUpdate(t *testing.T) {
 		assert.True(t, result, "ForceRelaunch must defeat same-state dedup")
 	})
 }
+
+func TestShouldRunBeforeExitHook(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		cmdName       string
+		slot          string
+		inHookContext bool
+		want          bool
+	}{
+		{name: "launch", cmdName: gozapscript.ZapScriptCmdLaunch, want: true},
+		{name: "launch.system", cmdName: gozapscript.ZapScriptCmdLaunchSystem, want: true},
+		{name: "launch.random", cmdName: gozapscript.ZapScriptCmdLaunchRandom, want: true},
+		{name: "launch.search", cmdName: gozapscript.ZapScriptCmdLaunchSearch, want: true},
+		{name: "launch.title", cmdName: gozapscript.ZapScriptCmdLaunchTitle, want: true},
+		{name: "launch.last", cmdName: gozapscript.ZapScriptCmdLaunchLast, want: true},
+		{name: "mister.mgl", cmdName: gozapscript.ZapScriptCmdMisterMGL, want: true},
+		{name: "random alias", cmdName: gozapscript.ZapScriptCmdRandom, want: true},
+		{name: "system alias", cmdName: gozapscript.ZapScriptCmdSystem, want: true},
+		{name: "stop", cmdName: gozapscript.ZapScriptCmdStop, want: true},
+		{name: "playlist.stop", cmdName: gozapscript.ZapScriptCmdPlaylistStop, want: true},
+
+		// Navigation queues a playlist update whose resulting launch command
+		// comes back through this same check, so firing here would double up.
+		{name: "playlist.next", cmdName: gozapscript.ZapScriptCmdPlaylistNext, want: false},
+		{name: "playlist.previous", cmdName: gozapscript.ZapScriptCmdPlaylistPrevious, want: false},
+		{name: "playlist.play", cmdName: gozapscript.ZapScriptCmdPlaylistPlay, want: false},
+		{name: "playlist.pause", cmdName: gozapscript.ZapScriptCmdPlaylistPause, want: false},
+		{name: "playlist.load", cmdName: gozapscript.ZapScriptCmdPlaylistLoad, want: false},
+		{name: "echo", cmdName: gozapscript.ZapScriptCmdEcho, want: false},
+		{name: "delay", cmdName: gozapscript.ZapScriptCmdDelay, want: false},
+
+		{name: "background launch", cmdName: gozapscript.ZapScriptCmdLaunch, slot: mediaslot.Background, want: false},
+		{name: "background stop", cmdName: gozapscript.ZapScriptCmdStop, slot: mediaslot.Background, want: false},
+
+		{name: "in hook context", cmdName: gozapscript.ZapScriptCmdLaunch, inHookContext: true, want: false},
+		{name: "in hook context stop", cmdName: gozapscript.ZapScriptCmdStop, inHookContext: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := gozapscript.Command{Name: tt.cmdName}
+			if tt.slot != "" {
+				cmd.AdvArgs = testSlotAdvArgs(tt.slot)
+			}
+			assert.Equal(t, tt.want, shouldRunBeforeExitHook(tt.inHookContext, cmd))
+		})
+	}
+}

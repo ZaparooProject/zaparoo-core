@@ -194,6 +194,14 @@ func runTokenZapScriptWithContext(
 			}
 		}
 
+		// The outgoing media's before_exit hook. After before_media_start so a
+		// hook that blocks the launch also suppresses the exit, and before any
+		// lock on the launch path is taken so the script is free to run its own
+		// ZapScript. Failures never abort the launch or stop.
+		if shouldRunBeforeExitHook(inHookContext, cmd) {
+			svc.State.RunBeforeExitHook()
+		}
+
 		mediaReadyGen, _ := svc.State.ActiveMediaReadyGeneration()
 
 		var cmdEnv gozapscript.ArgExprEnv

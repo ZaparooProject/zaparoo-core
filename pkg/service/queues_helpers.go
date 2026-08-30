@@ -26,6 +26,23 @@ import (
 	zscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 )
 
+// shouldRunBeforeExitHook reports whether before_exit should run before cmd
+// executes, i.e. cmd is about to replace or stop the active primary media.
+//
+// Playlist navigation commands are deliberately excluded: they queue a playlist
+// update whose resulting launch command comes back through this same check, so
+// including them here would fire the hook twice. playlist.pause is excluded for
+// a different reason: it only stops the launcher when the playback manager has
+// no path, and a pause is not an exit either way.
+func shouldRunBeforeExitHook(inHookContext bool, cmd zapscript.Command) bool {
+	if inHookContext || commandTargetsBackgroundSlot(cmd) {
+		return false
+	}
+	return zscript.IsMediaLaunchingCommand(cmd.Name) ||
+		cmd.Name == zapscript.ZapScriptCmdStop ||
+		cmd.Name == zapscript.ZapScriptCmdPlaylistStop
+}
+
 // shouldRunBeforeMediaStartHook determines if the before_media_start hook should run.
 // Returns true only when:
 // - Not already in a hook context (prevents infinite recursion)

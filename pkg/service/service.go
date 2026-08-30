@@ -458,6 +458,7 @@ func startService(
 	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
 	limitsResolver := profiles.NewLimitsResolver(cfg, st)
 	limitsManager.SetLimitsProvider(limitsResolver)
+	limitsManager.SetBeforeExitHook(st.RunBeforeExitHook)
 	limitsManager.Start(notifBroker, st.Notifications)
 	// Restore session state from history so session limits survive restarts within
 	// the cooldown window. Must run after CloseHangingMediaHistory (called above)

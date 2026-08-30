@@ -105,7 +105,8 @@ type LimitsManager struct {
 	player                audio.Player
 	cancel                context.CancelFunc
 	sessionCancel         context.CancelFunc // cancels checkLoop for the current game session; nil between sessions
-	lastProfileID         string             // last-seen active profile ID, for identity-change detection
+	beforeExit            func()
+	lastProfileID         string // last-seen active profile ID, for identity-change detection
 	state                 SessionState
 	sessionCumulativeTime time.Duration
 	subscriptionID        int
@@ -153,6 +154,12 @@ func NewLimitsManager(
 // profile-aware resolver. Must be called before Start.
 func (tm *LimitsManager) SetLimitsProvider(limits LimitsProvider) {
 	tm.limits = limits
+}
+
+// SetBeforeExitHook registers the callback run immediately before a limit stops
+// the running game. Must be called before Start.
+func (tm *LimitsManager) SetBeforeExitHook(hook func()) {
+	tm.beforeExit = hook
 }
 
 // Broker is the interface for subscribing to notifications.
@@ -693,6 +700,10 @@ func (tm *LimitsManager) checkLimits() {
 			Reason: reason,
 		})
 		tm.playWarningSound()
+
+		if tm.beforeExit != nil {
+			tm.beforeExit()
+		}
 
 		if err := tm.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 			log.Error().Err(err).Msg("playtime: failed to stop active launcher")

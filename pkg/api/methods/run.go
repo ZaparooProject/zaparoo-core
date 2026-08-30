@@ -206,6 +206,11 @@ func waitForCurrentMediaReady(ctx context.Context, st *state.State) error {
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
 
+	// Deliberately before the media stop gate: a before_exit script may launch
+	// media, which takes the read side of the same gate that AcquireMediaStop
+	// holds exclusively. Firing this after the line below deadlocks.
+	env.State.RunBeforeExitHook()
+
 	release, err := env.State.AcquireMediaStop(env.Context)
 	if err != nil {
 		return nil, fmt.Errorf("wait for in-flight media launch: %w", err)
