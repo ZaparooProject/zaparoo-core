@@ -20,6 +20,7 @@
 package container_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -30,6 +31,20 @@ import (
 
 func media(dbid int64, path string) database.Media {
 	return database.Media{DBID: dbid, Path: path, ParentDir: container.ParentDir(path)}
+}
+
+// A row whose Path came from filepath.Join carries the host separator. Before
+// this, ParentDir searched only for "/", returned empty, and Resolve then found
+// no container at all — folder artwork was dropped on Windows.
+func TestParentDirAcceptsHostSeparators(t *testing.T) {
+	t.Parallel()
+
+	joined := filepath.Join(string(filepath.Separator), "games", "psx", "Cool Game", "Disc 1.cue")
+	parent := container.ParentDir(joined)
+
+	require.NotEmpty(t, parent, "a host-separated path must still yield a parent")
+	assert.Equal(t, filepath.ToSlash(filepath.Dir(joined))+"/", parent)
+	assert.NotContains(t, parent, "\\", "the parent must be reported forward-slashed")
 }
 
 func TestSelectLaunchMedia(t *testing.T) {

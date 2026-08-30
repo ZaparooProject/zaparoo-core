@@ -20,6 +20,7 @@
 package container
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -28,12 +29,18 @@ import (
 // ParentDir returns the immediate browse parent of an indexed media path,
 // including the trailing slash. Virtual media collapses to its scheme prefix
 // because those paths have no directory hierarchy.
+//
+// Indexed paths are normally stored forward-slashed, but one that reached the
+// row from filepath.Join carries the host separator instead. Searching only
+// for "/" would return nothing for those, and an empty parent resolves to no
+// container at all, silently dropping folder artwork on Windows.
 func ParentDir(path string) string {
 	if idx := strings.Index(path, "://"); idx >= 0 {
 		return path[:idx+3]
 	}
-	if lastSlash := strings.LastIndex(path, "/"); lastSlash >= 0 {
-		return path[:lastSlash+1]
+	slashed := filepath.ToSlash(path)
+	if lastSlash := strings.LastIndex(slashed, "/"); lastSlash >= 0 {
+		return slashed[:lastSlash+1]
 	}
 	return ""
 }
@@ -109,6 +116,7 @@ func (idx *Index) HasMedia(dirPath string) bool {
 // normalizeDir gives a directory path its trailing slash without disturbing a
 // virtual scheme root such as "steam://", whose own separator is part of it.
 func normalizeDir(dir string) string {
+	dir = filepath.ToSlash(dir)
 	if strings.HasSuffix(dir, "/") {
 		return dir
 	}
