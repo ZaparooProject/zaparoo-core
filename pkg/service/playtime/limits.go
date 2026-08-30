@@ -712,7 +712,7 @@ func (tm *LimitsManager) checkLimits() {
 
 	// Enforcement is decided by the effective limits: the live provider,
 	// or the launch-pinned context after a mid-game deactivation.
-	if !tm.effectiveEnabled() {
+	if !tm.limits.PlaytimeLimitsEnabled() {
 		return
 	}
 
@@ -1014,7 +1014,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		// Calculate daily usage/remaining even during reset - this data is valid
 		// regardless of session state (the user has used time today and has
 		// time remaining in their daily allowance)
-		dailyLimit := tm.effectiveDailyLimit()
+		dailyLimit := tm.limits.DailyLimit()
 		if dailyLimit > 0 && helpers.IsClockReliable(now) {
 			year, month, day := now.Date()
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
@@ -1165,13 +1165,16 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 	tm.pruneExpiredWaivers()
 
-	// Whether limits are enforced is decided by the LimitsProvider (global
-	// config, possibly overridden by the active profile).
-	if !tm.limits.PlaytimeLimitsEnabled() {
+	// Launch-pinned, like the session limit below. A profile that deactivates
+	// to the shared profile keeps governing the session it launched, so reading
+	// the live values here let a relaunch during that session inherit the
+	// shared profile's — disabled, or a larger daily allowance — and step
+	// straight past the limit the session is actually under.
+	if !tm.effectiveEnabled() {
 		return "", nil
 	}
 
-	dailyLimit := tm.limits.DailyLimit()
+	dailyLimit := tm.effectiveDailyLimit()
 	// Use the effective session limit, not the raw configured one: a grant
 	// made after a limit stopped the game has to unblock the relaunch, which
 	// is the whole point of extending a session. Outside a running game the

@@ -125,6 +125,43 @@ func TestCheckBeforeLaunch_ProfileLimitsWithGlobalDisabled(t *testing.T) {
 	assert.Equal(t, models.PlaytimeLimitReasonDaily, reason)
 }
 
+// A profile that deactivates to the shared profile keeps governing the session
+// it launched: sessionLimits stays pinned while ActiveProfileID is empty.
+// CheckBeforeLaunch used the pinned session limit but the live enabled flag and
+// daily limit, so a relaunch during that preserved session inherited the shared
+// profile's — here, limits switched off entirely — and started anyway.
+func TestCheckBeforeLaunch_UsesPinnedLimitsAfterProfileDeactivates(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	const profileID = "kid-a"
+
+	mockDB := testhelpers.NewMockUserDBI()
+	// Two hours already played today, against a one hour pinned daily limit.
+	mockDB.On("SumMediaPlayTimeForDayByProfile", mock.AnythingOfType("time.Time"), profileID).
+		Return(int64(7200), nil).Maybe()
+	mockDB.On("SumMediaPlayTimeForDay", mock.AnythingOfType("time.Time")).
+		Return(int64(7200), nil).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+
+	tm := NewLimitsManager(
+		&database.Database{UserDB: mockDB}, nil, cfg,
+		clockwork.NewFakeClockAt(now), newNoOpMockPlayer(),
+	)
+	// The shared profile is active and enforces nothing.
+	tm.SetLimitsProvider(stubProvider{enabled: false, daily: 0, profileID: ""})
+	// The game running was launched by kid-a, under a one hour daily limit.
+	tm.sessionLimits = &pinnedLimits{
+		profileID: profileID, enabled: true, daily: time.Hour, session: time.Hour,
+	}
+
+	reason, err := tm.CheckBeforeLaunch()
+	require.Error(t, err, "the pinned profile's limit still governs this session")
+	assert.Equal(t, models.PlaytimeLimitReasonDaily, reason)
+}
+
 func TestCheckBeforeLaunch_ProviderDisabledSkipsChecks(t *testing.T) {
 	t.Parallel()
 

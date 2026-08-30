@@ -3813,7 +3813,7 @@ A successful grant emits [`playtime.extended`](./notifications.md#playtimeextend
   "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
   "result": {
     "mode": "today",
-    "expires": "2025-01-23T00:00:00Z",
+    "expires": "2025-01-23T00:00:00-05:00",
     "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
     "replayed": false
   }
