@@ -690,6 +690,77 @@ mode = "unrestricted"`))
 	}
 }
 
+// A reader configured to hold on a globally tap device arms the exit timer.
+// If that reader disconnects before exit_delay expires, re-resolving the policy
+// used to find no reader, fall back to the global tap, and return without
+// stopping anything — the game stayed running forever.
+func TestTimedExit_KeepsHoldPolicyWhenOwnerReaderDisconnects(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeTap)
+	require.NoError(t, cfg.LoadTOML(`
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB0"
+scan_mode = "hold"
+`))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{{
+		ID: "test-launcher", SystemID: "NES",
+	}}).Maybe()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+	stopCalled := make(chan struct{}, 1)
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).Run(func(_ mock.Arguments) {
+		stopCalled <- struct{}{}
+	}).Return(nil).Maybe()
+
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Path").Return("/dev/ttyUSB0")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"})
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	mockReader.On("Connected").Return(true)
+	mockReader.On("OnMediaChange", mock.Anything).Return(nil)
+	mockReader.On("Close").Return(nil).Maybe()
+	st.SetReader(mockReader)
+
+	owner := tokens.Token{
+		UID: "game-card", Text: "game.nes",
+		Source: tokens.SourceReader, ReaderID: readerID, ScanTime: time.Now(),
+	}
+	st.SetSoftwareToken(&owner)
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "game.nes", "Game", "test-launcher"))
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform: mockPlatform, Config: cfg, State: st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
+	}
+
+	clock := clockwork.NewFakeClock()
+	var exitGeneration atomic.Uint64
+	timedExit(svc, clock, nil, &exitGeneration, &owner)
+
+	// The reader goes away while the delay is still running.
+	st.RemoveReader(readerID)
+	clock.Advance(time.Second)
+
+	select {
+	case <-stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a disconnected hold reader must not downgrade to the global tap mode")
+	}
+}
+
 func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T) {
 	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
 	require.NoError(t, err)

@@ -22,6 +22,7 @@ package tokens_test
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 )
@@ -101,4 +102,25 @@ func TestTraitsAreStable(t *testing.T) {
 	// Copying the token copies the set; the copy resolves the same.
 	copied := traits
 	assert.Equal(t, first, copied.ScanMode())
+}
+
+// Trait keys are case-insensitive, so "tap" and "TAP" normalize to the same
+// key. Writing both into the map let its iteration order decide the scan mode,
+// so the same card could resolve differently between runs.
+func TestResolveTraits_MixedCaseDuplicateKeysInherit(t *testing.T) {
+	t.Parallel()
+
+	for range 32 {
+		traits := tokens.ResolveTraits(map[string]any{"tap": true, "TAP": false})
+		assert.Empty(t, traits.ScanMode(),
+			"a trait declared twice with different values must inherit, not pick one")
+	}
+}
+
+// The same key twice with the same value is not a contradiction.
+func TestResolveTraits_MixedCaseDuplicateKeysAgreeing(t *testing.T) {
+	t.Parallel()
+
+	traits := tokens.ResolveTraits(map[string]any{"hold": true, "Hold": true})
+	assert.Equal(t, config.ScanModeHold, traits.ScanMode())
 }

@@ -20,6 +20,7 @@
 package tokens
 
 import (
+	"reflect"
 	"sort"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -56,9 +57,29 @@ func ResolveTraits(parsed map[string]any) Traits {
 		return Traits{}
 	}
 
+	// Trait keys are case-insensitive, so "tap" and "TAP" land on the same
+	// normalized key. Writing both into the map would let its iteration order
+	// pick the winner, and a contradiction would resolve differently between
+	// runs. Contradictions are settled here, not by chance: a key declared
+	// twice with different values is dropped, so it inherits like any other
+	// unset trait.
 	values := make(map[string]any, len(parsed))
+	conflicted := make(map[string]struct{})
 	for key, value := range parsed {
-		values[gozapscript.NormalizeTraitKey(key)] = value
+		normalized := gozapscript.NormalizeTraitKey(key)
+		if existing, seen := values[normalized]; seen && !reflect.DeepEqual(existing, value) {
+			conflicted[normalized] = struct{}{}
+			continue
+		}
+		values[normalized] = value
+	}
+	for normalized := range conflicted {
+		log.Warn().Str("trait", normalized).
+			Msg("token declares the same trait twice with different values, inheriting it")
+		delete(values, normalized)
+	}
+	if len(values) == 0 {
+		return Traits{}
 	}
 
 	return Traits{

@@ -4328,8 +4328,8 @@ None.
 | Key               | Type                       | Required | Description                         |
 | :---------------- | :------------------------- | :------- | :---------------------------------- |
 | readers           | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
-| holdOwnerReaderId | string                     | No       | ID of the reader whose token currently owns hold-mode exit. Omitted when nothing owns it. |
-| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. Omitted when nothing owns hold. |
+| holdOwnerReaderId | string                     | No       | ID of the reader whose token is currently tracked as the owner of the running media. Omitted when no token is tracked. |
+| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. Falls back to the global mode when the owning reader has since disconnected. |
 
 ##### Reader info object
 
