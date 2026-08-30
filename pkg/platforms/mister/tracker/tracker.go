@@ -627,6 +627,32 @@ func readFileSelectionFrom(statusFile, fullPathFile, currentPathFile string) (fi
 	return sel, nil
 }
 
+// selectionStaleWindow bounds how far apart MiSTer's FILESELECT status and the
+// CURRENTPATH it describes may be written and still belong to the same
+// selection. Both MiSTer and writeCurrentPathTo write the trio back to back,
+// so a real selection lands well inside this.
+const selectionStaleWindow = 2 * time.Second
+
+// selectionIsStale reports whether FILESELECT was written meaningfully later
+// than the path it claims to describe.
+//
+// MiSTer never clears FILESELECT after a launch and rewrites it again when a
+// core exits, leaving the status at "selected" while FULLPATH and CURRENTPATH
+// still name the game that just ended. Without this the exit re-notification
+// reads as a fresh launch and resurrects the game that was just closed, which
+// then accrues playtime forever because no further core change is coming.
+func selectionIsStale(statusFile, currentPathFile string, window time.Duration) (bool, error) {
+	statusInfo, err := os.Stat(statusFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat file selection status: %w", err)
+	}
+	pathInfo, err := os.Stat(currentPathFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat selected current path: %w", err)
+	}
+	return statusInfo.ModTime().Sub(pathInfo.ModTime()) > window, nil
+}
+
 // stripExt mirrors the extension stripping MiSTer's get_display_name
 // (file_io.cpp) applies to CURRENTPATH for .mra/.mgl/.rbf files and cores
 // with a single declared extension.
@@ -789,6 +815,21 @@ func (tr *Tracker) loadFileSelection() {
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to read MiSTer file selection")
 		return
+	}
+
+	if sel.Status == "selected" {
+		// Fail open: an unreadable timestamp must not drop a real launch.
+		stale, staleErr := selectionIsStale(
+			misterconfig.FileSelectFile, misterconfig.CurrentPathFile, selectionStaleWindow,
+		)
+		switch {
+		case staleErr != nil:
+			log.Warn().Err(staleErr).Msg("failed to age MiSTer file selection, treating it as current")
+		case stale:
+			log.Debug().Str("path", sel.FullPath).
+				Msg("ignoring MiSTer file selection re-notified after its paths were written")
+			return
+		}
 	}
 
 	storageSelection, _ := os.ReadFile(filepath.Join(misterconfig.CoreConfigFolder, "device.bin"))

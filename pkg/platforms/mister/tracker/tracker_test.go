@@ -138,6 +138,60 @@ func TestResolveStorageRelativePath(t *testing.T) {
 	)
 }
 
+// MiSTer leaves FILESELECT at "selected" after a launch and rewrites it when
+// the core exits, while FULLPATH and CURRENTPATH still name the game that just
+// ended. That re-notification must not read as a new launch: it resurrected
+// the closed game, which then accrued playtime forever because no further core
+// change was coming.
+func TestSelectionIsStale(t *testing.T) {
+	t.Parallel()
+
+	write := func(t *testing.T, statusAge, pathAge time.Duration) (string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		statusFile := filepath.Join(dir, "FILESELECT")
+		currentPathFile := filepath.Join(dir, "CURRENTPATH")
+		require.NoError(t, os.WriteFile(statusFile, []byte("selected"), 0o600))
+		require.NoError(t, os.WriteFile(currentPathFile, []byte("Blockade.mra"), 0o600))
+		now := time.Now()
+		require.NoError(t, os.Chtimes(statusFile, now.Add(-statusAge), now.Add(-statusAge)))
+		require.NoError(t, os.Chtimes(currentPathFile, now.Add(-pathAge), now.Add(-pathAge)))
+		return statusFile, currentPathFile
+	}
+
+	t.Run("written together is current", func(t *testing.T) {
+		t.Parallel()
+		statusFile, currentPathFile := write(t, 10*time.Second, 10*time.Second)
+		stale, err := selectionIsStale(statusFile, currentPathFile, selectionStaleWindow)
+		require.NoError(t, err)
+		assert.False(t, stale)
+	})
+
+	t.Run("status re-notified long after its paths is stale", func(t *testing.T) {
+		t.Parallel()
+		// The real capture: paths at 13:39:56, status rewritten at 13:40:27.
+		statusFile, currentPathFile := write(t, 0, 31*time.Second)
+		stale, err := selectionIsStale(statusFile, currentPathFile, selectionStaleWindow)
+		require.NoError(t, err)
+		assert.True(t, stale)
+	})
+
+	t.Run("paths newer than status is not stale", func(t *testing.T) {
+		t.Parallel()
+		statusFile, currentPathFile := write(t, 31*time.Second, 0)
+		stale, err := selectionIsStale(statusFile, currentPathFile, selectionStaleWindow)
+		require.NoError(t, err)
+		assert.False(t, stale)
+	})
+
+	t.Run("missing file reports an error so the caller can fail open", func(t *testing.T) {
+		t.Parallel()
+		statusFile, _ := write(t, 0, 0)
+		_, err := selectionIsStale(statusFile, filepath.Join(t.TempDir(), "absent"), selectionStaleWindow)
+		require.Error(t, err)
+	})
+}
+
 func TestReadFileSelectionFrom(t *testing.T) {
 	t.Parallel()
 
