@@ -16,7 +16,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -349,6 +351,69 @@ func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
 		{Path: canonicalPath},
 		{Path: externalAlias},
 	}, results)
+}
+
+// cancellingLinkFs cancels the scan while a symlink target is being read, so
+// the walk finishes without any later entry observing the cancellation.
+type cancellingLinkFs struct {
+	afero.Fs
+	cancel context.CancelFunc
+}
+
+func (f *cancellingLinkFs) LstatIfPossible(name string) (info os.FileInfo, lstated bool, err error) {
+	lstater, ok := f.Fs.(afero.Lstater)
+	if !ok {
+		info, err = f.Stat(name)
+		return info, false, err //nolint:wrapcheck // Test filesystem passthrough.
+	}
+	return lstater.LstatIfPossible(name) //nolint:wrapcheck // Test filesystem passthrough.
+}
+
+func (f *cancellingLinkFs) ReadlinkIfPossible(name string) (string, error) {
+	f.cancel()
+	linkReader, ok := f.Fs.(afero.LinkReader)
+	if !ok {
+		return "", afero.ErrNoReadlink
+	}
+	return linkReader.ReadlinkIfPossible(name) //nolint:wrapcheck // Test filesystem passthrough.
+}
+
+func TestArcadeSystemCacheScanFilesFailsOnCancelDuringFinalEntry(t *testing.T) {
+	root := t.TempDir()
+	arcadeRoot := filepath.Join(root, "_Arcade")
+	require.NoError(t, os.MkdirAll(arcadeRoot, 0o750))
+	externalDir := filepath.Join(root, "external")
+	require.NoError(t, os.MkdirAll(externalDir, 0o750))
+	externalTarget := filepath.Join(externalDir, "External.mra")
+	require.NoError(t, os.WriteFile(externalTarget, []byte("test"), 0o600))
+	// The only entry under _Arcade, so nothing is walked after its target read.
+	require.NoError(t, os.Symlink(externalTarget, filepath.Join(arcadeRoot, "External.mra")))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[launchers]\nindex_root = [%q]\n", root)))
+	platform := NewPlatform()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(platform.Launchers(cfg))
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	// Leave index_root as the only root so the walk below is the last one,
+	// matching /media/fat on a device.
+	originalCustom, originalGames := misterconfig.CustomFolders, misterconfig.GamesFolders
+	misterconfig.CustomFolders, misterconfig.GamesFolders = nil, nil
+	t.Cleanup(func() {
+		misterconfig.CustomFolders, misterconfig.GamesFolders = originalCustom, originalGames
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	platform.fs = &cancellingLinkFs{Fs: afero.NewOsFs(), cancel: cancel}
+	cache := newArcadeSystemCache(platform)
+
+	results, err := cache.scanFiles(ctx, cfg)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, results)
 }
 
 func TestAddNeoGeoMVSLauncherSharesScannerCache(t *testing.T) {

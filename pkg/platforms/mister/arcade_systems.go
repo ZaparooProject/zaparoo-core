@@ -321,10 +321,12 @@ func (c *arcadeSystemCache) scanFiles(
 				return nil
 			},
 		)
+		// Walk can finish without observing cancellation when the last entry
+		// is already in flight, so partial results must not look complete.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if walkErr != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
 			log.Warn().Err(walkErr).Str("path", arcadePath).Msg("unable to scan MiSTer arcade files for classification")
 		}
 	}
