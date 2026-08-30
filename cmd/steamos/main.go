@@ -46,7 +46,7 @@ import (
 func main() {
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
+		os.Exit(cli.ExitCodeFor(err))
 	}
 }
 
