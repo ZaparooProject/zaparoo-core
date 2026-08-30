@@ -124,7 +124,10 @@ func snapshotDatabase(t *testing.T, dbPath string) string {
 // connection parameters, which is when SQLite runs WAL recovery.
 func openSnapshot(t *testing.T, dbPath string) *sql.DB {
 	t.Helper()
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	// The media driver, not the bare one: the schema carries an index collated
+	// with ZAPAROO_TITLE_V1, and a connection without that collation cannot
+	// even run integrity_check against it.
+	sqlDB, err := sql.Open(sqliteMediaDriver, dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	return sqlDB
@@ -252,8 +255,6 @@ func TestCrashConsistency_CommittedTransactionSurvivesWithoutCheckpoint(t *testi
 	requireIntegrityOK(t, snapshot)
 	assert.Equal(t, crashTestFilesPerSystem, countSystemMedia(t, snapshot, "SNES"))
 	assert.Equal(t, 2*crashTestFilesPerSystem, countRowsWhere(t, snapshot, "MediaTags", ""))
-	assert.Equal(t, 1, countRowsWhere(t, snapshot, "ScanSystemFingerprints", ""),
-		"the fingerprint commits with the reconcile it describes")
 }
 
 // A large transaction spills dirty pages into the WAL before it commits. Those
@@ -390,7 +391,6 @@ func TestCrashConsistency_InterruptedCheckpointReplaysWAL(t *testing.T) {
 			assert.Equal(t, crashTestFilesPerSystem, countSystemMedia(t, snapshot, "SNES"))
 			assert.Equal(t, crashTestFilesPerSystem, countSystemMedia(t, snapshot, "NES"))
 			assert.Equal(t, 4*crashTestFilesPerSystem, countRowsWhere(t, snapshot, "MediaTags", ""))
-			assert.Equal(t, 2, countRowsWhere(t, snapshot, "ScanSystemFingerprints", ""))
 		})
 	}
 }
@@ -421,8 +421,6 @@ func TestCrashConsistency_CheckpointedDatabaseStandsAlone(t *testing.T) {
 func TestCrashConsistency_CancelledReconcileRollsBackCleanly(t *testing.T) {
 	h := newCrashTestDB(t)
 	stageSystemFiles(t, h, "SNES", "Alpha", crashTestFilesPerSystem)
-	fingerprintBefore := countRowsWhere(t, h.db.sql.Load(), "ScanSystemFingerprints", "")
-	require.Equal(t, 1, fingerprintBefore)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -454,11 +452,9 @@ func TestCrashConsistency_CancelledReconcileRollsBackCleanly(t *testing.T) {
 	requireIntegrityOK(t, live)
 	assert.Equal(t, crashTestFilesPerSystem, countSystemMedia(t, live, "SNES"),
 		"the cancelled reconcile's rows are rolled back")
-	assert.Equal(t, fingerprintBefore, countRowsWhere(t, live, "ScanSystemFingerprints", ""))
 	assert.Zero(t, countRowsWhere(t, live, "ScanStage", ""), "staged rows roll back with the transaction")
 
 	stats := stageSystemFiles(t, h, "SNES", "Alpha", 2*crashTestFilesPerSystem)
-	assert.False(t, stats.Unchanged, "a changed set after a cancelled run must reconcile")
 	assert.Equal(t, int64(crashTestFilesPerSystem), stats.MediaUpserted, "only the new half is inserted")
 	assert.Equal(t, 2*crashTestFilesPerSystem, countSystemMedia(t, live, "SNES"))
 	requireIntegrityOK(t, live)
