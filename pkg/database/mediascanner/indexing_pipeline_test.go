@@ -506,6 +506,18 @@ func TestGetPathFragments_ProvidedName(t *testing.T) {
 	})
 	assert.Equal(t, "mslug", withoutName.Title, "filename-derived title without ProvidedName")
 
+	// A standalone .neo romset takes the romsets.xml title but keeps its
+	// extension, which is where the extension tag comes from.
+	neoPath := string(filepath.Separator) + filepath.Join("media", "fat", "games", "NEOGEO", "mslug.neo")
+	neoWithName := GetPathFragments(&PathFragmentParams{
+		Path:         neoPath,
+		SystemID:     "NeoGeo",
+		ProvidedName: "Metal Slug",
+	})
+	assert.Equal(t, "Metal Slug", neoWithName.Title, "ProvidedName must be used as .neo title")
+	assert.Equal(t, "metalslug", neoWithName.Slug, ".neo slug must derive from provided name")
+	assert.Equal(t, ".neo", neoWithName.Ext, ".neo extension must be kept for the extension tag")
+
 	// ProvidedName overrides title even when the filename has tag-like
 	// content; tags themselves are still extracted from the filename.
 	tagged := GetPathFragments(&PathFragmentParams{

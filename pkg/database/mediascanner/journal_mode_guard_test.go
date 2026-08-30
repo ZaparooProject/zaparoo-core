@@ -21,16 +21,14 @@ package mediascanner
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,20 +44,25 @@ import (
 func TestNewNamesIndex_NonWALJournalModeFailsInsteadOfHanging(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "media_rollback_journal.db")
-	sqlDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=DELETE&_foreign_keys=ON")
-	require.NoError(t, err)
-
 	// Launchers/RootDirs are deliberately left unstubbed: the WAL guard fires
 	// before NewNamesIndex ever reaches launcher discovery, so a call to
 	// either would itself indicate the guard regressed to running too late.
+	tempDir := t.TempDir()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: tempDir})
 
-	mediaDB := &mediadb.MediaDB{}
-	require.NoError(t, mediaDB.SetSQLForTesting(context.Background(), sqlDB, mockPlatform))
-	mediaDB.SetDBPathForTesting(dbPath)
+	mediaDB, err := mediadb.OpenMediaDB(context.Background(), mockPlatform)
+	require.NoError(t, err)
 	defer func() { _ = mediaDB.Close() }()
+	// Keep one pooled connection so the production DSN cannot open another and
+	// restore WAL after this test deliberately switches the database to DELETE.
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	sqlDB.SetMaxOpenConns(1)
+	var journalMode string
+	require.NoError(t, sqlDB.QueryRowContext(context.Background(),
+		"PRAGMA journal_mode=DELETE").Scan(&journalMode))
+	require.Equal(t, "delete", journalMode)
 
 	userDB, userCleanup := testhelpers.NewInMemoryUserDB(t)
 	defer userCleanup()

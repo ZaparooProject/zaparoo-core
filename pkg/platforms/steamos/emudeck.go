@@ -135,7 +135,7 @@ func launchStandaloneEmulator(
 func createEmuDeckLauncher(
 	systemFolder string,
 	systemInfo esde.SystemInfo,
-	paths EmuDeckPaths,
+	paths *EmuDeckPaths,
 	retroArchOpts *sharedretroarch.Options,
 ) platforms.Launcher {
 	emulator := emulatorMapping[systemFolder]
@@ -242,7 +242,7 @@ func buildEmuDeckLaunchers(
 		if !ok {
 			continue
 		}
-		result = append(result, createEmuDeckLauncher(systemFolder, systemInfo, paths, retroArchOpts))
+		result = append(result, createEmuDeckLauncher(systemFolder, systemInfo, &paths, retroArchOpts))
 	}
 	log.Info().Int("count", len(result)).Msg("EmuDeck launchers registered")
 	return result

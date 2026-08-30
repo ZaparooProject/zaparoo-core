@@ -40,11 +40,21 @@ func TestDefaultEmuDeckPathsReadsSettings(t *testing.T) {
 	settingsDir := filepath.Join(home, filepath.FromSlash(emuDeckSettingsDir))
 	require.NoError(t, os.MkdirAll(settingsDir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(settingsDir, "settings.sh"), []byte(
-		"romsPath=\"$HOME/Games/Emulation/roms\"\nmalicious=$(touch /tmp/nope)\n",
+		"emulationPath=\"$HOME/Games/Emulation\"\n"+
+			"romsPath=\"$HOME/Libraries/roms\"\n"+
+			"biosPath=\"$HOME/Firmware\"\n"+
+			"savesPath=\"$HOME/Save Data\"\n"+
+			"storagePath=\"$HOME/Emulator Storage\"\n"+
+			"malicious=$(touch /tmp/nope)\n",
 	), 0o600))
 
 	paths := DefaultEmuDeckPaths(home)
-	assert.Equal(t, filepath.Join(home, "Games", "Emulation", "roms"), paths.RomsPath)
+	assert.Equal(t, filepath.Join(home, "Games", "Emulation"), paths.EmulationPath)
+	assert.Equal(t, filepath.Join(home, "Libraries", "roms"), paths.RomsPath)
+	assert.Equal(t, filepath.Join(home, "Games", "Emulation", "tools"), paths.ToolsPath)
+	assert.Equal(t, filepath.Join(home, "Firmware"), paths.BiosPath)
+	assert.Equal(t, filepath.Join(home, "Save Data"), paths.SavesPath)
+	assert.Equal(t, filepath.Join(home, "Emulator Storage"), paths.StoragePath)
 	assert.Equal(t, filepath.Join(home, "ES-DE", "gamelists"), paths.GamelistPath)
 }
 
@@ -62,6 +72,51 @@ func TestDefaultEmuDeckPathsRejectsShellExpansion(t *testing.T) {
 	assert.Equal(t, filepath.Join(home, "Emulation", "roms"), paths.RomsPath)
 }
 
+func TestDefaultEmuDeckPathsRejectsDangerousSymlinkRoot(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	settingsDir := filepath.Join(home, filepath.FromSlash(emuDeckSettingsDir))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o750))
+	link := filepath.Join(home, "unsafe-saves")
+	require.NoError(t, os.Symlink(home, link))
+	require.NoError(t, os.WriteFile(filepath.Join(settingsDir, "settings.sh"), []byte(
+		"savesPath=\""+link+"\"\n",
+	), 0o600))
+
+	paths := DefaultEmuDeckPaths(home)
+	assert.Equal(t, filepath.Join(home, "Emulation", "saves"), paths.SavesPath)
+}
+
+func TestDefaultEmuDeckPathsRejectsRootSymlinkAncestor(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	settingsDir := filepath.Join(home, filepath.FromSlash(emuDeckSettingsDir))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o750))
+	link := filepath.Join(home, "root-link")
+	require.NoError(t, os.Symlink(string(filepath.Separator), link))
+	require.NoError(t, os.WriteFile(filepath.Join(settingsDir, "settings.sh"), []byte(
+		"savesPath=\""+filepath.Join(link, "not-created-by-zaparoo")+"\"\n",
+	), 0o600))
+
+	paths := DefaultEmuDeckPaths(home)
+	assert.Equal(t, filepath.Join(home, "Emulation", "saves"), paths.SavesPath)
+}
+
+func TestDefaultEmuDeckPathsRejectsExistingPathThroughRootSymlink(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	settingsDir := filepath.Join(home, filepath.FromSlash(emuDeckSettingsDir))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o750))
+	link := filepath.Join(home, "root-link")
+	require.NoError(t, os.Symlink(string(filepath.Separator), link))
+	require.NoError(t, os.WriteFile(filepath.Join(settingsDir, "settings.sh"), []byte(
+		"savesPath=\""+filepath.Join(link, "tmp")+"\"\n",
+	), 0o600))
+
+	paths := DefaultEmuDeckPaths(home)
+	assert.Equal(t, filepath.Join(home, "Emulation", "saves"), paths.SavesPath)
+}
+
 func TestDefaultRetroDECKPathsReadsJSON(t *testing.T) {
 	t.Parallel()
 
@@ -70,11 +125,26 @@ func TestDefaultRetroDECKPathsReadsJSON(t *testing.T) {
 	require.NoError(t, os.MkdirAll(configDir, 0o750))
 	customHome := filepath.Join(home, "Games", "RetroDECK")
 	customRoms := filepath.Join(home, "External", "roms")
-	content := `{"version":"1","paths":{"rd_home_path":"` + customHome + `","roms_path":"` + customRoms + `"}}`
+	customSaves := filepath.Join(home, "Persistent", "saves")
+	customStates := filepath.Join(home, "Persistent", "states")
+	customBios := filepath.Join(home, "Persistent", "bios")
+	customStorage := filepath.Join(home, "Persistent", "storage")
+	content := `{"version":"1","paths":{` +
+		`"rd_home_path":"` + customHome + `",` +
+		`"roms_path":"` + customRoms + `",` +
+		`"saves_path":"` + customSaves + `",` +
+		`"states_path":"` + customStates + `",` +
+		`"bios_path":"` + customBios + `",` +
+		`"storage_path":"` + customStorage + `"}}`
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "retrodeck.json"), []byte(content), 0o600))
 
 	paths := DefaultRetroDECKPaths(home)
+	assert.Equal(t, customHome, paths.HomePath)
 	assert.Equal(t, customRoms, paths.RomsPath)
+	assert.Equal(t, customSaves, paths.SavesPath)
+	assert.Equal(t, customStates, paths.StatesPath)
+	assert.Equal(t, customBios, paths.BiosPath)
+	assert.Equal(t, customStorage, paths.StoragePath)
 	assert.Equal(t, filepath.Join(customHome, "ES-DE", "gamelists"), paths.GamelistPath)
 }
 
@@ -648,4 +718,24 @@ func TestLaunchersRegistersNothingWithoutDependencies(t *testing.T) {
 	options.LookPath = func(string) (string, error) { return "", errors.New("missing") }
 
 	assert.Empty(t, Launchers(nil, options, nil))
+}
+
+func TestEmuDeckWrapperPathUsesToolsPath(t *testing.T) {
+	t.Parallel()
+
+	// EmuDeck lets romsPath and toolsPath point at different roots; the
+	// launcher wrappers only ever live under toolsPath.
+	paths := EmuDeckPaths{
+		RomsPath:  filepath.Join(string(filepath.Separator), "mnt", "sdcard", "roms"),
+		ToolsPath: filepath.Join(string(filepath.Separator), "home", "deck", "Emulation", "tools"),
+	}
+	got := emuDeckWrapperPath(&paths, emulatorConfig{wrapper: "DuckStation.sh"})
+	want := filepath.Join(paths.ToolsPath, "launchers", "DuckStation.sh")
+	if got != want {
+		t.Fatalf("wrapper path: got %s, want %s", got, want)
+	}
+
+	if emuDeckWrapperPath(&paths, emulatorConfig{}) != "" {
+		t.Fatal("expected empty path for an emulator with no wrapper")
+	}
 }

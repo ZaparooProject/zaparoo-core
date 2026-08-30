@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -396,5 +397,66 @@ func TestClientsPairedNotification_JSONShape(t *testing.T) {
 		_, present := got[k]
 		assert.False(t, present,
 			"clients.paired notification must never include %q", k)
+	}
+}
+
+func marshalledTagsField(t *testing.T, value any) (any, bool) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(raw, &fields))
+	tags, present := fields["tags"]
+	return tags, present
+}
+
+func TestMediaHistoryEntries_TagsJSONTriState(t *testing.T) {
+	t.Parallel()
+
+	populated := []database.TagInfo{{Tag: "favorite", Type: "collection", Label: "Favorite"}}
+	tests := []struct {
+		value       any
+		name        string
+		wantPresent bool
+		wantLen     int
+	}{
+		{name: "history nil tags omitted", value: MediaHistoryResponseEntry{}},
+		{
+			name:        "history empty tags serialised as empty array",
+			value:       MediaHistoryResponseEntry{Tags: []database.TagInfo{}},
+			wantPresent: true,
+		},
+		{
+			name:        "history populated tags",
+			value:       MediaHistoryResponseEntry{Tags: populated},
+			wantPresent: true,
+			wantLen:     1,
+		},
+		{name: "top nil tags omitted", value: MediaHistoryTopEntry{}},
+		{
+			name:        "top empty tags serialised as empty array",
+			value:       MediaHistoryTopEntry{Tags: []database.TagInfo{}},
+			wantPresent: true,
+		},
+		{
+			name:        "top populated tags",
+			value:       MediaHistoryTopEntry{Tags: populated},
+			wantPresent: true,
+			wantLen:     1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tags, present := marshalledTagsField(t, tt.value)
+			require.Equal(t, tt.wantPresent, present)
+			if !tt.wantPresent {
+				return
+			}
+			list, ok := tags.([]any)
+			require.True(t, ok, "tags must serialise as a JSON array, got %T", tags)
+			assert.Len(t, list, tt.wantLen)
+		})
 	}
 }

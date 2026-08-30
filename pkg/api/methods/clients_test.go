@@ -119,6 +119,7 @@ func TestHandleClientsCurrent(t *testing.T) {
 
 	adminCapabilities := []string{
 		string(permissions.CapInput),
+		string(permissions.CapPlaytimeExtend),
 		string(permissions.CapProfilesManage),
 		string(permissions.CapScreenshot),
 		string(permissions.CapSettingsWrite),

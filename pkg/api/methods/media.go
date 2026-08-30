@@ -1106,9 +1106,9 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	// valid image request merely because optional enrichment timed out.
 	coverStatusesKnown := false
 	if len(searchResults) > 0 {
-		coverRefs := make([]database.MediaCoverRef, len(searchResults))
+		coverRefs := make([]database.MediaRef, len(searchResults))
 		for i := range searchResults {
-			coverRefs[i] = database.MediaCoverRef{
+			coverRefs[i] = database.MediaRef{
 				MediaDBID:      searchResults[i].MediaID,
 				MediaTitleDBID: searchResults[i].MediaTitleID,
 			}

@@ -16,7 +16,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +27,12 @@ func TestArcadeSetSystemsMapsCuratedPlatforms(t *testing.T) {
 	t.Parallel()
 
 	setSystems := arcadeSetSystems([]arcadedb.ArcadeDbEntry{
+		{Setname: "donpachi", Platform: "CAVE 68000"},
+		{Setname: "DDONPACH", Platform: "CAVE 68000"},
+		{Setname: "donpachihk", Platform: "CAVE 68000"},
+		{Setname: "esprade_fp", Platform: "CAVE 68000"},
+		{Setname: "mazinger", Platform: "CAVE 68000"},
+		{Setname: "uopoko", Platform: "CAVE 68000"},
 		{Setname: "CPS1GAME", Platform: "Capcom CPS-1"},
 		{Setname: "cps15game", Platform: "Capcom CPS-1.5"},
 		{Setname: "cps2game", Platform: "Capcom CPS-2"},
@@ -41,6 +49,12 @@ func TestArcadeSetSystemsMapsCuratedPlatforms(t *testing.T) {
 		{Setname: "unknown", Platform: "Unique hardware"},
 	})
 
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["donpachi"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["ddonpach"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["donpachihk"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["esprade_fp"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["mazinger"])
+	assert.Equal(t, systemdefs.SystemCave68000, setSystems["uopoko"])
 	assert.Equal(t, systemdefs.SystemCPS1, setSystems["cps1game"])
 	assert.Equal(t, systemdefs.SystemCPS1, setSystems["cps15game"])
 	assert.Equal(t, systemdefs.SystemCPS2, setSystems["cps2game"])
@@ -164,6 +178,130 @@ func TestArcadeSystemCacheClassifiesProvidedMRAFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, classifiedPath, results[0].Path)
 	assert.Equal(t, 2, mraReads, "second demand serves from memory")
+}
+
+// TestArcadeSystemCacheClassifiesCave68000MRAFiles covers the CAVE 68000
+// system through the shared classification pass: representative sets, an
+// alternate region set, a Free Play variant, an uppercase MRA setname, sets
+// from another board, and sets missing from the arcade DB.
+func TestArcadeSystemCacheClassifiesCave68000MRAFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeMRA := func(name, setName string) string {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(
+			"<misterromdescription><setname>%s</setname></misterromdescription>", setName,
+		)), 0o600))
+		return path
+	}
+	donpachiPath := writeMRA("DonPachi.mra", "donpachi")
+	ddonpachPath := writeMRA("DoDonPachi.mra", "DDONPACH")
+	donpachihkPath := writeMRA("DonPachi (HK).mra", "donpachihk")
+	espradeFPPath := writeMRA("ESP RaDe (Free Play).mra", "esprade_fp")
+	cps1Path := writeMRA("1941.mra", "1941")
+	unknownPath := writeMRA("Homebrew.mra", "notinarcadedb")
+
+	cache := newTestArcadeSystemCache(t)
+	cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+		return []arcadedb.ArcadeDbEntry{
+			{Setname: "donpachi", Platform: "CAVE 68000"},
+			// Repeated setname: a duplicated arcade DB row must not classify
+			// the same MRA twice.
+			{Setname: "donpachi", Platform: "CAVE 68000"},
+			{Setname: "ddonpach", Platform: "CAVE 68000"},
+			{Setname: "donpachihk", Platform: "CAVE 68000"},
+			{Setname: "esprade_fp", Platform: "CAVE 68000"},
+			{Setname: "1941", Platform: "Capcom CPS-1"},
+			{Setname: "twincobr", Platform: "Toaplan 1"},
+		}, nil
+	}
+
+	input := []platforms.ScanResult{
+		{Path: donpachiPath},
+		{Path: ddonpachPath},
+		{Path: donpachihkPath},
+		{Path: espradeFPPath},
+		{Path: cps1Path},
+		{Path: unknownPath},
+	}
+	inputBefore := append([]platforms.ScanResult(nil), input...)
+
+	// The ordinary Arcade system still receives every MRA: a granular system
+	// is an additional filtered view, not a replacement.
+	arcadeResults, err := cache.captureScanner(
+		context.Background(), &config.Instance{}, systemdefs.SystemArcade, input,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, inputBefore, arcadeResults)
+
+	caveResults, err := cache.scanner(systemdefs.SystemCave68000)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCave68000, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.ScanResult{
+		{Path: donpachiPath}, {Path: ddonpachPath}, {Path: donpachihkPath}, {Path: espradeFPPath},
+	}, caveResults, "each CAVE 68000 set is classified exactly once, in capture order")
+
+	// A set from another board must not land in CAVE 68000, and a CAVE set
+	// must not leak into another granular system.
+	cps1Results, err := cache.scanner(systemdefs.SystemCPS1)(
+		context.Background(), &config.Instance{}, systemdefs.SystemCPS1, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []platforms.ScanResult{{Path: cps1Path}}, cps1Results)
+}
+
+// TestArcadeSystemCacheReusesPersistedCaveClassification proves CAVE 68000
+// rides on the existing persisted classification cache instead of re-reading
+// unchanged MRA files on every index.
+func TestArcadeSystemCacheReusesPersistedCaveClassification(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	guwangePath := filepath.Join(dir, "Guwange.mra")
+	require.NoError(t, os.WriteFile(guwangePath, []byte(
+		"<misterromdescription><setname>guwange</setname></misterromdescription>",
+	), 0o600))
+	uopokoPath := filepath.Join(dir, "Puzzle Uo Poko.mra")
+	require.NoError(t, os.WriteFile(uopokoPath, []byte(
+		"<misterromdescription><setname>uopoko</setname></misterromdescription>",
+	), 0o600))
+	persistPath := filepath.Join(t.TempDir(), arcadeClassCacheFileName)
+	input := []platforms.ScanResult{{Path: guwangePath}, {Path: uopokoPath}}
+
+	classify := func(mraReads *int) []platforms.ScanResult {
+		cache := newArcadeSystemCache(NewPlatform())
+		cache.persistPath = persistPath
+		cache.readArcadeDB = func(platforms.Platform) ([]arcadedb.ArcadeDbEntry, error) {
+			return []arcadedb.ArcadeDbEntry{
+				{Setname: "guwange", Platform: "CAVE 68000"},
+				{Setname: "uopoko", Platform: "CAVE 68000"},
+			}, nil
+		}
+		baseReadMRA := cache.readMRA
+		cache.readMRA = func(path string) (mgls.MRA, error) {
+			*mraReads++
+			return baseReadMRA(path)
+		}
+		_, err := cache.captureScanner(context.Background(), &config.Instance{}, systemdefs.SystemArcade, input)
+		require.NoError(t, err)
+		results, err := cache.scanner(systemdefs.SystemCave68000)(
+			context.Background(), &config.Instance{}, systemdefs.SystemCave68000, nil,
+		)
+		require.NoError(t, err)
+		return results
+	}
+
+	coldReads := 0
+	cold := classify(&coldReads)
+	assert.Equal(t, input, cold)
+	assert.Equal(t, 2, coldReads, "cold cache parses every CAVE MRA")
+
+	warmReads := 0
+	warm := classify(&warmReads)
+	assert.Equal(t, cold, warm)
+	assert.Zero(t, warmReads, "unchanged CAVE MRAs are served from the persisted cache")
 }
 
 func TestArcadeSystemCachePersistedCacheSkipsUnchangedMRAReads(t *testing.T) {
@@ -318,6 +456,18 @@ func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
 	}
 	aliasPath := filepath.Join(organizedDir, "Pooyan.mra")
 	require.NoError(t, os.Symlink(canonicalPath, aliasPath))
+	// Organizer output written straight into _Arcade, plus a PREPEND_YEAR
+	// alias at the Organizer root and a link to media outside _Arcade.
+	inPlaceDir := filepath.Join(arcadeRoot, "_1 A-E")
+	require.NoError(t, os.MkdirAll(inPlaceDir, 0o750))
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(inPlaceDir, "Pooyan.mra")))
+	require.NoError(t, os.Symlink(canonicalPath, filepath.Join(arcadeRoot, "}82 Pooyan.mra")))
+	externalDir := filepath.Join(root, "external")
+	require.NoError(t, os.MkdirAll(externalDir, 0o750))
+	externalTarget := filepath.Join(externalDir, "External.mra")
+	require.NoError(t, os.WriteFile(externalTarget, []byte("test"), 0o600))
+	externalAlias := filepath.Join(arcadeRoot, "External.mra")
+	require.NoError(t, os.Symlink(externalTarget, externalAlias))
 
 	cfg := &config.Instance{}
 	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[launchers]\nindex_root = [%q]\n", root)))
@@ -335,7 +485,71 @@ func TestArcadeSystemCacheScanFilesFiltersSupportedExtensions(t *testing.T) {
 		{Path: mraPath},
 		{Path: mglPath},
 		{Path: canonicalPath},
+		{Path: externalAlias},
 	}, results)
+}
+
+// cancellingLinkFs cancels the scan while a symlink target is being read, so
+// the walk finishes without any later entry observing the cancellation.
+type cancellingLinkFs struct {
+	afero.Fs
+	cancel context.CancelFunc
+}
+
+func (f *cancellingLinkFs) LstatIfPossible(name string) (info os.FileInfo, lstated bool, err error) {
+	lstater, ok := f.Fs.(afero.Lstater)
+	if !ok {
+		info, err = f.Stat(name)
+		return info, false, err //nolint:wrapcheck // Test filesystem passthrough.
+	}
+	return lstater.LstatIfPossible(name) //nolint:wrapcheck // Test filesystem passthrough.
+}
+
+func (f *cancellingLinkFs) ReadlinkIfPossible(name string) (string, error) {
+	f.cancel()
+	linkReader, ok := f.Fs.(afero.LinkReader)
+	if !ok {
+		return "", afero.ErrNoReadlink
+	}
+	return linkReader.ReadlinkIfPossible(name) //nolint:wrapcheck // Test filesystem passthrough.
+}
+
+func TestArcadeSystemCacheScanFilesFailsOnCancelDuringFinalEntry(t *testing.T) {
+	root := t.TempDir()
+	arcadeRoot := filepath.Join(root, "_Arcade")
+	require.NoError(t, os.MkdirAll(arcadeRoot, 0o750))
+	externalDir := filepath.Join(root, "external")
+	require.NoError(t, os.MkdirAll(externalDir, 0o750))
+	externalTarget := filepath.Join(externalDir, "External.mra")
+	require.NoError(t, os.WriteFile(externalTarget, []byte("test"), 0o600))
+	// The only entry under _Arcade, so nothing is walked after its target read.
+	require.NoError(t, os.Symlink(externalTarget, filepath.Join(arcadeRoot, "External.mra")))
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[launchers]\nindex_root = [%q]\n", root)))
+	platform := NewPlatform()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(platform.Launchers(cfg))
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	// Leave index_root as the only root so the walk below is the last one,
+	// matching /media/fat on a device.
+	originalCustom, originalGames := misterconfig.CustomFolders, misterconfig.GamesFolders
+	misterconfig.CustomFolders, misterconfig.GamesFolders = nil, nil
+	t.Cleanup(func() {
+		misterconfig.CustomFolders, misterconfig.GamesFolders = originalCustom, originalGames
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	platform.fs = &cancellingLinkFs{Fs: afero.NewOsFs(), cancel: cancel}
+	cache := newArcadeSystemCache(platform)
+
+	results, err := cache.scanFiles(ctx, cfg)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, results)
 }
 
 func TestAddNeoGeoMVSLauncherSharesScannerCache(t *testing.T) {

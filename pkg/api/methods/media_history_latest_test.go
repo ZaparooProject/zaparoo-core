@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -133,5 +134,39 @@ func TestHandleMediaHistoryLatest_DatabaseError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "error getting latest media history")
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistoryLatest_ResponseHasNoTagsAndNoMediaDBCalls(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockUserDB.On("GetLatestMediaHistory").Return(database.MediaHistoryEntry{
+		DBID:       12,
+		SystemID:   "SNES",
+		SystemName: "Super Nintendo Entertainment System",
+		MediaName:  "Super Mario World",
+		MediaPath:  filepath.ToSlash(filepath.Join("roms", "snes", "smw.sfc")),
+		LauncherID: "SNES",
+		StartTime:  time.Unix(1_770_000_000, 0).UTC(),
+	}, true, nil)
+
+	result, err := HandleMediaHistoryLatest(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+	})
+	require.NoError(t, err)
+
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	var decoded struct {
+		Entry map[string]any `json:"entry"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.NotNil(t, decoded.Entry)
+	assert.NotContains(t, decoded.Entry, "tags")
+	assert.NotContains(t, decoded.Entry, "mediaId")
+	assert.Empty(t, mockMediaDB.Calls, "media.history.latest must not touch the media database")
 	mockUserDB.AssertExpectations(t)
 }
