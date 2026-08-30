@@ -119,8 +119,9 @@ type GrantResult struct {
 	// SessionExtension is the session's accumulated duration extension after
 	// this grant.
 	SessionExtension time.Duration
-	// Replayed is true when a matching idempotency key had already been
-	// applied and no new time was granted.
+	// Replayed is true when the request granted no new time, either because a
+	// matching idempotency key had already been applied or because the day
+	// was already waived.
 	Replayed bool
 }
 
@@ -263,6 +264,9 @@ func (tm *LimitsManager) applyGrant(req *GrantRequest, now time.Time) (GrantResu
 		if existing, ok := nextWaivers[recipient]; ok && existing.expires.After(now) {
 			result.ExpiresAt = existing.expires
 			result.SessionExtension = tm.sessionExtensionTotalLocked(recipient)
+			// Nothing new was granted, so this must not read as a fresh grant
+			// to notification subscribers.
+			result.Replayed = true
 			tm.recordGrantLocked(req, &result, now)
 			return result, nil
 		}

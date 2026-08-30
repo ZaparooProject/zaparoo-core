@@ -299,6 +299,11 @@ func TestGrant_TodayRepeatKeepsSameBoundary(t *testing.T) {
 
 	assert.Equal(t, first.ExpiresAt, second.ExpiresAt,
 		"rescanning must not roll the waiver into another day")
+	assert.False(t, first.Replayed)
+	// No new time was granted, so callers must not publish another
+	// playtime.extended notification for it.
+	assert.True(t, second.Replayed,
+		"a repeat waiver granted nothing and must report as replayed")
 }
 
 func TestGrant_TodayExpiresAtMidnight(t *testing.T) {

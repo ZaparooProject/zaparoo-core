@@ -3687,7 +3687,7 @@ None.
 
 Grant extra time to the playtime session currently being limited, without stopping what is playing and without changing any configured limit.
 
-The recipient is never named by the caller: a grant always applies to the profile playtime is being enforced against at that moment, so it cannot be aimed at someone else's session. Grants are held against the current session only and are cleared when that session resets — when a different profile becomes active, when the cooldown window expires, or when limits are disabled.
+The recipient is never named by the caller: a grant always applies to the profile playtime is being enforced against at that moment, so it cannot be aimed at someone else's session. A `duration` grant is held against the current session only and is cleared when that session resets — when a different profile becomes active, when the cooldown window expires, or when limits are disabled. A `today` waiver survives all three because it is day-scoped: it lapses at the next local midnight and nowhere else.
 
 **The daily limit is never affected.** It remains the hard ceiling in both modes; raising it is a settings change, not a grant.
 

@@ -529,11 +529,14 @@ func RunCommand(
 		Playlist:           plsc,
 		Source:             token.Source,
 		PathRoot:           token.PathRoot,
-		TotalCommands:      totalCmds,
-		CurrentIndex:       currentIndex,
-		Unsafe:             unsafe,
-		Database:           db,
-		ExprEnv:            exprEnv,
+		// A ZapLink resolves one card command into a whole script, so the
+		// count on the card understates what this token runs. Commands that
+		// insist on running alone have to see the expanded total.
+		TotalCommands: totalCmds + len(newCmds),
+		CurrentIndex:  currentIndex,
+		Unsafe:        unsafe,
+		Database:      db,
+		ExprEnv:       exprEnv,
 	}
 
 	if opts.LauncherManager != nil {
