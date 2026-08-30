@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -41,6 +42,7 @@ type ServiceContext struct {
 	State               *state.State
 	DB                  *database.Database
 	Profiles            *profiles.Service
+	LimitsManager       *playtime.LimitsManager
 	PlaybackManager     audio.PlaybackManager
 	UI                  *uievents.Service
 	LaunchSoftwareQueue chan *tokens.Token

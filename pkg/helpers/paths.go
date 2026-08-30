@@ -238,6 +238,7 @@ type launcherPrecomp struct {
 	extensions            []string // pre-lowercased extensions
 	scanExcludes          []string // pre-normalized scan-only file exclude patterns
 	scanDirectoryExcludes []string // pre-normalized scan-only directory exclude patterns
+	skipInternalSymlinks  bool     // skip symlinks whose target is inside this launcher's roots
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -333,6 +334,7 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 				NormalizePathForComparison(exclude),
 			)
 		}
+		lp.skipInternalSymlinks = l.ScanSkipInternalSymlinks
 
 		precomp[l.ID] = lp
 	}
@@ -444,6 +446,80 @@ func (m *LauncherMatcher) ShouldSkipScanDirectory(systemID, path string) bool {
 	}
 
 	return matched
+}
+
+// ShouldSkipScanSymlink reports whether a symlink found under a launcher scan
+// root should be skipped because its target resolves inside that launcher's
+// folders. Such an alias only duplicates media indexed under the target's own
+// path. Every filesystem-scanning launcher whose root contains the link must
+// opt in through ScanSkipInternalSymlinks, so a launcher sharing the root
+// keeps the aliases it needs. readTarget is only called once that agreement
+// holds, so systems without the flag pay no filesystem cost.
+func (m *LauncherMatcher) ShouldSkipScanSymlink(
+	systemID, linkPath string,
+	readTarget func() (string, error),
+) (bool, error) {
+	normLink := NormalizePathForComparison(linkPath)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	var candidateRoots []string
+
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SkipFilesystemScan {
+			continue
+		}
+		lc := m.precomp[launcher.ID]
+		if lc == nil {
+			continue
+		}
+
+		contains := false
+		for _, roots := range [][]string{lc.rootPairs, lc.absFolders} {
+			for _, root := range roots {
+				if !pathHasPrefixNormalized(normLink, root) {
+					continue
+				}
+				if normLink == root {
+					return false, nil
+				}
+				contains = true
+			}
+		}
+		if !contains {
+			continue
+		}
+		if !lc.skipInternalSymlinks {
+			return false, nil
+		}
+		candidateRoots = append(candidateRoots, lc.rootPairs...)
+		candidateRoots = append(candidateRoots, lc.absFolders...)
+	}
+	if len(candidateRoots) == 0 {
+		return false, nil
+	}
+
+	target, err := readTarget()
+	if err != nil {
+		return false, err
+	}
+	normTarget := NormalizePathForComparison(resolveSymlinkTargetLexically(linkPath, target))
+	for _, root := range candidateRoots {
+		if pathHasPrefixNormalized(normTarget, root) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// resolveSymlinkTargetLexically turns a raw symlink target into an absolute
+// path without touching the filesystem: relative targets are joined to the
+// link's directory. The result is only compared against scan roots, so
+// symlinked ancestors in the path do not need resolving.
+func resolveSymlinkTargetLexically(linkPath, target string) string {
+	if filepath.IsAbs(target) {
+		return filepath.Clean(target)
+	}
+	return filepath.Join(filepath.Dir(linkPath), target)
 }
 
 func scanDirectoryExcludeMatches(relPath string, patterns []string) bool {

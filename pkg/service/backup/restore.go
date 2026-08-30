@@ -996,7 +996,7 @@ func (m *Manager) restoreTargetPolicy(file *FileRef) (restorePolicy, error) {
 		}
 		policy := restorePolicy{
 			logical: filepath.Join(root, filepath.FromSlash(file.RestorePath)),
-			roots:   buildRestoreRootPolicies([]string{root}),
+			roots:   buildRestoreRootPolicies([]string{root}, false),
 		}
 		if len(policy.roots) == 0 {
 			return restorePolicy{}, fmt.Errorf("zaparoo restore root is unavailable: %s", root)
@@ -1013,12 +1013,22 @@ func (m *Manager) restoreTargetPolicy(file *FileRef) (restorePolicy, error) {
 		if def.Category != file.Category || !allowedRestorePath(file, []platforms.BackupDefinition{*def}) {
 			continue
 		}
+		logical := filepath.Join(
+			m.platformRestoreRoot(helpers.DataDir(m.pl)), filepath.FromSlash(file.RestorePath),
+		)
+		if def.RestoreTargetRoot != "" {
+			rel := file.RestorePath
+			if restoreRoot := filepath.ToSlash(def.RestoreRoot); restoreRoot != "" {
+				rel = strings.TrimPrefix(file.RestorePath, restoreRoot+"/")
+			}
+			logical = filepath.Join(def.RestoreTargetRoot, filepath.FromSlash(rel))
+		}
 		policy := restorePolicy{
 			definition: def,
-			logical: filepath.Join(
-				m.platformRestoreRoot(helpers.DataDir(m.pl)), filepath.FromSlash(file.RestorePath),
+			logical:    logical,
+			roots: buildRestoreRootPolicies(
+				m.definitionRestoreRootCandidates(def), def.RestoreTargetRoot != "",
 			),
-			roots: buildRestoreRootPolicies(m.definitionRestoreRootCandidates(def)),
 		}
 		if len(policy.roots) == 0 {
 			return restorePolicy{}, fmt.Errorf("restore roots are unavailable for %s", file.RestorePath)
@@ -1041,11 +1051,11 @@ func (m *Manager) isSensitiveRestoreTarget(target string) bool {
 	return false
 }
 
-func buildRestoreRootPolicies(candidates []string) []restoreRootPolicy {
+func buildRestoreRootPolicies(candidates []string, allowCategorySymlink bool) []restoreRootPolicy {
 	seen := make(map[string]struct{}, len(candidates))
 	var policies []restoreRootPolicy
 	for _, candidate := range candidates {
-		for _, policy := range restoreRootPolicyChain(candidate) {
+		for _, policy := range restoreRootPolicyChain(candidate, allowCategorySymlink) {
 			key := policy.root + "\x00" + policy.prefix
 			if _, ok := seen[key]; ok {
 				continue
@@ -1065,7 +1075,7 @@ func buildRestoreRootPolicies(candidates []string) []restoreRootPolicy {
 	return policies
 }
 
-func restoreRootPolicyChain(candidate string) []restoreRootPolicy {
+func restoreRootPolicyChain(candidate string, allowCategorySymlink bool) []restoreRootPolicy {
 	candidate, err := filepath.Abs(candidate)
 	if err != nil {
 		return nil
@@ -1079,9 +1089,9 @@ func restoreRootPolicyChain(candidate string) []restoreRootPolicy {
 		if statErr == nil {
 			resolved := current
 			if info.Mode()&os.ModeSymlink != 0 {
-				if categoryRoot {
-					// The category target must match another independently approved
-					// policy; resolving it here would make any target trusted.
+				if categoryRoot && !allowCategorySymlink {
+					// Implicit category targets must match another independently approved
+					// policy. Explicit platform restore targets may resolve their root.
 					statErr = os.ErrInvalid
 				} else {
 					resolved, statErr = filepath.EvalSymlinks(current)

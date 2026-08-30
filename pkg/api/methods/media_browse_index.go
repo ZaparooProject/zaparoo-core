@@ -39,26 +39,18 @@ import (
 //
 // Phase 1 (current): buckets are derived from the first character of
 // Media.SortName via the shared bucketer (BrowseNameFirstChar /
-// browseBucketKeyExpr), giving Latin/numeric buckets A-Z, 0-9, #. SortName has
-// no phonetic normalization, so CJK titles all land in '#' — identical to how
-// media.browse already orders them, so no regression. The response reports
-// scheme "latin".
+// browseBucketKeyExpr), giving Latin/numeric buckets A-Z, 0-9, #. Browse uses a
+// case-insensitive, punctuation-aware natural collation that keeps those buckets
+// contiguous. SortName has no phonetic normalization, so CJK titles all land in
+// '#'. The response reports scheme "latin".
 //
-// Phase 2 (later, Core-side, no client change): populate a normalized,
-// case-folded sort key at index time and bucket/sort on it instead of SortName.
-// This is the same change for two problems:
-//   - Latin: SortName is BINARY-collated, so lowercase-initial titles sort after
-//     'Z' and would strand under the wrong bucket. A case-folded key fixes the
-//     ordering wrinkle.
-//   - CJK: bucket by pinyin initial (Chinese), kana row (Japanese), or hangul
-//     initial (Korean). Korean is computable from the codepoint; Chinese needs a
-//     Han->pinyin table; Japanese needs reading (yomi) data and is the hardest.
-// The vehicle is a *stored* column populated in Go at index time (a generated
-// column cannot run the phonetic transforms), indexed like SortName. Swapping it
-// in touches only the one shared bucketer; the facet, the letter filter, and the
-// seek cursor follow automatically. No data backfill — it fills on the next
-// manual reindex; pre-reindex rows fall back to SortName bucketing. The response
-// then reports scheme "pinyin"/"kana"/"hangul"/"mixed".
+// Phase 2 (later, Core-side, no client change): populate a phonetic sort key at
+// index time and bucket by pinyin initial (Chinese), kana row (Japanese), or
+// hangul initial (Korean). Korean is computable from the codepoint; Chinese needs
+// a Han->pinyin table; Japanese needs reading (yomi) data and is the hardest.
+// The vehicle is a stored column populated in Go at index time. Swapping it in
+// touches only the shared bucketer; facet, letter filter, and seek cursor follow.
+// Response then reports scheme "pinyin"/"kana"/"hangul"/"mixed".
 //
 // Forward-compatibility is already baked in so Phase 2 needs no client change:
 // scheme and key are opaque, label is separate from key, and jumping is done via

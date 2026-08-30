@@ -1009,9 +1009,12 @@ func (db *MediaDB) AnalyzeApproximate() error {
 	return nil
 }
 
+const browseSortIndexName = "idx_media_browse_sort"
+
 type secondaryIndex struct {
-	name string
-	ddl  string
+	name               string
+	ddl                string
+	replaceWhenEnsured bool
 }
 
 // secondaryIndexes lists all secondary indexes that can be dropped before bulk
@@ -1096,8 +1099,10 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",
 	},
 	{
-		name: "idx_media_browse_sort",
-		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName, DBID)",
+		name: browseSortIndexName,
+		ddl: "CREATE INDEX IF NOT EXISTS " + browseSortIndexName +
+			" ON Media(ParentDir, IsMissing, SortName COLLATE " + browseTitleCollationName + ", DBID)",
+		replaceWhenEnsured: true,
 	},
 }
 
@@ -1135,18 +1140,68 @@ func (db *MediaDB) secondaryIndexExists(indexName string) (bool, error) {
 	return true, nil
 }
 
+func (db *MediaDB) secondaryIndexCurrent(idx secondaryIndex) (bool, error) {
+	exists, err := db.secondaryIndexExists(idx.name)
+	if err != nil || !exists {
+		return exists, err
+	}
+	if idx.name != browseSortIndexName {
+		return true, nil
+	}
+
+	rows, err := db.conn().QueryContext(db.ctx,
+		"SELECT name, coll FROM pragma_index_xinfo(?) WHERE key = 1", idx.name)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect index %s: %w", idx.name, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var column, collation sql.NullString
+		if scanErr := rows.Scan(&column, &collation); scanErr != nil {
+			return false, fmt.Errorf("failed to scan index %s columns: %w", idx.name, scanErr)
+		}
+		if column.String == "SortName" {
+			return strings.EqualFold(collation.String, browseTitleCollationName), nil
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return false, fmt.Errorf("failed to read index %s columns: %w", idx.name, rowsErr)
+	}
+	return false, nil
+}
+
 func (db *MediaDB) missingSecondaryIndexes() ([]secondaryIndex, error) {
 	missing := make([]secondaryIndex, 0)
 	for _, idx := range secondaryIndexes {
-		exists, err := db.secondaryIndexExists(idx.name)
+		current, err := db.secondaryIndexCurrent(idx)
 		if err != nil {
 			return nil, err
 		}
-		if !exists {
+		if !current {
 			missing = append(missing, idx)
 		}
 	}
 	return missing, nil
+}
+
+func (db *MediaDB) replaceSecondaryIndex(idx secondaryIndex) error {
+	tx, err := db.sql.Load().BeginTx(db.ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin replacement of index %s: %w", idx.name, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err = tx.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+idx.name); err != nil {
+		return fmt.Errorf("failed to drop old index %s: %w", idx.name, err)
+	}
+	if _, err = tx.ExecContext(db.ctx, idx.ddl); err != nil {
+		return fmt.Errorf("failed to create replacement index %s: %w", idx.name, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit replacement index %s: %w", idx.name, err)
+	}
+	return nil
 }
 
 // CreateSecondaryIndexes recreates dropped secondary indexes after bulk inserts
@@ -1176,7 +1231,12 @@ func (db *MediaDB) CreateSecondaryIndexes() error {
 
 	for _, idx := range indexesToEnsure {
 		started := time.Now()
-		_, err := db.sql.Load().ExecContext(db.ctx, idx.ddl)
+		var err error
+		if idx.replaceWhenEnsured {
+			err = db.replaceSecondaryIndex(idx)
+		} else {
+			_, err = db.sql.Load().ExecContext(db.ctx, idx.ddl)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to create index %s: %w", idx.name, err)
 		}
@@ -1499,12 +1559,6 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	}
 	defer db.recreating.Store(false)
 
-	if keepBackup {
-		database.PreserveCorruptFile(db.dbPath, "media")
-		database.PreserveCorruptFile(db.dbPath+"-wal", "media")
-		database.PreserveCorruptFile(db.dbPath+"-shm", "media")
-	}
-
 	if err := db.Close(); err != nil {
 		log.Warn().Err(err).Msg("error closing media database before recreate")
 	}
@@ -1514,16 +1568,33 @@ func (db *MediaDB) Recreate(keepBackup bool) error {
 	// dereference. A guard check (Load() == nil) followed by a second Load() for the
 	// query would otherwise race the swap-to-nil and panic.
 
+	// Preserved after the close, not before it, because renaming a file SQLite
+	// still has open fails on Windows: the main database and WAL are opened
+	// without FILE_SHARE_DELETE and the -shm is memory-mapped, so every rename
+	// here returned a sharing violation and the forensic copy was silently
+	// skipped — then the corrupt database was removed below with no backup at
+	// all. Nothing is lost by waiting: either the close checkpointed the WAL
+	// into the main database, which is the file being preserved, or it could
+	// not, and the WAL is still on disk to be preserved with it.
+	//
+	// The -shm is deliberately not preserved. It is a shared-memory index
+	// rebuilt from the WAL on demand, holds nothing durable, and is the one
+	// file whose mapping Windows would refuse to rename anyway.
+	if keepBackup {
+		database.PreserveCorruptFile(db.dbPath, "media")
+		database.PreserveCorruptFile(db.dbPath+"-wal", "media")
+	}
+
 	// Clear any transaction state so db.conn() can't hand out a stale closed tx after
 	// the reopen below. Close has already rolled back and released any writer connection.
 	db.tx = nil
 	db.txConn = nil
 	db.inTransaction = false
 
-	// PreserveCorruptFile above is best-effort: on a rename failure it logs and
-	// leaves the file in place. Whether or not keepBackup ran (or partially
-	// succeeded), db.dbPath must not still exist here — otherwise Open() below
-	// would reopen the corrupt database instead of allocating a fresh one.
+	// PreserveCorruptFile is best-effort: on a rename failure it logs and leaves
+	// the file in place. Whether or not keepBackup ran (or partially succeeded),
+	// db.dbPath must not still exist here — otherwise Open() below would reopen
+	// the corrupt database instead of allocating a fresh one.
 	if err := os.Remove(db.dbPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to remove corrupt media database: %w", err)
 	}
@@ -2922,7 +2993,7 @@ func (db *MediaDB) BrowseFiles(
 
 // GetMediaCoverStatus reports image-property availability at media or title scope.
 func (db *MediaDB) GetMediaCoverStatus(
-	ctx context.Context, refs []database.MediaCoverRef,
+	ctx context.Context, refs []database.MediaRef,
 ) (map[int64]bool, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL

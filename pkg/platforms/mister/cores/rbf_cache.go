@@ -574,6 +574,36 @@ func (c *RBFCache) ResolveLauncher(cfg *config.Instance, launcherID, systemID st
 	return c.GetBySystemID(systemID)
 }
 
+// ResolveLauncherStrict reports the RBF a launcher would use, without
+// ResolveLauncher's fall back to the system's stock core. A launcher that
+// registered its own alt core paths resolves to one of those or to nothing:
+// "would silently run the stock core instead" is not the same as installed,
+// and callers deciding whether a launcher is usable must not conflate them.
+// cfg may be nil, which skips the load_path check.
+func (c *RBFCache) ResolveLauncherStrict(cfg *config.Instance, launcherID, systemID string) (RBFInfo, bool) {
+	key := launcherID
+	if key == "" {
+		key = systemID
+	}
+
+	if cfg != nil {
+		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
+			return c.GetByMglPath(lp)
+		}
+	}
+
+	if launcherID != "" {
+		if rbfInfo, ok := c.GetByLauncherID(launcherID); ok {
+			return rbfInfo, true
+		}
+		if len(c.AltCorePaths(launcherID)) > 0 {
+			return RBFInfo{}, false
+		}
+	}
+
+	return c.GetBySystemID(systemID)
+}
+
 func (c *RBFCache) relatedCandidates(rbfPath string) []string {
 	canonicalDir, shortName := splitRBFPath(rbfPath)
 	if shortName == "" {
