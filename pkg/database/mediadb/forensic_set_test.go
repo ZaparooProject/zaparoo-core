@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -35,6 +36,13 @@ import (
 // SHM kept together, untouched, and reassemblable into a database that opens
 // with every committed row — including rows that only ever reached the WAL.
 func TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The scenario needs a second connection open across Recreate, and
+		// Windows will not let PreserveCorruptFile rename a database file
+		// while any handle on it is still open.
+		t.Skip("open SQLite handles block renaming the database on Windows")
+	}
+
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -42,6 +50,22 @@ func TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet(t *testing.T
 	insertSystemWithMedia(t, mediaDB, "NES", "Some Game", filepath.Join("roms", "nes", "game.nes"))
 	path := mediaDB.GetDBPath()
 	require.FileExists(t, path+"-wal", "the row must still be in the WAL for the set to matter")
+
+	// The set only matters if the row is genuinely WAL-only, so prove the main
+	// database alone cannot answer for it. This has to happen before Recreate:
+	// Recreate closes the database first, and that close can checkpoint the row
+	// into the main file.
+	mainOnly := filepath.Join(t.TempDir(), "main-only.db")
+	copyFileIfExists(t, path, mainOnly)
+	var mainOnlyMedia int
+	mainOnlyErr := openSnapshot(t, mainOnly).
+		QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&mainOnlyMedia)
+	if mainOnlyErr == nil {
+		assert.Zero(t, mainOnlyMedia, "the row must not have been checkpointed into the main database")
+	} else {
+		// Nothing has been checkpointed at all, so even the schema is missing.
+		require.ErrorContains(t, mainOnlyErr, "no such table")
+	}
 
 	// A second, read-only connection keeps the WAL and SHM on disk through
 	// Close(): SQLite checkpoints and deletes them only when the last
