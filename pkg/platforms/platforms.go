@@ -355,6 +355,11 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
+	// ScanSkipInternalSymlinks skips symlinks whose target resolves inside this
+	// launcher's Folders during media scanning. The target is indexed under its
+	// own path, so the alias would only duplicate it. Applies to symlinked files
+	// and directories. Direct path launches remain unaffected.
+	ScanSkipInternalSymlinks bool
 	// Available is populated by LauncherCache.
 	Available bool
 }

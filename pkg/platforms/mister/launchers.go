@@ -55,6 +55,26 @@ var misterDefaultScanExcludes = []string{
 	"empty_hdd.zip/boot.vhd",
 }
 
+// arcadeOrganizerScanDirectoryExcludes are the directories the MiSTer Arcade
+// Organizer script generates: its ORGDIR_DIRECTORIES category folders plus the
+// default _Organized container. They hold symlinks (or copies, with
+// NO_SYMLINKS) of MRAs that are already indexed under _Arcade. The script can
+// write the category folders straight into _Arcade instead of under
+// _Organized, so the container name alone is not enough.
+var arcadeOrganizerScanDirectoryExcludes = []string{
+	"_Organized",
+	"_1 0-9",
+	"_1 A-E",
+	"_1 F-K",
+	"_1 L-Q",
+	"_1 R-T",
+	"_1 U-Z",
+	"_2 Region",
+	"_3 Collections",
+	"_4 Video & Inputs",
+	"_5 Extra Software",
+}
+
 func checkInZip(path string) string {
 	if !strings.HasSuffix(strings.ToLower(path), ".zip") {
 		return path
@@ -2285,12 +2305,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 		// Other
 		{
-			ID:                    systemdefs.SystemArcade,
-			SystemID:              systemdefs.SystemArcade,
-			Folders:               []string{"_Arcade"},
-			Extensions:            []string{".mra", ".mgl"},
-			ScanDirectoryExcludes: []string{"_Organized"},
-			Launch:                launchArcade(pl, systemdefs.SystemArcade),
+			ID:                       systemdefs.SystemArcade,
+			SystemID:                 systemdefs.SystemArcade,
+			Folders:                  []string{"_Arcade"},
+			Extensions:               []string{".mra", ".mgl"},
+			ScanDirectoryExcludes:    arcadeOrganizerScanDirectoryExcludes,
+			ScanSkipInternalSymlinks: true,
+			Launch:                   launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,
