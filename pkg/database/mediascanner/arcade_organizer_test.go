@@ -77,6 +77,21 @@ func TestShouldSkipSymlinkAlias_ContextCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+// A link read that lands after cancellation still answers. Returning that
+// answer let the walk carry on as though nothing had been interrupted, and a
+// cancellation during the final entry then reported a partial scan as complete.
+func TestShouldSkipSymlinkAlias_CancelledDuringSuccessfulCheck(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	skip, err := shouldSkipSymlinkAlias(ctx, func() (bool, error) {
+		cancel()
+		return true, nil
+	})
+	assert.False(t, skip)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 // installArcadeOrganizerLauncher swaps in a launcher cache holding a MiSTer
 // style Arcade launcher rooted at rootDir and returns the matching platform.
 // The caller must not run in parallel: the global launcher cache is shared.

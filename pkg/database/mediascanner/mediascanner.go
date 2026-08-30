@@ -716,11 +716,14 @@ func shouldSkipExcludedSymlink(
 // walk so ordinary handling applies. Context cancellation takes precedence.
 func shouldSkipSymlinkAlias(ctx context.Context, check func() (bool, error)) (bool, error) {
 	skip, err := check()
-	if err == nil {
-		return skip, nil
-	}
+	// Checked before the success return too: a link read that lands after
+	// cancellation still answers, and returning it would let the walk carry on
+	// as though nothing had been interrupted.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return false, ctxErr
+	}
+	if err == nil {
+		return skip, nil
 	}
 	if errors.Is(err, ErrFsTimeout) {
 		return true, nil
@@ -908,6 +911,12 @@ func GetFiles(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk directory %s: %w", path, err)
+	}
+	// The callback checks the context per entry, so cancellation during the
+	// last one leaves the walk finishing normally. Reporting a partial file
+	// list as a complete scan is worse than losing a cancelled run's work.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("directory walk cancelled: %w", ctxErr)
 	}
 
 	scanned := entriesScanned.Load()
