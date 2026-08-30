@@ -34,6 +34,80 @@ import (
 
 const browseBenchRows = 1000
 
+func BenchmarkBrowseSortIndexCreate_239k(b *testing.B) {
+	const rows = 239_000
+
+	for _, tc := range []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "binary",
+			ddl:  "CREATE INDEX idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName, DBID)",
+		},
+		{
+			name: "natural",
+			ddl: "CREATE INDEX idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName COLLATE " +
+				browseTitleCollationName + ", DBID)",
+		},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			mediaDB, cleanup := setupBrowseBenchMediaDB(b)
+			defer cleanup()
+			require.NoError(b, dropBrowseSortIndex(mediaDB))
+			seedBrowseSortIndexBenchmark(b, mediaDB, rows)
+			b.ReportMetric(rows, "rows")
+			b.ResetTimer()
+
+			for b.Loop() {
+				b.StopTimer()
+				require.NoError(b, dropBrowseSortIndex(mediaDB))
+				b.StartTimer()
+				_, err := mediaDB.sql.Load().ExecContext(context.Background(), tc.ddl)
+				require.NoError(b, err)
+			}
+		})
+	}
+}
+
+func dropBrowseSortIndex(mediaDB *MediaDB) error {
+	_, err := mediaDB.sql.Load().ExecContext(context.Background(), "DROP INDEX IF EXISTS idx_media_browse_sort")
+	if err != nil {
+		return fmt.Errorf("drop browse sort benchmark index: %w", err)
+	}
+	return nil
+}
+
+func seedBrowseSortIndexBenchmark(b *testing.B, mediaDB *MediaDB, rows int) {
+	b.Helper()
+	ctx := context.Background()
+	tx, err := mediaDB.sql.Load().BeginTx(ctx, nil)
+	require.NoError(b, err)
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'Bench', 'Bench');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'bench', 'Bench');
+	`)
+	require.NoError(b, err)
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO Media (MediaTitleDBID, SystemDBID, Path, ParentDir, SortName)
+		VALUES (1, 1, ?, ?, ?)
+	`)
+	require.NoError(b, err)
+	defer func() { require.NoError(b, stmt.Close()) }()
+
+	for i := range rows {
+		shuffled := (i * 104729) % rows
+		parentDir := fmt.Sprintf("/roms/system-%03d/", i%96)
+		name := fmt.Sprintf("Game: Variant %d! Disc %d", shuffled, i%12)
+		path := fmt.Sprintf("%sgame-%06d.rom", parentDir, i)
+		_, err = stmt.ExecContext(ctx, path, parentDir, name)
+		require.NoError(b, err)
+	}
+	require.NoError(b, tx.Commit())
+}
+
 func BenchmarkBrowseFiles_TagAttach_100(b *testing.B) {
 	benchBrowseFilesTagAttach(b, "no-tags", false)
 	benchBrowseFilesTagAttach(b, "with-tags", true)
@@ -155,6 +229,9 @@ func setupBrowseBenchMediaDB(b *testing.B) (mediaDB *MediaDB, cleanup func()) {
 
 	mediaDB, err = OpenMediaDB(context.Background(), mockPlatform)
 	require.NoError(b, err)
+	// Browse benchmarks model a database after media update has run the
+	// secondary-index creation phase.
+	require.NoError(b, mediaDB.CreateSecondaryIndexes())
 	cleanup = func() {
 		if mediaDB != nil {
 			_ = mediaDB.Close()

@@ -93,24 +93,32 @@ type pinnedLimits struct {
 
 // LimitsManager enforces time limits and warnings for gameplay sessions.
 type LimitsManager struct {
-	sessionStart          time.Time
-	sessionStartMono      time.Time
-	lastStopTime          time.Time
-	platform              platforms.Platform
-	clock                 clockwork.Clock
-	ctx                   context.Context
-	cooldownTimer         clockwork.Timer
-	done                  chan struct{}
-	warningsGiven         map[time.Duration]bool
-	db                    *database.Database
-	notificationsSend     chan<- models.Notification
-	cfg                   *config.Instance
-	limits                LimitsProvider
-	sessionLimits         *pinnedLimits // launch-time limits for the running game; nil between sessions
-	player                audio.Player
-	cancel                context.CancelFunc
-	sessionCancel         context.CancelFunc // cancels checkLoop for the current game session; nil between sessions
-	lastProfileID         string             // last-seen active profile ID, for identity-change detection
+	sessionStart      time.Time
+	sessionStartMono  time.Time
+	lastStopTime      time.Time
+	platform          platforms.Platform
+	clock             clockwork.Clock
+	ctx               context.Context
+	cooldownTimer     clockwork.Timer
+	done              chan struct{}
+	warningsGiven     map[time.Duration]bool
+	db                *database.Database
+	notificationsSend chan<- models.Notification
+	cfg               *config.Instance
+	limits            LimitsProvider
+	sessionLimits     *pinnedLimits // launch-time limits for the running game; nil between sessions
+	player            audio.Player
+	cancel            context.CancelFunc
+	sessionCancel     context.CancelFunc // cancels checkLoop for the current game session; nil between sessions
+	lastProfileID     string             // last-seen active profile ID, for identity-change detection
+	// sessionExtension is the duration granted to the current session, or
+	// nil when none is in force. Cleared whenever the session resets.
+	sessionExtension *sessionExtension
+	// dayWaivers suspends the session limit per recipient profile until
+	// midnight. Unlike sessionExtension it outlives the session.
+	dayWaivers map[string]dayWaiver
+	// grantLedger deduplicates repeated grants (API retries, reader bounce).
+	grantLedger           []appliedGrant
 	state                 SessionState
 	sessionCumulativeTime time.Duration
 	subscriptionID        int
@@ -247,6 +255,7 @@ func (tm *LimitsManager) SetEnabled(enabled bool) {
 			tm.sessionStartReliable = false
 			tm.warningsGiven = make(map[time.Duration]bool)
 			tm.sessionLimits = nil
+			tm.clearSessionExtensionLocked()
 		}
 		tm.mu.Unlock()
 	}
@@ -302,15 +311,13 @@ func (tm *LimitsManager) snapshotLimits() *pinnedLimits {
 	}
 }
 
-// pinned returns the launch-time limits when they should govern instead of
-// the live provider: a game session exists, it was launched (or re-pinned)
-// under a profile, and the device has since deactivated to the shared
-// profile. Returns nil when live values apply. Must be called without
-// tm.mu held.
-func (tm *LimitsManager) pinned() *pinnedLimits {
-	tm.mu.Lock()
+// pinnedLocked returns the launch-time limits when they should govern
+// instead of the live provider: a game session exists, it was launched (or
+// re-pinned) under a profile, and the device has since deactivated to the
+// shared profile. Returns nil when live values apply. Caller must hold
+// tm.mu; the provider reads service state under its own lock.
+func (tm *LimitsManager) pinnedLocked() *pinnedLimits {
 	p := tm.sessionLimits
-	tm.mu.Unlock()
 	if p == nil || p.profileID == "" {
 		return nil
 	}
@@ -323,7 +330,14 @@ func (tm *LimitsManager) pinned() *pinnedLimits {
 // effectiveEnabled reports whether limits are enforced for the current
 // session, honoring launch-time pinning. Must be called without tm.mu held.
 func (tm *LimitsManager) effectiveEnabled() bool {
-	if p := tm.pinned(); p != nil {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.effectiveEnabledLocked()
+}
+
+// effectiveEnabledLocked is effectiveEnabled for callers holding tm.mu.
+func (tm *LimitsManager) effectiveEnabledLocked() bool {
+	if p := tm.pinnedLocked(); p != nil {
 		return p.enabled
 	}
 	return tm.limits.PlaytimeLimitsEnabled()
@@ -332,26 +346,60 @@ func (tm *LimitsManager) effectiveEnabled() bool {
 // effectiveDailyLimit returns the daily limit for the current session,
 // honoring launch-time pinning. Must be called without tm.mu held.
 func (tm *LimitsManager) effectiveDailyLimit() time.Duration {
-	if p := tm.pinned(); p != nil {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if p := tm.pinnedLocked(); p != nil {
 		return p.daily
 	}
 	return tm.limits.DailyLimit()
 }
 
-// effectiveSessionLimit returns the session limit for the current session,
-// honoring launch-time pinning. Must be called without tm.mu held.
+// effectiveSessionLimit returns the session limit governing the current
+// session: the launch-pinned or live configured limit, adjusted by any
+// extension granted to the profile that owns the session. Must be called
+// without tm.mu held.
 func (tm *LimitsManager) effectiveSessionLimit() time.Duration {
-	if p := tm.pinned(); p != nil {
-		return p.session
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.effectiveSessionLimitLocked(tm.clock.Now())
+}
+
+// effectiveSessionLimitLocked is effectiveSessionLimit for callers holding
+// tm.mu. A zero return means "no session limit", which is how an active day
+// waiver is expressed: createRules simply builds no SessionLimitRule, and
+// the daily limit is left untouched.
+func (tm *LimitsManager) effectiveSessionLimitLocked(now time.Time) time.Duration {
+	recipient := tm.effectiveProfileIDLocked()
+
+	var base time.Duration
+	if p := tm.pinnedLocked(); p != nil {
+		base = p.session
+	} else {
+		base = tm.limits.SessionLimit()
 	}
-	return tm.limits.SessionLimit()
+
+	if !tm.dayWaiverExpiryLocked(recipient, now).IsZero() {
+		return 0
+	}
+	if base == 0 {
+		// No session limit configured, so there is nothing to extend.
+		return 0
+	}
+	return base + tm.sessionExtensionTotalLocked(recipient)
 }
 
 // effectiveProfileID returns the profile whose history scopes daily usage
 // accounting, honoring launch-time pinning. Must be called without tm.mu
 // held.
 func (tm *LimitsManager) effectiveProfileID() string {
-	if p := tm.pinned(); p != nil {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.effectiveProfileIDLocked()
+}
+
+// effectiveProfileIDLocked is effectiveProfileID for callers holding tm.mu.
+func (tm *LimitsManager) effectiveProfileIDLocked() string {
+	if p := tm.pinnedLocked(); p != nil {
 		return p.profileID
 	}
 	return tm.limits.ActiveProfileID()
@@ -376,6 +424,11 @@ func (tm *LimitsManager) ResetSession() {
 		log.Debug().Msg("playtime: cancelled cooldown timer (profile switched)")
 	}
 
+	// A different person is playing, so any time granted to the previous
+	// session goes with it. Day waivers are scoped to a profile rather than
+	// a session and are kept.
+	tm.clearSessionExtensionLocked()
+
 	switch tm.state {
 	case StateActive:
 		log.Info().Msg("playtime: profile switched mid-game, restarting session tracking")
@@ -399,11 +452,19 @@ func (tm *LimitsManager) ResetSession() {
 	}
 }
 
-// IsEnabled returns whether limits are currently enforced.
+// IsEnabled returns the runtime enabled toggle. It reflects global config
+// only; use EffectiveLimitsEnabled to ask whether limits are actually being
+// enforced for whoever is playing.
 func (tm *LimitsManager) IsEnabled() bool {
 	tm.enabledMu.Lock()
 	defer tm.enabledMu.Unlock()
 	return tm.enabled
+}
+
+// EffectiveLimitsEnabled reports whether limits are enforced for the current
+// session, honoring the active profile's override and the launch-time pin.
+func (tm *LimitsManager) EffectiveLimitsEnabled() bool {
+	return tm.effectiveEnabled()
 }
 
 // isSessionActive returns true if a session is currently being tracked.
@@ -611,6 +672,7 @@ func (tm *LimitsManager) cooldownTimerLoop() {
 			tm.sessionCumulativeTime = 0
 			tm.lastStopTime = time.Time{}
 			tm.cooldownTimer = nil
+			tm.clearSessionExtensionLocked()
 		}
 		tm.mu.Unlock()
 
@@ -646,6 +708,8 @@ func (tm *LimitsManager) checkLoop(ctx context.Context) {
 
 // checkLimits evaluates all rules and handles warnings/limits.
 func (tm *LimitsManager) checkLimits() {
+	tm.pruneExpiredWaivers()
+
 	// Enforcement is decided by the effective limits: the live provider,
 	// or the launch-pinned context after a mid-game deactivation.
 	if !tm.effectiveEnabled() {
@@ -902,7 +966,10 @@ func (tm *LimitsManager) playWarningSound() {
 
 // StatusInfo contains current playtime session and limit status.
 type StatusInfo struct {
-	SessionStarted        time.Time
+	SessionStarted time.Time
+	// SessionExtendedUntil is when an active day waiver lapses, or the zero
+	// time when the session limit is being enforced normally.
+	SessionExtendedUntil  time.Time
 	DailyUsageToday       *time.Duration
 	DailyRemaining        *time.Duration
 	State                 string
@@ -910,29 +977,38 @@ type StatusInfo struct {
 	SessionCumulativeTime time.Duration
 	SessionRemaining      time.Duration
 	CooldownRemaining     time.Duration
-	SessionActive         bool
+	// SessionExtension is the duration granted to the current session on top
+	// of the configured session limit. Zero when nothing was granted.
+	SessionExtension time.Duration
+	SessionActive    bool
 }
 
 // GetStatus returns the current playtime session and limit status.
 // Always returns a StatusInfo struct with current state information.
 func (tm *LimitsManager) GetStatus() *StatusInfo {
+	tm.pruneExpiredWaivers()
+
+	now := tm.clock.Now()
+
 	// Snapshot session state under lock
 	tm.mu.Lock()
 	sessionStart := tm.sessionStart
 	currentState := tm.state
 	cumulativeTime := tm.sessionCumulativeTime
 	lastStop := tm.lastStopTime
+	recipient := tm.effectiveProfileIDLocked()
+	sessionExtension := tm.sessionExtensionTotalLocked(recipient)
+	waiverExpiry := tm.dayWaiverExpiryLocked(recipient, now)
 	tm.mu.Unlock()
 
 	resetTimeout := tm.cfg.SessionResetTimeout()
 
-	now := tm.clock.Now()
-
 	// State: Reset (no session exists)
 	if currentState == StateReset {
 		status := &StatusInfo{
-			State:         StateReset.String(),
-			SessionActive: false,
+			State:                StateReset.String(),
+			SessionActive:        false,
+			SessionExtendedUntil: waiverExpiry,
 		}
 
 		// Calculate daily usage/remaining even during reset - this data is valid
@@ -989,6 +1065,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			SessionCumulativeTime: cumulativeTime,
 			SessionRemaining:      sessionRemaining,
 			CooldownRemaining:     cooldownRemaining,
+			SessionExtension:      sessionExtension,
+			SessionExtendedUntil:  waiverExpiry,
 		}
 
 		// For daily usage/remaining, we need to calculate today's total usage
@@ -1020,6 +1098,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			SessionStarted:        sessionStart,
 			SessionDuration:       now.Sub(sessionStart),
 			SessionCumulativeTime: cumulativeTime,
+			SessionExtension:      sessionExtension,
+			SessionExtendedUntil:  waiverExpiry,
 		}
 	}
 
@@ -1068,6 +1148,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		CooldownRemaining:     0, // Not in cooldown
 		DailyUsageToday:       dailyUsageToday,
 		DailyRemaining:        dailyRemaining,
+		SessionExtension:      sessionExtension,
+		SessionExtendedUntil:  waiverExpiry,
 	}
 }
 
@@ -1081,6 +1163,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 // Limit rejections wrap ErrLimitReached so callers can tell a limit apart
 // from a usage-lookup failure.
 func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
+	tm.pruneExpiredWaivers()
+
 	// Whether limits are enforced is decided by the LimitsProvider (global
 	// config, possibly overridden by the active profile).
 	if !tm.limits.PlaytimeLimitsEnabled() {
@@ -1088,7 +1172,11 @@ func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 	}
 
 	dailyLimit := tm.limits.DailyLimit()
-	sessionLimit := tm.limits.SessionLimit()
+	// Use the effective session limit, not the raw configured one: a grant
+	// made after a limit stopped the game has to unblock the relaunch, which
+	// is the whole point of extending a session. Outside a running game the
+	// launch-time pin is nil, so this otherwise matches the live value.
+	sessionLimit := tm.effectiveSessionLimit()
 
 	// If no limits configured, allow launch
 	if dailyLimit == 0 && sessionLimit == 0 {

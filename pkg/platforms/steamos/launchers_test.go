@@ -148,7 +148,7 @@ func TestCreateEmuDeckLauncherTest(t *testing.T) {
 	options.CoresDir = coresDir
 	options.AppendConfigPath = appendConfigPath
 	options.LaunchEnv = func() []string { return []string{"STEAMOS_SESSION=1"} }
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths, options)
+	launcher := createEmuDeckLauncher("nes", systemInfo, &paths, options)
 	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupEmuDeck)
 
 	mediaPath := filepath.Join(paths.RomsPath, "nes", "super_mario.nes")
@@ -233,7 +233,7 @@ func TestCreateRetroDECKLauncherTest(t *testing.T) {
 		SystemID: "snes",
 	}
 
-	launcher := createRetroDECKLauncher("snes", systemInfo, paths)
+	launcher := createRetroDECKLauncher("snes", systemInfo, &paths)
 	assert.Contains(t, launcher.Groups, platformshared.LauncherGroupRetroDECK)
 	mediaPath := filepath.Join(paths.RomsPath, "snes", "chrono_trigger.sfc")
 	command, err := launcher.BuildLaunchCommand(nil, mediaPath, nil)
@@ -307,7 +307,7 @@ func TestEmuDeckLauncherID(t *testing.T) {
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
+	launcher := createEmuDeckLauncher("nes", systemInfo, &paths, testEmuDeckRetroArchOptions())
 
 	assert.Equal(t, "nes", launcher.SystemID)
 	assert.Contains(t, launcher.ID, "EmuDeck")
@@ -326,7 +326,7 @@ func TestRetroDECKLauncherID(t *testing.T) {
 		SystemID: "snes",
 	}
 
-	launcher := createRetroDECKLauncher("snes", systemInfo, paths)
+	launcher := createRetroDECKLauncher("snes", systemInfo, &paths)
 
 	assert.Equal(t, "snes", launcher.SystemID)
 	assert.Contains(t, launcher.ID, "RetroDECK")
@@ -346,7 +346,7 @@ func TestEmuDeckRetroArchLauncherHasControls(t *testing.T) {
 		SystemID: "nes",
 	}
 
-	launcher := createEmuDeckLauncher("nes", systemInfo, paths, testEmuDeckRetroArchOptions())
+	launcher := createEmuDeckLauncher("nes", systemInfo, &paths, testEmuDeckRetroArchOptions())
 
 	expectedControls := []string{
 		platforms.ControlSaveState,
@@ -382,7 +382,7 @@ func TestEmuDeckStandaloneLauncherHasNoControls(t *testing.T) {
 		SystemID: "psx",
 	}
 
-	launcher := createEmuDeckLauncher("psx", systemInfo, paths, testEmuDeckRetroArchOptions())
+	launcher := createEmuDeckLauncher("psx", systemInfo, &paths, testEmuDeckRetroArchOptions())
 	mediaPath := filepath.Join(paths.RomsPath, "psx", "game.chd")
 	command, err := launcher.BuildLaunchCommand(nil, mediaPath, nil)
 	require.NoError(t, err)

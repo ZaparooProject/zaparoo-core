@@ -90,6 +90,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 		models.MethodConfirm,
 		models.MethodSettingsUpdate,
 		models.MethodPlaytimeLimitsUpdate,
+		models.MethodPlaytimeExtend,
 		models.MethodClientsDelete,
 		models.MethodInboxDelete,
 		models.MethodInboxClear,

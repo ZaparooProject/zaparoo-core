@@ -816,10 +816,10 @@ func runBrowseOverlayDirectories(
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
 	if opts.AfterName != "" {
-		query += ` AND name > ?`
+		query += ` AND ` + browseNaturalSortExpr("name") + ` > ?`
 		args = append(args, opts.AfterName)
 	}
-	query += ` ORDER BY name ASC`
+	query += ` ORDER BY ` + browseNaturalSortExpr("name") + ` ASC`
 	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
 		query += limitClause
 		args = append(args, limitArgs...)
@@ -907,10 +907,10 @@ func sqlBrowseDirectoriesFromCache(
 		args = append(args, systemArgs...)
 	}
 	if opts.AfterName != "" {
-		query += ` AND d.Name > ?`
+		query += ` AND ` + browseNaturalSortExpr("d.Name") + ` > ?`
 		args = append(args, opts.AfterName)
 	}
-	query += ` GROUP BY d.DBID, d.Name ORDER BY d.Name ASC`
+	query += ` GROUP BY d.DBID, d.Name ORDER BY ` + browseNaturalSortExpr("d.Name") + ` ASC`
 	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
 		query += limitClause
 		args = append(args, limitArgs...)
@@ -955,10 +955,10 @@ func sqlBrowseDirectoriesFromCacheForSingleSystem(
 			AND d.IsVirtual = 0
 			AND s.SystemID = ?`
 	if opts.AfterName != "" {
-		query += ` AND d.Name > ?`
+		query += ` AND ` + browseNaturalSortExpr("d.Name") + ` > ?`
 		args = append(args, opts.AfterName)
 	}
-	query += ` ORDER BY d.Name ASC`
+	query += ` ORDER BY ` + browseNaturalSortExpr("d.Name") + ` ASC`
 	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
 		query += limitClause
 		args = append(args, limitArgs...)
@@ -1003,10 +1003,10 @@ func sqlBrowseDirectoriesFromMedia(
 		 WHERE instr(Rest, '/') > 0
 		 GROUP BY Name`
 	if opts.AfterName != "" {
-		query += ` HAVING Name > ?`
+		query += ` HAVING ` + browseNaturalSortExpr("Name") + ` > ?`
 		args = append(args, opts.AfterName)
 	}
-	query += ` ORDER BY Name ASC`
+	query += ` ORDER BY ` + browseNaturalSortExpr("Name") + ` ASC`
 	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
 		query += limitClause
 		args = append(args, limitArgs...)
@@ -1055,10 +1055,10 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 		 WHERE instr(Rest, '/') > 0
 		 GROUP BY Name`
 	if opts.AfterName != "" {
-		query += ` HAVING Name > ?`
+		query += ` HAVING ` + browseNaturalSortExpr("Name") + ` > ?`
 		args = append(args, opts.AfterName)
 	}
-	query += ` ORDER BY Name ASC`
+	query += ` ORDER BY ` + browseNaturalSortExpr("Name") + ` ASC`
 	if limitClause, limitArgs := browseDirLimitClause(opts.Limit); limitClause != "" {
 		query += limitClause
 		args = append(args, limitArgs...)
@@ -1128,6 +1128,14 @@ func browseFilenameExpr() string {
 	return `substr(m.Path, length(m.ParentDir) + 1)`
 }
 
+func browseNaturalSortExpr(expr string) string {
+	return expr + " COLLATE " + browseDirectoryCollationName
+}
+
+func browseTitleSortExpr() string {
+	return "m.SortName COLLATE " + browseTitleCollationName
+}
+
 func browseRankPrefixSortExpr() string {
 	filename := browseFilenameExpr()
 	return `CASE WHEN substr(` + filename + `, 1, 1) BETWEEN '0' AND '9' ` +
@@ -1144,7 +1152,7 @@ func browseSortExpr(sortOrder string) string {
 	case browseSortDatePrefixAsc, browseSortDatePrefixDesc:
 		return browseFilenameExpr()
 	default:
-		return "m.SortName"
+		return browseTitleSortExpr()
 	}
 }
 
@@ -1365,7 +1373,7 @@ func sqlBrowseOverlayFilesFromMedia(
 	where, filterArgs := browseFilesFilterCondition(&filterOpts, false)
 	args = append(args, filterArgs...)
 	sortMode := opts.Sort
-	sortExpr := "m.SortName"
+	sortExpr := browseTitleSortExpr()
 	if opts.Sort == "filename-asc" || opts.Sort == "filename-desc" {
 		sortExpr = browseFilenameExpr()
 	}
@@ -1793,7 +1801,7 @@ func queryImagePropertyEntityIDChunk(
 }
 
 func fetchCoverStatuses(
-	ctx context.Context, db sqlQueryable, refs []database.MediaCoverRef,
+	ctx context.Context, db sqlQueryable, refs []database.MediaRef,
 ) (map[int64]bool, error) {
 	statuses := make(map[int64]bool, len(refs))
 	results := make([]database.SearchResultWithCursor, 0, len(refs))
@@ -2272,7 +2280,7 @@ func sqlBrowseIndex(
 		Tags:       opts.Tags,
 	}
 	sortMode := resolveBrowseSortMode(ctx, db, filesOpts)
-	if browseSortExpr(sortMode) != "m.SortName" {
+	if browseSortExpr(sortMode) != browseTitleSortExpr() {
 		total, err := sqlBrowseFileCount(ctx, db, database.BrowseFileCountOptions{
 			PathPrefix: opts.PathPrefix,
 			Systems:    opts.Systems,
@@ -2298,10 +2306,10 @@ func sqlBrowseIndex(
 	}
 	bucketExpr := browseBucketKeyExpr("m.SortName")
 	// The window orders by the browse sort expression, which idx_media_browse_sort
-	// already provides (ParentDir, IsMissing equality then SortName, DBID), so the
-	// window needs no sort; only the GROUP BY (folded bucket, not index order) uses
-	// a transient btree. rn gives each row's position so MIN(rn) per bucket finds
-	// the bucket's first row, joined back for its keyset.
+	// already provides (ParentDir, IsMissing equality then naturally collated
+	// SortName, DBID), so the window needs no sort; only the GROUP BY (folded
+	// bucket, not index order) uses a transient btree. rn gives each row's
+	// position so MIN(rn) per bucket finds the first row, joined back for its keyset.
 	desc := sortMode == "name-desc"
 
 	query := `WITH ordered AS (
@@ -2417,7 +2425,8 @@ func sqlBrowseOverlayIndex(
 			SELECT ` + bucketExpr + ` AS bucket,
 				m.SortName AS sortValue,
 				m.DBID AS dbid,
-				ROW_NUMBER() OVER (ORDER BY m.SortName ` + direction + `, m.DBID ` + direction + `) AS rn
+				ROW_NUMBER() OVER (ORDER BY ` + browseTitleSortExpr() + ` ` + direction +
+		`, m.DBID ` + direction + `) AS rn
 			FROM ranked
 			INNER JOIN Media m ON m.DBID = ranked.DBID
 			WHERE ranked.source_rank = 1 AND ` + where + `

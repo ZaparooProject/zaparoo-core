@@ -385,6 +385,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodPlaytimeLimits:              methods.HandlePlaytimeLimits,
 		models.MethodPlaytimeLimitsUpdate:        methods.HandlePlaytimeLimitsUpdate,
 		models.MethodPlaytime:                    methods.HandlePlaytime,
+		models.MethodPlaytimeExtend:              methods.HandlePlaytimeExtend,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers

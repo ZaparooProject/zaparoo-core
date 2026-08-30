@@ -2866,7 +2866,7 @@ func (m *MockMediaDBI) BrowseFiles(
 }
 
 func (m *MockMediaDBI) GetMediaCoverStatus(
-	ctx context.Context, refs []database.MediaCoverRef,
+	ctx context.Context, refs []database.MediaRef,
 ) (map[int64]bool, error) {
 	if !m.hasExpectedCall("GetMediaCoverStatus") {
 		return map[int64]bool{}, nil
@@ -3426,6 +3426,19 @@ func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBIDs(
 	ctx context.Context, mediaTitleDBIDs []int64,
 ) (map[int64][]database.TagInfo, error) {
 	args := m.Called(ctx, mediaTitleDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTagsByMediaRefs(
+	ctx context.Context, refs []database.MediaRef,
+) (map[int64][]database.TagInfo, error) {
+	if !m.hasExpectedCall("GetMediaTagsByMediaRefs") {
+		return map[int64][]database.TagInfo{}, nil
+	}
+	args := m.Called(ctx, refs)
 	if result, ok := args.Get(0).(map[int64][]database.TagInfo); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}

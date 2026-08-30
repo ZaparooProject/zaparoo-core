@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/profiles"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -309,6 +310,12 @@ func runTokenZapScriptWithContext(
 			}
 		}
 
+		if result.PlaytimeExtension != nil {
+			if extendErr := applyPlaytimeExtension(svc, result.PlaytimeExtension, &originToken); extendErr != nil {
+				return extendErr
+			}
+		}
+
 		if result.Unsafe {
 			log.Warn().Msg("token has been flagged as unsafe")
 			token.Unsafe = true
@@ -341,6 +348,101 @@ func applyProfileSwitch(svc *ServiceContext, req *platforms.ProfileSwitchRequest
 	if _, err := svc.Profiles.ActivateBySwitchID(req.SwitchID); err != nil {
 		return fmt.Errorf("failed to switch profile: %w", err)
 	}
+	return nil
+}
+
+// tokenForLog returns a copy of a token with any bearer credential removed,
+// for log lines that print the whole token.
+func tokenForLog(t *tokens.Token) tokens.Token {
+	safe := *t
+	safe.Text, safe.Data = zapscript.RedactToken(t.Text, t.Data)
+	return safe
+}
+
+// cardGrantIdempotencyWindow is how long one scanned extension card counts
+// as the same grant. It absorbs reader bounce without turning a deliberate
+// second tap minutes later into a no-op.
+const cardGrantIdempotencyWindow = 10 * time.Second
+
+// applyPlaytimeExtension grants extra playtime from a scanned card. The
+// switch ID on the card is a bearer credential, exactly like a profile
+// card: resolving it is the authorization. The difference is that a grant
+// weakens somebody's limits, so it additionally requires the credential to
+// belong to an administrator profile — a member card grants nothing.
+//
+// The recipient is never named on the card. It is whichever profile is
+// governing playtime when the card is scanned, so a card cannot be aimed at
+// a different person's session.
+func applyPlaytimeExtension(
+	svc *ServiceContext,
+	req *platforms.PlaytimeExtensionRequest,
+	token *tokens.Token,
+) error {
+	if svc.Profiles == nil {
+		return errors.New("profiles service not available")
+	}
+	if svc.LimitsManager == nil {
+		return errors.New("playtime limits not available")
+	}
+
+	profile, err := svc.Profiles.VerifyBySwitchID(req.AuthorizerSwitchID)
+	if err != nil {
+		return fmt.Errorf("unknown profile switch ID: %w", err)
+	}
+	if profile.Role != profiles.ProfileRoleAdmin {
+		return fmt.Errorf("profile %s is not an administrator", profile.ProfileID)
+	}
+
+	grant := &playtime.GrantRequest{
+		Source:              "reader",
+		AuthorizerProfileID: profile.ProfileID,
+		Duration:            req.Duration,
+	}
+	// A tap is one grant. Reader bounce and a token briefly re-seating both
+	// re-fire within a second or two, so a short window collapses them,
+	// while a deliberate second tap later still grants again (up to the
+	// cumulative session cap). The key is built from the card's identity and
+	// what it asked for, never from the credential it carries. Without a UID
+	// there is nothing to tell two cards apart, so dedup is skipped rather
+	// than risk collapsing distinct cards into one grant.
+	if token != nil && token.UID != "" {
+		grant.IdempotencyKey = fmt.Sprintf("%s|%s|%s", token.UID, req.Mode, req.Duration)
+		grant.IdempotencyWindow = cardGrantIdempotencyWindow
+	}
+	switch req.Mode {
+	case models.PlaytimeExtendModeDuration:
+		grant.Mode = playtime.GrantModeDuration
+	case models.PlaytimeExtendModeToday:
+		grant.Mode = playtime.GrantModeToday
+	default:
+		return fmt.Errorf("%w: %q", playtime.ErrGrantModeInvalid, req.Mode)
+	}
+
+	result, err := svc.LimitsManager.Grant(grant)
+	if err != nil {
+		return fmt.Errorf("failed to extend playtime: %w", err)
+	}
+
+	if result.Replayed {
+		return nil
+	}
+
+	payload := &models.PlaytimeExtendedParams{
+		Mode:      string(result.Mode),
+		ProfileID: result.RecipientProfileID,
+		GrantedBy: result.AuthorizerProfileID,
+	}
+	if result.Duration > 0 {
+		payload.Duration = result.Duration.String()
+	}
+	if result.SessionExtension > 0 {
+		payload.SessionExtension = result.SessionExtension.String()
+	}
+	if !result.ExpiresAt.IsZero() {
+		payload.Expires = result.ExpiresAt.Format(time.RFC3339)
+	}
+	notifications.PlaytimeExtended(svc.State.Notifications, payload)
+
 	return nil
 }
 
@@ -470,13 +572,16 @@ func launchPlaylistMedia(
 	}
 	monotonicStart := int64(systemUptime.Seconds())
 
+	// Never store a bearer credential: history is readable by every client.
+	historyText, historyData := zapscript.RedactToken(t.Text, t.Data)
+
 	he := database.HistoryEntry{
 		ID:             uuid.New().String(),
 		Time:           t.ScanTime,
 		Type:           t.Type,
 		TokenID:        t.UID,
-		TokenValue:     t.Text,
-		TokenData:      t.Data,
+		TokenValue:     historyText,
+		TokenData:      historyData,
 		ClockReliable:  helpers.IsClockReliable(now),
 		BootUUID:       svc.State.BootUUID(),
 		MonotonicStart: monotonicStart,
@@ -647,7 +752,7 @@ func handleQueuedToken(
 		return
 	}
 
-	log.Info().Msgf("processing token: %v", t)
+	log.Info().Msgf("processing token: %v", tokenForLog(&t))
 
 	if err := svc.Platform.ScanHook(&t); err != nil {
 		log.Error().Err(err).Msgf("error writing tmp scan result")
@@ -661,13 +766,16 @@ func handleQueuedToken(
 	}
 	monotonicStart := int64(systemUptime.Seconds())
 
+	// Never store a bearer credential: history is readable by every client.
+	historyText, historyData := zapscript.RedactToken(t.Text, t.Data)
+
 	he := database.HistoryEntry{
 		ID:             uuid.New().String(),
 		Time:           t.ScanTime,
 		Type:           t.Type,
 		TokenID:        t.UID,
-		TokenValue:     t.Text,
-		TokenData:      t.Data,
+		TokenValue:     historyText,
+		TokenData:      historyData,
 		ClockReliable:  helpers.IsClockReliable(now),
 		BootUUID:       svc.State.BootUUID(),
 		MonotonicStart: monotonicStart,
