@@ -209,7 +209,7 @@ func (s *scraperImpl) scrapeLoop(
 			if opts.Force {
 				var cleanupErr error
 				staleDeleted, cleanupErr = s.deleteStaleLocalMediaProps(
-					ctx, media, system.ROMPaths, props, isContainerTarget,
+					ctx, media, system.ROMPaths, props,
 				)
 				if cleanupErr != nil {
 					skipped++
@@ -380,12 +380,15 @@ func artworkFallbackNames(path string, roots []string, isContainerTarget bool) [
 	return nil
 }
 
+// deleteStaleLocalMediaProps drops properties this scraper wrote that a forced
+// rescrape no longer finds. Container-style names are always considered: a
+// directory that used to collapse to one game may since have gained nested
+// media, and its folder artwork still needs clearing.
 func (s *scraperImpl) deleteStaleLocalMediaProps(
 	ctx context.Context,
 	media *database.MediaWithFullPath,
 	roots []string,
 	foundProps []database.MediaProperty,
-	isContainerTarget bool,
 ) (int, error) {
 	existingProps, err := s.db.GetMediaPropertyMetadata(ctx, media.DBID)
 	if err != nil {
@@ -402,7 +405,7 @@ func (s *scraperImpl) deleteStaleLocalMediaProps(
 		if _, found := foundTypes[prop.TypeTag]; found {
 			continue
 		}
-		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots, isContainerTarget) {
+		if prop.TypeTagDBID == 0 || !isLocalMediaPropForPath(&prop, media.Path, roots, true) {
 			continue
 		}
 		if err := s.db.DeleteMediaProperty(ctx, media.DBID, prop.TypeTagDBID); err != nil {

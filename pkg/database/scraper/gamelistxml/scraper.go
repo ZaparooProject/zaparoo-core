@@ -1562,7 +1562,7 @@ func selectMediaForSlugMatch(
 	mediaTitleDBID int64,
 	resolved string,
 ) slugMediaSelection {
-	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
 	if ok && media.MediaTitleDBID == mediaTitleDBID {
 		return slugMediaSelection{media: media, matchKind: gamelistMatchSlugPath, key: matchedKey}
 	}
@@ -1627,7 +1627,7 @@ func (g *GamelistXMLScraper) canonicalMediaForResolvedPath(
 	indexes loadRecordIndexes,
 	resolved string,
 ) (database.Media, string, bool) {
-	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+	media, matchedKey, ok := matchMediaByResolvedPath(indexes, resolved)
 	if ok {
 		return media, matchedKey, true
 	}
@@ -1800,19 +1800,27 @@ func samePath(a, b string) bool {
 }
 
 func matchMediaByResolvedPath(
-	mediaByPathFold map[string]database.Media,
+	indexes loadRecordIndexes,
 	resolved string,
 ) (database.Media, string, bool) {
 	key := pathFoldKey(resolved)
-	if media, ok := mediaByPathFold[key]; ok {
+	if media, ok := indexes.MediaByPathFold[key]; ok {
 		return media, key, true
+	}
+
+	// A directory the container index knows about is only ever resolved there,
+	// against every row. Prefix matching sees just the rows still unscraped
+	// this run, so a directory holding several children starts to look
+	// unambiguous once the others have been consumed.
+	if indexes.Containers.HasMedia(filepath.ToSlash(resolved)) {
+		return database.Media{}, "", false
 	}
 
 	prefix := key + "/"
 	var matchedMedia database.Media
 	var matchedKey string
 	matches := 0
-	for mediaKey, media := range mediaByPathFold {
+	for mediaKey, media := range indexes.MediaByPathFold {
 		if !strings.HasPrefix(mediaKey, prefix) {
 			continue
 		}
@@ -2428,7 +2436,7 @@ func matchCompanionChildMedia(
 		return companionMediaMatch{Media: cloneMediaRows(mediaRows)}
 	}
 
-	if media, _, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, child.ResolvedPath); ok {
+	if media, _, ok := matchMediaByResolvedPath(indexes, child.ResolvedPath); ok {
 		return companionMediaMatch{Media: []database.Media{media}, MediaLevelWriteSafe: true}
 	}
 

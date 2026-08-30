@@ -1135,6 +1135,34 @@ func TestLoadRecords_DarksoftFolderAmbiguousChildrenSkipped(t *testing.T) {
 	assert.Empty(t, records)
 }
 
+func TestLoadRecords_AmbiguousFolderStaysUnmatchedAfterChildConsumed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	setDir := filepath.Join(root, "2020bb")
+	require.NoError(t, os.MkdirAll(setDir, 0o750))
+	// The child entry is consumed first, which used to leave exactly one row
+	// under ./2020bb and make the ambiguous directory look like a container.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./2020bb/2020bb.xml</path><name>2020bb XML</name></game>
+  <game><path>./2020bb</path><name>2020 Super Baseball</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 71, MediaTitleDBID: 81, Path: filepath.Join(setDir, "2020bb.xml")},
+			database.Media{DBID: 72, MediaTitleDBID: 82, Path: filepath.Join(setDir, "2020bb.mra")},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "2020bb XML", records[0].Game.Name)
+	assert.Equal(t, int64(71), records[0].MatchedMediaDBID)
+}
+
 func TestLoadRecords_ZipAsDirAmbiguousChildrenSkipped(t *testing.T) {
 	t.Parallel()
 

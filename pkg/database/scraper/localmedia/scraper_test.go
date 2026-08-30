@@ -160,7 +160,7 @@ func TestDeleteStaleLocalMediaProps_DeletesOnlyMissingLocalConventionProps(t *te
 	deleted, err := s.deleteStaleLocalMediaProps(context.Background(), media, []string{root}, []database.MediaProperty{{
 		TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
 		Text:    filepath.ToSlash(keptLocalPath),
-	}}, false)
+	}})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
@@ -370,8 +370,36 @@ func TestDeleteStaleLocalMediaProps_DeletesStaleCrossRootProp(t *testing.T) {
 	s := &scraperImpl{db: mockDB, fs: afero.NewMemMapFs()}
 	media := &database.MediaWithFullPath{DBID: 11, MediaTitleDBID: 101, Path: mediaPath, SystemID: "NES"}
 	deleted, err := s.deleteStaleLocalMediaProps(
-		context.Background(), media, []string{romRoot, artRoot}, nil, false,
+		context.Background(), media, []string{romRoot, artRoot}, nil,
 	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+	mockDB.AssertExpectations(t)
+}
+
+// A directory that has since gained nested media no longer collapses to one
+// game, but the folder artwork written while it did still has to be cleared.
+func TestDeleteStaleLocalMediaProps_DeletesFormerContainerArtwork(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	mediaPath := filepath.Join(root, "Cool Game", "Disc 1.cue")
+	staleFolderArt := filepath.Join(root, "media", "boxart", "Cool Game.png")
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(12)).Return([]database.MediaProperty{
+		{
+			TypeTag:     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+			TypeTagDBID: 102,
+			Text:        filepath.ToSlash(staleFolderArt),
+		},
+	}, nil)
+	mockDB.On("DeleteMediaProperty", mock.Anything, int64(12), int64(102)).Return(nil).Once()
+
+	s := &scraperImpl{db: mockDB, fs: afero.NewMemMapFs()}
+	media := &database.MediaWithFullPath{DBID: 12, MediaTitleDBID: 102, Path: mediaPath, SystemID: "psx"}
+	deleted, err := s.deleteStaleLocalMediaProps(context.Background(), media, []string{root}, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
