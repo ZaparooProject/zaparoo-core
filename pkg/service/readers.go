@@ -345,11 +345,18 @@ func timedExit(
 		if exitGeneration.Load() != generation {
 			return
 		}
+		outgoingGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
 		svc.State.RunBeforeExitHook()
 
 		softwareToken = svc.State.GetSoftwareToken()
 		if exitGeneration.Load() != generation || !helpers.TokensEqual(&ownerCopy, softwareToken) {
 			log.Debug().Msg("hold owner changed during before_exit, cancelling exit")
+			return
+		}
+		// Hook-launched media carries no reader ID, so it never moves the hold
+		// owner checked above. Without this the exit would stop it.
+		if svc.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+			log.Info().Msg("before_exit replaced the outgoing media, cancelling exit")
 			return
 		}
 

@@ -824,6 +824,20 @@ func (s *State) ActiveMediaReadyGeneration() (uint64, bool) {
 	return s.activeMediaReadyGen, true
 }
 
+// ActiveMediaReplacedSince reports whether the active media changed since gen
+// was captured alongside hadMedia. It is how a caller that ran before_exit
+// tells that the hook launched or stopped media itself: stopping after that
+// would kill what the hook started rather than the media the caller set out
+// to exit. With nothing active when gen was taken, before_exit is a no-op and
+// there is nothing it could have replaced.
+func (s *State) ActiveMediaReplacedSince(gen uint64, hadMedia bool) bool {
+	if !hadMedia {
+		return false
+	}
+	current, active := s.ActiveMediaReadyGeneration()
+	return !active || current != gen
+}
+
 func (s *State) WaitForActiveMediaReady(ctx context.Context, expectedGen uint64) error {
 	for {
 		s.mu.RLock()

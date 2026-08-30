@@ -209,6 +209,7 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 	// Deliberately before the media stop gate: a before_exit script may launch
 	// media, which takes the read side of the same gate that AcquireMediaStop
 	// holds exclusively. Firing this after the line below deadlocks.
+	outgoingGen, hadMedia := env.State.ActiveMediaReadyGeneration()
 	env.State.RunBeforeExitHook()
 
 	release, err := env.State.AcquireMediaStop(env.Context)
@@ -219,6 +220,13 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 
 	if err := waitForCurrentMediaReady(env.Context, env.State); err != nil {
 		return nil, err
+	}
+
+	// A before_exit script can launch media of its own. Stopping now would
+	// kill what the hook just started instead of what the caller asked to stop.
+	if env.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+		log.Info().Msg("before_exit replaced the outgoing media, leaving it running")
+		return NoContent{}, nil
 	}
 
 	// TODO: return an error when nothing is active, requires StopActiveLauncher
