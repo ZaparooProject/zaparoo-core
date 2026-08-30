@@ -22,10 +22,12 @@ package methods
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
 )
 
@@ -72,8 +74,9 @@ func HandleRemoteActivity(env requests.RequestEnv) (any, error) {
 		limit = *params.Limit
 	}
 
+	status := remoteStatusInfo(env.State)
 	if env.Database == nil || env.Database.UserDB == nil {
-		return models.RemoteActivityResponse{Entries: []models.RemoteActivityEntry{}}, nil
+		return models.RemoteActivityResponse{Status: status, Entries: []models.RemoteActivityEntry{}}, nil
 	}
 
 	commands, err := env.Database.UserDB.ListRecentRemoteCommands(limit)
@@ -102,5 +105,23 @@ func HandleRemoteActivity(env requests.RequestEnv) (any, error) {
 		})
 	}
 
-	return models.RemoteActivityResponse{Entries: entries}, nil
+	return models.RemoteActivityResponse{Status: status, Entries: entries}, nil
+}
+
+// remoteStatusInfo renders the poller's last observation for the response;
+// an absent State (tests, early startup) reports unknown.
+func remoteStatusInfo(st *state.State) models.RemoteStatusInfo {
+	info := models.RemoteStatusInfo{State: state.RemoteStateUnknown}
+	if st == nil {
+		return info
+	}
+	current := st.RemoteStatus()
+	if current.State != "" {
+		info.State = current.State
+	}
+	info.LastErrorCode = current.LastErrorCode
+	if !current.LastContactAt.IsZero() {
+		info.LastContactAt = current.LastContactAt.UTC().Format(time.RFC3339)
+	}
+	return info
 }

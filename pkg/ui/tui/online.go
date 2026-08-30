@@ -27,14 +27,18 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
 // onlinePageData bundles the API responses the online settings page renders.
+// activity is nil when the remote status could not be loaded; the page still
+// renders and shows the status as unknown.
 type onlinePageData struct {
 	status   *models.BackupStatusResponse
 	settings *models.SettingsResponse
+	activity *models.RemoteActivityResponse
 }
 
 // customBaseURLHost returns the display host for a non-default Online base
@@ -88,7 +92,12 @@ func buildOnlineSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview
 			if err != nil {
 				return nil, fmt.Errorf("get settings: %w", err)
 			}
-			return &onlinePageData{status: status, settings: settings}, nil
+			activity, err := svc.GetRemoteActivity(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("error loading remote control status")
+				activity = nil
+			}
+			return &onlinePageData{status: status, settings: settings, activity: activity}, nil
 		},
 		func(data *onlinePageData) {
 			renderOnlineSettingsMenu(svc, pages, app, data, goBack)
@@ -176,6 +185,14 @@ func renderOnlineSettingsMenu(
 			})
 		}
 	})
+	menu.AddValueAction("Remote status",
+		"Whether Zaparoo Online can currently send commands to this device",
+		func() string { return remoteStatusValue(data.activity) },
+		func() {
+			ShowInfoModal(pages, app, "Remote control", remoteStatusDetail(data.activity), func() {
+				app.SetFocus(menu.List)
+			})
+		})
 	menu.AddNavAction("Remote control activity",
 		"See what a linked account's remote commands have done on this device", func() {
 			buildRemoteActivityPage(svc, pages, app, rebuild)
@@ -295,6 +312,71 @@ func addOnlineAccountItems(
 			func() { app.SetFocus(menu.List) },
 		)
 	})
+}
+
+// remoteStatusValue renders the poller's last observation as the short
+// value shown on the Remote status menu line.
+func remoteStatusValue(activity *models.RemoteActivityResponse) string {
+	if activity == nil {
+		return "Unknown"
+	}
+	switch activity.Status.State {
+	case state.RemoteStateDisabled:
+		return "Off"
+	case state.RemoteStateUnlinked:
+		return "Not linked"
+	case state.RemoteStateConnecting:
+		return "Connecting"
+	case state.RemoteStateWaiting:
+		return "Waiting for commands"
+	case state.RemoteStateNotRemoteDevice:
+		return "Not this account's remote device"
+	case state.RemoteStateUnavailable:
+		return "Not available"
+	case state.RemoteStateCredentialRejected:
+		return "Link rejected"
+	case state.RemoteStateError:
+		return "Server unreachable"
+	default:
+		return "Unknown"
+	}
+}
+
+// remoteStatusDetail renders the explanation shown when the Remote status
+// line is selected: what the state means and what, if anything, to do.
+func remoteStatusDetail(activity *models.RemoteActivityResponse) string {
+	if activity == nil {
+		return "The remote control status could not be loaded."
+	}
+	var detail string
+	switch activity.Status.State {
+	case state.RemoteStateDisabled:
+		detail = "Remote control is switched off on this device."
+	case state.RemoteStateUnlinked:
+		detail = "Link this device to a Zaparoo Online account\nto use remote control."
+	case state.RemoteStateConnecting:
+		detail = "Connecting to Zaparoo Online."
+	case state.RemoteStateWaiting:
+		detail = "Zaparoo Online can send commands to this device."
+	case state.RemoteStateNotRemoteDevice:
+		detail = "Only one device per account can use remote control\nwithout Zaparoo Warp.\n\n" +
+			"Choose this device for remote access on Zaparoo Online.\nIt can take a few minutes to connect afterwards."
+	case state.RemoteStateUnavailable:
+		detail = "Zaparoo Online reports remote control as unavailable.\nTry again later."
+	case state.RemoteStateCredentialRejected:
+		detail = "Zaparoo Online rejected this device's credentials.\nUnlink the account and link it again."
+	case state.RemoteStateError:
+		detail = "Zaparoo Online could not be reached.\nCheck the network connection; the device retries on its own."
+	default:
+		detail = "Remote control has not reported a status yet."
+	}
+	if activity.Status.LastErrorCode != "" {
+		detail += "\n\nLast error: " + activity.Status.LastErrorCode
+	}
+	if activity.Status.LastContactAt != "" {
+		detail += "\nLast contact: " + formatRemoteActivityTime(activity.Status.LastContactAt)
+	}
+	return detail
 }
 
 // formatLinkedSince renders a stored link timestamp as a short date, or ""

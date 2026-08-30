@@ -68,7 +68,7 @@ type readerWriteState struct {
 type State struct {
 	platform              platforms.Platform
 	ctx                   context.Context
-	launcherManager       *LauncherManager
+	softwareToken         *tokens.Token
 	uiEvents              *uievents.Service
 	pendingLaunchOverride *PendingLaunchOverride
 	pendingWrite          *PendingWrite
@@ -84,17 +84,19 @@ type State struct {
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
-	softwareToken         *tokens.Token
 	ctxCancelFunc         context.CancelFunc
+	launcherManager       *LauncherManager
 	backupCoordinator     *backupcoordinator.Coordinator
+	remoteStatus          RemoteStatus
 	bootUUID              string
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
 	activeMediaReadyGen   uint64
+	activeMediaPublishMu  syncutil.RWMutex
+	remoteStatusMu        syncutil.RWMutex
 	mediaRestoreMu        syncutil.RWMutex
 	mu                    syncutil.RWMutex
 	mediaLaunchMu         syncutil.RWMutex
-	activeMediaPublishMu  syncutil.RWMutex
 	activeMediaReady      bool
 	restartRequested      bool
 	restorePendingRestart bool

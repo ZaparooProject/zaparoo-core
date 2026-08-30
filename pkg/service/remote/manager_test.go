@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/permissions"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testinghelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -249,9 +250,160 @@ func TestIsUnauthorized(t *testing.T) {
 	assert.True(t, isUnauthorized(errUnauthorized))
 	assert.True(t, isUnauthorized(fmt.Errorf("wrapped: %w", errUnauthorized)))
 	assert.True(t, isUnauthorized(&httpError{status: http.StatusUnauthorized}))
+	assert.True(t, isUnauthorized(&unauthorizedError{bearer: "zpd1_x"}))
 	assert.False(t, isUnauthorized(&httpError{status: http.StatusForbidden}))
 	assert.False(t, isUnauthorized(errors.New("network unreachable")))
 	assert.False(t, isUnauthorized(nil))
+}
+
+// TestWaitUnauthorizedCarriesRejectedBearer pins that a 401 on the wait
+// endpoint reports which bearer was rejected, and still unwraps to the
+// HTTP error the transition/result handlers classify on.
+func TestWaitUnauthorizedCarriesRejectedBearer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"bad token"}}`))
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+
+	_, _, err := m.waitOnce(context.Background(), "zpd1_test")
+	require.True(t, isUnauthorized(err))
+	assert.Equal(t, "zpd1_test", rejectedBearer(err))
+	var httpErr *httpError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.status)
+	assert.Equal(t, "unauthorized", errorCodeOf(err))
+
+	err = m.doJSON(context.Background(), http.MethodPost, "/v1/device/heartbeat", map[string]any{}, nil)
+	require.True(t, isUnauthorized(err))
+	assert.Equal(t, "zpd1_test", rejectedBearer(err))
+}
+
+// TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer pins the re-link
+// race: a 401 for a bearer that is no longer the stored credential is a
+// late answer about the old token and must not flag the fresh link as
+// unlinked; a 401 for the current bearer (or one of unknown provenance)
+// still does.
+func TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://online.example.com"))
+	require.NoError(t, cfg.SetBackupRemoteBaseURL("https://online.example.com"))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL("https://online.example.com"): {Bearer: "zpd1_new"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	calls := 0
+	m := &manager{deps: Deps{Config: cfg}, markUnlinked: func() { calls++ }}
+
+	m.markUnlinkedIfSharedEndpoint("zpd1_old")
+	assert.Equal(t, 0, calls, "a superseded bearer's 401 must be ignored")
+
+	m.markUnlinkedIfSharedEndpoint("zpd1_new")
+	assert.Equal(t, 1, calls, "the current bearer's 401 marks the account unlinked")
+
+	m.markUnlinkedIfSharedEndpoint("")
+	assert.Equal(t, 2, calls, "a 401 of unknown provenance is treated as current")
+}
+
+func TestErrorCodeOf(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "remote_slot_required", errorCodeOf(&httpError{status: 404, code: "remote_slot_required"}))
+	assert.Equal(t, "http_503", errorCodeOf(&httpError{status: 503}))
+	assert.Equal(t, "unauthorized", errorCodeOf(errUnauthorized))
+	assert.Equal(t, "unreachable", errorCodeOf(errors.New("dial tcp: connection refused")))
+}
+
+// TestRunRecordsRemoteStatus pins the owner-facing status the poll loop
+// records on the shared state: a slot-required 404 is reported as "not this
+// account's remote device" with the server's code, distinct from the
+// feature-dark 404, and the loop still stops cleanly on cancel while backed
+// off on the long retry.
+func TestRunRecordsRemoteStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/device/remote-sessions/wait":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"remote_slot_required","message":"not entitled"}}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	st, notifications := state.NewState(m.deps.Platform, "")
+	t.Cleanup(func() {
+		for len(notifications) > 0 {
+			<-notifications
+		}
+	})
+	m.deps.State = st
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	userDB.On("ListUnreportedRemoteCommands", resultReplayBatchLimit).
+		Return([]database.RemoteCommand{}, nil).Maybe()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		return st.RemoteStatus().State == state.RemoteStateNotRemoteDevice
+	}, 2*time.Second, 10*time.Millisecond, "slot-required 404 was never reported as status")
+	status := st.RemoteStatus()
+	assert.Equal(t, "remote_slot_required", status.LastErrorCode)
+	assert.False(t, status.LastContactAt.IsZero(), "the successful heartbeat counts as contact")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
+	userDB.AssertExpectations(t)
+}
+
+// TestRunRecordsDisabledStatus pins that the not-eligible branch reports
+// "disabled" (consent off) rather than leaving the status unknown.
+func TestRunRecordsDisabledStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("disabled remote control must not make requests, got %s", r.URL.Path)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	m.deps.Config.SetRemoteControl(false)
+	st, notifications := state.NewState(m.deps.Platform, "")
+	t.Cleanup(func() {
+		for len(notifications) > 0 {
+			<-notifications
+		}
+	})
+	m.deps.State = st
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Once()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		return st.RemoteStatus().State == state.RemoteStateDisabled
+	}, 2*time.Second, 10*time.Millisecond)
+	cancel()
+	<-done
 }
 
 // TestJitter pins the backoff jitter contract: the result always falls in

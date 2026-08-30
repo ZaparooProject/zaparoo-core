@@ -137,7 +137,9 @@ func TestBuildOnlineSettingsMenu_RemoteControlActivityNavigatesToActivityPage_In
 	})
 	require.True(t, runner.WaitForText("Remote control activity", uiSettleTimeout))
 
-	// Account, Warp, Unlink account, Remote control, then Remote control activity.
+	// Account, Warp, Unlink account, Remote control, Remote status, then
+	// Remote control activity.
+	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()
 	runner.SimulateArrowDown()

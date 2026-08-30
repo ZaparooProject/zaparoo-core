@@ -646,8 +646,9 @@ func TestOperationEchoAndUnknownType(t *testing.T) {
 
 // TestOperationDispatchesMethodBackedOperationThroughAllowlist is an
 // end-to-end check that a method-backed operation_type reaches the shared
-// API registry with a non-admin role, scoped params, and the exact
-// camelCase result shape — not a bespoke adapter.
+// API registry with a non-admin role and scoped params, and that its
+// response comes back in the snake_case wire shape — not the model's own
+// camelCase.
 func TestOperationDispatchesMethodBackedOperationThroughAllowlist(t *testing.T) {
 	var sawRole string
 	m := &manager{deps: Deps{Methods: fakeMethodResolver{
@@ -656,7 +657,9 @@ func TestOperationDispatchesMethodBackedOperationThroughAllowlist(t *testing.T) 
 			var params models.SystemsParams
 			require.NoError(t, json.Unmarshal(env.Params, &params))
 			require.True(t, params.All)
-			return models.SystemsResponse{Systems: []models.System{{ID: "SNES"}}}, nil
+			return models.SystemsResponse{
+				Systems: []models.System{{ID: "SNES", ZapScript: "**launch.system:SNES"}},
+			}, nil
 		},
 	}}}
 
@@ -664,8 +667,44 @@ func TestOperationDispatchesMethodBackedOperationThroughAllowlist(t *testing.T) 
 		OperationType: "systems", Params: json.RawMessage(`{"all":true}`),
 	})
 	assert.Equal(t, "succeeded", result.Status)
-	assert.JSONEq(t, `{"systems":[{"id":"SNES"}]}`, string(result.Result))
+	assert.JSONEq(t, `{"systems":[{"id":"SNES","zap_script":"**launch.system:SNES"}]}`, string(result.Result))
 	assert.Equal(t, "remote", sawRole)
+}
+
+// TestOperationTranslatesSearchParamsAndResult pins the casing contract end
+// to end for a query verb: the API delivers snake_case params, the Core
+// method receives camelCase params, and the method's camelCase response is
+// reported to the API as snake_case.
+func TestOperationTranslatesSearchParamsAndResult(t *testing.T) {
+	var sawParams map[string]json.RawMessage
+	m := &manager{deps: Deps{Methods: fakeMethodResolver{
+		"media.search": func(env requests.RequestEnv) (any, error) {
+			require.NoError(t, json.Unmarshal(env.Params, &sawParams))
+			return models.SearchResults{Total: 1, Results: []models.SearchResultMedia{{
+				Name: "Sonic", Path: "/roms/Genesis/Sonic.md", ZapScript: "**launch:/roms/Genesis/Sonic.md",
+				HasCover: true, System: models.System{ID: "Genesis"},
+			}}}, nil
+		},
+	}}}
+
+	result := m.executeOperation(context.Background(), &operationEnvelope{
+		OperationType: "media.search",
+		Params:        json.RawMessage(`{"query":"sonic","max_results":5,"fuzzy_system":true}`),
+	})
+	require.Equal(t, "succeeded", result.Status, result.ErrorCode)
+	assert.Contains(t, sawParams, "maxResults")
+	assert.Contains(t, sawParams, "fuzzySystem")
+	assert.NotContains(t, sawParams, "max_results")
+	assert.JSONEq(t, `{"total":1,"results":[{
+		"name":"Sonic","path":"/roms/Genesis/Sonic.md","zap_script":"**launch:/roms/Genesis/Sonic.md",
+		"has_cover":true,"system":{"id":"Genesis"},"tags":null
+	}]}`, string(result.Result))
+
+	rejected := m.executeOperation(context.Background(), &operationEnvelope{
+		OperationType: "media.search", Params: json.RawMessage(`{"query":"sonic","maxResults":5}`),
+	})
+	assert.Equal(t, "failed", rejected.Status)
+	assert.Equal(t, "bad_params", rejected.ErrorCode, "camelCase params are not the wire contract")
 }
 
 // TestOperationRejectsUnscopedLaunchersParams verifies the bad_params gate

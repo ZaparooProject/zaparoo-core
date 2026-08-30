@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -80,6 +81,44 @@ func TestHandleRemoteActivity_ReturnsRecentEntriesNewestFirst(t *testing.T) {
 	assert.Equal(t, "bad_params", resp.Entries[1].ErrorCode)
 
 	mockUserDB.AssertExpectations(t)
+}
+
+// TestHandleRemoteActivity_ReportsPollerStatus pins that the response
+// carries the remote poller's last observation (state, last contact, last
+// error code) alongside the ledger, and reports unknown when no service
+// state is available at all.
+func TestHandleRemoteActivity_ReportsPollerStatus(t *testing.T) {
+	t.Parallel()
+
+	st, notifications := state.NewState(nil, "")
+	t.Cleanup(func() {
+		for len(notifications) > 0 {
+			<-notifications
+		}
+	})
+	st.SetRemoteStatus(state.RemoteStateWaiting, "")
+	st.SetRemoteStatus(state.RemoteStateNotRemoteDevice, "remote_slot_required")
+
+	mockUserDB := &helpers.MockUserDBI{}
+	mockUserDB.On("ListRecentRemoteCommands", defaultRemoteActivityLimit).Return([]database.RemoteCommand{}, nil)
+	result, err := HandleRemoteActivity(requests.RequestEnv{
+		IsLocal: true, State: st, Database: &database.Database{UserDB: mockUserDB},
+	})
+	require.NoError(t, err)
+	resp, ok := result.(models.RemoteActivityResponse)
+	require.True(t, ok)
+	assert.Equal(t, state.RemoteStateNotRemoteDevice, resp.Status.State)
+	assert.Equal(t, "remote_slot_required", resp.Status.LastErrorCode)
+	assert.NotEmpty(t, resp.Status.LastContactAt, "the earlier waiting state is remembered as last contact")
+	_, parseErr := time.Parse(time.RFC3339, resp.Status.LastContactAt)
+	require.NoError(t, parseErr)
+
+	result, err = HandleRemoteActivity(requests.RequestEnv{IsLocal: true})
+	require.NoError(t, err)
+	resp, ok = result.(models.RemoteActivityResponse)
+	require.True(t, ok)
+	assert.Equal(t, state.RemoteStateUnknown, resp.Status.State)
+	assert.Empty(t, resp.Entries)
 }
 
 func TestHandleRemoteActivity_RejectsOutOfRangeLimit(t *testing.T) {

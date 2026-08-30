@@ -164,19 +164,26 @@ func TestBuildStructuralCommandRejectsMalformedAdvancedArgs(t *testing.T) {
 }
 
 // TestCommandRejectsURLValueForAllStructuralVerbs pins that none of the
-// three remote structural verbs accept a URL-shaped value: a system ID,
-// media path, or script name is never legitimately one. This is
-// defense-in-depth alongside RunCommand skipping ZapLink resolution
-// entirely for remote-sourced tokens (pkg/zapscript/commands_test.go); it
-// gives a clean bad_params error instead of a downstream failure, and used
-// to only apply to "launch".
+// three remote structural verbs accept a value carrying any URL scheme: a
+// system ID, media path, or script name is never legitimately one, and the
+// launch command would install-fetch http(s) and smb URLs onto the device.
+// The check mirrors the Online API's own (any scheme, anywhere in the
+// value) so a bypassed API still can't reach the fetch path, and gives a
+// clean bad_params error instead of a downstream failure.
 func TestCommandRejectsURLValueForAllStructuralVerbs(t *testing.T) {
 	t.Parallel()
 	for _, operationType := range []string{"launch", "launch.system", "mister.script"} {
-		m := &manager{}
-		result := m.executeCommand(
-			context.Background(), operationType, json.RawMessage(`{"value":"https://example.com/game.zip"}`))
-		assert.Equal(t, "bad_params", result.ErrorCode, operationType)
+		for _, value := range []string{
+			"https://example.com/game.zip",
+			"smb://nas/share/game.sfc?system=SNES",
+			"FTP://example.com/game.zip",
+			"Genesis/Sonic.md?launcher=x&url=http://example.com",
+		} {
+			m := &manager{}
+			result := m.executeCommand(
+				context.Background(), operationType, json.RawMessage(`{"value":"`+value+`"}`))
+			assert.Equal(t, "bad_params", result.ErrorCode, "%s: %s", operationType, value)
+		}
 	}
 }
 
@@ -204,8 +211,10 @@ func TestValidCommandValueRejectsZapScriptInjection(t *testing.T) {
 		assert.False(t, validCommandValue(value), value)
 	}
 	assert.True(t, validCommandValue("Genesis/Sonic.md?launcher=default"))
-	assert.True(t, isURLLaunch("https://example.com/game.zip?launcher=x"))
-	assert.False(t, isURLLaunch("Genesis/Sonic.md?launcher=x"))
+	assert.True(t, containsURLScheme("https://example.com/game.zip?launcher=x"))
+	assert.True(t, containsURLScheme("smb://nas/share/game.sfc"))
+	assert.False(t, containsURLScheme("Genesis/Sonic.md?launcher=x"))
+	assert.False(t, containsURLScheme("C:/Games/Sonic.md"), "a drive letter is not a URL scheme")
 }
 
 func FuzzBuildStructuralCommand(f *testing.F) {

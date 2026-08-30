@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -46,11 +47,13 @@ func (m *manager) executeCommand(
 		return failResult("bad_params")
 	}
 	// None of the three structural verbs ever legitimately take a URL as
-	// their value (a system ID, media path, or script name never is one).
-	// Rejecting it here, in addition to RunCommand skipping ZapLink
-	// resolution for remote-sourced tokens, gives a clean bad_params error
-	// instead of a downstream failure.
-	if isURLLaunch(params.Value) {
+	// their value (a system ID, media path, or script name never is one),
+	// and the launch command would install-fetch an http(s) or smb URL onto
+	// the device. The Online API rejects any scheme before an operation is
+	// created; this repeats that check locally so a bypassed or compromised
+	// API still can't reach the fetch path, and gives a clean bad_params
+	// error instead of a downstream failure.
+	if containsURLScheme(params.Value) {
 		return failResult("bad_params")
 	}
 	command, err := buildStructuralCommand(operationType, params.Value)
@@ -122,11 +125,12 @@ func validCommandValue(value string) bool {
 	return true
 }
 
-func isURLLaunch(value string) bool {
-	base := value
-	if index := strings.IndexByte(base, '?'); index >= 0 {
-		base = base[:index]
-	}
-	parsed, err := url.Parse(strings.TrimSpace(base))
-	return err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https"))
+// urlSchemePattern matches a URL scheme anywhere in a command value, the
+// same pattern the Online API applies to a launch value at creation.
+//
+//nolint:gochecknoglobals // compiled once
+var urlSchemePattern = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://`)
+
+func containsURLScheme(value string) bool {
+	return urlSchemePattern.MatchString(value)
 }

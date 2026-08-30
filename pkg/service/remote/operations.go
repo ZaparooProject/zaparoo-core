@@ -371,7 +371,8 @@ func (m *manager) postResult(
 
 // executeOperation dispatches an operation against operationAllowlist —
 // deny-by-default: an operation_type with no entry is refused before
-// anything else runs. See allowlist.go for the table and dispatch.go for
+// anything else runs. See allowlist.go for the table, wire.go for the
+// params translation every entry goes through first, and dispatch.go for
 // runMethod, which handles every method-backed entry generically.
 func (m *manager) executeOperation(
 	ctx context.Context, operation *operationEnvelope,
@@ -380,20 +381,21 @@ func (m *manager) executeOperation(
 	if !ok {
 		return failResult("unknown_type")
 	}
-	if err := spec.params(operation.Params); err != nil {
+	params, err := spec.translate(operation.Params)
+	if err != nil {
 		return failResult("bad_params")
 	}
 	if spec.local != nil {
-		return spec.local(m, ctx, operation.OperationType, operation.Params)
+		return spec.local(m, ctx, operation.OperationType, params)
 	}
-	return m.runMethod(ctx, spec, operation.Params)
+	return m.runMethod(ctx, spec, params)
 }
 
 // executeEcho is the "echo" operation's local handler: a fixed round-trip
 // with no side effects, used to verify the remote operations path end to
 // end without touching device state.
 func (*manager) executeEcho(_ context.Context, _ string, raw json.RawMessage) operationResult {
-	var params echoParams
+	var params wireEchoParams
 	if err := decodeParams(raw, &params); err != nil {
 		return failResult("bad_params")
 	}
