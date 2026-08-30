@@ -9,6 +9,7 @@ package steamos
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -350,6 +351,83 @@ func TestPrepareBackupRestorePreservesDestinationProviderPaths(t *testing.T) {
 	assert.Equal(t, filepath.Join(destinationRetro, "states"), retroPaths.StatesPath)
 	assert.Equal(t, filepath.Join(destinationRetro, "bios"), retroPaths.BiosPath)
 	assert.Equal(t, filepath.Join(destinationRetro, "storage"), retroPaths.StoragePath)
+}
+
+func TestRewriteEmuDeckPathsQuotesShellMetacharacters(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	emuSettings := filepath.Join(home, ".config", "EmuDeck", "settings.sh")
+	// $ stays active inside a double-quoted shell assignment, and an
+	// apostrophe has to survive the single quoting we now emit.
+	emulation := filepath.Join(home, "Bob's $HOME Emulation")
+	require.NoError(t, os.MkdirAll(emulation, 0o750))
+	writeBackupTestFile(t, emuSettings, "emulationPath=\"/old/Emulation\"\n")
+
+	paths := linuxemu.EmuDeckPaths{
+		EmulationPath: emulation,
+		RomsPath:      filepath.Join(emulation, "roms"),
+		ToolsPath:     filepath.Join(emulation, "tools"),
+		BiosPath:      filepath.Join(emulation, "bios"),
+		SavesPath:     filepath.Join(emulation, "saves"),
+		StoragePath:   filepath.Join(emulation, "storage"),
+	}
+	require.NoError(t, rewriteEmuDeckPaths(home, &paths))
+
+	assert.Equal(t, emulation, sourceEmuDeckSetting(t, emuSettings))
+}
+
+func TestRewriteEmuDeckPathsRoundTripsApostrophes(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	emuSettings := filepath.Join(home, ".config", "EmuDeck", "settings.sh")
+	emulation := filepath.Join(home, "Bob's Emulation")
+	require.NoError(t, os.MkdirAll(emulation, 0o750))
+	writeBackupTestFile(t, emuSettings, "emulationPath=\"/old/Emulation\"\n")
+
+	paths := linuxemu.EmuDeckPaths{EmulationPath: emulation}
+	require.NoError(t, rewriteEmuDeckPaths(home, &paths))
+
+	assert.Equal(t, emulation, sourceEmuDeckSetting(t, emuSettings))
+	assert.Equal(t, emulation, linuxemu.DefaultEmuDeckPaths(home).EmulationPath)
+}
+
+// sourceEmuDeckSetting reads emulationPath back the way EmuDeck does, by
+// sourcing settings.sh in a POSIX shell.
+func sourceEmuDeckSetting(t *testing.T, settingsPath string) string {
+	t.Helper()
+	//nolint:gosec // Fixed script; the settings path is a test-owned temporary file.
+	sourced, err := exec.CommandContext(
+		t.Context(), "sh", "-c",
+		". \"$1\" >/dev/null 2>&1; printf %s \"$emulationPath\"", "sh", settingsPath,
+	).Output()
+	require.NoError(t, err)
+	return string(sourced)
+}
+
+func TestBackupDefinitionsFailClosedWithoutHome(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, BackupDefinitions(""))
+	assert.Empty(t, BackupDefinitions("relative/home"))
+	assert.Empty(t, durableDefinitions(""))
+}
+
+func TestDurableDefinitionsHaveAbsoluteSourceRoots(t *testing.T) {
+	t.Parallel()
+	definitions := durableDefinitions(t.TempDir())
+	require.NotEmpty(t, definitions)
+	for _, definition := range definitions {
+		assert.True(t, filepath.IsAbs(definition.SourceRoot),
+			"relative source root: %s", definition.SourceRoot)
+	}
+}
+
+func TestFlycastSavesDoNotMatchArbitraryVMUNames(t *testing.T) {
+	t.Parallel()
+	saves := flycastSaves("flycast")
+	for _, pattern := range saves.include {
+		assert.NotEqual(t, "vmu", pattern.Contains,
+			"bare vmu substring collects unrelated files")
+	}
 }
 
 func writeBackupTestFile(t *testing.T, path, contents string) {

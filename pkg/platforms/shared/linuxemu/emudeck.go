@@ -191,7 +191,7 @@ func emuDeckWrapperPath(paths *EmuDeckPaths, emulator emulatorConfig) string {
 	if emulator.wrapper == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(paths.RomsPath), "tools", "launchers", emulator.wrapper)
+	return filepath.Join(paths.ToolsPath, "launchers", emulator.wrapper)
 }
 
 func validEmuDeckWrapper(path string) bool {

@@ -181,6 +181,7 @@ func parseShellPathAssignment(contents, key, homeDir string) string {
 			continue
 		}
 		value = strings.TrimSpace(value)
+		literal := false
 		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
 			unquoted, err := strconv.Unquote(value)
 			if err != nil {
@@ -188,12 +189,17 @@ func parseShellPathAssignment(contents, key, homeDir string) string {
 			}
 			value = unquoted
 		} else if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
-			value = value[1 : len(value)-1]
+			// POSIX single quoting escapes an apostrophe as '\'' and leaves
+			// everything else, including $HOME and ~, literal.
+			value = strings.ReplaceAll(value[1:len(value)-1], `'\''`, "'")
+			literal = true
 		}
-		value = strings.ReplaceAll(value, "${HOME}", homeDir)
-		value = strings.ReplaceAll(value, "$HOME", homeDir)
-		if strings.HasPrefix(value, "~/") {
-			value = filepath.Join(homeDir, value[2:])
+		if !literal {
+			value = strings.ReplaceAll(value, "${HOME}", homeDir)
+			value = strings.ReplaceAll(value, "$HOME", homeDir)
+			if strings.HasPrefix(value, "~/") {
+				value = filepath.Join(homeDir, value[2:])
+			}
 		}
 		if strings.ContainsAny(value, "$`\n\r") || !validConfiguredPath(value, homeDir) {
 			return ""

@@ -447,7 +447,7 @@ func flycastSaves(rel string) emulatorPathDefinition {
 			{Glob: "*.vmu"},
 			{Glob: "*.nvm"},
 			{Glob: "*.flash"},
-			{Contains: "vmu"},
+			{Contains: "vmu/"},
 		},
 	}
 }

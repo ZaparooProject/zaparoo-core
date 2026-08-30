@@ -719,3 +719,23 @@ func TestLaunchersRegistersNothingWithoutDependencies(t *testing.T) {
 
 	assert.Empty(t, Launchers(nil, options, nil))
 }
+
+func TestEmuDeckWrapperPathUsesToolsPath(t *testing.T) {
+	t.Parallel()
+
+	// EmuDeck lets romsPath and toolsPath point at different roots; the
+	// launcher wrappers only ever live under toolsPath.
+	paths := EmuDeckPaths{
+		RomsPath:  filepath.Join(string(filepath.Separator), "mnt", "sdcard", "roms"),
+		ToolsPath: filepath.Join(string(filepath.Separator), "home", "deck", "Emulation", "tools"),
+	}
+	got := emuDeckWrapperPath(&paths, emulatorConfig{wrapper: "DuckStation.sh"})
+	want := filepath.Join(paths.ToolsPath, "launchers", "DuckStation.sh")
+	if got != want {
+		t.Fatalf("wrapper path: got %s, want %s", got, want)
+	}
+
+	if emuDeckWrapperPath(&paths, emulatorConfig{}) != "" {
+		t.Fatal("expected empty path for an emulator with no wrapper")
+	}
+}

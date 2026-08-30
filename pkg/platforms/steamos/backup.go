@@ -192,10 +192,28 @@ func (p *Platform) BackupDefinitions() []platforms.BackupDefinition {
 // compatibility definitions are restore-only and never traversed for backup.
 func (p *Platform) BackupPlan() platforms.BackupPlan {
 	home := steamOSHomeDir()
+	if !validBackupHome(home) {
+		return platforms.BackupPlan{Warnings: []platforms.BackupWarning{unresolvedHomeWarning()}}
+	}
 	definitions := durableDefinitions(home)
 	prefixDefinitions, warnings := discoverNonSteamDefinitionsAt(home, p.configuredSteamBackupRoot())
 	definitions = append(definitions, prefixDefinitions...)
 	return platforms.BackupPlan{Definitions: definitions, Warnings: warnings}
+}
+
+// validBackupHome rejects an unresolved home directory. Definitions built from
+// an empty home are relative, and the collector would walk the working
+// directory as a trusted source root.
+func validBackupHome(home string) bool {
+	return home != "" && filepath.IsAbs(home)
+}
+
+func unresolvedHomeWarning() platforms.BackupWarning {
+	return platforms.BackupWarning{
+		Category: backupCategorySettings,
+		Path:     "",
+		Reason:   "home directory could not be resolved; nothing was collected",
+	}
 }
 
 func (p *Platform) configuredSteamBackupRoot() string {
@@ -223,6 +241,9 @@ func BackupDefinitions(home string) []platforms.BackupDefinition {
 }
 
 func steamOSBackupDefinitions(home, configuredSteamRoot string) []platforms.BackupDefinition {
+	if !validBackupHome(home) {
+		return nil
+	}
 	definitions := durableDefinitions(home)
 	discovered, _ := discoverNonSteamDefinitionsAt(home, configuredSteamRoot)
 	definitions = append(definitions, discovered...)
@@ -231,6 +252,9 @@ func steamOSBackupDefinitions(home, configuredSteamRoot string) []platforms.Back
 }
 
 func durableDefinitions(home string) []platforms.BackupDefinition {
+	if !validBackupHome(home) {
+		return nil
+	}
 	definitions := make([]platforms.BackupDefinition, 0, 96)
 	definitions = append(definitions,
 		definition(
@@ -247,7 +271,20 @@ func durableDefinitions(home string) []platforms.BackupDefinition {
 	definitions = append(definitions, emulatorDefinitions(home)...)
 	definitions = append(definitions, launcherDefinitions(home)...)
 	definitions = append(definitions, faugusMetadataDefinitions(home)...)
-	return definitions
+	return absoluteDefinitions(definitions)
+}
+
+// absoluteDefinitions drops any definition whose source root is relative. A
+// provider path that failed discovery would otherwise resolve against the
+// working directory.
+func absoluteDefinitions(definitions []platforms.BackupDefinition) []platforms.BackupDefinition {
+	filtered := definitions[:0]
+	for i := range definitions {
+		if filepath.IsAbs(definitions[i].SourceRoot) {
+			filtered = append(filtered, definitions[i])
+		}
+	}
+	return filtered
 }
 
 func definition(
