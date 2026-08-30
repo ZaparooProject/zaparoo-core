@@ -585,3 +585,183 @@ func TestLaunchGuardDelay_SetterAndGetter(t *testing.T) {
 	cfg.SetLaunchGuardDelay(8)
 	assert.InDelta(t, 8, cfg.LaunchGuardDelay(), 0)
 }
+
+func TestScanModeForReader(t *testing.T) {
+	t.Parallel()
+
+	newCfg := func(globalMode string) *Instance {
+		return &Instance{
+			vals: Values{
+				Readers: Readers{
+					Scan: ReadersScan{Mode: globalMode},
+					Connect: []ReadersConnect{
+						{Driver: "pn532", Path: "/dev/ttyUSB0"},
+						{Driver: "pn532", Path: "/dev/ttyUSB1", ScanMode: ScanModeHold},
+						{Driver: "simple_serial", Path: "/dev/ttyACM0", ScanMode: ScanModeTap},
+						{Driver: "opticaldrive", Path: "/dev/sr0", ScanMode: "sideways"},
+					},
+					Drivers: map[string]DriverConfig{
+						"pn532":         {ScanMode: ScanModeTap},
+						"opticaldrive":  {ScanMode: ScanModeHold},
+						"simpleserial":  {ScanMode: ScanModeHold},
+						"acr122pcsc":    {ScanMode: ""},
+						"externaldrive": {ScanMode: "HOLD"},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		globalMode string
+		driverID   string
+		path       string
+		want       string
+	}{
+		{
+			name:       "connect entry overrides driver and global",
+			globalMode: ScanModeTap,
+			driverID:   "pn532",
+			path:       "/dev/ttyUSB1",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "driver applies when connect entry sets nothing",
+			globalMode: ScanModeHold,
+			driverID:   "pn532",
+			path:       "/dev/ttyUSB0",
+			want:       ScanModeTap,
+		},
+		{
+			name:       "connect entry matches underscored driver key",
+			globalMode: ScanModeHold,
+			driverID:   "simpleserial",
+			path:       "/dev/ttyACM0",
+			want:       ScanModeTap,
+		},
+		{
+			name:       "driver key normalizes against underscored config key",
+			globalMode: ScanModeTap,
+			driverID:   "simple_serial",
+			path:       "/dev/ttyACM9",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "unmatched path falls through to driver",
+			globalMode: ScanModeTap,
+			driverID:   "opticaldrive",
+			path:       "/dev/sr9",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "unrecognised connect value falls through to driver",
+			globalMode: ScanModeTap,
+			driverID:   "opticaldrive",
+			path:       "/dev/sr0",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "empty driver value falls through to global",
+			globalMode: ScanModeHold,
+			driverID:   "acr122pcsc",
+			path:       "/dev/acr",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "driver value is case insensitive",
+			globalMode: ScanModeTap,
+			driverID:   "externaldrive",
+			path:       "/mnt/usb",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "unknown driver falls through to global",
+			globalMode: ScanModeHold,
+			driverID:   "mqtt",
+			path:       "broker:1883",
+			want:       ScanModeHold,
+		},
+		{
+			name:       "empty global mode defaults to tap",
+			globalMode: "",
+			driverID:   "mqtt",
+			path:       "broker:1883",
+			want:       ScanModeTap,
+		},
+		{
+			name:       "unrecognised global mode defaults to tap",
+			globalMode: "sideways",
+			driverID:   "mqtt",
+			path:       "broker:1883",
+			want:       ScanModeTap,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := newCfg(tt.globalMode)
+			assert.Equal(t, tt.want, cfg.ScanModeForReader(tt.driverID, tt.path))
+			assert.Equal(t, tt.want == ScanModeHold,
+				cfg.HoldModeEnabledForReader(tt.driverID, tt.path))
+		})
+	}
+}
+
+// Resolving a per-reader override must never write back to the global setting,
+// which stays the single value the settings API reads and writes.
+func TestScanModeForReaderLeavesGlobalUntouched(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan:    ReadersScan{Mode: ScanModeTap},
+				Connect: []ReadersConnect{{Driver: "pn532", Path: "/dev/ttyUSB0", ScanMode: ScanModeHold}},
+				Drivers: map[string]DriverConfig{"opticaldrive": {ScanMode: ScanModeHold}},
+			},
+		},
+	}
+
+	for range 5 {
+		cfg.ScanModeForReader("pn532", "/dev/ttyUSB0")
+		cfg.ScanModeForReader("opticaldrive", "/dev/sr0")
+		cfg.HoldModeEnabledForReader("pn532", "/dev/ttyUSB0")
+	}
+
+	assert.Equal(t, ScanModeTap, cfg.ReadersScan().Mode)
+	assert.False(t, cfg.HoldModeEnabled())
+	assert.True(t, cfg.TapModeEnabled())
+}
+
+func TestScanModeTOMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	configDir := filepath.Join(t.TempDir(), "zaparoo")
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, fs)
+	require.NoError(t, err)
+
+	require.NoError(t, cfg.LoadTOML(`
+[readers.scan]
+mode = "tap"
+
+[readers.drivers.opticaldrive]
+scan_mode = "hold"
+
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB1"
+scan_mode = "hold"
+`))
+
+	require.NoError(t, cfg.Save())
+	require.NoError(t, cfg.Load())
+
+	assert.Equal(t, ScanModeTap, cfg.ReadersScan().Mode)
+	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("opticaldrive", "/dev/sr0"))
+	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB1"))
+	assert.Equal(t, ScanModeTap, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+}

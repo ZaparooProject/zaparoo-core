@@ -61,5 +61,10 @@ type Token struct {
 	// PathRoot is an optional filesystem root used to resolve relative paths
 	// originating from source-backed tokens such as external drives.
 	PathRoot string
-	Unsafe   bool
+	// Traits is the set of traits this token's ZapScript declared, resolved
+	// once where the token entered the system. Tokens derived from this one,
+	// such as playlist tracks and hook scripts, inherit it rather than
+	// resolving their own.
+	Traits Traits
+	Unsafe bool
 }

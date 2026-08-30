@@ -760,3 +760,135 @@ func TestHandlePlaylist_InvalidSlotIgnored(t *testing.T) {
 	assert.Same(t, active, svc.State.GetActivePlaylist())
 	assert.Same(t, background, svc.State.GetBackgroundPlaylist())
 }
+
+// The card that started a playlist keeps its scan-mode override across track
+// changes, since each track launches through the card's hold token.
+func TestRunTokenZapScript_PlaylistLaunchCarriesCardScanMode(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	const readerID = "mock-removable-reader"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	mockReader.On("ReaderID").Return(readerID).Maybe()
+	svc.State.SetReader(mockReader)
+
+	owner := &tokens.Token{
+		UID:      "playlist-card",
+		Text:     "#tap||**playlist.play:games",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+		Traits:   tokens.ResolveTraits(map[string]any{tokens.TraitTap: true}),
+	}
+	active := makeServicePlaylist()
+	active.Playing = true
+	active.HoldToken = owner
+
+	path := filepath.Join(t.TempDir(), "game.rom")
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Return(nil).Once()
+
+	err := runTokenZapScript(svc, tokens.Token{
+		Text:     "**launch:" + path,
+		Source:   tokens.SourcePlaylist,
+		ScanTime: time.Now(),
+	}, playlists.PlaylistController{
+		Active:    active,
+		Current:   active,
+		HoldToken: owner,
+		Queue:     make(chan *playlists.Playlist, 1),
+	}, nil, false)
+	require.NoError(t, err)
+
+	softwareToken := <-svc.LaunchSoftwareQueue
+	require.NotNil(t, softwareToken)
+	assert.Equal(t, config.ScanModeTap, softwareToken.Traits.ScanMode())
+}
+
+// A playlist item's own script must not flip the policy the card launched
+// under, or the mode could change part-way through a playlist.
+func TestRunTokenZapScript_PlaylistItemTraitDoesNotOverrideCardScanMode(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	const readerID = "mock-removable-reader"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("Path").Return(filepath.Join(string(filepath.Separator), "dev", "mock-device")).Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable}).Maybe()
+	mockReader.On("ReaderID").Return(readerID).Maybe()
+	svc.State.SetReader(mockReader)
+
+	owner := &tokens.Token{
+		UID:      "playlist-card",
+		Text:     "#tap||**playlist.play:games",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+		Traits:   tokens.ResolveTraits(map[string]any{tokens.TraitTap: true}),
+	}
+	active := makeServicePlaylist()
+	active.Playing = true
+	active.HoldToken = owner
+
+	path := filepath.Join(t.TempDir(), "game.rom")
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Return(nil).Once()
+
+	err := runTokenZapScript(svc, tokens.Token{
+		Text:     "#hold||**launch:" + path,
+		Source:   tokens.SourcePlaylist,
+		ScanTime: time.Now(),
+	}, playlists.PlaylistController{
+		Active:    active,
+		Current:   active,
+		HoldToken: owner,
+		Queue:     make(chan *playlists.Playlist, 1),
+	}, nil, false)
+	require.NoError(t, err)
+
+	softwareToken := <-svc.LaunchSoftwareQueue
+	require.NotNil(t, softwareToken)
+	assert.Equal(t, config.ScanModeTap, softwareToken.Traits.ScanMode(),
+		"playlist item traits must not replace the card's policy")
+}
+
+// Starting a playlist carries the card's already-resolved traits onto the
+// queued playlist's hold token, which is what later track launches read them
+// back from.
+func TestRunTokenZapScript_PlaylistHoldTokenCarriesTraitOverride(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	active.Playing = true
+	plq := make(chan *playlists.Playlist, 1)
+	owner := tokens.Token{
+		UID:      "playlist-card",
+		Text:     "#tap||**playlist.next",
+		Source:   tokens.SourceReader,
+		ReaderID: "mock-removable-reader",
+		ScanTime: time.Now(),
+		Traits:   tokens.ResolveTraits(map[string]any{tokens.TraitTap: true}),
+	}
+
+	err := runTokenZapScript(svc, owner, playlists.PlaylistController{
+		Active:  active,
+		Current: active,
+		Queue:   plq,
+	}, nil, false)
+	require.NoError(t, err)
+
+	updated := <-plq
+	require.NotNil(t, updated.HoldToken)
+	assert.Equal(t, config.ScanModeTap, updated.HoldToken.Traits.ScanMode())
+}

@@ -163,6 +163,7 @@ type ReaderConnection struct {
 	Driver   string `json:"driver" validate:"required,min=1"`
 	Path     string `json:"path"`
 	IDSource string `json:"idSource,omitempty"`
+	ScanMode string `json:"scanMode,omitempty" validate:"omitempty,oneof=tap hold"`
 }
 
 type SystemDefault struct {

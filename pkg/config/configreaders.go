@@ -35,8 +35,9 @@ type Readers struct {
 }
 
 type DriverConfig struct {
-	Enabled    *bool `toml:"enabled,omitempty"`
-	AutoDetect *bool `toml:"auto_detect,omitempty"`
+	Enabled    *bool  `toml:"enabled,omitempty"`
+	AutoDetect *bool  `toml:"auto_detect,omitempty"`
+	ScanMode   string `toml:"scan_mode,omitempty"`
 }
 
 type ReadersScan struct {
@@ -61,6 +62,7 @@ type ReadersConnect struct {
 	Driver   string `toml:"driver"`
 	Path     string `toml:"path,omitempty"`
 	IDSource string `toml:"id_source,omitempty"`
+	ScanMode string `toml:"scan_mode,omitempty"`
 }
 
 // DriverInfo contains driver metadata needed for enabled/auto-detect checks.
@@ -142,6 +144,69 @@ func (c *Instance) HoldModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Readers.Scan.Mode == ScanModeHold
+}
+
+// normalizeScanMode returns mode as a recognised scan mode, or "" when it is
+// unset or unrecognised. An unrecognised value falls through to the next level
+// of the override chain rather than failing the whole config.
+func normalizeScanMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ScanModeTap:
+		return ScanModeTap
+	case ScanModeHold:
+		return ScanModeHold
+	default:
+		return ""
+	}
+}
+
+// scanModeForReaderLocked resolves a reader's configured scan mode, preferring
+// a matching [[readers.connect]] entry over its [readers.drivers.<id>] entry.
+// Returns "" when neither sets one. Caller must hold c.mu.
+func (c *Instance) scanModeForReaderLocked(driverID, path string) string {
+	normalizedID := normalizeDriverID(driverID)
+
+	for _, conn := range c.vals.Readers.Connect {
+		if normalizeDriverID(conn.Driver) != normalizedID || conn.Path != path {
+			continue
+		}
+		if mode := normalizeScanMode(conn.ScanMode); mode != "" {
+			return mode
+		}
+	}
+
+	for key, driver := range c.vals.Readers.Drivers {
+		if normalizeDriverID(key) != normalizedID {
+			continue
+		}
+		if mode := normalizeScanMode(driver.ScanMode); mode != "" {
+			return mode
+		}
+	}
+
+	return ""
+}
+
+// ScanModeForReader returns the effective scan mode for a connected reader,
+// resolving its [[readers.connect]] entry, then its [readers.drivers.<id>]
+// entry, then the global readers.scan.mode. A per-token ZapScript override
+// takes precedence over this and is applied by the service layer.
+func (c *Instance) ScanModeForReader(driverID, path string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if mode := c.scanModeForReaderLocked(driverID, path); mode != "" {
+		return mode
+	}
+	if mode := normalizeScanMode(c.vals.Readers.Scan.Mode); mode != "" {
+		return mode
+	}
+	return ScanModeTap
+}
+
+// HoldModeEnabledForReader reports whether a connected reader holds by default.
+func (c *Instance) HoldModeEnabledForReader(driverID, path string) bool {
+	return c.ScanModeForReader(driverID, path) == ScanModeHold
 }
 
 func (c *Instance) SetScanMode(mode string) {

@@ -1800,3 +1800,66 @@ func TestHandleSettingsUpdate_UpdateInstallReloadsChecking(t *testing.T) {
 		})
 	}
 }
+
+// A settings round-trip rebuilds the reader connection slice from the API
+// model, so scan_mode has to survive both conversions or an unrelated settings
+// edit would silently wipe a configured per-reader mode.
+func TestHandleSettings_ReaderConnectionScanModeRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("ManagedByPackageManager").Return(false).Maybe()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Readers: config.Readers{
+			Connect: []config.ReadersConnect{
+				{Driver: "pn532", Path: "/dev/ttyUSB0", ScanMode: config.ScanModeHold},
+				{Driver: "libnfc", Path: "/dev/ttyUSB1"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	readEnv := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(readEnv)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.ReadersConnect, 2)
+	assert.Equal(t, config.ScanModeHold, resp.ReadersConnect[0].ScanMode)
+	assert.Empty(t, resp.ReadersConnect[1].ScanMode)
+
+	// Write the response straight back, as a client editing any other setting
+	// on the same screen would.
+	paramsJSON, err := json.Marshal(models.UpdateSettingsParams{
+		ReadersConnect: &resp.ReadersConnect,
+	})
+	require.NoError(t, err)
+
+	_, err = HandleSettingsUpdate(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+		IsLocal:  true,
+	})
+	require.NoError(t, err)
+
+	stored := cfg.Readers().Connect
+	require.Len(t, stored, 2)
+	assert.Equal(t, config.ScanModeHold, stored[0].ScanMode)
+	assert.Empty(t, stored[1].ScanMode)
+	assert.Equal(t, config.ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
+}

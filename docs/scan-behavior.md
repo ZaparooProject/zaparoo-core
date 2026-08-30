@@ -41,3 +41,75 @@ When `readers.scan.mode='hold'` with `readers.scan.exit_delay=N` and a game is l
 - [ ] Exiting the game manually while the card is still on the reader will not cause the game to relaunch when returning to the menu.
 - [ ] Exiting the game manually via the internal menu and then removing the card won't trigger a core menu reload.
 - [ ] Exiting the game manually during the N-second countdown cancels the countdown and returns to the menu.
+
+---
+
+## Per-reader mode: `[readers.drivers]` and `[[readers.connect]]`
+
+A reader can override the global mode, so a cartridge slot can hold on a device
+whose NFC antenna taps. `scan_mode` on a `[[readers.connect]]` entry applies to
+that one device; on `[readers.drivers.<id>]` it applies to every reader using
+that driver. An empty or unrecognised value falls through to the next level.
+
+```toml
+[readers.scan]
+mode = "tap"
+
+[readers.drivers.opticaldrive]
+scan_mode = "hold"
+
+[[readers.connect]]
+driver = "pn532"
+path = "/dev/ttyUSB1"
+scan_mode = "hold"
+```
+
+- [ ] A reader with no `scan_mode` behaves exactly as `readers.scan.mode` says.
+- [ ] A `[[readers.connect]]` entry's `scan_mode` wins over its driver's.
+- [ ] A driver's `scan_mode` wins over `readers.scan.mode`.
+- [ ] With one hold reader and one tap reader, removing from the tap reader
+      leaves media running and removing from the hold reader exits it.
+- [ ] Setting `scan_mode` never changes `readers.scan.mode`, and the app's Scan
+      mode setting still reads and writes only the global value.
+- [ ] The `readers` API method reports each reader's effective mode.
+
+---
+
+## Per-token override: the `#tap` and `#hold` traits
+
+One token can override the mode it would otherwise inherit, without changing any
+setting. Both traits are boolean, so the shorthand form is the normal one:
+
+```
+#tap||/media/games/SNES/Mario.sfc
+#hold||**launch:/media/games/SNES/Mario.sfc
+```
+
+The value form works as well, since `#hold=false` means the same as `#tap`.
+Trait keys are case-insensitive.
+
+- [ ] With `readers.scan.mode='hold'`, removing a `#tap` token leaves the game
+      running, and its `on_remove` hook does not run.
+- [ ] With `readers.scan.mode='tap'`, removing a `#hold` token closes the game
+      after `readers.scan.exit_delay`.
+- [ ] A token's trait wins over its reader's `scan_mode`.
+- [ ] A `#tap` token that launches media takes over hold ownership, so removing
+      the card that launched the *previous* game does not close the new one.
+- [ ] A `#tap` token that runs only a command leaves the current hold owner
+      alone; removing the owner's card still exits.
+- [ ] A token carrying both `#tap` and `#hold` is treated as carrying neither,
+      and inherits the normal mode.
+- [ ] A playlist started by a `#tap` token keeps tap behavior across every
+      track, and a playlist item's own traits do not change it.
+
+A misspelled trait is silent: `#taap||...` is not an error, it is simply not an
+override. This follows ZapScript's existing rule that an unrecognised trait key
+mixed with other content falls back to being launch content.
+
+Traits are settled once, when the token enters the system, and describe the
+token rather than a step in running it:
+
+- [ ] A hook script or an injected command that declares `#tap` or `#hold` does
+      not change the mode of the token that triggered it.
+- [ ] Every track of a playlist runs under the mode the card that started the
+      playlist declared.

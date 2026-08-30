@@ -9,7 +9,8 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 - **Mappings**: Rules that override token behavior via pattern matching (exact, partial/wildcard, regex) against UID, text, or data. Essential for read-only tokens like Amiibo. Stored in UserDB or as TOML files in `mappings/`.
 - **Launchers**: Per-system programs that launch games/media. Each platform provides built-in launchers. Custom launchers via TOML files in `launchers/`. See `pkg/platforms/`.
 - **Systems**: 200+ supported game/computer/media systems (e.g., `SNES`, `Genesis`, `PSX`). IDs are case-insensitive with aliases and fallbacks.
-- **Readers**: Hardware or virtual devices that detect tokens. Two scan modes: **tap** (default, free removal) and **hold** (token must stay on reader, removal stops media).
+- **Readers**: Hardware or virtual devices that detect tokens. Two scan modes: **tap** (default, free removal) and **hold** (token must stay on reader, removal stops media). The mode in force for a launch resolves in order: the token's `#tap`/`#hold` ZapScript trait, the reader's `[[readers.connect]]` entry, its `[readers.drivers.<id>]` entry, then the global `readers.scan.mode`.
+- **Traits**: Script-level `#key=value` metadata declaring something about a token. Resolved once in `processTokenQueue`, the single point every token carrying script text passes through, and carried on the token from then on. Tokens derived from another — playlist tracks, hook scripts, injected commands — inherit rather than resolving their own, so running a script can never change the traits of the token running it.
 - **Global UI events**: Server-owned transient notice, loader, picker, or confirm requests. Host and connected clients render in parallel; first ID-bound response wins or Core times request out. See `pkg/ui/events/`.
 
 ## Zaparoo Ecosystem

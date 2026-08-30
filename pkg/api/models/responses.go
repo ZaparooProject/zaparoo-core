@@ -685,12 +685,15 @@ type ReaderInfo struct {
 	ReaderID     string   `json:"readerId"`
 	Driver       string   `json:"driver"`
 	Info         string   `json:"info"`
+	ScanMode     string   `json:"scanMode"`
 	Capabilities []string `json:"capabilities"`
 	Connected    bool     `json:"connected"`
 }
 
 type ReadersResponse struct {
-	Readers []ReaderInfo `json:"readers"`
+	HoldOwnerReaderID string       `json:"holdOwnerReaderId,omitempty"`
+	HoldScanMode      string       `json:"holdScanMode,omitempty"`
+	Readers           []ReaderInfo `json:"readers"`
 }
 
 type InboxMessage struct {

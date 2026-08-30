@@ -312,7 +312,7 @@ func timedExit(
 		log.Debug().Msg("cancelling previous exit timer")
 	}
 
-	if !svc.Config.HoldModeEnabled() {
+	if !holdModeForToken(svc, owner) {
 		log.Debug().Msg("hold mode not enabled, skipping exit timer")
 		return exitTimer
 	}
@@ -351,7 +351,7 @@ func timedExit(
 			log.Debug().Msg("stale exit timer expired, cancelling exit")
 			return
 		}
-		if !svc.Config.HoldModeEnabled() {
+		if !holdModeForToken(svc, &ownerCopy) {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
 			return
 		}
@@ -452,7 +452,8 @@ func readerManager(
 			return
 		}
 		delete(pendingRemovals, key)
-		exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, removedToken)
+		owner := withHoldOwnerTraits(svc.State, removedToken)
+		exitTimer = timedExit(svc, clock, exitTimer, &exitGeneration, &owner)
 	}
 
 	var stagedToken *tokens.Token
@@ -989,7 +990,8 @@ preprocessing:
 			// Run on_remove hook for every normal removal. Delayed hooks run outside
 			// the reader loop so reinserting the removed token can cancel them.
 			onRemoveScript := svc.Config.ReadersScan().OnRemove
-			if svc.Config.HoldModeEnabled() && onRemoveScript != "" {
+			removalPolicyToken := withHoldOwnerTraits(svc.State, removedToken)
+			if holdModeForToken(svc, &removalPolicyToken) && onRemoveScript != "" {
 				if removedToken != nil && hookHasDelayCommand(onRemoveScript) {
 					if activeRemovalHook != nil {
 						activeRemovalHook.cancel()

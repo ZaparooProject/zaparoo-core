@@ -398,7 +398,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMappingsReload: methods.HandleReloadMappings,
 		// readers
 		models.MethodReaders: func(env requests.RequestEnv) (any, error) {
-			return methods.HandleReaders(env.State.ListReaders())
+			return methods.HandleReaders(env.Config, env.State, env.State.ListReaders())
 		},
 		models.MethodReadersWrite: func(env requests.RequestEnv) (any, error) {
 			ls := env.State.GetLastScanned()

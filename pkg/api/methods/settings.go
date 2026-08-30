@@ -45,6 +45,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 			Driver:   rc.Driver,
 			Path:     rc.Path,
 			IDSource: rc.IDSource,
+			ScanMode: rc.ScanMode,
 		})
 	}
 
@@ -331,6 +332,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 				Driver:   rc.Driver,
 				Path:     rc.Path,
 				IDSource: rc.IDSource,
+				ScanMode: rc.ScanMode,
 			})
 		}
 		env.Config.SetReaderConnections(connections)
