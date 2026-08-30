@@ -308,6 +308,34 @@ func TestMarkUnlinkedIfSharedEndpointIgnoresSupersededBearer(t *testing.T) {
 	assert.Equal(t, 2, calls, "a 401 of unknown provenance is treated as current")
 }
 
+// TestSupersededRejection pins which 401s the poller is allowed to act on.
+// A verdict about a bearer that a re-link has already replaced must not be
+// shown as credential_rejected, nor hold the new credential behind the
+// one-minute rejection back-off.
+func TestSupersededRejection(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.SetRemoteControlBaseURL("https://online.example.com"))
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL("https://online.example.com"): {Bearer: "zpd1_new"},
+	})
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	m := &manager{deps: Deps{Config: cfg}}
+
+	unauthorized := func(bearer string) error {
+		return &unauthorizedError{httpErr: &httpError{status: 401}, bearer: bearer}
+	}
+
+	assert.True(t, m.supersededRejection(unauthorized("zpd1_old")),
+		"a 401 for a replaced bearer is a late answer about the old token")
+	assert.False(t, m.supersededRejection(unauthorized("zpd1_new")),
+		"a 401 for the current bearer is a real rejection")
+	assert.False(t, m.supersededRejection(unauthorized("")),
+		"a 401 of unknown provenance is treated as current")
+	assert.False(t, m.supersededRejection(errors.New("boom")),
+		"a non-401 carries no bearer and is never superseded")
+}
+
 func TestErrorCodeOf(t *testing.T) {
 	t.Parallel()
 
@@ -631,6 +659,60 @@ func TestRunStopsPromptlyOnCancelWhileDisabled(t *testing.T) {
 		t.Fatal("run did not stop after context cancellation while disabled")
 	}
 	userDB.AssertExpectations(t)
+}
+
+// TestRunRetriesImmediatelyAfterSupersededHeartbeatRejection pins the
+// re-link race end to end. sleepWhileEligible only wakes early when remote
+// control is switched off or the credential is cleared, so a rotated bearer
+// used to sit out the full one-minute rejection back-off before the new
+// credential got its first try.
+func TestRunRetriesImmediatelyAfterSupersededHeartbeatRejection(t *testing.T) {
+	var heartbeatCalls int32
+	var rotated int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/device/heartbeat" {
+			atomic.AddInt32(&heartbeatCalls, 1)
+			// Re-link lands while this request is in flight, so the 401 below
+			// answers a bearer that is already gone.
+			if atomic.CompareAndSwapInt32(&rotated, 0, 1) {
+				config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+					config.RemoteAuthLookupURL(r.Host): {Bearer: "zpd1_new"},
+				})
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		t.Errorf("unexpected request after unauthorized heartbeat: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	m := newHTTPTestManager(t, server.URL)
+	// The rotation above rewrites the whole auth config, so key it the same
+	// way newHTTPTestManager does.
+	config.SetAuthCfgForTesting(map[string]config.CredentialEntry{
+		config.RemoteAuthLookupURL(server.URL): {Bearer: "zpd1_test"},
+	})
+	userDB := testinghelpers.NewMockUserDBI()
+	userDB.On("PruneRemoteCommands", mock.Anything).Return(int64(0), nil).Maybe()
+	m.deps.DB = &database.Database{UserDB: userDB}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&heartbeatCalls) >= 2
+	}, 3*time.Second, 10*time.Millisecond,
+		"the new credential was held behind the rejection back-off")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop after context cancellation")
+	}
 }
 
 // TestRunUnauthorizedHeartbeatStopsCleanlyOnCancel pins the credential-

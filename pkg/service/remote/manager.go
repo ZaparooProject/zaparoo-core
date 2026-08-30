@@ -178,6 +178,10 @@ func (m *manager) run(ctx context.Context) {
 			m.setStatus(state.RemoteStateConnecting, "")
 			if err := m.sendCapabilityHeartbeat(ctx); err != nil {
 				if isUnauthorized(err) {
+					if m.supersededRejection(err) {
+						log.Debug().Msg("ignoring unauthorized heartbeat for a superseded remote credential")
+						continue
+					}
 					m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
 					m.markUnlinkedIfSharedEndpoint(rejectedBearer(err))
 					m.sleepWhileEligible(ctx, time.Minute, true)
@@ -211,9 +215,13 @@ func (m *manager) run(ctx context.Context) {
 			var httpErr *httpError
 			switch {
 			case isUnauthorized(err):
+				advertised = false
+				if m.supersededRejection(err) {
+					log.Debug().Msg("ignoring unauthorized poll for a superseded remote credential")
+					break
+				}
 				m.setStatus(state.RemoteStateCredentialRejected, errorCodeOf(err))
 				m.markUnlinkedIfSharedEndpoint(rejectedBearer(err))
-				advertised = false
 				m.sleepWhileEligible(ctx, time.Minute, true)
 			case errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound:
 				// The server answers 404 both when the feature is dark and
@@ -305,6 +313,15 @@ func (m *manager) sendCapabilityHeartbeat(ctx context.Context) error {
 		return fmt.Errorf("send remote operations capability heartbeat: %w", err)
 	}
 	return nil
+}
+
+// supersededRejection reports whether a 401 answers a bearer that a re-link
+// has already replaced. The server's verdict is about the old token, so it
+// must not be shown to the owner as a rejection, and it must not hold the new
+// credential behind the rejection back-off.
+func (m *manager) supersededRejection(err error) bool {
+	rejected := rejectedBearer(err)
+	return rejected != "" && rejected != m.deviceBearer()
 }
 
 // markUnlinkedIfSharedEndpoint records a rejected device credential as an

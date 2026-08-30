@@ -21,6 +21,7 @@ package remote
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
@@ -262,7 +263,11 @@ func TestTranslateEchoParams(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, raw, translated, "echo params pass through unchanged after validation")
 
-	_, err = translateEchoParams(json.RawMessage(`{"message":"` + string(make([]byte, 257)) + `"}`))
+	// Built with Marshal so the payload is valid JSON: raw NUL bytes would be
+	// rejected while decoding and never reach the length validation.
+	oversized, err := json.Marshal(map[string]string{"message": strings.Repeat("a", 257)})
+	require.NoError(t, err)
+	_, err = translateEchoParams(oversized)
 	require.Error(t, err)
 	_, err = translateEchoParams(json.RawMessage(`{"message":"hi","extra":1}`))
 	require.Error(t, err)
