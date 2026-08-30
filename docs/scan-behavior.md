@@ -80,7 +80,7 @@ scan_mode = "hold"
 One token can override the mode it would otherwise inherit, without changing any
 setting. Both traits are boolean, so the shorthand form is the normal one:
 
-```
+```text
 #tap||/media/games/SNES/Mario.sfc
 #hold||**launch:/media/games/SNES/Mario.sfc
 ```

@@ -848,6 +848,31 @@ func TestScanBehavior_Hold_TapTraitLaunchClearsPreviousOwner(t *testing.T) {
 	env.expectNoStop(t)
 }
 
+// Regression: swapping a live hold owner for a #tap card must move ownership
+// to the new card. Leaving the older card as the owner would let its later
+// removal stop media it never launched.
+func TestScanBehavior_Hold_TapTraitLaunchReplacesLiveOwner(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, config.ScanModeHold, 0)
+
+	env.sendGameScan("holdCard", env.gamePath("gameA.rom"))
+	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "holdCard")
+
+	// No removal in between, so the replacement launch takes ownership from a
+	// hold owner that is still live.
+	env.sendTraitScan("tapCard", "#tap", env.gamePath("gameB.rom"))
+	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareTokenUID(t, "tapCard")
+
+	owner := env.st.GetSoftwareToken()
+	require.NotNil(t, owner)
+	assert.Equal(t, config.ScanModeTap, owner.Traits.ScanMode())
+
+	env.sendRemoval()
+	env.expectNoStop(t)
+}
+
 // A #hold card opts in to hold mode on a device that is globally tap.
 func TestScanBehavior_Tap_HoldTraitRemovalClosesGame(t *testing.T) {
 	t.Parallel()
