@@ -84,6 +84,7 @@ type State struct {
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
 	onMediaStopHook       func()
+	beforeExitHook        func()
 	softwareToken         *tokens.Token
 	ctxCancelFunc         context.CancelFunc
 	backupCoordinator     *backupcoordinator.Coordinator
@@ -96,6 +97,7 @@ type State struct {
 	mediaLaunchMu         syncutil.RWMutex
 	activeMediaPublishMu  syncutil.RWMutex
 	activeMediaReady      bool
+	beforeExitRunning     bool
 	restartRequested      bool
 	restorePendingRestart bool
 	runZapScript          bool
@@ -311,6 +313,42 @@ func (s *State) SetOnMediaStopHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStopHook = hook
+}
+
+// SetBeforeExitHook registers the callback run just before active media is
+// stopped or replaced. Pass nil to clear it.
+func (s *State) SetBeforeExitHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeExitHook = hook
+}
+
+// RunBeforeExitHook invokes the registered before_exit callback synchronously
+// in the caller's goroutine. It is a no-op when no hook is registered or when
+// another before_exit run is already in flight: at most one before_exit script
+// runs process-wide at a time, so a script that itself stops or launches media
+// cannot re-enter this path from any goroutine.
+//
+// Callers must not hold a media gate (AcquireMediaStop, AcquireUpdateMediaGate)
+// when calling this. The hook script may launch media, which takes the read
+// side of the same gate and would deadlock against the exclusive holder.
+func (s *State) RunBeforeExitHook() {
+	s.mu.Lock()
+	hook := s.beforeExitHook
+	if hook == nil || s.beforeExitRunning {
+		s.mu.Unlock()
+		return
+	}
+	s.beforeExitRunning = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.beforeExitRunning = false
+		s.mu.Unlock()
+	}()
+
+	hook()
 }
 
 func (s *State) BackgroundAutoPaused() bool {

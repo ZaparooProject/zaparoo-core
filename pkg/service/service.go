@@ -510,6 +510,10 @@ func startService(
 		}
 	})
 
+	st.SetBeforeExitHook(func() {
+		runBeforeExitHook(svc)
+	})
+
 	// Resume background music when a game quits, but only if we auto-paused it.
 	st.SetOnMediaStopHook(func() {
 		resumeBackgroundAfterMediaStop(svc)
