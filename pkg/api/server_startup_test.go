@@ -819,8 +819,8 @@ func TestServerTrustsOwnHostnameOrigins(t *testing.T) {
 		require.NoError(t, <-serverErr)
 	}()
 
-	// The listener takes an OS-assigned port, so this checks the port-less
-	// origin forms. Port-bearing forms are covered by TestOriginPolicy_MDNSHostname.
+	// The listener takes an OS-assigned port, so this also covers the
+	// port-bearing origin forms carrying the port actually bound.
 	port := waitForServerReady(t, cfg)
 
 	client := &http.Client{Timeout: time.Second}
@@ -839,9 +839,18 @@ func TestServerTrustsOwnHostnameOrigins(t *testing.T) {
 	}
 
 	for _, name := range hostNames {
-		for _, origin := range []string{"http://" + name, "https://" + name} {
+		origins := []string{
+			"http://" + name,
+			"https://" + name,
+			fmt.Sprintf("http://%s:%d", name, port),
+			fmt.Sprintf("https://%s:%d", name, port),
+		}
+		for _, origin := range origins {
 			assert.Equal(t, origin, checkOrigin(origin), "origin %s should be allowed", origin)
 		}
+		// Port 0 is what was configured; it must never be advertised.
+		assert.Empty(t, checkOrigin(fmt.Sprintf("http://%s:0", name)),
+			"the unresolved port must not be trusted")
 	}
 
 	assert.Empty(t, checkOrigin("http://not-this-device.invalid"), "unrelated origins must stay rejected")

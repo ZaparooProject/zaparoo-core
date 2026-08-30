@@ -1815,6 +1815,31 @@ func StartWithReady(
 		}
 	}
 
+	log.Info().Str("listen", listenAddr).Msg("starting HTTP server")
+	log.Debug().Msg("HTTP server attempting to bind")
+
+	// Bind before reporting startup success so callers can fail fast when the
+	// configured API port is already in use, and before the origin lists are
+	// built so a port-zero bind resolves to the port they advertise.
+	lc := &net.ListenConfig{}
+	listener, err := lc.Listen(st.GetContext(), "tcp", listenAddr)
+	if err != nil {
+		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
+		log.Error().Err(bindErr).Msg("failed to bind to port")
+		notifyReady(bindErr)
+		st.StopService()
+		return bindErr
+	}
+
+	// If port 0 was requested, adopt the port actually bound so callers can
+	// discover it and every allowed origin carries the real port.
+	if port == 0 {
+		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			port = addr.Port
+			_ = cfg.SetAPIPort(port)
+		}
+	}
+
 	baseOrigins := make([]string, 0, len(allowedOrigins)+4)
 	baseOrigins = append(baseOrigins, allowedOrigins...)
 	baseOrigins = append(baseOrigins,
@@ -2143,29 +2168,6 @@ func StartWithReady(
 	}
 
 	serverDone := make(chan error, 1)
-
-	log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
-	log.Debug().Msg("HTTP server attempting to bind")
-
-	// Create the listener before reporting startup success so callers can fail
-	// fast when the configured API port is already in use.
-	lc := &net.ListenConfig{}
-	listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
-	if err != nil {
-		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
-		log.Error().Err(bindErr).Msg("failed to bind to port")
-		notifyReady(bindErr)
-		st.StopService()
-		return bindErr
-	}
-
-	// If port 0 was requested, update config with the actual bound port
-	// so callers can discover which port the server is listening on.
-	if port == 0 {
-		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
-			_ = cfg.SetAPIPort(addr.Port)
-		}
-	}
 
 	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
 	notifyReady(nil)
