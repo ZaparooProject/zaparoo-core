@@ -672,6 +672,37 @@ preference = ["Native", "RetroDECK"]
 	mockPlatform.AssertExpectations(t)
 }
 
+// TestApplySystemDefaultLauncher_SkipsUninstalledMisterCoreFamily is the
+// MiSTer shape of an ordered preference: the device has LLAPI cores but no
+// unstable nightlies, so the first entry must fall through instead of matching
+// a family that is not installed.
+func TestApplySystemDefaultLauncher_SkipsUninstalledMisterCoreFamily(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[launchers]
+preference = ["Unstable", "LLAPI"]
+`))
+	launchers := []platforms.Launcher{
+		{
+			ID: "UnstableSNES", SystemID: "SNES",
+			Groups:       []string{platformshared.LauncherGroupUnstable},
+			Availability: func(*config.Instance) error { return errors.New("core not installed") },
+		},
+		{ID: "LLAPISNES", SystemID: "SNES", Groups: []string{platformshared.LauncherGroupLLAPI}},
+		{ID: "SNES", SystemID: "SNES"},
+	}
+	mockPlatform.On("Launchers", cfg).Once().Return(launchers)
+	env := platforms.CmdEnv{Cfg: cfg, Cmd: zapscript.Command{AdvArgs: zapscript.NewAdvArgs(nil)}}
+
+	launcherID := applySystemDefaultLauncher(mockPlatform, &env, "SNES")
+
+	assert.Equal(t, "LLAPISNES", launcherID)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestApplySystemDefaultLauncher_SystemDefaultBeatsGlobalPreference(t *testing.T) {
 	t.Parallel()
 

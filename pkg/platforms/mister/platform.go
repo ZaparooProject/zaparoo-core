@@ -1495,7 +1495,12 @@ func setCoreAvailability(launchers []platforms.Launcher) {
 			if systems, _ := cores.GlobalRBFCache.Count(); systems == 0 {
 				return nil
 			}
-			if _, ok := cores.GlobalRBFCache.ResolveLauncher(cfg, launcherID, systemID); ok {
+			// Strict: an alt core launcher whose own RBF is missing falls
+			// back to the stock core at launch time, but reporting that as
+			// available makes every uninstalled family (LLAPI, DB9, ...) look
+			// installed and lets an ordered launchers.preference match a group
+			// the device does not have.
+			if _, ok := cores.GlobalRBFCache.ResolveLauncherStrict(cfg, launcherID, systemID); ok {
 				return nil
 			}
 			return fmt.Errorf("core not installed: %s", misterExpectedCorePath(launcherID, systemID))

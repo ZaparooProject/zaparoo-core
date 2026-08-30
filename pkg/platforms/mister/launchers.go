@@ -484,11 +484,121 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 	}
 }
 
-func applyRetroAchievementsLauncherGroup(launchers []platforms.Launcher) []platforms.Launcher {
-	for i := range launchers {
-		if _, ok := retroAchievementsSetName(launchers[i].ID); ok {
-			launchers[i].Groups = append(launchers[i].Groups, shared.LauncherGroupRetroAchievements)
+// altCorePath is a registered alt core RBF path split for classification.
+// lowerName is precomputed because most rules need a case-insensitive check
+// and CreateLaunchers reruns on every Launchers call.
+type altCorePath struct {
+	dir       string
+	lowerName string
+}
+
+func newAltCorePath(rbfPath string) altCorePath {
+	dir, shortName := splitAltCorePath(rbfPath)
+	return altCorePath{dir: dir, lowerName: strings.ToLower(shortName)}
+}
+
+// altCoreGroupRule classifies a launcher by the RBF paths it registers with the
+// global cache. Paths are ground truth: the launcher ID is not, because IDs
+// like DB9DualRAMPSX and PWM2XPSX belong to more than one family and no prefix
+// rule can express that.
+type altCoreGroupRule struct {
+	match func(p altCorePath) bool
+	group string
+}
+
+// altCoreGroupRules is ordered. Primary families (the distribution a core came
+// from) come first so Groups[0] identifies the family; secondary attributes
+// like dual-SDRAM follow. Callers such as the browse scheme map read Groups[0].
+var altCoreGroupRules = []altCoreGroupRule{
+	{
+		group: shared.LauncherGroupRetroAchievements,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_RA_Cores/Cores") },
+	},
+	{
+		group: shared.LauncherGroupLLAPI,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_LLAPI") },
+	},
+	{
+		group: shared.LauncherGroupSinden,
+		match: func(p altCorePath) bool {
+			return dirWithin(p.dir, "Light Gun") || dirWithin(p.dir, "_Sinden")
+		},
+	},
+	{
+		// The PWM database sorts overclocked builds into a _Turbo subfolder.
+		group: shared.LauncherGroupPWM,
+		match: func(p altCorePath) bool { return dirWithin(p.dir, "_ConsolePWM") },
+	},
+	{
+		group: shared.LauncherGroupUnstable,
+		match: func(p altCorePath) bool { return strings.Contains(p.lowerName, "_unstable_") },
+	},
+	{
+		group: shared.LauncherGroupDB9,
+		match: func(p altCorePath) bool { return strings.HasSuffix(p.lowerName, "_db9") },
+	},
+	{
+		group: shared.LauncherGroupDualRAM,
+		match: func(p altCorePath) bool {
+			return dirWithin(p.dir, "_Console (Dual SDRAM)") ||
+				strings.Contains(p.lowerName, "_dualsdram")
+		},
+	},
+}
+
+func splitAltCorePath(rbfPath string) (dir, shortName string) {
+	if idx := strings.LastIndex(rbfPath, "/"); idx >= 0 {
+		return rbfPath[:idx], rbfPath[idx+1:]
+	}
+	return "", rbfPath
+}
+
+// dirWithin reports whether dir is want or a folder inside it.
+func dirWithin(dir, want string) bool {
+	if strings.EqualFold(dir, want) {
+		return true
+	}
+	return len(dir) > len(want) && strings.EqualFold(dir[:len(want)+1], want+"/")
+}
+
+// altCoreGroups returns the config groups a launcher belongs to, derived from
+// every RBF path it registered. A launcher with no registered paths is a stock
+// core launcher and gets no group.
+func altCoreGroups(launcherID string, scratch []altCorePath) ([]string, []altCorePath) {
+	rbfPaths := cores.GlobalRBFCache.AltCorePaths(launcherID)
+	if len(rbfPaths) == 0 {
+		return nil, scratch
+	}
+
+	paths := scratch[:0]
+	for _, rbfPath := range rbfPaths {
+		paths = append(paths, newAltCorePath(rbfPath))
+	}
+
+	var groups []string
+	for _, rule := range altCoreGroupRules {
+		for _, path := range paths {
+			if rule.match(path) {
+				groups = append(groups, rule.group)
+				break
+			}
 		}
+	}
+	return groups, paths
+}
+
+// applyAltCoreLauncherGroups tags every alt core launcher with the groups its
+// registered RBF paths imply. Must run after the launcher slice is built, since
+// the launch constructors are what register those paths.
+func applyAltCoreLauncherGroups(launchers []platforms.Launcher) []platforms.Launcher {
+	var scratch []altCorePath
+	for i := range launchers {
+		var groups []string
+		groups, scratch = altCoreGroups(launchers[i].ID, scratch)
+		if len(groups) == 0 {
+			continue
+		}
+		launchers[i].Groups = append(launchers[i].Groups, groups...)
 	}
 	return launchers
 }
@@ -2387,5 +2497,10 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 	}
 
-	return applyDefaultScanExcludes(enableMGLIndexing(applyRetroAchievementsLauncherGroup(launchers)))
+	unstable := createUnstableLaunchers()
+	all := make([]platforms.Launcher, 0, len(launchers)+len(unstable))
+	all = append(all, launchers...)
+	all = append(all, unstable...)
+
+	return applyDefaultScanExcludes(enableMGLIndexing(applyAltCoreLauncherGroups(all)))
 }
