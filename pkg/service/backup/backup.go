@@ -843,12 +843,30 @@ func backupPatternsMatch(rel string, patterns []platforms.BackupPattern) bool {
 		if !strings.Contains(glob, "/") {
 			target = path.Base(lowerRel)
 		}
-		matched, err := path.Match(glob, target)
-		if err == nil && matched {
+		if matchBackupGlob(glob, target) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchBackupGlob(glob, target string) bool {
+	if prefixGlob, found := strings.CutSuffix(glob, "/**"); found {
+		for i := strings.IndexByte(target, '/'); i >= 0; {
+			matched, err := path.Match(prefixGlob, target[:i])
+			if err == nil && matched {
+				return true
+			}
+			next := strings.IndexByte(target[i+1:], '/')
+			if next < 0 {
+				break
+			}
+			i += next + 1
+		}
+		return false
+	}
+	matched, err := path.Match(glob, target)
+	return err == nil && matched
 }
 
 func (m *Manager) resolveBackupPath(name string) (string, error) {

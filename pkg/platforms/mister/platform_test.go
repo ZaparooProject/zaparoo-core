@@ -544,6 +544,49 @@ func TestSetCoreAvailability_MissingCoreIsUnavailableWithReason(t *testing.T) {
 	assert.Contains(t, err.Error(), "_Console/SNES")
 }
 
+// TestSetCoreAvailability_MissingAltCoreIsUnavailable covers the rule that
+// makes an ordered launchers.preference work: a launcher for a core family the
+// device does not have must report unavailable, even though launching it would
+// silently fall back to the system's stock core.
+func TestSetCoreAvailability_MissingAltCoreIsUnavailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+	})
+	cores.GlobalRBFCache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	launchers := []platforms.Launcher{{ID: "LLAPISNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+
+	err := launchers[0].Availability(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "_LLAPI/SNES_LLAPI")
+}
+
+// TestSetCoreAvailability_InstalledAltCoreIsAvailable is the other half: once
+// the family's core is on the card the launcher reports available.
+func TestSetCoreAvailability_InstalledAltCoreIsAvailable(t *testing.T) {
+	withRBFCache(t, []cores.RBFInfo{
+		{
+			Path: "/media/fat/_Console/SNES_20260311.rbf", Filename: "SNES_20260311.rbf",
+			ShortName: "SNES", MglName: "_Console/SNES",
+		},
+		{
+			Path: "/media/fat/_LLAPI/SNES_LLAPI_20260311.rbf", Filename: "SNES_LLAPI_20260311.rbf",
+			ShortName: "SNES_LLAPI", MglName: "_LLAPI/SNES_LLAPI",
+		},
+	})
+	cores.GlobalRBFCache.RegisterAltCore("LLAPISNES", "_LLAPI/SNES_LLAPI")
+
+	launchers := []platforms.Launcher{{ID: "LLAPISNES", SystemID: "SNES"}}
+	setCoreAvailability(launchers)
+	require.NotNil(t, launchers[0].Availability)
+	assert.NoError(t, launchers[0].Availability(nil))
+}
+
 func TestSetCoreAvailability_NonCoreLauncherLeftAlone(t *testing.T) {
 	withRBFCache(t, nil)
 

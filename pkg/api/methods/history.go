@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,22 +37,24 @@ func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // s
 
 	active := env.State.GetActiveCard()
 	if !active.ScanTime.IsZero() {
+		text, data := zapscript.RedactToken(active.Text, active.Data)
 		resp.Active = append(resp.Active, models.TokenResponse{
 			Type:     active.Type,
 			UID:      active.UID,
-			Text:     active.Text,
-			Data:     active.Data,
+			Text:     text,
+			Data:     data,
 			ScanTime: active.ScanTime,
 		})
 	}
 
 	last := env.State.GetLastScanned()
 	if !last.ScanTime.IsZero() {
+		text, data := zapscript.RedactToken(last.Text, last.Data)
 		resp.Last = &models.TokenResponse{
 			Type:     last.Type,
 			UID:      last.UID,
-			Text:     last.Text,
-			Data:     last.Data,
+			Text:     text,
+			Data:     data,
 			ScanTime: last.ScanTime,
 		}
 	}
@@ -73,12 +76,15 @@ func HandleHistory(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 	}
 
 	for i := range entries {
+		// Redact on the way out as well as on the way in: rows written by
+		// earlier versions still hold credentials in the clear.
+		text, data := zapscript.RedactToken(entries[i].TokenValue, entries[i].TokenData)
 		resp.Entries[i] = models.HistoryResponseEntry{
 			Time:    entries[i].Time,
 			Type:    entries[i].Type,
 			UID:     entries[i].TokenID,
-			Text:    entries[i].TokenValue,
-			Data:    entries[i].TokenData,
+			Text:    text,
+			Data:    data,
 			Success: entries[i].Success,
 		}
 	}

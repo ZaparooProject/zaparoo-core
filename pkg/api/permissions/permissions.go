@@ -90,6 +90,12 @@ const (
 	CapScreenshot Capability = "screenshot"
 	// CapInput covers injecting keyboard and gamepad input.
 	CapInput Capability = "input"
+	// CapPlaytimeExtend covers granting extra playtime to the session
+	// currently being limited. It is separate from CapSettingsWrite: a
+	// grant weakens one session's limit without changing configuration,
+	// and a client trusted to hand out extra time is not necessarily
+	// trusted to rewrite the device's settings.
+	CapPlaytimeExtend Capability = "playtime.extend"
 	// CapUpdateApply covers replacing the running binary and restarting
 	// the service. It is the one capability that is not about weakening
 	// someone's limits: an update decides what code the device runs from
@@ -107,6 +113,7 @@ var roleCapabilities = map[Role]map[Capability]bool{
 		CapSettingsWrite:  true,
 		CapScreenshot:     true,
 		CapInput:          true,
+		CapPlaytimeExtend: true,
 		CapUpdateApply:    true,
 	},
 	RoleMember: {

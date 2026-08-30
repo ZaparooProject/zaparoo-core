@@ -51,7 +51,7 @@ func newWALTestDB(t *testing.T) walTestDB {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	sqlDB, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlDB, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, sqlDB.Close())

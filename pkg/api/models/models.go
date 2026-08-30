@@ -38,6 +38,7 @@ const (
 	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
+	NotificationPlaytimeExtended     = "playtime.extended"
 	NotificationInboxAdded           = "inbox.added"
 	NotificationClientsPaired        = "clients.paired"
 	NotificationProfilesActive       = "profiles.active"
@@ -59,6 +60,11 @@ const (
 const (
 	PlaytimeLimitReasonSession = "session"
 	PlaytimeLimitReasonDaily   = "daily"
+
+	// PlaytimeExtendModeDuration adds time to the current session.
+	PlaytimeExtendModeDuration = "duration"
+	// PlaytimeExtendModeToday waives the session limit until midnight.
+	PlaytimeExtendModeToday = "today"
 )
 
 type UIEventKind string
@@ -141,6 +147,7 @@ const (
 	MethodPlaytimeLimits              = "settings.playtime.limits"
 	MethodPlaytimeLimitsUpdate        = "settings.playtime.limits.update"
 	MethodPlaytime                    = "playtime"
+	MethodPlaytimeExtend              = "playtime.extend"
 	MethodClients                     = "clients"
 	MethodClientsCurrent              = "clients.current"
 	MethodClientsDelete               = "clients.delete"

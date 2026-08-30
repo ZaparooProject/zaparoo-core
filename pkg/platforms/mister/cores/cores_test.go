@@ -253,6 +253,24 @@ func TestPathToMGLDef(t *testing.T) {
 			wantMgl:  Systems["MegaVGMDrive"].Slots[0].Mgl,
 		},
 		{
+			name:     "NeoGeo .neo ROM set",
+			systemID: "NeoGeo",
+			path:     "mslug.neo",
+			wantMgl:  Systems["NeoGeo"].Slots[0].Mgl,
+		},
+		{
+			name:     "NeoGeo uppercase .NEO ROM set",
+			systemID: "NeoGeo",
+			path:     "MSLUG.NEO",
+			wantMgl:  Systems["NeoGeo"].Slots[0].Mgl,
+		},
+		{
+			name:     "NeoGeo .zip has no slot (system hook supplies the file tag)",
+			systemID: "NeoGeo",
+			path:     "mslug.zip",
+			wantErr:  true,
+		},
+		{
 			name:     "No matching extension returns error",
 			systemID: "NES",
 			path:     "unknown.zip",
@@ -478,6 +496,56 @@ func TestLookupCore(t *testing.T) {
 					t.Fatalf("expected a system core, got %+v", got)
 				}
 			}
+		})
+	}
+}
+
+func TestHookNeoGeo(t *testing.T) {
+	t.Parallel()
+
+	fileTag := func(path string) string {
+		return "\t<file delay=\"1\" type=\"f\" index=\"1\" path=\"../../../../.." + path + "\"/>\n"
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "zip romset gets file tag",
+			path: "/media/fat/games/NEOGEO/mslug.zip",
+			want: fileTag("/media/fat/games/NEOGEO/mslug.zip"),
+		},
+		{
+			name: "uppercase zip romset gets file tag",
+			path: "/media/fat/games/NEOGEO/MSLUG.ZIP",
+			want: fileTag("/media/fat/games/NEOGEO/MSLUG.ZIP"),
+		},
+		{
+			name: "extracted romset folder gets file tag",
+			path: "/media/fat/games/NEOGEO/mslug",
+			want: fileTag("/media/fat/games/NEOGEO/mslug"),
+		},
+		{
+			name: "neo file falls through to the core slot",
+			path: "/media/fat/games/NEOGEO/mslug.neo",
+			want: "",
+		},
+		{
+			name: "uppercase neo file falls through to the core slot",
+			path: "/media/fat/games/NEOGEO/MSLUG.NEO",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := hookNeoGeo(nil, nil, tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

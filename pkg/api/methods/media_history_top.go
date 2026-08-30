@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
@@ -82,7 +83,20 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 			Path:     entries[i].MediaPath,
 		})
 	}
-	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
+	mediaIDs := make(map[mediaPathRef]int64)
+	var tagsByID map[int64][]database.TagInfo
+	tagsKnown := false
+	enrichCtx, cancelEnrichment := optionalDBEnrichmentContext(env.Context)
+	defer cancelEnrichment()
+
+	mediaRows, enrichErr := resolveMediaPathIDs(enrichCtx, env.Database.MediaDB, mediaRefs)
+	if enrichErr != nil {
+		log.Debug().Err(enrichErr).Msg("could not enrich media history top from media database")
+	} else {
+		var resolvedRefs []database.MediaRef
+		mediaIDs, resolvedRefs = resolvedMediaRefs(mediaRefs, mediaRows)
+		tagsByID, tagsKnown = mediaTagsByRefs(enrichCtx, env.Database.MediaDB, resolvedRefs)
+	}
 
 	responseEntries := make([]models.MediaHistoryTopEntry, 0, len(entries))
 	for i := range entries {
@@ -98,6 +112,7 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 			LastPlayedAt:  entry.LastPlayedAt.Format(time.RFC3339),
 			TotalPlayTime: entry.TotalPlayTime,
 			SessionCount:  entry.SessionCount,
+			Tags:          mediaEntryTags(tagsKnown, mediaIDs[ref], tagsByID),
 		})
 	}
 

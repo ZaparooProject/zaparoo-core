@@ -116,14 +116,14 @@ func emuDeckLaunchers(_ *config.Instance, options *Options) []platforms.Launcher
 		mappedFolder := emuDeckSystemFolder(folder)
 		emulator, mapped := emulatorMapping[mappedFolder]
 		if !mapped || (emulator.typeName == emulatorRetroArch && !retroArchAvailable(options)) ||
-			(emulator.typeName == emulatorStandalone && !emuDeckEmulatorAvailable(options, paths, emulator)) {
+			(emulator.typeName == emulatorStandalone && !emuDeckEmulatorAvailable(options, &paths, emulator)) {
 			continue
 		}
 		info, ok := esde.LookupByFolderName(mappedFolder)
 		if !ok {
 			continue
 		}
-		launcher, ok := createEmuDeckLauncher(options, folder, mappedFolder, info, paths, emulator)
+		launcher, ok := createEmuDeckLauncher(options, folder, mappedFolder, info, &paths, emulator)
 		if ok {
 			result = append(result, launcher)
 		}
@@ -135,7 +135,7 @@ func createEmuDeckLauncher(
 	options *Options,
 	folder, mappedFolder string,
 	info esde.SystemInfo,
-	paths EmuDeckPaths,
+	paths *EmuDeckPaths,
 	emulator emulatorConfig,
 ) (platforms.Launcher, bool) {
 	var launcher platforms.Launcher
@@ -187,11 +187,11 @@ func emuDeckSystemFolder(folder string) string {
 	}
 }
 
-func emuDeckWrapperPath(paths EmuDeckPaths, emulator emulatorConfig) string {
+func emuDeckWrapperPath(paths *EmuDeckPaths, emulator emulatorConfig) string {
 	if emulator.wrapper == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(paths.RomsPath), "tools", "launchers", emulator.wrapper)
+	return filepath.Join(paths.ToolsPath, "launchers", emulator.wrapper)
 }
 
 func validEmuDeckWrapper(path string) bool {
@@ -202,14 +202,14 @@ func validEmuDeckWrapper(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }
 
-func emuDeckEmulatorAvailable(options *Options, paths EmuDeckPaths, emulator emulatorConfig) bool {
+func emuDeckEmulatorAvailable(options *Options, paths *EmuDeckPaths, emulator emulatorConfig) bool {
 	return validEmuDeckWrapper(emuDeckWrapperPath(paths, emulator)) ||
 		(emulator.flatpakID != "" && options.IsFlatpakInstalled(emulator.flatpakID))
 }
 
 func standaloneEmuDeckLauncher(
 	options *Options,
-	paths EmuDeckPaths,
+	paths *EmuDeckPaths,
 	emulator emulatorConfig,
 ) platforms.Launcher {
 	buildCommand := func(path string) (*platforms.LaunchCommand, error) {
@@ -250,7 +250,7 @@ func standaloneEmuDeckLauncher(
 
 func emuDeckStandaloneCommand(
 	options *Options,
-	paths EmuDeckPaths,
+	paths *EmuDeckPaths,
 	emulator emulatorConfig,
 	path string,
 ) (*platforms.LaunchCommand, error) {

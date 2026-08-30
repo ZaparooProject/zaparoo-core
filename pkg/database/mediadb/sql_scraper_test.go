@@ -2653,3 +2653,102 @@ func TestResolveSingletonContainerAliases_HasCoverSetFromTitleProperty(t *testin
 	assert.True(t, byDir[coverDir].HasCover, "aliased dir with title-scope image property should have HasCover=true")
 	assert.False(t, byDir[noCoverDir].HasCover, "aliased dir without image property should have HasCover=false")
 }
+
+// seedMediaRefTagFixture adds Media 2 (Title 2, untagged) and Media 3 (Title
+// 1, no file tags) beside the seeded Media 1, then tags Media 1 at file level
+// and Title 1 at title level so file/title merging and fan-out are observable.
+func seedMediaRefTagFixture(t *testing.T, mediaDB *MediaDB) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := mediaDB.sql.Load().ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (3, 1, 1, ?);
+	`, filepath.ToSlash(filepath.Join("roms", "zelda.nes")), filepath.ToSlash(filepath.Join("roms", "mario-alt.nes")))
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
+		{Type: "developer", Tag: "nintendo", Label: "Nintendo"},
+		{Type: "scraper.test", Tag: "alpha", Label: "Alpha"},
+	}))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, []database.TagInfo{
+		{Type: "scraper.test", Tag: "alpha", Label: "Alpha"},
+	}))
+}
+
+func TestGetMediaTagsByMediaRefs_MergesFileAndTitleTags(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	seedMediaRefTagFixture(t, mediaDB)
+
+	got, err := mediaDB.GetMediaTagsByMediaRefs(context.Background(), []database.MediaRef{
+		{MediaDBID: 1, MediaTitleDBID: 1},
+		{MediaDBID: 2, MediaTitleDBID: 2},
+		{MediaDBID: 3, MediaTitleDBID: 1},
+		{MediaDBID: 999, MediaTitleDBID: 999},
+		{},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "nintendo", Type: "developer", Label: "Nintendo"},
+		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+	}, got[1], "file and title tags merge, duplicates collapse, sorted by type then tag")
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+	}, got[3], "title tags fan out to sibling media without its file tags")
+	assert.NotContains(t, got, int64(2), "untagged media has no entry")
+	assert.NotContains(t, got, int64(999))
+	assert.NotContains(t, got, int64(0))
+	assert.Len(t, got, 2)
+}
+
+func TestGetMediaTagsByMediaRefs_EmptyRefsReturnEmptyMap(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	got, err := mediaDB.GetMediaTagsByMediaRefs(context.Background(), nil)
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
+
+	got, err = mediaDB.GetMediaTagsByMediaRefs(context.Background(), []database.MediaRef{{}, {MediaDBID: -1}})
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
+}
+
+func TestGetMediaTagsByMediaRefs_ChunksBeyondSQLiteParamLimit(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	seedMediaRefTagFixture(t, mediaDB)
+
+	// Well over the 999-parameter limit once media and title IDs are both
+	// bound. Filler refs use nonexistent media and title IDs so they cannot
+	// pick up tags; the real rows sit at both ends so fan-out has to work
+	// across chunks, and Media 1 repeats to prove deduplication.
+	const fillerCount = 1200
+	refs := make([]database.MediaRef, 0, fillerCount+3)
+	refs = append(refs, database.MediaRef{MediaDBID: 1, MediaTitleDBID: 1})
+	for i := range fillerCount {
+		refs = append(refs, database.MediaRef{MediaDBID: int64(10_000 + i), MediaTitleDBID: int64(20_000 + i)})
+	}
+	refs = append(refs,
+		database.MediaRef{MediaDBID: 1, MediaTitleDBID: 1},
+		database.MediaRef{MediaDBID: 3, MediaTitleDBID: 1},
+	)
+
+	got, err := mediaDB.GetMediaTagsByMediaRefs(context.Background(), refs)
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "nintendo", Type: "developer", Label: "Nintendo"},
+		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+	}, got[1])
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "alpha", Type: "scraper.test", Label: "Alpha"},
+	}, got[3])
+	assert.Len(t, got, 2)
+}

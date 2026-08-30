@@ -41,3 +41,15 @@ const (
 	LauncherGroupKodiTV            = "KodiTV"
 	LauncherGroupKodiMusic         = "KodiMusic"
 )
+
+// MiSTer alt-core launcher groups. Each name matches a family of cores
+// published by a distinct MiSTer downloader database, so a user can prefer a
+// whole family at once with a single [launchers] preference entry.
+const (
+	LauncherGroupDB9      = "DB9"
+	LauncherGroupLLAPI    = "LLAPI"
+	LauncherGroupDualRAM  = "DualRAM"
+	LauncherGroupSinden   = "Sinden"
+	LauncherGroupPWM      = "PWM"
+	LauncherGroupUnstable = "Unstable"
+)

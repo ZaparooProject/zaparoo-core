@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -455,13 +456,27 @@ func findAmigaLauncher(t *testing.T, launchers []platforms.Launcher) *platforms.
 func findNeoGeoLauncher(t *testing.T, launchers []platforms.Launcher) *platforms.Launcher {
 	t.Helper()
 
+	return findLauncherByID(t, launchers, systemdefs.SystemNeoGeo)
+}
+
+func findLauncherByID(t *testing.T, launchers []platforms.Launcher, id string) *platforms.Launcher {
+	t.Helper()
+
 	for i := range launchers {
-		if launchers[i].ID == "NeoGeo" {
+		if launchers[i].ID == id {
 			return &launchers[i]
 		}
 	}
-	require.FailNow(t, "NeoGeo launcher should exist")
+	require.FailNow(t, "launcher should exist", "id: %s", id)
 	return nil
+}
+
+func scanResultPaths(results []platforms.ScanResult) []string {
+	paths := make([]string, 0, len(results))
+	for _, r := range results {
+		paths = append(paths, r.Path)
+	}
+	return paths
 }
 
 func writeAmigaVisionInstall(t *testing.T, path, game string) {
@@ -626,6 +641,312 @@ func TestNeoGeoScanner_HandlesMalformedRomsets(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []platforms.ScanResult{{Path: contentPath}}, results)
+}
+
+func TestApplyNeoGeoRomsetNames(t *testing.T) {
+	t.Parallel()
+
+	neoGeoPath := filepath.Join(string(filepath.Separator), "media", "fat", "games", "NEOGEO")
+	names := map[string]string{
+		"mslug":      "Metal Slug",
+		"mslugalias": "Metal Slug",
+		"kof98":      "King of Fighters '98",
+	}
+	rootNeo := filepath.Join(neoGeoPath, "mslug.neo")
+
+	tests := []struct {
+		romsets   map[string]string
+		name      string
+		input     []platforms.ScanResult
+		want      []platforms.ScanResult
+		wantNamed int
+	}{
+		{
+			name:      "root neo file",
+			romsets:   names,
+			input:     []platforms.ScanResult{{Path: rootNeo}},
+			want:      []platforms.ScanResult{{Path: rootNeo, Name: "Metal Slug"}},
+			wantNamed: 1,
+		},
+		{
+			name:    "nested neo file",
+			romsets: names,
+			input: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "Favorites", "collection", "kof98.neo")},
+			},
+			want: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "Favorites", "collection", "kof98.neo"), Name: "King of Fighters '98"},
+			},
+			wantNamed: 1,
+		},
+		{
+			name:    "neo file inside collection zip",
+			romsets: names,
+			input:   []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "collection.zip", "mslug.neo")}},
+			want: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "collection.zip", "mslug.neo"), Name: "Metal Slug"},
+			},
+			wantNamed: 1,
+		},
+		{
+			name:    "mixed case extension and romset id",
+			romsets: names,
+			input: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "MSLUG.NEO")},
+				{Path: filepath.Join(neoGeoPath, "Kof98.Neo")},
+			},
+			want: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "MSLUG.NEO"), Name: "Metal Slug"},
+				{Path: filepath.Join(neoGeoPath, "Kof98.Neo"), Name: "King of Fighters '98"},
+			},
+			wantNamed: 2,
+		},
+		{
+			name:      "alias romset id",
+			romsets:   names,
+			input:     []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "mslugalias.neo")}},
+			want:      []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "mslugalias.neo"), Name: "Metal Slug"}},
+			wantNamed: 1,
+		},
+		{
+			name:    "unknown romset id is left alone",
+			romsets: names,
+			input:   []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "homebrew.neo")}},
+			want:    []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "homebrew.neo")}},
+		},
+		{
+			name:    "multi-dot stem is not a romset id",
+			romsets: names,
+			input:   []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "mslug.v2.neo")}},
+			want:    []platforms.ScanResult{{Path: filepath.Join(neoGeoPath, "mslug.v2.neo")}},
+		},
+		{
+			name:    "existing name is kept",
+			romsets: names,
+			input:   []platforms.ScanResult{{Path: rootNeo, Name: "Custom"}},
+			want:    []platforms.ScanResult{{Path: rootNeo, Name: "Custom"}},
+		},
+		{
+			name:    "non-neo entries are untouched",
+			romsets: names,
+			input: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "mslug.zip")},
+				{Path: filepath.Join(neoGeoPath, "mslug")},
+				{Path: filepath.Join(neoGeoPath, "mslug.zip", "crom0")},
+			},
+			want: []platforms.ScanResult{
+				{Path: filepath.Join(neoGeoPath, "mslug.zip")},
+				{Path: filepath.Join(neoGeoPath, "mslug")},
+				{Path: filepath.Join(neoGeoPath, "mslug.zip", "crom0")},
+			},
+		},
+		{
+			name:    "duplicate paths are both named",
+			romsets: names,
+			input:   []platforms.ScanResult{{Path: rootNeo}, {Path: rootNeo}},
+			want: []platforms.ScanResult{
+				{Path: rootNeo, Name: "Metal Slug"},
+				{Path: rootNeo, Name: "Metal Slug"},
+			},
+			wantNamed: 2,
+		},
+		{
+			name:    "empty romsets",
+			romsets: map[string]string{},
+			input:   []platforms.ScanResult{{Path: rootNeo}},
+			want:    []platforms.ScanResult{{Path: rootNeo}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			results := append([]platforms.ScanResult(nil), tt.input...)
+			named := applyNeoGeoRomsetNames(results, tt.romsets)
+			assert.Equal(t, tt.wantNamed, named)
+			assert.Equal(t, tt.want, results)
+		})
+	}
+}
+
+func TestNeoGeoScanner_MapsNeoFilesThroughRomsets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	favoritesPath := filepath.Join(neoGeoPath, "Favorites")
+	collectionPath := filepath.Join(favoritesPath, "collection")
+	rootNeoPath := filepath.Join(neoGeoPath, "mslug.neo")
+	nestedNeoPath := filepath.Join(favoritesPath, "KOF98.NEO")
+	unknownNeoPath := filepath.Join(collectionPath, "homebrew.neo")
+	zipNeoPath := filepath.Join(neoGeoPath, "collection.zip", "samshoalias.neo")
+	zipPath := filepath.Join(neoGeoPath, "mslug.zip")
+	folderPath := filepath.Join(neoGeoPath, "kof98")
+
+	require.NoError(t, os.MkdirAll(collectionPath, 0o700))
+	require.NoError(t, os.MkdirAll(folderPath, 0o700))
+	require.NoError(t, os.WriteFile(rootNeoPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(nestedNeoPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(unknownNeoPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(folderPath, "crom0"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+  <romset name="kof98" altname="King of Fighters '98"/>
+  <romset name="samsho,samshoalias" altname="Samurai Shodown"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	// Mirrors what the filesystem walk hands the scanner: .neo files at any
+	// depth (including inside a collection zip), romset contents, and the
+	// same path twice from overlapping roots.
+	initial := []platforms.ScanResult{
+		{Path: rootNeoPath},
+		{Path: nestedNeoPath},
+		{Path: unknownNeoPath},
+		{Path: zipNeoPath},
+		{Path: filepath.Join(folderPath, "kof98.neo")},
+		{Path: filepath.Join(zipPath, "crom0")},
+		{Path: filepath.Join(folderPath, "crom0")},
+		{Path: rootNeoPath},
+	}
+
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, systemdefs.SystemNeoGeo, initial)
+	require.NoError(t, err)
+
+	assert.Contains(t, results, platforms.ScanResult{Path: rootNeoPath, Name: "Metal Slug"})
+	assert.Contains(t, results, platforms.ScanResult{Path: nestedNeoPath, Name: "King of Fighters '98"})
+	assert.Contains(t, results, platforms.ScanResult{Path: zipNeoPath, Name: "Samurai Shodown"})
+	assert.Contains(t, results, platforms.ScanResult{Path: unknownNeoPath})
+	assert.Contains(t, results, platforms.ScanResult{Path: zipPath, Name: "Metal Slug", NoExt: true})
+	assert.Contains(t, results, platforms.ScanResult{Path: folderPath, Name: "King of Fighters '98", NoExt: true})
+
+	paths := scanResultPaths(results)
+	assert.NotContains(t, paths, filepath.Join(folderPath, "kof98.neo"))
+	assert.NotContains(t, paths, filepath.Join(zipPath, "crom0"))
+	assert.NotContains(t, paths, filepath.Join(folderPath, "crom0"))
+
+	rootNeoEntries := 0
+	for _, r := range results {
+		if r.Path != rootNeoPath {
+			continue
+		}
+		rootNeoEntries++
+		assert.Equal(t, "Metal Slug", r.Name)
+		assert.False(t, r.NoExt, ".neo entries keep their extension")
+	}
+	assert.Equal(t, 2, rootNeoEntries, "duplicate .neo paths are both named; the indexer coalesces them")
+}
+
+func TestNeoGeoScanner_LeavesNeoFilesUnmappedWithoutRomsets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		romsets string
+	}{
+		{name: "missing romsets.xml"},
+		{name: "invalid romsets.xml", romsets: "<romsets>"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			neoGeoPath := filepath.Join(root, "NEOGEO")
+			neoPath := filepath.Join(neoGeoPath, "mslug.neo")
+			zipNeoPath := filepath.Join(neoGeoPath, "collection.zip", "mslug.neo")
+			require.NoError(t, os.MkdirAll(neoGeoPath, 0o700))
+			require.NoError(t, os.WriteFile(neoPath, []byte("test"), 0o600))
+			if tt.romsets != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(tt.romsets), 0o600))
+			}
+
+			cfg, err := config.NewConfig(t.TempDir(), config.Values{
+				Launchers: config.Launchers{
+					IndexRoot: []string{root},
+				},
+			})
+			require.NoError(t, err)
+
+			p := NewPlatform()
+			neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+			initial := []platforms.ScanResult{{Path: neoPath}, {Path: zipNeoPath}}
+
+			results, err := neoGeoLauncher.Scanner(context.Background(), cfg, systemdefs.SystemNeoGeo, initial)
+			require.NoError(t, err)
+
+			assert.Equal(t, initial, results)
+		})
+	}
+}
+
+func TestNeoGeoScanner_SharesMappedNeoWithMVS(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	neoPath := filepath.Join(neoGeoPath, "mslug.neo")
+	require.NoError(t, os.MkdirAll(neoGeoPath, 0o700))
+	require.NoError(t, os.WriteFile(neoPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	// Both launchers must come from the same Launchers call to share a cache.
+	launchers := NewPlatform().Launchers(cfg)
+	neoGeoLauncher := findNeoGeoLauncher(t, launchers)
+	mvsLauncher := findLauncherByID(t, launchers, systemdefs.SystemNeoGeoMVS)
+
+	results, err := neoGeoLauncher.Scanner(
+		context.Background(), cfg, systemdefs.SystemNeoGeo, []platforms.ScanResult{{Path: neoPath}},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, results, platforms.ScanResult{Path: neoPath, Name: "Metal Slug"})
+
+	mvsResults, err := mvsLauncher.Scanner(context.Background(), cfg, systemdefs.SystemNeoGeoMVS, nil)
+	require.NoError(t, err)
+	assert.Equal(t, results, mvsResults)
+}
+
+func TestCollectNeoGeoRomsetEntries_IgnoresNeoFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	zipPath := filepath.Join(neoGeoPath, "mslug.zip")
+	require.NoError(t, os.MkdirAll(neoGeoPath, 0o700))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "mslug.neo"), []byte("test"), 0o600))
+
+	romsets := map[string]string{"mslug": "Metal Slug"}
+	entries, err := collectNeoGeoRomsetEntries(
+		context.Background(), afero.NewOsFs(), neoGeoPath, romsets, make(map[string]struct{}),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, []platforms.ScanResult{{Path: zipPath, Name: "Metal Slug", NoExt: true}}, entries)
 }
 
 func TestCollectNeoGeoRomsetEntries_DeduplicatesOverlappingRoots(t *testing.T) {

@@ -196,3 +196,66 @@ func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathR
 	}
 	return mediaIDs
 }
+
+// resolvedMediaRefs flattens resolved rows into media IDs keyed by path ref
+// and a MediaRef list deduplicated by media DBID in entry order, ready for
+// batch cover-status and tag lookups.
+func resolvedMediaRefs(
+	order []mediaPathRef, rows map[mediaPathRef]database.MediaPathID,
+) (map[mediaPathRef]int64, []database.MediaRef) {
+	mediaIDs := make(map[mediaPathRef]int64, len(rows))
+	refs := make([]database.MediaRef, 0, len(rows))
+	seen := make(map[int64]struct{}, len(rows))
+	for _, ref := range order {
+		row := rows[ref]
+		if row.DBID <= 0 {
+			continue
+		}
+		mediaIDs[ref] = row.DBID
+		if _, ok := seen[row.DBID]; ok {
+			continue
+		}
+		seen[row.DBID] = struct{}{}
+		refs = append(refs, database.MediaRef{
+			MediaDBID:      row.DBID,
+			MediaTitleDBID: row.MediaTitleDBID,
+		})
+	}
+	return mediaIDs, refs
+}
+
+// mediaTagsByRefs batch-loads tags for resolved media rows. The bool reports
+// whether tags are known: false means the lookup failed, so callers must omit
+// tags rather than report the media as untagged.
+func mediaTagsByRefs(
+	ctx context.Context, db database.MediaDBI, refs []database.MediaRef,
+) (map[int64][]database.TagInfo, bool) {
+	if db == nil || len(refs) == 0 {
+		return map[int64][]database.TagInfo{}, true
+	}
+	started := time.Now()
+	tags, err := db.GetMediaTagsByMediaRefs(ctx, refs)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve media tags by ref")
+		return nil, false
+	}
+	log.Debug().
+		Int("refs", len(refs)).
+		Int("tagged", len(tags)).
+		Dur("duration", time.Since(started)).
+		Msg("media tag enrichment timing")
+	return tags, true
+}
+
+// mediaEntryTags returns the tags for one response entry: nil (omitted from
+// JSON) when the media is unresolved or tags are unknown, and an empty slice
+// when the media is indexed but untagged.
+func mediaEntryTags(known bool, mediaID int64, tags map[int64][]database.TagInfo) []database.TagInfo {
+	if !known || mediaID <= 0 {
+		return nil
+	}
+	if entryTags := tags[mediaID]; entryTags != nil {
+		return entryTags
+	}
+	return []database.TagInfo{}
+}

@@ -880,6 +880,15 @@ func TestZaparooRestorePolicyMirrorsCollector(t *testing.T) {
 	assert.False(t, allowed("auth.toml"))
 }
 
+func TestBackupPatternsRecursiveGlobIsRootAnchored(t *testing.T) {
+	t.Parallel()
+	patterns := []platforms.BackupPattern{{Glob: "*/Documents/**"}}
+	assert.True(t, backupPatternsMatch(filepath.Join("steamuser", "Documents", "Game", "save.dat"), patterns))
+	assert.True(t, backupPatternsMatch(filepath.Join("STEAMUSER", "DOCUMENTS", "save.dat"), patterns))
+	assert.False(t, backupPatternsMatch(filepath.Join("steamuser", "Other", "Documents", "save.dat"), patterns))
+	assert.False(t, backupPatternsMatch(filepath.Join("Documents", "save.dat"), patterns))
+}
+
 func TestManagerCreateInspectRestoreNestedConfigFiles(t *testing.T) {
 	t.Parallel()
 	env := newBackupTestEnv(t, platformids.Mister)

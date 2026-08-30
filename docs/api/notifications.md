@@ -444,6 +444,41 @@ The warning applies to whichever limit will be reached first (session or daily).
 }
 ```
 
+### playtime.extended
+
+Sent when extra playtime was granted to the session currently being limited, either through the [`playtime.extend`](./methods.md#playtimeextend) method or by scanning a physical extension card. Warning thresholds are re-armed by a grant, so they fire again against the newly granted time.
+
+Profiles are identified by ID only. The switch ID authorizing a card grant is a bearer credential and is never published.
+
+A repeated request that granted no additional time emits no notification.
+
+#### Parameters
+
+| Key              | Type   | Required | Description                                                                    |
+| :--------------- | :----- | :------- | :------------------------------------------------------------------------------- |
+| mode             | string | Yes      | `"duration"` when time was added, `"today"` when the session limit was waived.  |
+| duration         | string | No       | Time this grant added (Go duration format). Omitted for `"today"`.              |
+| expires          | string | No       | RFC 3339 timestamp when a `"today"` waiver lapses. Omitted for `"duration"`.     |
+| sessionExtension | string | No       | The session's accumulated extension after this grant.                          |
+| profileId        | string | No       | Recipient profile. Omitted for the shared profile.                             |
+| grantedBy        | string | No       | Profile that authorized the grant. Omitted when authorized by an admin client rather than a profile credential. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "playtime.extended",
+  "params": {
+    "mode": "duration",
+    "duration": "15m0s",
+    "sessionExtension": "15m0s",
+    "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
+    "grantedBy": "0194e2a1-9f8e-7c65-b432-1a0f9e8d7c6b"
+  }
+}
+```
+
 ## Inbox
 
 ### inbox.added
