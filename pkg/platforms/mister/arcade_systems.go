@@ -27,6 +27,7 @@ type arcadeSystemSpec struct {
 }
 
 var misterArcadeSystemSpecs = []arcadeSystemSpec{
+	{systemID: systemdefs.SystemCave68000, platforms: []string{"CAVE 68000"}},
 	{systemID: systemdefs.SystemCPS1, platforms: []string{"Capcom CPS-1", "Capcom CPS-1.5"}},
 	{systemID: systemdefs.SystemCPS2, platforms: []string{"Capcom CPS-2"}},
 	{systemID: systemdefs.SystemCPS3, platforms: []string{"Capcom CPS-3"}},
