@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -72,6 +73,7 @@ type Platform struct {
 	steamRuntime              runtimeBroker
 	setActiveMedia            func(*models.ActiveMedia)
 	emulationOptionsOverride  *linuxemu.Options
+	backupSteamRoot           atomic.Pointer[string]
 	retroArchAppendConfigPath string
 }
 
@@ -191,6 +193,7 @@ func (p *Platform) StartPost(
 	// Resolve Steam root once so tracker uses the same configured installation
 	// as the Steam launcher.
 	steamRoot := steam.NewClient(steam.DefaultSteamOSOptions()).FindSteamDir(cfg)
+	p.backupSteamRoot.Store(&steamRoot)
 
 	// Create shared process scanner for both Steam and emulator tracking
 	p.procScanner = procscanner.New()

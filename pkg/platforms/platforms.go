@@ -366,8 +366,11 @@ type BackupPattern struct {
 }
 
 type BackupDefinition struct {
-	SourceRoot         string
-	RestoreRoot        string
+	SourceRoot  string
+	RestoreRoot string
+	// RestoreTargetRoot optionally maps RestoreRoot to a platform-discovered
+	// physical category root. It must never be derived from backup contents.
+	RestoreTargetRoot  string
 	Category           string
 	Include            []BackupPattern
 	Exclude            []BackupPattern
