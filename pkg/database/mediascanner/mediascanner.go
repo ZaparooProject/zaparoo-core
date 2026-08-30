@@ -708,6 +708,35 @@ func shouldSkipExcludedSymlink(
 	return false, nil
 }
 
+// entryIsSymlink reports whether a walked entry is a symlink.
+//
+// The dirent type is trusted wherever readdir fills it in. Where it does not —
+// the FAT family, which is what MiSTer's /media/fat is — every symlink arrives
+// looking like an ordinary file, which silently disables both the excluded
+// directory and the alias exclusion below it. lstat is the only way to tell
+// there, and it is a plain call rather than a timeout-wrapped one because it
+// runs per entry against a directory that was just read; the timeout-wrapped
+// calls stay on the symlink branches, which only a real link reaches. A failed
+// lstat leaves the entry as the dirent described it.
+//
+// Directories are left alone: a directory entry is reported as one on every
+// filesystem here, and a link to a directory is exactly the case the dirent
+// type gets wrong, so it arrives as a non-directory and is checked.
+func entryIsSymlink(
+	d fs.DirEntry,
+	direntTypesReliable bool,
+	lstat func() (os.FileInfo, error),
+) bool {
+	if d.Type()&os.ModeSymlink != 0 {
+		return true
+	}
+	if direntTypesReliable || d.IsDir() {
+		return false
+	}
+	info, err := lstat()
+	return err == nil && info.Mode()&os.ModeSymlink != 0
+}
+
 // shouldSkipSymlinkAlias reports whether a symlink must be kept out of the
 // walk because it aliases media already scanned under its target path. A
 // timeout while reading the link leaves its target unknown, but letting
@@ -763,7 +792,12 @@ func GetFiles(
 
 	matcher := helpers.NewLauncherMatcher(cfg, platform)
 
-	log.Debug().Str("system", systemID).Str("path", path).Msg("starting directory walk")
+	// Resolved once per root rather than per entry: one statfs, and the answer
+	// cannot change under the walk.
+	direntSymlinkTypes := direntTypesReportSymlinks(path)
+
+	log.Debug().Str("system", systemID).Str("path", path).
+		Bool("direntSymlinkTypes", direntSymlinkTypes).Msg("starting directory walk")
 	err = fastwalk.Walk(conf, path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// fastwalk reports a directory read failure by re-invoking this
@@ -787,10 +821,12 @@ func GetFiles(
 		}
 
 		n := entriesScanned.Add(1)
-		if d.Type()&os.ModeSymlink != 0 {
+		isSymlink := entryIsSymlink(d, direntSymlinkTypes, func() (os.FileInfo, error) {
+			return os.Lstat(p)
+		})
+		if isSymlink {
 			symlinksEncountered.Add(1)
 		}
-		isSymlink := d.Type()&os.ModeSymlink != 0
 		if (d.IsDir() || isSymlink) && matcher.ShouldSkipScanDirectory(system.ID, p) {
 			shouldSkip := d.IsDir()
 			if isSymlink {
