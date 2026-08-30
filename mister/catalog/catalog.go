@@ -132,12 +132,12 @@ func Groups() map[string][]Core {
 	for id, members := range canonical.Groups {
 		cloned := make([]Core, len(members))
 		for i := range members {
-			member := &members[i]
+			member := members[i]
 			if system, ok := canonical.Systems[member.ID]; ok {
 				member.Folders = system.Folders
 				member.Extensions = system.Extensions
 			}
-			cloned[i] = cloneCore(member)
+			cloned[i] = cloneCore(&member)
 		}
 		groups[id] = cloned
 	}
@@ -191,6 +191,9 @@ func PathToMGLDef(core *Core, path string) (*MGLParams, error) {
 	for _, slot := range core.Slots {
 		for _, ext := range slot.Exts {
 			if strings.HasSuffix(lowerPath, ext) {
+				if slot.Mgl == nil {
+					continue
+				}
 				return cloneMGLParams(slot.Mgl), nil
 			}
 		}

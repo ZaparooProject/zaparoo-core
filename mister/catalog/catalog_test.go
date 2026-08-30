@@ -20,6 +20,7 @@
 package catalog_test
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/mister/v2/catalog"
@@ -114,4 +115,53 @@ func TestPathToMGLDef(t *testing.T) {
 	if _, err = catalog.PathToMGLDef(core, "unknown.zip"); err == nil {
 		t.Fatal("expected unmatched extension error")
 	}
+}
+
+func TestPathToMGLDefSkipsSlotsWithoutParams(t *testing.T) {
+	t.Parallel()
+
+	core := &catalog.Core{
+		ID: "Test",
+		Slots: []catalog.Slot{
+			{Exts: []string{".bin"}},
+			{Exts: []string{".rom"}, Mgl: &catalog.MGLParams{Delay: 1, Method: "f", Index: 0}},
+		},
+	}
+
+	if _, err := catalog.PathToMGLDef(core, "game.bin"); err == nil {
+		t.Fatal("expected unmatched definition error for slot without MGL params")
+	}
+
+	params, err := catalog.PathToMGLDef(core, "game.rom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params == nil || params.Method != "f" {
+		t.Fatalf("unexpected params: %#v", params)
+	}
+}
+
+func TestGroupsIsSafeForConcurrentUse(t *testing.T) {
+	t.Parallel()
+
+	// Groups enriches member folders and extensions; readers must not observe
+	// writes into the canonical catalog while doing so.
+	var readers [8]struct{}
+	var passes [20]struct{}
+
+	var wg sync.WaitGroup
+	wg.Add(len(readers))
+	for range readers {
+		go func() {
+			defer wg.Done()
+			for range passes {
+				for _, members := range catalog.Groups() {
+					for i := range members {
+						_ = members[i].Folders
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

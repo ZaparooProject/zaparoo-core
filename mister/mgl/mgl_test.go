@@ -97,3 +97,16 @@ func TestGenerateErrors(t *testing.T) {
 		t.Fatal("expected extension error")
 	}
 }
+
+func TestGenerateEscapesRBFPath(t *testing.T) {
+	t.Parallel()
+
+	core := &catalog.Core{}
+	got, err := mgl.Generate(core, `_Console/A&B<C>`, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `<rbf>_Console/A&amp;B&lt;C&gt;</rbf>`) {
+		t.Fatalf("rbf path not escaped: %s", got)
+	}
+}

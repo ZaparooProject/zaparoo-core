@@ -45,7 +45,7 @@ func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, 
 		return "", errors.New("no core supplied for MGL generation")
 	}
 
-	result := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
+	result := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", escapeAttribute(rbfPath))
 
 	if core.SetName != "" {
 		sameDir := ""
