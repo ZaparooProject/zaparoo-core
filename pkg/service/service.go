@@ -464,6 +464,9 @@ func startService(
 	// and after the active profile is restored, so the session is judged
 	// against the right profile's limits.
 	limitsManager.RestoreSessionFromHistory(time.Now())
+	// Restore granted extensions after the session, so a session-scoped
+	// grant is only reinstated when the session it belongs to came back.
+	limitsManager.RestoreExtensions(time.Now())
 	if limitsResolver.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
 	}
@@ -490,6 +493,7 @@ func startService(
 		State:               st,
 		DB:                  db,
 		Profiles:            profilesSvc,
+		LimitsManager:       limitsManager,
 		PlaybackManager:     playbackManager,
 		UI:                  uiEvents,
 		LaunchSoftwareQueue: lsq,

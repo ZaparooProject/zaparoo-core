@@ -201,6 +201,19 @@ type ProfileSwitchRequest struct {
 	Clear    bool
 }
 
+// PlaytimeExtensionRequest asks the script runner to grant extra time to
+// the session currently being limited. AuthorizerSwitchID is the bearer
+// credential from the card; the service layer resolves it and checks the
+// profile's role, so the command layer never sees a verified identity.
+type PlaytimeExtensionRequest struct {
+	// Mode is models.PlaytimeExtendModeDuration or ...ModeToday.
+	Mode string
+	// AuthorizerSwitchID is the switch ID of the authorizing profile.
+	AuthorizerSwitchID string
+	// Duration is the time to add, for duration mode only.
+	Duration time.Duration
+}
+
 // CmdResult returns a summary of what global side effects may or may not have
 // happened as a result of a single ZapScript command running.
 type CmdResult struct {
@@ -211,6 +224,10 @@ type CmdResult struct {
 	// Playlist). The scan path activates without a PIN check — possession
 	// of the card is the authorization.
 	ProfileSwitch *ProfileSwitchRequest
+	// PlaytimeExtension requests extra time for the current playtime
+	// session. Like ProfileSwitch this is intent only: the service layer
+	// verifies the authorizing credential and applies the grant.
+	PlaytimeExtension *PlaytimeExtensionRequest
 	// Strategy indicates which matching strategy was used for title-based launches.
 	// Empty for non-title commands. Used for testing and debugging title resolution.
 	Strategy string
