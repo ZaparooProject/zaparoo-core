@@ -23,7 +23,6 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -36,13 +35,6 @@ import (
 // SHM kept together, untouched, and reassemblable into a database that opens
 // with every committed row — including rows that only ever reached the WAL.
 func TestMediaDB_Recreate_KeepBackup_PreservesConsistentForensicSet(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		// The scenario needs a second connection open across Recreate, and
-		// Windows will not let PreserveCorruptFile rename a database file
-		// while any handle on it is still open.
-		t.Skip("open SQLite handles block renaming the database on Windows")
-	}
-
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 	ctx := context.Background()
