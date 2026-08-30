@@ -1793,7 +1793,7 @@ func queryImagePropertyEntityIDChunk(
 }
 
 func fetchCoverStatuses(
-	ctx context.Context, db sqlQueryable, refs []database.MediaCoverRef,
+	ctx context.Context, db sqlQueryable, refs []database.MediaRef,
 ) (map[int64]bool, error) {
 	statuses := make(map[int64]bool, len(refs))
 	results := make([]database.SearchResultWithCursor, 0, len(refs))

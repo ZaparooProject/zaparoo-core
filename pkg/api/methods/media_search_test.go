@@ -273,7 +273,7 @@ func TestHandleMediaSearch_IncludesCoverStatus(t *testing.T) {
 				MediaID: 2, MediaTitleID: 22,
 			},
 		}, nil)
-	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaRef{
 		{MediaDBID: 1, MediaTitleDBID: 11},
 		{MediaDBID: 2, MediaTitleDBID: 22},
 	}).Return(map[int64]bool{1: true, 2: false}, nil)
@@ -306,7 +306,7 @@ func TestHandleMediaSearch_CoverFailureIsNonFatal(t *testing.T) {
 			SystemID: "NES", Name: "Game", Path: filepath.Join("games", "game.nes"),
 			MediaID: 1, MediaTitleID: 11,
 		}}, nil)
-	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaCoverRef{{
+	mockMediaDB.On("GetMediaCoverStatus", mock.Anything, []database.MediaRef{{
 		MediaDBID: 1, MediaTitleDBID: 11,
 	}}).Run(func(args mock.Arguments) {
 		ctx, ok := args.Get(0).(context.Context)

@@ -291,9 +291,14 @@ type MediaHistoryResponseEntry struct {
 	MediaPath  string  `json:"mediaPath"`
 	LauncherID string  `json:"launcherId"`
 	StartedAt  string  `json:"startedAt"`
-	PlayTime   int     `json:"playTime"`
-	MediaID    int64   `json:"mediaId,omitempty"`
-	HasCover   bool    `json:"hasCover"`
+	// Tags is nil when the media is unresolved or tag enrichment failed
+	// (key omitted) and an empty slice when the media is indexed but
+	// untagged (serialised as []). omitzero keeps that distinction;
+	// omitempty would drop the empty array.
+	Tags     []database.TagInfo `json:"tags,omitzero"`
+	PlayTime int                `json:"playTime"`
+	MediaID  int64              `json:"mediaId,omitempty"`
+	HasCover bool               `json:"hasCover"`
 }
 
 type MediaHistoryResponse struct {
@@ -315,15 +320,18 @@ type MediaHistoryLatestResponse struct {
 }
 
 type MediaHistoryTopEntry struct {
-	RelPath       *string `json:"relativePath,omitempty"`
-	SystemID      string  `json:"systemId"`
-	SystemName    string  `json:"systemName"`
-	MediaName     string  `json:"mediaName"`
-	MediaPath     string  `json:"mediaPath"`
-	LastPlayedAt  string  `json:"lastPlayedAt"`
-	TotalPlayTime int     `json:"totalPlayTime"`
-	SessionCount  int     `json:"sessionCount"`
-	MediaID       int64   `json:"mediaId,omitempty"`
+	RelPath      *string `json:"relativePath,omitempty"`
+	SystemID     string  `json:"systemId"`
+	SystemName   string  `json:"systemName"`
+	MediaName    string  `json:"mediaName"`
+	MediaPath    string  `json:"mediaPath"`
+	LastPlayedAt string  `json:"lastPlayedAt"`
+	// Tags follows the same nil-omitted / empty-array rule as
+	// MediaHistoryResponseEntry.Tags.
+	Tags          []database.TagInfo `json:"tags,omitzero"`
+	TotalPlayTime int                `json:"totalPlayTime"`
+	SessionCount  int                `json:"sessionCount"`
+	MediaID       int64              `json:"mediaId,omitempty"`
 }
 
 type MediaHistoryTopResponse struct {

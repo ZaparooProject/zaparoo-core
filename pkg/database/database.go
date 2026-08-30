@@ -249,8 +249,9 @@ type MediaPathID struct {
 	MediaTitleDBID int64
 }
 
-// MediaCoverRef identifies media and title rows for a cover-status lookup.
-type MediaCoverRef struct {
+// MediaRef identifies a Media row and its MediaTitle row for batch lookups
+// such as cover status and tags.
+type MediaRef struct {
 	MediaDBID      int64
 	MediaTitleDBID int64
 }
@@ -1109,7 +1110,7 @@ type MediaDBI interface {
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
 	// GetMediaCoverStatus returns statuses keyed by MediaDBID. True means a media-
 	// or title-level image exists; absent keys mean no cover.
-	GetMediaCoverStatus(ctx context.Context, refs []MediaCoverRef) (map[int64]bool, error)
+	GetMediaCoverStatus(ctx context.Context, refs []MediaRef) (map[int64]bool, error)
 	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
 	BrowseIndex(ctx context.Context, opts BrowseIndexOptions) (BrowseIndexResult, error)
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
@@ -1329,6 +1330,15 @@ type MediaDBI interface {
 	// (MediaTitleTags) for a single MediaTitle row.
 	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
 	GetMediaTitleTagsByMediaTitleDBIDs(ctx context.Context, mediaTitleDBIDs []int64) (map[int64][]TagInfo, error)
+
+	// GetMediaTagsByMediaRefs returns the merged file-level (MediaTags) and
+	// title-level (MediaTitleTags) tags for each referenced media row, keyed
+	// by MediaDBID. This is the same tag view media.search attaches to
+	// results, unlike GetMediaTagsByMediaDBIDs which is file-level only.
+	// Tags are deduplicated by (type, tag) and sorted by type then tag.
+	// Untagged media have no map entry. Refs with MediaDBID <= 0 are ignored.
+	// The lookup is batched internally under the SQLite parameter limit.
+	GetMediaTagsByMediaRefs(ctx context.Context, refs []MediaRef) (map[int64][]TagInfo, error)
 
 	// UpsertMediaBlob inserts a blob into MediaBlobs when no row with the same
 	// SHA-256 hash of framed content type and bytes already exists, then returns its DBID.

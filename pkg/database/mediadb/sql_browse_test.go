@@ -1195,7 +1195,7 @@ func TestFetchAndAttachCoverFlags_Integration_MediaLevelProperty(t *testing.T) {
 	assert.True(t, results[0].HasCover, "media with image property should have HasCover=true")
 	assert.False(t, results[1].HasCover, "media without image property should have HasCover=false")
 
-	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaCoverRef{
+	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaRef{
 		{MediaDBID: mediaA.DBID, MediaTitleDBID: titleA.DBID},
 		{MediaDBID: mediaB.DBID, MediaTitleDBID: titleB.DBID},
 		{MediaDBID: mediaA.DBID, MediaTitleDBID: titleA.DBID},
@@ -1253,7 +1253,7 @@ func TestCoverAvailabilityIndex_AsyncBuildAndInvalidation(t *testing.T) {
 	assert.True(t, index.hasTitle(title.DBID))
 	assert.False(t, index.hasMedia(media.DBID))
 
-	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaCoverRef{
+	statuses, err := mediaDB.GetMediaCoverStatus(ctx, []database.MediaRef{
 		{MediaDBID: media.DBID, MediaTitleDBID: title.DBID},
 		{MediaDBID: media.DBID + 1, MediaTitleDBID: title.DBID + 1},
 	})

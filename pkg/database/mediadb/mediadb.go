@@ -2933,7 +2933,7 @@ func (db *MediaDB) BrowseFiles(
 
 // GetMediaCoverStatus reports image-property availability at media or title scope.
 func (db *MediaDB) GetMediaCoverStatus(
-	ctx context.Context, refs []database.MediaCoverRef,
+	ctx context.Context, refs []database.MediaRef,
 ) (map[int64]bool, error) {
 	if db.sql.Load() == nil {
 		return nil, ErrNullSQL

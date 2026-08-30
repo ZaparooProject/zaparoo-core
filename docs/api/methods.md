@@ -1530,6 +1530,7 @@ Optionally, an object:
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
 | playTime   | number | Yes      | Duration of the play session in seconds.               |
+| tags       | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example
 
@@ -1566,7 +1567,11 @@ Optionally, an object:
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
-        "playTime": 2730
+        "playTime": 2730,
+        "tags": [
+          { "tag": "favorite", "type": "collection" },
+          { "tag": "platformer", "type": "genre" }
+        ]
       }
     ],
     "pagination": {
@@ -1613,6 +1618,7 @@ Optionally, an object:
 | totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
 | sessionCount  | number | Yes      | Number of play sessions.                               |
 | lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
+| tags          | [TagInfo](#taginfo-object)[] | No | Tags for the resolved media, merged from file-level and title-level tags exactly as `media.search` returns them. An empty array means the media is indexed but has no tags. Omitted when `mediaId` is omitted or when media database enrichment fails or times out. |
 
 #### Example
 
@@ -1647,7 +1653,11 @@ Optionally, an object:
         "relativePath": "snes/Super Mario World (USA).sfc",
         "totalPlayTime": 7200,
         "sessionCount": 12,
-        "lastPlayedAt": "2026-02-14T20:30:00Z"
+        "lastPlayedAt": "2026-02-14T20:30:00Z",
+        "tags": [
+          { "tag": "favorite", "type": "collection" },
+          { "tag": "platformer", "type": "genre" }
+        ]
       }
     ]
   }
