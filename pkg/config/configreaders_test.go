@@ -765,3 +765,21 @@ scan_mode = "hold"
 	assert.Equal(t, ScanModeHold, cfg.ScanModeForReader("pn532", "/dev/ttyUSB1"))
 	assert.Equal(t, ScanModeTap, cfg.ScanModeForReader("pn532", "/dev/ttyUSB0"))
 }
+
+// TapModeEnabled and GlobalScanMode read the same setting and must agree.
+// Exact matching made "TAP" report neither tap nor hold, and an unrecognised
+// value report hold while GlobalScanMode fell back to tap.
+func TestTapModeEnabled_MatchesGlobalScanMode(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"", "tap", "TAP", " tap ", "hold", "HOLD", "sideways"} {
+		cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+		require.NoError(t, err)
+		cfg.SetScanMode(mode)
+
+		assert.Equal(t, cfg.GlobalScanMode() == ScanModeTap, cfg.TapModeEnabled(),
+			"TapModeEnabled disagrees with GlobalScanMode for %q", mode)
+		assert.Equal(t, cfg.GlobalScanMode() == ScanModeHold, cfg.HoldModeEnabled(),
+			"HoldModeEnabled disagrees with GlobalScanMode for %q", mode)
+	}
+}

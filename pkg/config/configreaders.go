@@ -132,12 +132,10 @@ func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 func (c *Instance) TapModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	switch c.vals.Readers.Scan.Mode {
-	case ScanModeTap, "":
-		return true
-	default:
-		return false
-	}
+	// Normalized like GlobalScanMode and ScanModeForReader read the same
+	// value: "TAP" is tap, and an unset or unrecognised mode falls through to
+	// the tap default rather than reporting neither mode.
+	return normalizeScanMode(c.vals.Readers.Scan.Mode) != ScanModeHold
 }
 
 func (c *Instance) HoldModeEnabled() bool {
