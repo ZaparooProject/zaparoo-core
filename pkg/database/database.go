@@ -165,6 +165,12 @@ const DeviceStateKeyActiveProfile = "active_profile_id"
 // skip the table walk entirely.
 const DeviceStateKeyMediaHistoryIdentitySweep = "media_history_identity_sweep"
 
+// DeviceStateKeyPlaytimeExtensions is the DeviceState key holding granted
+// playtime extensions: the current session's duration grant and any
+// unexpired per-profile day waivers, as versioned JSON. It stores resolved
+// profile IDs only, never the switch IDs used to authorize a grant.
+const DeviceStateKeyPlaytimeExtensions = "playtime_extensions"
+
 // Client represents a paired API client. AuthToken and PairingKey are
 // hidden from JSON (API uses models.PairedClient instead).
 type Client struct {

@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/text/unicode/norm"
@@ -47,6 +48,22 @@ import (
 var ErrNotAllowed = errors.New("not allowed")
 
 type NoContent struct{}
+
+// runParamsForLog returns a copy of run params with any bearer credential in
+// the ZapScript removed, so a profile card run through the API cannot leave
+// its switch ID in the logs.
+func runParamsForLog(params *models.RunParams) models.RunParams {
+	safe := *params
+	if safe.Text != nil {
+		redacted := zapscript.RedactScript(*safe.Text)
+		safe.Text = &redacted
+	}
+	if safe.Data != nil && safe.Text != nil && zapscript.HasSensitiveScript(*params.Text) {
+		empty := ""
+		safe.Data = &empty
+	}
+	return safe
+}
 
 func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received run request")
@@ -66,7 +83,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
-		log.Debug().Msgf("unmarshalled run params: %+v", params)
+		log.Debug().Msgf("unmarshalled run params: %+v", runParamsForLog(&params))
 
 		if params.Type != nil {
 			t.Type = *params.Type
@@ -97,7 +114,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			t.Unsafe = true
 		}
 	} else {
-		log.Debug().Msgf("could not unmarshal run params, trying string: %s", env.Params)
+		log.Debug().Msg("could not unmarshal run params, trying string")
 
 		var text string
 		err := json.Unmarshal(env.Params, &text)

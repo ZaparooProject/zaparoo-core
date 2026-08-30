@@ -185,9 +185,16 @@ type PlaytimeStatusResponse struct {
 	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
 	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
 	DailyRemaining        *string `json:"dailyRemaining,omitempty"`
-	State                 string  `json:"state"`
-	SessionActive         bool    `json:"sessionActive"`
-	LimitsEnabled         bool    `json:"limitsEnabled"`
+	// SessionExtension is the time granted on top of the configured session
+	// limit for the current session. Omitted when nothing was granted.
+	SessionExtension *string `json:"sessionExtension,omitempty"`
+	// SessionExtendedUntil is when a session-limit waiver lapses, RFC3339.
+	// While it is set the session limit is not enforced and
+	// sessionRemaining is omitted; the daily limit still applies.
+	SessionExtendedUntil *string `json:"sessionExtendedUntil,omitempty"`
+	State                string  `json:"state"`
+	SessionActive        bool    `json:"sessionActive"`
+	LimitsEnabled        bool    `json:"limitsEnabled"`
 }
 
 type System struct {
@@ -252,6 +259,35 @@ type PlaytimeLimitReachedParams struct {
 type PlaytimeLimitWarningParams struct {
 	Interval  string `json:"interval"`
 	Remaining string `json:"remaining"`
+}
+
+// PlaytimeExtendedParams is the payload of the playtime.extended
+// notification. Profiles are identified by ID only: the switch ID that
+// authorized a card grant is a bearer credential and is never published.
+type PlaytimeExtendedParams struct {
+	Mode string `json:"mode"`
+	// Duration is what this grant added. Omitted for a day waiver.
+	Duration string `json:"duration,omitempty"`
+	// Expires is when a day waiver lapses, RFC3339. Omitted otherwise.
+	Expires string `json:"expires,omitempty"`
+	// SessionExtension is the session's accumulated duration grant.
+	SessionExtension string `json:"sessionExtension,omitempty"`
+	// ProfileID is the recipient. Empty is the shared profile.
+	ProfileID string `json:"profileId,omitempty"`
+	// GrantedBy is the profile that authorized the grant.
+	GrantedBy string `json:"grantedBy,omitempty"`
+}
+
+// ExtendPlaytimeResponse reports what a playtime.extend request granted.
+type ExtendPlaytimeResponse struct {
+	Mode             string `json:"mode"`
+	Duration         string `json:"duration,omitempty"`
+	Expires          string `json:"expires,omitempty"`
+	SessionExtension string `json:"sessionExtension,omitempty"`
+	ProfileID        string `json:"profileId,omitempty"`
+	// Replayed is true when a repeated requestId matched an earlier grant
+	// and no additional time was added.
+	Replayed bool `json:"replayed"`
 }
 
 type IndexingStatusResponse struct {
