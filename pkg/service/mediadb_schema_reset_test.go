@@ -325,7 +325,7 @@ func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 			t.Cleanup(st.StopService)
 			st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
-			notifyMediaDBSchemaReset(st, tt.userDataLost)
+			notifyMediaDBSchemaReset(st, tt.userDataLost, false)
 
 			messages, err := db.UserDB.GetInboxMessages()
 			require.NoError(t, err)
@@ -355,15 +355,15 @@ func TestNotifyMediaDBSchemaReset_InboxWriteFailureIsNotFatal(t *testing.T) {
 	t.Cleanup(st.StopService)
 	st.SetInbox(inbox.NewService(userDB, st.Notifications))
 
-	notifyMediaDBSchemaReset(st, false)
+	notifyMediaDBSchemaReset(st, false, false)
 
 	userDB.AssertExpectations(t)
 }
 
 func TestNotifyMediaDBSchemaReset_WithoutInboxIsNoOp(_ *testing.T) {
 	// Must not panic before the inbox service exists, or with no state at all.
-	notifyMediaDBSchemaReset(nil, false)
+	notifyMediaDBSchemaReset(nil, false, false)
 	st, _ := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
 	defer st.StopService()
-	notifyMediaDBSchemaReset(st, true)
+	notifyMediaDBSchemaReset(st, true, false)
 }
