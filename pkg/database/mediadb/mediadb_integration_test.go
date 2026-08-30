@@ -186,6 +186,28 @@ func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+// The browse sort index orders SortName with a collation this binary registers
+// on its connections rather than storing in the file, so a build without it
+// cannot prepare any statement against Media. Introducing the index through a
+// migration is what moves the schema version past older builds, so going back
+// to one raises ErrSchemaAhead and startup rebuilds the media database instead
+// of failing on a schema it cannot parse. CreateSecondaryIndexes only runs at
+// the end of an indexing run, so an index present on a freshly migrated
+// database can only have come from a migration.
+func TestMigrations_CreateBrowseSortIndexWithItsCollation(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	require.NoError(t, mediaDB.MigrateUp())
+
+	var indexSQL string
+	require.NoError(t, mediaDB.UnsafeGetSQLDb().QueryRowContext(context.Background(),
+		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
+	).Scan(&indexSQL), "browse sort index must exist on a freshly migrated database")
+	assert.Contains(t, indexSQL, browseTitleCollationName,
+		"the index must carry the collation whose absence breaks older builds")
+}
+
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-mediadb-*")
