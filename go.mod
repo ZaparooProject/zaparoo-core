@@ -145,3 +145,10 @@ require (
 	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
+
+// The mister/ module lives in this repository. Resolving it from the proxy
+// would let Core compile an older catalog than the one checked out beside it,
+// with both test suites still passing, so build it from the tree instead. The
+// require above is what external consumers of Core resolve; it is never
+// fetched here.
+replace github.com/ZaparooProject/zaparoo-core/mister/v2 => ./mister

@@ -44,6 +44,7 @@ Do not run ad hoc `GOOS=...` builds, tests, or lints. Core has CGO and platform-
 - Treat token contents, NDEF records, barcodes, MQTT messages, ZapScript, API requests, archives, and update metadata as untrusted input.
 - Do not hand-edit generated files such as `pkg/database/mediadb/stat1_seed_data.go`; use their documented generator.
 - Do not add dependencies, platforms, readers, launchers, or public API surface without discussion.
+- `mister/` is a nested Go module published for standalone MiSTer tools. Core builds it from the tree through a `replace` in the root `go.mod`, so a catalog change lands on the same commit; never re-pin it to a published version. Its tests and lint run as separate steps because `./...` does not reach into it.
 
 ## High-risk areas
 
