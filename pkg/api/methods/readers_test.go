@@ -712,8 +712,48 @@ scan_mode = "hold"
 		resp, ok := result.(models.ReadersResponse)
 		require.True(t, ok)
 		assert.Equal(t, "pn532-gone", resp.HoldOwnerReaderID)
+		assert.Equal(t, config.ScanModeHold, resp.HoldScanMode)
+	})
+
+	// The exit path keeps the decision a disconnected reader was making, so a
+	// hold reader on a globally-tap device still exits. Reporting the global
+	// mode here told a client the opposite of what removal would do.
+	t.Run("disconnected owner reports the mode its removal will use", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"tap\"")
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "**launch:/games/game.rom",
+			ReaderID: "pn532-gone",
+		})
+
+		result, err := methods.HandleReaders(cfg, st, nil)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
 		assert.Equal(t, config.ScanModeHold, resp.HoldScanMode,
-			"a missing reader falls back to the global mode, not to empty")
+			"a disconnected owner keeps hold, so the report must say hold")
+	})
+
+	// A #tap owner whose reader disconnected declared its own mode, and that
+	// still wins: the disconnect rule only covers an owner with no trait.
+	t.Run("disconnected owner keeps its own tap override", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, st := readersEnv(t, "[readers.scan]\nmode = \"hold\"")
+		st.SetSoftwareToken(&tokens.Token{
+			UID:      "card",
+			Text:     "#tap||**launch:/games/game.rom",
+			ReaderID: "pn532-gone",
+			Traits:   tokens.ResolveTraits(map[string]any{tokens.TraitTap: true}),
+		})
+
+		result, err := methods.HandleReaders(cfg, st, nil)
+		require.NoError(t, err)
+		resp, ok := result.(models.ReadersResponse)
+		require.True(t, ok)
+		assert.Equal(t, config.ScanModeTap, resp.HoldScanMode)
 	})
 
 	t.Run("hold owner reports its token override", func(t *testing.T) {

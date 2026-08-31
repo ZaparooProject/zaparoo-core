@@ -127,9 +127,30 @@ type Reader interface {
 	ReaderID() string
 }
 
-// NormalizeDriverID removes underscores from driver IDs to provide backwards
-// compatibility with the legacy underscore format (e.g., "simple_serial").
-// This allows both "simple_serial" and "simpleserial" to work interchangeably.
+// NormalizeDriverID returns a driver ID in the form driver IDs are compared in.
+//
+// Underscores are dropped for backwards compatibility with the legacy format,
+// so "simple_serial" and "simpleserial" work interchangeably, and case is
+// folded because a driver ID is something a user types into a config file:
+// "PN532" and "pn532" name the same driver.
+//
+// config.normalizeDriverID applies the same rule for [[readers.connect]] and
+// [readers.drivers.<id>]; pkg/config cannot import this package, so the two
+// must be kept in step.
 func NormalizeDriverID(id string) string {
-	return strings.ReplaceAll(id, "_", "")
+	return strings.ToLower(strings.ReplaceAll(id, "_", ""))
+}
+
+// MatchesDriverID reports whether driver names one of ids, comparing them the
+// way NormalizeDriverID does. Drivers use this to check the ID a config entry
+// asked for against the IDs they answer to, so a reader configured as "PN532"
+// or "simple_serial" opens rather than being silently skipped.
+func MatchesDriverID(ids []string, driver string) bool {
+	normalized := NormalizeDriverID(driver)
+	for _, id := range ids {
+		if NormalizeDriverID(id) == normalized {
+			return true
+		}
+	}
+	return false
 }

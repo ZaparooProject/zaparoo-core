@@ -337,7 +337,7 @@ func (*Reader) IDs() []string {
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
-	if !helpers.Contains(r.IDs(), device.Driver) {
+	if !readers.MatchesDriverID(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 

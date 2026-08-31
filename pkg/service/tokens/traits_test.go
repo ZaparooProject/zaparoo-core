@@ -105,15 +105,17 @@ func TestTraitsAreStable(t *testing.T) {
 }
 
 // Trait keys are case-insensitive, so "tap" and "TAP" normalize to the same
-// key. Writing both into the map let its iteration order decide the scan mode,
-// so the same card could resolve differently between runs.
-func TestResolveTraits_MixedCaseDuplicateKeysInherit(t *testing.T) {
+// key. The parser never emits both, but if a caller hands over a map that does,
+// the answer must not depend on Go's map iteration order: the same input has to
+// resolve the same way on every run.
+func TestResolveTraits_MixedCaseDuplicateKeysAreDeterministic(t *testing.T) {
 	t.Parallel()
 
-	for range 32 {
+	first := tokens.ResolveTraits(map[string]any{"tap": true, "TAP": false}).ScanMode()
+	for range 64 {
 		traits := tokens.ResolveTraits(map[string]any{"tap": true, "TAP": false})
-		assert.Empty(t, traits.ScanMode(),
-			"a trait declared twice with different values must inherit, not pick one")
+		assert.Equal(t, first, traits.ScanMode(),
+			"a trait declared twice must resolve the same way on every run")
 	}
 }
 

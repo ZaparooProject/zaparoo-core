@@ -2684,7 +2684,7 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
-| scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. |
+| scanMode | string | No       | Scan mode for this reader (`"tap"` or `"hold"`), overriding the driver's and the global `readers.scan.mode`. Empty means inherit. Case and surrounding space are ignored and the canonical spelling is stored; any other value is rejected. |
 
 ##### System default object
 
@@ -4370,7 +4370,7 @@ None.
 | :---------------- | :------------------------- | :------- | :---------------------------------- |
 | readers           | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
 | holdOwnerReaderId | string                     | No       | ID of the reader whose token is currently tracked as the owner of the running media. Omitted when no token is tracked. |
-| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. Falls back to the global mode when the owning reader has since disconnected. |
+| holdScanMode      | string                     | No       | Effective scan mode of that token, including a `#tap` or `#hold` override on the token itself. A tracked owner can be `tap`: the token still owns the running media, its removal just does not exit. This is resolved exactly as the removal will resolve it, so an owner whose reader has since disconnected reports `hold` — the decision made while that reader was present still stands. |
 
 ##### Reader info object
 
