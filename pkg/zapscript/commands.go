@@ -51,6 +51,7 @@ import (
 type RunCommandOptions struct {
 	WaitForMediaReady  func(context.Context) error
 	AcquireMediaLaunch func() (platforms.MediaLaunchAccess, error)
+	BeforeExit         func()
 	PlaybackManager    audio.PlaybackManager
 	UI                 *uievents.Service
 	LauncherManager    *state.LauncherManager
@@ -546,6 +547,7 @@ func RunCommand(
 		ServiceCtx:         serviceCtx,
 		WaitForMediaReady:  opts.WaitForMediaReady,
 		AcquireMediaLaunch: opts.AcquireMediaLaunch,
+		BeforeExit:         opts.BeforeExit,
 		PlaybackManager:    opts.PlaybackManager,
 		UI:                 opts.UI,
 		Playlist:           plsc,

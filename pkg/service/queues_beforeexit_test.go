@@ -20,6 +20,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,6 +74,17 @@ type exitTestEnv struct {
 	platform *mocks.MockPlatform
 	rec      *exitRecorder
 	gamePath string
+	// publishOnLaunch makes a mocked LaunchMedia publish active media the way a
+	// real launch does, so a launch from inside before_exit moves the active
+	// media generation the stop paths check.
+	publishOnLaunch bool
+}
+
+// publishActiveMediaOnLaunch makes every subsequent mocked launch publish new
+// active media, which is what a real launch does and what the generation guard
+// on the stop paths keys off.
+func (e *exitTestEnv) publishActiveMediaOnLaunch() {
+	e.publishOnLaunch = true
 }
 
 // setupExitTestEnv wires a service whose NES before_exit hook presses a key,
@@ -87,6 +99,7 @@ mode = "unrestricted"`))
 	cfg.SetSystemDefaults([]config.SystemsDefault{{System: "NES", BeforeExit: beforeExit}})
 
 	rec := &exitRecorder{}
+	env := &exitTestEnv{rec: rec}
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.SetupBasicMock()
@@ -100,9 +113,17 @@ mode = "unrestricted"`))
 	mockPlatform.On("StopActiveLauncher", mock.Anything).Run(func(_ mock.Arguments) {
 		rec.record("stop")
 	}).Return(nil).Maybe()
+	launched := 0
 	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 		mock.Anything).Run(func(_ mock.Arguments) {
 		rec.record("launch")
+		if !env.publishOnLaunch || env.svc == nil {
+			return
+		}
+		launched++
+		env.svc.State.SetActiveMedia(models.NewActiveMedia(
+			"NES", "NES", fmt.Sprintf("hook-%d.nes", launched),
+			fmt.Sprintf("Hook %d", launched), "test-launcher"))
 	}).Return(nil).Maybe()
 
 	mockUserDB := testhelpers.NewMockUserDBI()
@@ -134,7 +155,10 @@ mode = "unrestricted"`))
 	gamePath := filepath.Join(t.TempDir(), "next.nes")
 	require.NoError(t, os.WriteFile(gamePath, []byte("rom"), 0o600))
 
-	return &exitTestEnv{svc: svc, platform: mockPlatform, rec: rec, gamePath: gamePath}
+	env.svc = svc
+	env.platform = mockPlatform
+	env.gamePath = gamePath
+	return env
 }
 
 // setNESMediaRunning marks an NES game as the active primary media, which is
@@ -275,4 +299,74 @@ func TestRunTokenZapScript_HookContextDoesNotRunBeforeExit(t *testing.T) {
 
 	assert.Zero(t, env.rec.count("before_exit"),
 		"a script already running inside a hook must not re-trigger before_exit")
+}
+
+// A launch that is rejected never disturbs the running game, so the exit it
+// was going to cause never happens. Firing before_exit anyway runs the user's
+// save-and-clean-up script against media that is still playing.
+func TestRunTokenZapScript_RejectedLaunchDoesNotRunBeforeExit(t *testing.T) {
+	t.Parallel()
+
+	env := setupExitTestEnv(t, keypressHook)
+	env.setNESMediaRunning()
+
+	err := env.run(t, "**launch:"+env.gamePath+"?launcher=NoSuchLauncher")
+
+	require.Error(t, err, "an unknown launcher must fail the launch")
+	assert.Zero(t, env.rec.count("launch"), "nothing should have been launched")
+	assert.Zero(t, env.rec.count("before_exit"),
+		"before_exit must not fire for a launch that was rejected")
+}
+
+// A before_exit script may launch media of its own. HandleStop skips its stop
+// when that happens; the ZapScript stop commands run through a different path
+// and must skip it too, or they kill what the hook just started instead of the
+// media the token asked to stop.
+func TestRunTokenZapScript_StopSkippedWhenBeforeExitLaunchedMedia(t *testing.T) {
+	t.Parallel()
+
+	hookGame := filepath.Join(t.TempDir(), "hook.nes")
+	require.NoError(t, os.WriteFile(hookGame, []byte("rom"), 0o600))
+
+	env := setupExitTestEnv(t, "**launch:"+hookGame)
+	env.publishActiveMediaOnLaunch()
+	env.setNESMediaRunning()
+
+	require.NoError(t, env.run(t, "**stop"))
+
+	assert.Equal(t, 1, env.rec.count("launch"), "the hook's own launch should happen")
+	assert.Zero(t, env.rec.count("stop"),
+		"the stop must be skipped once before_exit replaced the outgoing media")
+}
+
+// The same guard, for the playlist stop command.
+func TestRunTokenZapScript_PlaylistStopSkippedWhenBeforeExitLaunchedMedia(t *testing.T) {
+	t.Parallel()
+
+	hookGame := filepath.Join(t.TempDir(), "hook.nes")
+	require.NoError(t, os.WriteFile(hookGame, []byte("rom"), 0o600))
+
+	env := setupExitTestEnv(t, "**launch:"+hookGame)
+	env.publishActiveMediaOnLaunch()
+	env.setNESMediaRunning()
+
+	_ = env.run(t, "**playlist.stop")
+
+	assert.Zero(t, env.rec.count("stop"),
+		"the playlist stop must be skipped once before_exit replaced the outgoing media")
+}
+
+// Without a launching hook the stop still happens; the guard must not swallow
+// ordinary stops.
+func TestRunTokenZapScript_StopStillHappensWithHarmlessHook(t *testing.T) {
+	t.Parallel()
+
+	env := setupExitTestEnv(t, keypressHook)
+	env.publishActiveMediaOnLaunch()
+	env.setNESMediaRunning()
+
+	require.NoError(t, env.run(t, "**stop"))
+
+	assert.Equal(t, []string{"before_exit", "stop"}, env.rec.snapshot(),
+		"a hook that launches nothing must not suppress the stop")
 }

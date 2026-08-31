@@ -27,10 +27,15 @@ import (
 )
 
 // shouldRunBeforeExitHook reports whether before_exit should run before cmd
-// executes, i.e. cmd is about to replace or stop the active primary media.
+// executes, i.e. cmd is about to stop the active primary media.
+//
+// Launch commands are not listed here. They run the hook from inside the launch
+// path instead, once the target and launcher have been resolved, so a launch
+// that is rejected cannot fire it. **mister.mgl is the exception: it forwards
+// to the platform and never reaches that point.
 //
 // Playlist navigation commands are deliberately excluded: they queue a playlist
-// update whose resulting launch command comes back through this same check, so
+// update whose resulting launch command comes back through the launch path, so
 // including them here would fire the hook twice. playlist.pause is excluded for
 // a different reason: it only stops the launcher when the playback manager has
 // no path, and a pause is not an exit either way.
@@ -38,8 +43,26 @@ func shouldRunBeforeExitHook(inHookContext bool, cmd zapscript.Command) bool {
 	if inHookContext || commandTargetsBackgroundSlot(cmd) {
 		return false
 	}
-	return zscript.IsMediaLaunchingCommand(cmd.Name) ||
-		cmd.Name == zapscript.ZapScriptCmdStop ||
+	return cmd.Name == zapscript.ZapScriptCmdMisterMGL ||
+		commandStopsPrimaryMedia(cmd)
+}
+
+// beforeExitCallback returns the hook the launch path invokes once it knows a
+// launch is going ahead, or nil inside a hook script so a before_exit script's
+// own launch cannot re-enter the hook.
+func beforeExitCallback(svc *ServiceContext, inHookContext bool) func() {
+	if inHookContext {
+		return nil
+	}
+	return svc.State.RunBeforeExitHook
+}
+
+// commandStopsPrimaryMedia reports whether cmd exits the active primary media
+// outright rather than replacing it. These are the commands whose stop must be
+// skipped when before_exit launched media of its own, the same way HandleStop
+// skips it.
+func commandStopsPrimaryMedia(cmd zapscript.Command) bool {
+	return cmd.Name == zapscript.ZapScriptCmdStop ||
 		cmd.Name == zapscript.ZapScriptCmdPlaylistStop
 }
 

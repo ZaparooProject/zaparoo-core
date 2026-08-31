@@ -203,12 +203,24 @@ func runTokenZapScriptWithContext(
 			}
 		}
 
-		// The outgoing media's before_exit hook. After before_media_start so a
-		// hook that blocks the launch also suppresses the exit, and before any
-		// lock on the launch path is taken so the script is free to run its own
-		// ZapScript. Failures never abort the launch or stop.
+		// The outgoing media's before_exit hook for commands that stop media
+		// outright. After before_media_start so a hook that blocks the launch
+		// also suppresses the exit, and before any lock on the launch path is
+		// taken so the script is free to run its own ZapScript. Launch commands
+		// run it from the launch path instead, once the launch is known to be
+		// going ahead. Failures never abort the launch or stop.
 		if shouldRunBeforeExitHook(inHookContext, cmd) {
+			outgoingGen, hadMedia := svc.State.ActiveMediaReadyGeneration()
 			svc.State.RunBeforeExitHook()
+			// A before_exit script can launch media of its own. Running the
+			// stop now would kill what the hook just started instead of what
+			// the token asked to stop, so skip the command entirely.
+			if commandStopsPrimaryMedia(cmd) &&
+				svc.State.ActiveMediaReplacedSince(outgoingGen, hadMedia) {
+				log.Info().Str("command", cmd.Name).
+					Msg("before_exit replaced the outgoing media, skipping stop")
+				continue
+			}
 		}
 
 		mediaReadyGen, _ := svc.State.ActiveMediaReadyGeneration()
@@ -257,6 +269,7 @@ func runTokenZapScriptWithContext(
 			zapscript.RunCommandOptions{
 				LauncherManager:    svc.State.LauncherManager(),
 				AcquireMediaLaunch: svc.State.AcquireMediaLaunch,
+				BeforeExit:         beforeExitCallback(svc, inHookContext),
 				WaitForMediaReady: func(ctx context.Context) error {
 					return waitForMediaReady(ctx, svc, mediaReadyGen)
 				},

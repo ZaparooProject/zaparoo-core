@@ -61,7 +61,7 @@ The script is looked up against the outgoing media's system, so it applies
 regardless of which launcher started it.
 
 - [ ] Tapping a second card runs `before_exit` before the new game starts.
-- [ ] `**stop`, `**playlist.stop` and the `media.stop` API method each run it
+- [ ] `**stop`, `**playlist.stop` and the `stop` API method each run it
       before returning to the menu.
 - [ ] A playtime limit runs it before it stops the game.
 - [ ] Removing the card in hold mode runs it after `on_remove` and `exit_delay`.
