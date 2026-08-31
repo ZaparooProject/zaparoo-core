@@ -22,6 +22,7 @@
 package cores
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,11 +140,12 @@ func TestPathToMGLDef(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		wantMgl  *MGLParams
-		name     string
-		systemID string
-		path     string
-		wantErr  bool
+		wantMgl    *MGLParams
+		name       string
+		systemID   string
+		path       string
+		wantErr    bool
+		wantDirect bool
 	}{
 		{
 			name:     "Exact extension match",
@@ -187,10 +189,12 @@ func TestPathToMGLDef(t *testing.T) {
 			},
 		},
 		{
-			name:     "Nil MGL allowed (Arcade .mra)",
-			systemID: "Arcade",
-			path:     "maze_game.mra",
-			wantMgl:  nil,
+			// MiSTer opens .mra files itself, so the slot declares no MGL. That
+			// has to stay distinct from an extension no slot claims.
+			name:       "Arcade .mra launches directly",
+			systemID:   "Arcade",
+			path:       "maze_game.mra",
+			wantDirect: true,
 		},
 		{
 			name:     "Multiple extensions - first match wins",
@@ -291,9 +295,19 @@ func TestPathToMGLDef(t *testing.T) {
 			sys := Systems[tc.systemID] // Safe copy; map holds value not pointer.
 			got, err := PathToMGLDef(&sys, tc.path)
 
+			if tc.wantDirect {
+				if !errors.Is(err, ErrLaunchesDirectly) {
+					t.Fatalf("expected the direct-launch sentinel, got: %v", err)
+				}
+				return
+			}
+
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
+				}
+				if errors.Is(err, ErrLaunchesDirectly) {
+					t.Fatal("an unclaimed extension is not a direct launch")
 				}
 				return
 			}

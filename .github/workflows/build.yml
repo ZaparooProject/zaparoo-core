@@ -449,6 +449,54 @@ jobs:
           PKG_VERSION="${VERSION//-/_}"
           gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-any.pkg.tar.zst" --clobber
 
+  mister-module-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Check mister module tag
+    # The standalone mister/ module is versioned by its own directory-prefixed
+    # tags, which a vX.Y.Z release does not create. Without this the module
+    # quietly never gets one and third parties can only pin a pseudo-version.
+    if: ${{ !cancelled() && !inputs.test_build }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Report whether mister/ needs a new tag
+        env:
+          tag: ${{ env.BUILD_TAG }}
+          is_nightly: ${{ inputs.is_nightly || 'false' }}
+        run: |
+          # Only stable releases are worth a library tag; a nightly or beta
+          # would just churn the version third parties pin.
+          case "${tag#v}" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          if [ "$is_nightly" = "true" ] || [ "$prerelease" = "true" ]; then
+            echo "$tag is a pre-release; skipping the mister/ tag check."
+            exit 0
+          fi
+          last=$(git tag -l 'mister/v*' | sort -V | tail -n 1)
+          if [ -z "$last" ]; then
+            echo "::warning::The mister/ module has never been tagged. Cut one with 'task mister:tag-module -- v0.1.0' so third parties can pin a version."
+            echo "The mister/ module has never been tagged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git diff --quiet "$last" "$tag" -- mister; then
+            echo "mister/ is unchanged since $last." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::mister/ has changed since $last. Cut a new tag with 'task mister:tag-module -- vX.Y.Z'."
+            {
+              echo "mister/ has changed since $last:"
+              echo '```'
+              git diff --stat "$last" "$tag" -- mister
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   attest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
