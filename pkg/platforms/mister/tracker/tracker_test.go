@@ -4,15 +4,20 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -192,14 +197,22 @@ func TestResolveSelectedLaunchPath(t *testing.T) {
 		assert.False(t, ok, "the exit re-notification must not read as a launch")
 	})
 
-	t.Run("an unreadable timestamp fails open", func(t *testing.T) {
+	t.Run("a window that cannot be exceeded still resolves", func(t *testing.T) {
 		t.Parallel()
 		files, gamePath := build(t, "Blockade.mra", 0, 31*time.Second)
 		require.NoError(t, os.Remove(files.currentPath))
 		require.NoError(t, os.WriteFile(files.currentPath, []byte("Blockade.mra"), 0o600))
 		path, ok := resolveSelectedLaunchPath(files, time.Hour)
-		require.True(t, ok, "a window that cannot be exceeded still resolves")
+		require.True(t, ok, "the gate only drops a status older than the window")
 		assert.Equal(t, gamePath, path)
+	})
+
+	t.Run("an unreadable trio is ignored", func(t *testing.T) {
+		t.Parallel()
+		files, _ := build(t, "Blockade.mra", 10*time.Second, 10*time.Second)
+		require.NoError(t, os.Remove(files.fullPath))
+		_, ok := resolveSelectedLaunchPath(files, selectionStaleWindow)
+		assert.False(t, ok, "a half-written trio must not read as a launch")
 	})
 }
 
@@ -246,9 +259,11 @@ func TestSelectionIsStale(t *testing.T) {
 
 	t.Run("missing file reports an error so the caller can fail open", func(t *testing.T) {
 		t.Parallel()
-		statusFile, _ := write(t, 0, 0)
+		statusFile, currentPathFile := write(t, 0, 0)
 		_, err := selectionIsStale(statusFile, filepath.Join(t.TempDir(), "absent"), selectionStaleWindow)
-		require.Error(t, err)
+		require.Error(t, err, "an unreadable current path must be reported, not treated as current")
+		_, err = selectionIsStale(filepath.Join(t.TempDir(), "absent"), currentPathFile, selectionStaleWindow)
+		require.Error(t, err, "an unreadable status must be reported, not treated as current")
 	})
 }
 
@@ -608,4 +623,140 @@ func TestMediaLookupContextUsesServiceContext(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("MediaDB lookup context should follow service context")
 	}
+}
+
+func TestMisterSelectionFiles(t *testing.T) {
+	t.Parallel()
+
+	files := misterSelectionFiles()
+	assert.Equal(t, misterconfig.FileSelectFile, files.status)
+	assert.Equal(t, misterconfig.FullPathFile, files.fullPath)
+	assert.Equal(t, misterconfig.CurrentPathFile, files.currentPath)
+	assert.Equal(t, filepath.Join(misterconfig.CoreConfigFolder, "device.bin"), files.deviceBin)
+}
+
+// buildSelection writes MiSTer's file-selector trio into a temp directory and
+// ages the status file relative to the paths it describes, which is what tells
+// a real launch apart from the status MiSTer rewrites when a core exits.
+func buildSelection(
+	t *testing.T, gameName string, statusAge, pathAge time.Duration,
+) (files selectionFiles, gamePath string) {
+	t.Helper()
+	dir := t.TempDir()
+	gamesDir := filepath.Join(dir, "games")
+	require.NoError(t, os.MkdirAll(gamesDir, 0o750))
+	gamePath = filepath.Join(gamesDir, gameName)
+	require.NoError(t, os.WriteFile(gamePath, []byte("rom"), 0o600))
+
+	files = selectionFiles{
+		status:      filepath.Join(dir, "FILESELECT"),
+		fullPath:    filepath.Join(dir, "FULLPATH"),
+		currentPath: filepath.Join(dir, "CURRENTPATH"),
+		deviceBin:   filepath.Join(dir, "device.bin"),
+	}
+	require.NoError(t, os.WriteFile(files.status, []byte("selected"), 0o600))
+	require.NoError(t, os.WriteFile(files.fullPath, []byte(gamePath), 0o600))
+	require.NoError(t, os.WriteFile(files.currentPath, []byte(gameName), 0o600))
+
+	now := time.Now()
+	require.NoError(t, os.Chtimes(files.status, now.Add(-statusAge), now.Add(-statusAge)))
+	for _, f := range []string{files.fullPath, files.currentPath} {
+		require.NoError(t, os.Chtimes(f, now.Add(-pathAge), now.Add(-pathAge)))
+	}
+	return files, gamePath
+}
+
+// TestLoadFileSelection drives the whole selection path, not just the
+// staleness predicate: the exit re-notification only causes harm because
+// loadFileSelection went on to publish an active game from it.
+func TestLoadFileSelection(t *testing.T) {
+	// Cannot use t.Parallel() - swaps the shared GlobalLauncherCache.
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{})
+	pl.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{{
+		ID:         "NES",
+		SystemID:   "NES",
+		Extensions: []string{".nes"},
+	}})
+	helpers.GlobalLauncherCache = testCache
+	t.Cleanup(func() { helpers.GlobalLauncherCache = originalCache })
+
+	newTracker := func(files selectionFiles, record func(string) error) *Tracker {
+		return &Tracker{
+			pl:            pl,
+			cfg:           &config.Instance{},
+			selection:     files,
+			setActiveGame: record,
+		}
+	}
+
+	t.Run("a settled selection is recorded", func(t *testing.T) {
+		files, gamePath := buildSelection(t, "Zelda.nes", 10*time.Second, 10*time.Second)
+		var recorded []string
+		tr := newTracker(files, func(path string) error {
+			recorded = append(recorded, path)
+			return nil
+		})
+
+		tr.loadFileSelection()
+
+		assert.Equal(t, []string{gamePath}, recorded)
+	})
+
+	t.Run("a status re-notified after a core exit records nothing", func(t *testing.T) {
+		files, _ := buildSelection(t, "Zelda.nes", 0, 31*time.Second)
+		var recorded []string
+		tr := newTracker(files, func(path string) error {
+			recorded = append(recorded, path)
+			return nil
+		})
+
+		tr.loadFileSelection()
+
+		assert.Empty(t, recorded, "the exit re-notification must not resurrect the closed game")
+	})
+
+	t.Run("a system or menu file records nothing", func(t *testing.T) {
+		files, _ := buildSelection(t, "Menu.rbf", 10*time.Second, 10*time.Second)
+		var recorded []string
+		tr := newTracker(files, func(path string) error {
+			recorded = append(recorded, path)
+			return nil
+		})
+
+		tr.loadFileSelection()
+
+		assert.Empty(t, recorded)
+	})
+
+	t.Run("a path no launcher claims records nothing", func(t *testing.T) {
+		files, _ := buildSelection(t, "Unknown.zzz", 10*time.Second, 10*time.Second)
+		var recorded []string
+		tr := newTracker(files, func(path string) error {
+			recorded = append(recorded, path)
+			return nil
+		})
+
+		tr.loadFileSelection()
+
+		assert.Empty(t, recorded)
+	})
+
+	t.Run("a failed record is reported, not fatal", func(t *testing.T) {
+		files, gamePath := buildSelection(t, "Zelda.nes", 10*time.Second, 10*time.Second)
+		var seen string
+		tr := newTracker(files, func(path string) error {
+			seen = path
+			return errors.New("write failed")
+		})
+
+		tr.loadFileSelection()
+
+		assert.Equal(t, gamePath, seen)
+	})
 }

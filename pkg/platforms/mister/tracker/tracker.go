@@ -67,6 +67,8 @@ type Tracker struct {
 	activeMedia      func() *models.ActiveMedia
 	db               *database.Database
 	arcadeResolved   map[string]arcadeResolution
+	setActiveGame    func(string) error
+	selection        selectionFiles
 	ActiveSystemName string
 	ActiveSystem     string
 	ActiveGameID     string
@@ -144,6 +146,8 @@ func NewTracker(
 		NameMap:          nameMap,
 		activeMedia:      activeMedia,
 		setActiveMedia:   setActiveMedia,
+		setActiveGame:    activegame.SetActiveGame,
+		selection:        misterSelectionFiles(),
 	}, nil
 }
 
@@ -805,9 +809,6 @@ func hasSystemLauncher(launchers []platforms.Launcher) bool {
 	return false
 }
 
-// loadFileSelection reads a settled native MiSTer file-selection event and,
-// if it resolves to a trackable game, records it the same way a Zaparoo
-// launch does.
 // selectionFiles names the MiSTer file-selector trio plus the storage
 // selection, so the resolution below can be driven from a temp directory.
 type selectionFiles struct {
@@ -854,8 +855,11 @@ func resolveSelectedLaunchPath(files selectionFiles, window time.Duration) (stri
 	return composeSelectedPath(sel, storageSelection, os.Stat, os.ReadDir)
 }
 
+// loadFileSelection resolves the tracker's file-selector trio and records the
+// result as the active game. Both the trio and the recorder come from the
+// tracker so a test can drive the whole decision from a temp directory.
 func (tr *Tracker) loadFileSelection() {
-	path, ok := resolveSelectedLaunchPath(misterSelectionFiles(), selectionStaleWindow)
+	path, ok := resolveSelectedLaunchPath(tr.selection, selectionStaleWindow)
 	if !ok {
 		return
 	}
@@ -870,7 +874,7 @@ func (tr *Tracker) loadFileSelection() {
 	}
 
 	log.Info().Str("path", path).Msg("manual MiSTer file launch detected")
-	if err := activegame.SetActiveGame(path); err != nil {
+	if err := tr.setActiveGame(path); err != nil {
 		log.Error().Err(err).Str("path", path).Msg("failed to set selected active game")
 	}
 }
