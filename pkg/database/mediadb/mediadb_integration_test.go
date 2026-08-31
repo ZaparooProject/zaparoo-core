@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -223,6 +224,36 @@ func TestMigrations_BrowseSortCollationBumpsVersionWithoutTableWork(t *testing.T
 	).Scan(&indexSQL))
 	assert.Contains(t, indexSQL, browseTitleCollationName,
 		"an indexing run replaces it with the collated form")
+
+	// An explicit downgrade must restore the legacy index before lowering the
+	// schema version. Otherwise a build without the custom collation accepts the
+	// version but cannot prepare statements against Media.
+	goose.SetBaseFS(migrationFiles)
+	require.NoError(t, goose.SetDialect("sqlite"))
+	require.NoError(t, goose.Down(sqlDB, "migrations"))
+
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", browseSortIndexName,
+	).Scan(&indexSQL))
+	assert.NotContains(t, indexSQL, browseTitleCollationName)
+
+	var markerCount int
+	require.NoError(t, sqlDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM DBConfig WHERE Name = 'BrowseSortCollation'",
+	).Scan(&markerCount))
+	assert.Zero(t, markerCount)
+
+	dbPath := mediaDB.GetDBPath()
+	require.NoError(t, mediaDB.Close())
+	legacyDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, legacyDB.Close()) }()
+	stmt, err := legacyDB.PrepareContext(ctx, "SELECT DBID FROM Media LIMIT 1")
+	require.NoError(t, err, "legacy connection must prepare Media statements after downgrade")
+	defer func() { require.NoError(t, stmt.Close()) }()
+	var mediaDBID int64
+	err = stmt.QueryRowContext(ctx).Scan(&mediaDBID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {

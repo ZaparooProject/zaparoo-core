@@ -25,4 +25,9 @@ INSERT INTO DBConfig (Name, Value) VALUES ('BrowseSortCollation', 'zaparoo_title
     ON CONFLICT(Name) DO UPDATE SET Value = excluded.Value;
 
 -- +goose Down
+-- An explicit downgrade can follow an indexing run that created the collated
+-- index. Restore the legacy definition before lowering the schema version so
+-- a build without ZAPAROO_TITLE_V1 can prepare statements against Media.
+DROP INDEX IF EXISTS idx_media_browse_sort;
+CREATE INDEX idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName, DBID);
 DELETE FROM DBConfig WHERE Name = 'BrowseSortCollation';
