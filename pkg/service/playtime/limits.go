@@ -27,6 +27,7 @@ package playtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -55,6 +56,10 @@ const (
 	// a game that will be immediately killed.
 	MinimumViableSession = 1 * time.Minute
 )
+
+// ErrLimitReached is wrapped by CheckBeforeLaunch when a daily or session
+// limit blocks a launch, as opposed to a failure looking up usage.
+var ErrLimitReached = errors.New("playtime limit reached")
 
 // SessionState represents the current state of a playtime session.
 type SessionState int
@@ -707,7 +712,7 @@ func (tm *LimitsManager) checkLimits() {
 
 	// Enforcement is decided by the effective limits: the live provider,
 	// or the launch-pinned context after a mid-game deactivation.
-	if !tm.effectiveEnabled() {
+	if !tm.limits.PlaytimeLimitsEnabled() {
 		return
 	}
 
@@ -1009,7 +1014,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		// Calculate daily usage/remaining even during reset - this data is valid
 		// regardless of session state (the user has used time today and has
 		// time remaining in their daily allowance)
-		dailyLimit := tm.effectiveDailyLimit()
+		dailyLimit := tm.limits.DailyLimit()
 		if dailyLimit > 0 && helpers.IsClockReliable(now) {
 			year, month, day := now.Date()
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
@@ -1154,16 +1159,22 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 // - Daily or session limit is already exceeded
 // - Remaining time < MinimumViableSession (prevents launching a game that will be immediately killed)
 // On success, reason is "" and error is nil.
+//
+// Limit rejections wrap ErrLimitReached so callers can tell a limit apart
+// from a usage-lookup failure.
 func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 	tm.pruneExpiredWaivers()
 
-	// Whether limits are enforced is decided by the LimitsProvider (global
-	// config, possibly overridden by the active profile).
-	if !tm.limits.PlaytimeLimitsEnabled() {
+	// Launch-pinned, like the session limit below. A profile that deactivates
+	// to the shared profile keeps governing the session it launched, so reading
+	// the live values here let a relaunch during that session inherit the
+	// shared profile's — disabled, or a larger daily allowance — and step
+	// straight past the limit the session is actually under.
+	if !tm.effectiveEnabled() {
 		return "", nil
 	}
 
-	dailyLimit := tm.limits.DailyLimit()
+	dailyLimit := tm.effectiveDailyLimit()
 	// Use the effective session limit, not the raw configured one: a grant
 	// made after a limit stopped the game has to unblock the relaunch, which
 	// is the whole point of extending a session. Outside a running game the
@@ -1203,7 +1214,7 @@ func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 					Dur("limit", dailyLimit).
 					Msg("playtime: daily limit already reached, blocking launch")
 				return models.PlaytimeLimitReasonDaily,
-					fmt.Errorf("daily playtime limit reached (%s / %s)", usage, dailyLimit)
+					fmt.Errorf("daily %w (%s / %s)", ErrLimitReached, usage, dailyLimit)
 			}
 
 			// Minimum viable session check for daily limit
@@ -1213,9 +1224,10 @@ func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 					Dur("minimum", MinimumViableSession).
 					Msg("playtime: insufficient daily time remaining for viable session, blocking launch")
 				return models.PlaytimeLimitReasonDaily, fmt.Errorf(
-					"insufficient daily time remaining (%s left, need %s min)",
+					"insufficient daily time remaining (%s left, need %s min): %w",
 					dailyRemaining,
 					MinimumViableSession,
+					ErrLimitReached,
 				)
 			}
 		}
@@ -1237,7 +1249,7 @@ func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 				Dur("limit", sessionLimit).
 				Msg("playtime: session limit already reached, blocking launch")
 			return models.PlaytimeLimitReasonSession,
-				fmt.Errorf("session playtime limit reached (%s / %s)", cumulativeTime, sessionLimit)
+				fmt.Errorf("session %w (%s / %s)", ErrLimitReached, cumulativeTime, sessionLimit)
 		}
 
 		// Minimum viable session check for session limit
@@ -1247,9 +1259,10 @@ func (tm *LimitsManager) CheckBeforeLaunch() (string, error) {
 				Dur("minimum", MinimumViableSession).
 				Msg("playtime: insufficient session time remaining for viable session, blocking launch")
 			return models.PlaytimeLimitReasonSession, fmt.Errorf(
-				"insufficient session time remaining (%s left, need %s min)",
+				"insufficient session time remaining (%s left, need %s min): %w",
 				sessionRemaining,
 				MinimumViableSession,
+				ErrLimitReached,
 			)
 		}
 	}

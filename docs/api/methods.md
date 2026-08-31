@@ -46,11 +46,36 @@ These parameters allow emulating a token exactly as it would be read directly fr
 
 #### Result
 
-Returns `null` on success.
+Returns `null` once the ZapScript has finished executing without error. The method waits for execution to complete: mapping, parsing, launch policy (profiles, playtime limits, blocked commands, hooks), media lookup and every command in the script. Success means the script ran to completion; it does not prove the launched software is still running afterwards.
 
-Currently, it is not reported if the launched ZapScript encountered an error during launching, and the method will return before execution of ZapScript is complete.
+If execution fails, the response carries an [error](index.md#response-errors) whose `data.category` is one of:
+
+| Category           | Meaning                                                                                       |
+| :----------------- | :-------------------------------------------------------------------------------------------- |
+| `busy`             | Another launch is already in progress.                                                        |
+| `media_not_found`  | The requested media could not be found or matched.                                            |
+| `disabled`         | ZapScript execution is disabled in settings.                                                  |
+| `invalid_script`   | The script could not be parsed, or names an unknown command or system.                        |
+| `blocked`          | Execution was refused by configuration, a profile requirement or a hook.                      |
+| `playtime_limit`   | A playtime limit prevented the launch.                                                        |
+| `timeout`          | Core stopped waiting after the request timeout (30 seconds). Anything already started continues. |
+| `cancelled`        | The request was cancelled, for example because the connection closed. Anything already started continues. |
+| `unavailable`      | The service is shutting down.                                                                 |
+| `execution_failed` | Any other execution failure.                                                                  |
+
+Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back.
+
+Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 
 For ZapScript `launch.random`, Core selects uniformly from matching non-missing media rows after applying systems, tags, and path scope. Filesystem and virtual path targets recursively include subfolders. Tagged requests never use filesystem fallback because unindexed files have no tag metadata.
+
+##### Compatibility
+
+Earlier Core versions returned `null` as soon as the token was accepted, before execution started, and never reported execution failures. Clients that treated an immediate `null` as "launched" should now expect the response to arrive when execution finishes and treat an error response as authoritative.
+
+##### Aliases
+
+`launch` is a deprecated alias for `run` with identical parameters and result. `run.script` is reserved and currently returns a method-not-found error.
 
 #### Example
 
@@ -74,6 +99,22 @@ For ZapScript `launch.random`, Core selects uniformly from matching non-missing 
   "jsonrpc": "2.0",
   "id": "52f6242e-7a5a-11ef-bf93-020304050607",
   "result": null
+}
+```
+
+##### Error response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "52f6242e-7a5a-11ef-bf93-020304050607",
+  "error": {
+    "code": 1,
+    "message": "media not found",
+    "data": {
+      "category": "media_not_found"
+    }
+  }
 }
 ```
 
@@ -3772,7 +3813,7 @@ A successful grant emits [`playtime.extended`](./notifications.md#playtimeextend
   "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
   "result": {
     "mode": "today",
-    "expires": "2025-01-23T00:00:00Z",
+    "expires": "2025-01-23T00:00:00-05:00",
     "profileId": "0194e2a1-6c3f-7b21-9d4e-8a5b6c7d8e9f",
     "replayed": false
   }

@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -54,12 +55,40 @@ type scanBehaviorEnv struct {
 	st         *state.State
 	cfg        *config.Instance
 	userDB     *testhelpers.MockUserDBI
+	svc        *ServiceContext
+	launchHook *launchHook
 	scanQueue  chan readers.Scan
+	itq        chan tokens.Token
 	clock      *clockwork.FakeClock
 	launchCh   chan string
 	stopCh     chan struct{}
 	keyboardCh chan string
+	historyCh  chan database.HistoryEntry
 	romsDir    string
+}
+
+// launchHook lets a test intercept the mock platform's LaunchMedia for one
+// path before it publishes active media: it can block, panic, or record.
+// The mock's LaunchMedia expectation is registered once with Maybe(), which
+// never exhausts, so a per-test On() would never be consulted.
+type launchHook struct {
+	fn func(path string)
+	mu syncutil.Mutex
+}
+
+func (h *launchHook) set(fn func(path string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+func (h *launchHook) call(path string) {
+	h.mu.Lock()
+	fn := h.fn
+	h.mu.Unlock()
+	if fn != nil {
+		fn(path)
+	}
 }
 
 func setupScanBehavior(
@@ -103,9 +132,21 @@ mode = "unrestricted"`))
 	mockReader.On("OnMediaChange", mock.Anything).Return(nil).Maybe()
 	st.SetReader(mockReader)
 
+	// historyCh mirrors every history write so tests can assert on outcomes
+	// without reaching into the mock's call log. Sends never block: a test
+	// that writes more entries than the buffer simply loses the oldest.
+	historyCh := make(chan database.HistoryEntry, 64)
+
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
-	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Maybe()
+	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		if he, ok := args.Get(0).(*database.HistoryEntry); ok && he != nil {
+			select {
+			case historyCh <- *he:
+			default:
+			}
+		}
+	}).Maybe()
 	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
 
 	mockMediaDB := testhelpers.NewMockMediaDBI()
@@ -118,6 +159,7 @@ mode = "unrestricted"`))
 	launchCh := make(chan string, 10)
 	stopCh := make(chan struct{}, 10)
 	keyboardCh := make(chan string, 10)
+	hook := &launchHook{}
 
 	// LaunchMedia sets active media in state (simulating real platform behavior)
 	// and signals launchCh so tests can observe launches.
@@ -129,6 +171,7 @@ mode = "unrestricted"`))
 		mock.Anything,
 	).Return(nil).Run(func(args mock.Arguments) {
 		path := args.String(1)
+		hook.call(path)
 		media := &models.ActiveMedia{
 			SystemID: "mock",
 			Path:     path,
@@ -179,6 +222,7 @@ mode = "unrestricted"`))
 		Profiles:            profiles.NewService(db, st),
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		BackgroundWG:        &sync.WaitGroup{},
 	}
 
 	var wg sync.WaitGroup
@@ -195,6 +239,8 @@ mode = "unrestricted"`))
 	t.Cleanup(func() {
 		st.StopService()
 		wg.Wait()
+		// Launch goroutines outlive the worker; join them before goleak looks.
+		svc.BackgroundWG.Wait()
 		for {
 			select {
 			case <-notifCh:
@@ -209,12 +255,16 @@ mode = "unrestricted"`))
 		st:         st,
 		cfg:        cfg,
 		userDB:     mockUserDB,
+		svc:        svc,
+		launchHook: hook,
 		scanQueue:  scanQueue,
+		itq:        itq,
 		clock:      fakeClock,
 		romsDir:    romsDir,
 		launchCh:   launchCh,
 		stopCh:     stopCh,
 		keyboardCh: keyboardCh,
+		historyCh:  historyCh,
 	}
 }
 

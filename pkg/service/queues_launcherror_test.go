@@ -46,6 +46,11 @@ func TestIsExpectedLaunchError(t *testing.T) {
 		{name: "launch in progress", err: state.ErrLaunchInProgress, expected: true},
 		{name: "unknown system", err: systemdefs.ErrUnknownSystem, expected: true},
 		{name: "run zapscript disabled", err: state.ErrRunZapScriptDisabled, expected: true},
+		{name: "invalid script", err: zapscript.ErrInvalidScript, expected: true},
+		{name: "unknown command", err: zapscript.ErrUnknownCommand, expected: true},
+		{name: "command blocked", err: zapscript.ErrCommandBlocked, expected: true},
+		{name: "hook blocked launch", err: state.ErrLaunchBlockedByHook, expected: true},
+		{name: "launch panicked", err: errLaunchPanicked, expected: false},
 		{
 			name:     "wrapped no playlist active",
 			err:      fmt.Errorf("failed to run zapscript command: %w", zapscript.ErrNoPlaylistActive),
