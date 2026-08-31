@@ -1,0 +1,50 @@
+{
+  "id": "zaparoo-hyperhq",
+  "name": "Zaparoo Core",
+  "version": "0.1.0",
+  "type": "executable",
+  "description": "HyperHQ integration plugin for Zaparoo",
+  "author": "The Zaparoo Project Contributors",
+  "homepage": "https://zaparoo.org",
+  "repository": "https://github.com/ZaparooProject/zaparoo-core",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "zaparoo",
+    "nfc",
+    "tokens",
+    "launcher",
+    "hyperspin",
+    "hyperhq",
+    "arcade"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "executable": "zaparoo-hyperhq.exe",
+  "capabilities": [
+    "games",
+    "launch",
+    "events"
+  ],
+  "events": [
+    "gameLaunched",
+    "gameClosed"
+  ],
+  "communication": {
+    "preferred": "socketio",
+    "fallback": "stdio",
+    "socketio": {
+      "enabled": true,
+      "autoReconnect": true,
+      "events": [
+        "gameLaunched",
+        "gameClosed"
+      ],
+      "dataRequests": true
+    }
+  },
+  "socketio": {
+    "enabled": true,
+    "namespace": "/"
+  }
+}
