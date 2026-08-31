@@ -40,3 +40,10 @@ its last tag, and the release workflow raises a warning when a stable Core
 release ships changes here that have not been tagged.
 
 While the module is on `v0.x.y` the API is free to move between tags.
+
+## License
+
+GPL-3.0-or-later, the same as Zaparoo Core. The module zip carries the
+repository's `LICENSE`, and every file here declares
+`SPDX-License-Identifier: GPL-3.0-or-later`. Importing this module puts your own
+program under the GPL too.
