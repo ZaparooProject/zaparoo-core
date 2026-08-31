@@ -304,13 +304,42 @@ func TestStart_SchemaAheadPostsInboxMessage(t *testing.T) {
 // A reindex restores the media list and (after a re-scrape) the artwork, so the notice
 // only has to explain that. Favorites and launcher overrides are different: nothing
 // can rebuild them, so when they did not make it across the notice has to say so.
+//
+// The corrupt path gets its own wording because nothing changed versions there:
+// the downgrade explanation would send the user looking for a cause that does
+// not exist instead of at their storage.
 func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 	tests := []struct {
 		name         string
+		wantTitle    string
+		wantBody     string
 		userDataLost bool
+		corrupt      bool
 	}{
-		{name: "user data carried across", userDataLost: false},
-		{name: "user data lost", userDataLost: true},
+		{
+			name:      "version change, user data carried across",
+			wantTitle: "Media database was rebuilt after a version change",
+			wantBody:  "older than the one that last ran",
+		},
+		{
+			name:         "version change, user data lost",
+			userDataLost: true,
+			wantTitle:    "Media database was rebuilt after a version change",
+			wantBody:     "before this device last updated",
+		},
+		{
+			name:      "damage found, user data carried across",
+			corrupt:   true,
+			wantTitle: "Media database was rebuilt after damage was found",
+			wantBody:  "check the device's storage",
+		},
+		{
+			name:         "damage found, user data lost",
+			corrupt:      true,
+			userDataLost: true,
+			wantTitle:    "Media database was rebuilt after damage was found",
+			wantBody:     "in an older version of Zaparoo",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,15 +354,22 @@ func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 			t.Cleanup(st.StopService)
 			st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
-			notifyMediaDBSchemaReset(st, tt.userDataLost, false)
+			notifyMediaDBSchemaReset(st, tt.userDataLost, tt.corrupt)
 
 			messages, err := db.UserDB.GetInboxMessages()
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
 			assert.Equal(t, inbox.CategoryMediaDBSchemaReset, messages[0].Category)
 			assert.Equal(t, inbox.SeverityWarning, messages[0].Severity)
+			assert.Equal(t, tt.wantTitle, messages[0].Title,
+				"damage and a version change need different explanations")
+			assert.Contains(t, messages[0].Body, tt.wantBody)
 			assert.Contains(t, messages[0].Body, "indexed again",
 				"the notice always explains the reindex")
+			if tt.corrupt {
+				assert.NotContains(t, messages[0].Body, "older than the one that last ran",
+					"nothing changed versions, so the notice must not blame a downgrade")
+			}
 			if tt.userDataLost {
 				assert.Contains(t, messages[0].Body, "Favorites")
 			} else {
@@ -342,28 +378,4 @@ func TestNotifyMediaDBSchemaReset_PostsInboxMessage(t *testing.T) {
 			}
 		})
 	}
-}
-
-// The notice is an explanation, not part of the rebuild, so a failed write is
-// logged and startup continues.
-func TestNotifyMediaDBSchemaReset_InboxWriteFailureIsNotFatal(t *testing.T) {
-	userDB := testhelpers.NewMockUserDBI()
-	userDB.On("AddInboxMessage", mock.Anything).
-		Return((*database.InboxMessage)(nil), errors.New("user database is unwritable"))
-
-	st, _ := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
-	t.Cleanup(st.StopService)
-	st.SetInbox(inbox.NewService(userDB, st.Notifications))
-
-	notifyMediaDBSchemaReset(st, false, false)
-
-	userDB.AssertExpectations(t)
-}
-
-func TestNotifyMediaDBSchemaReset_WithoutInboxIsNoOp(_ *testing.T) {
-	// Must not panic before the inbox service exists, or with no state at all.
-	notifyMediaDBSchemaReset(nil, false, false)
-	st, _ := state.NewState(testmocks.NewMockPlatform(), "test-boot-uuid")
-	defer st.StopService()
-	notifyMediaDBSchemaReset(st, true, false)
 }

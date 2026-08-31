@@ -60,26 +60,44 @@ func TestStreamerAtTargetSampleRate_BypassesAtTargetRate(t *testing.T) {
 
 	t.Run("a lower rate source is resampled", func(t *testing.T) {
 		t.Parallel()
-		src := &countingStreamer{}
-		got := streamerAtTargetSampleRate(src, beep.SampleRate(44100), resampleQuality)
-		require.NotSame(t, src, got, "a mismatched rate must be resampled")
-
-		// Pulling one output buffer must draw fewer input samples than it
-		// produced, which is what resampling 44.1k up to 48k means.
-		out := make([][2]float64, 4800)
-		n, ok := got.Stream(out)
-		require.True(t, ok)
-		require.Equal(t, len(out), n)
-		assert.Less(t, src.pulled, n*2,
-			"resampling 44.1kHz to 48kHz should not pull wildly more input than output")
-		assert.Positive(t, src.pulled, "the resampler must read from the source")
+		assertResampledFrom(t, 44100)
 	})
 
 	t.Run("a higher rate source is resampled", func(t *testing.T) {
 		t.Parallel()
-		src := &countingStreamer{}
-		got := streamerAtTargetSampleRate(src, beep.SampleRate(192000), resampleQuality)
-		assert.NotSame(t, src, got,
-			"192kHz is what the bundled feedback sounds are; it must be resampled")
+		// 192kHz is what the bundled feedback sounds are.
+		assertResampledFrom(t, 192000)
 	})
+}
+
+// assertResampledFrom pins the input-to-output ratio a resampler from srcRate
+// must hold. Checking only that the source was read cannot tell a real
+// resampler from a passthrough or from one running the ratio backwards, and
+// either of those plays the sound at the wrong pitch.
+func assertResampledFrom(t *testing.T, srcRate int) {
+	t.Helper()
+
+	src := &countingStreamer{}
+	got := streamerAtTargetSampleRate(src, beep.SampleRate(srcRate), resampleQuality)
+	require.NotSame(t, src, got, "a mismatched rate must be resampled")
+
+	// Enough output that the resampler's internal chunking averages out; a
+	// single buffer still carries a partial chunk of over-read.
+	const buffers = 10
+	out := make([][2]float64, 4800)
+	produced := 0
+	for range buffers {
+		n, ok := got.Stream(out)
+		require.True(t, ok)
+		require.Equal(t, len(out), n)
+		produced += n
+	}
+
+	// One input chunk of slack either way. The distance to a passthrough
+	// (produced) or to the inverted ratio is far larger than that, so both
+	// still fail.
+	want := produced * srcRate / targetSampleRate
+	const slack = 2048
+	assert.InDelta(t, want, src.pulled, slack,
+		"resampling %dHz to %dHz must draw input in proportion to the rate", srcRate, targetSampleRate)
 }
