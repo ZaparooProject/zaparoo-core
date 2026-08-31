@@ -110,3 +110,17 @@ func TestGenerateEscapesRBFPath(t *testing.T) {
 		t.Fatalf("rbf path not escaped: %s", got)
 	}
 }
+
+// Generate is not the launch path for media that needs no MGL, and the nil
+// params such a slot returns used to be dereferenced straight into a panic.
+func TestGenerateRejectsMediaThatNeedsNoMGL(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("Arcade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgl.Generate(core, "_Arcade/core.rbf", "maze_game.mra", ""); err == nil {
+		t.Fatal("expected an error rather than a nil dereference")
+	}
+}

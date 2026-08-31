@@ -191,9 +191,10 @@ func PathToMGLDef(core *Core, path string) (*MGLParams, error) {
 	for _, slot := range core.Slots {
 		for _, ext := range slot.Exts {
 			if strings.HasSuffix(lowerPath, ext) {
-				if slot.Mgl == nil {
-					continue
-				}
+				// A matched slot with no mgl block resolves to (nil, nil) on
+				// purpose: Arcade's .mra slot carries no parameters because
+				// MiSTer opens .mra files directly rather than through an MGL.
+				// Treating that as unmatched would fail every arcade launch.
 				return cloneMGLParams(slot.Mgl), nil
 			}
 		}

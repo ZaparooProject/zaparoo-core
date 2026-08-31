@@ -117,7 +117,10 @@ func TestPathToMGLDef(t *testing.T) {
 	}
 }
 
-func TestPathToMGLDefSkipsSlotsWithoutParams(t *testing.T) {
+// A slot with no mgl block is how the catalog says "this extension launches
+// directly". Arcade's .mra slot is the real one; reporting it as unmatched
+// would fail every arcade launch, so the nil result must survive.
+func TestPathToMGLDefReturnsNilForSlotsWithoutParams(t *testing.T) {
 	t.Parallel()
 
 	core := &catalog.Core{
@@ -128,8 +131,12 @@ func TestPathToMGLDefSkipsSlotsWithoutParams(t *testing.T) {
 		},
 	}
 
-	if _, err := catalog.PathToMGLDef(core, "game.bin"); err == nil {
-		t.Fatal("expected unmatched definition error for slot without MGL params")
+	direct, err := catalog.PathToMGLDef(core, "game.bin")
+	if err != nil {
+		t.Fatalf("a matched slot without params is not an error: %v", err)
+	}
+	if direct != nil {
+		t.Fatalf("expected nil params for a slot that declares none, got %#v", direct)
 	}
 
 	params, err := catalog.PathToMGLDef(core, "game.rom")
@@ -138,6 +145,23 @@ func TestPathToMGLDefSkipsSlotsWithoutParams(t *testing.T) {
 	}
 	if params == nil || params.Method != "f" {
 		t.Fatalf("unexpected params: %#v", params)
+	}
+}
+
+// The catalog ships this shape, so pin it against the real Arcade entry too.
+func TestPathToMGLDefArcadeMRANeedsNoMGL(t *testing.T) {
+	t.Parallel()
+
+	core, err := catalog.Get("Arcade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := catalog.PathToMGLDef(core, "maze_game.mra")
+	if err != nil {
+		t.Fatalf("arcade .mra must resolve: %v", err)
+	}
+	if params != nil {
+		t.Fatalf("arcade .mra launches directly, so it must carry no MGL params: %#v", params)
 	}
 }
 
