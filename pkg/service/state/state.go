@@ -832,6 +832,13 @@ func (s *State) ActiveMediaReadyGeneration() (uint64, bool) {
 // would kill what the hook started rather than the media the caller set out
 // to exit. With nothing active when gen was taken, before_exit is a no-op and
 // there is nothing it could have replaced.
+//
+// The generation tracks media identity, not launches, so a before_exit script
+// that relaunches media comparing equal to the outgoing media (ActiveMedia.Equal:
+// same slot, system and slugified name) does not read as a replacement, and the
+// caller's stop goes ahead. That is correct: media with the same content is the
+// same media, so the caller is still stopping exactly what it asked to stop.
+// Only a launch of something genuinely different needs protecting from the stop.
 func (s *State) ActiveMediaReplacedSince(gen uint64, hadMedia bool) bool {
 	if !hadMedia {
 		return false
