@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/mister/v2/catalog"
+	"github.com/ZaparooProject/zaparoo-core/mister/catalog"
 )
 
 func escapeAttribute(value string) string {

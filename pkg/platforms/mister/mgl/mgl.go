@@ -18,12 +18,12 @@
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // Package mgl preserves the original Core import path for the standalone
-// github.com/ZaparooProject/zaparoo-core/mister/v2/mgl module.
+// github.com/ZaparooProject/zaparoo-core/mister/mgl module.
 package mgl
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/mister/v2/catalog"
-	standalone "github.com/ZaparooProject/zaparoo-core/mister/v2/mgl"
+	"github.com/ZaparooProject/zaparoo-core/mister/catalog"
+	standalone "github.com/ZaparooProject/zaparoo-core/mister/mgl"
 )
 
 func Generate(core *catalog.Core, rbfPath, mediaPath, override string) (string, error) {

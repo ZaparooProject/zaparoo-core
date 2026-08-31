@@ -18,10 +18,10 @@
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // Package catalog preserves the original Core import path for the standalone
-// github.com/ZaparooProject/zaparoo-core/mister/v2/catalog module.
+// github.com/ZaparooProject/zaparoo-core/mister/catalog module.
 package catalog
 
-import standalone "github.com/ZaparooProject/zaparoo-core/mister/v2/catalog"
+import standalone "github.com/ZaparooProject/zaparoo-core/mister/catalog"
 
 type (
 	MGLParams = standalone.MGLParams

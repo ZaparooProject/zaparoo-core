@@ -23,7 +23,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/mister/v2/catalog"
+	"github.com/ZaparooProject/zaparoo-core/mister/catalog"
 )
 
 func TestCatalogDefinitions(t *testing.T) {

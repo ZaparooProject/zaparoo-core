@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/mister/v2/catalog"
-	"github.com/ZaparooProject/zaparoo-core/mister/v2/mgl"
+	"github.com/ZaparooProject/zaparoo-core/mister/catalog"
+	"github.com/ZaparooProject/zaparoo-core/mister/mgl"
 )
 
 func TestGenerate(t *testing.T) {

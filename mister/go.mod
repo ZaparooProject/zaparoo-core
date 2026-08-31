@@ -1,3 +1,3 @@
-module github.com/ZaparooProject/zaparoo-core/mister/v2
+module github.com/ZaparooProject/zaparoo-core/mister
 
 go 1.18
