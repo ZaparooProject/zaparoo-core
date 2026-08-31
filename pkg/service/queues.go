@@ -99,6 +99,9 @@ func isExpectedLaunchError(err error) bool {
 		errors.Is(err, zapscript.ErrInvalidScript) ||
 		errors.Is(err, zapscript.ErrUnknownCommand) ||
 		errors.Is(err, zapscript.ErrCommandBlocked) ||
+		errors.Is(err, zapscript.ErrExecuteNotAllowed) ||
+		errors.Is(err, zapscript.ErrHTTPNotAllowed) ||
+		errors.Is(err, zapscript.ErrRemoteSource) ||
 		errors.Is(err, state.ErrLaunchInProgress) ||
 		errors.Is(err, state.ErrLaunchBlockedByHook) ||
 		errors.Is(err, systemdefs.ErrUnknownSystem) ||
@@ -356,6 +359,9 @@ func applyProfileSwitch(svc *ServiceContext, req *platforms.ProfileSwitchRequest
 func tokenForLog(t *tokens.Token) tokens.Token {
 	safe := *t
 	safe.Text, safe.Data = zapscript.RedactToken(t.Text, t.Data)
+	// The completion is a channel handle, not token content: printing it
+	// only puts a heap address in the log.
+	safe.Completion = nil
 	return safe
 }
 
@@ -912,7 +918,6 @@ func launchQueuedToken(
 	}
 
 	err := runTokenZapScriptRecovering(svc, t, plsc)
-	t.Completion.Complete(err)
 
 	// ErrRunZapScriptDisabled already logged its own Warn inside
 	// runTokenZapScriptWithContext; treat it as the prior
@@ -920,19 +925,28 @@ func launchQueuedToken(
 	// setting doesn't play a fail sound or record a failed
 	// history entry.
 	disabled := errors.Is(err, state.ErrRunZapScriptDisabled)
-	if err != nil && !disabled {
+	failed := err != nil && !disabled
+	if failed {
 		if isExpectedLaunchError(err) {
 			log.Warn().Err(err).Msgf("error launching token")
 		} else {
 			log.Error().Err(err).Msgf("error launching token")
 		}
-		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
-		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 	}
 
 	he.Success = err == nil || disabled
 	if histErr := svc.DB.UserDB.AddHistory(he); histErr != nil {
 		log.Error().Err(histErr).Msgf("error adding history")
+	}
+
+	// Complete once history is durable: a caller that waited for this
+	// result can immediately read the run back from tokens.history. The
+	// fail sound follows, so the caller never waits on audio.
+	t.Completion.Complete(err)
+
+	if failed {
+		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 	}
 }
 

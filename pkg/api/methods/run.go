@@ -150,22 +150,31 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	// already started is not rolled back.
 	select {
 	case err := <-t.Completion.Done():
-		return runResult(err)
+		return runResult(&env, err)
 	case <-env.Context.Done():
 		// A result that landed at the same instant wins, so the caller never
 		// sees "cancelled" for a script that actually finished.
 		select {
 		case err := <-t.Completion.Done():
-			return runResult(err)
+			return runResult(&env, err)
 		default:
 		}
 		return nil, runContextError(&env, env.Context.Err())
 	}
 }
 
-func runResult(err error) (any, error) {
+// runResult maps a terminal result onto the API response. Shutdown is checked
+// before the error itself: cancelling the launcher context is how shutdown
+// stops a running script, so the failure that surfaces is whatever the
+// command made of the cancellation, and reporting that verbatim would tell
+// the caller its script was broken rather than that the service went away.
+func runResult(env *requests.RequestEnv, err error) (any, error) {
 	if err == nil {
 		return NoContent{}, nil
+	}
+	if env.State.GetContext().Err() != nil {
+		return nil, models.CategorizedErr(models.ErrorCategoryUnavailable,
+			"service is shutting down", err)
 	}
 	return nil, runError(err)
 }
@@ -211,6 +220,9 @@ func runError(err error) error {
 		return models.CategorizedErr(models.ErrorCategoryInvalidScript,
 			"ZapScript is invalid", err)
 	case errors.Is(err, zapscript.ErrCommandBlocked),
+		errors.Is(err, zapscript.ErrExecuteNotAllowed),
+		errors.Is(err, zapscript.ErrHTTPNotAllowed),
+		errors.Is(err, zapscript.ErrRemoteSource),
 		errors.Is(err, state.ErrLaunchBlockedByHook),
 		errors.Is(err, state.ErrLaunchRequiresProfile):
 		return models.CategorizedErr(models.ErrorCategoryBlocked,

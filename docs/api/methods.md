@@ -63,7 +63,7 @@ If execution fails, the response carries an [error](index.md#response-errors) wh
 | `unavailable`      | The service is shutting down.                                                                 |
 | `execution_failed` | Any other execution failure.                                                                  |
 
-Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back.
+Error messages are fixed per category and never include filesystem paths or token contents; the details are in the Core log. `timeout` and `cancelled` only mean Core stopped waiting: nothing that already started is rolled back. During shutdown the connection often closes before the `unavailable` response can be written, so treat a dropped connection with a request in flight the same way.
 
 Physical reader scans, playlists and the [launch endpoint](index.md#launch-endpoint) are not affected. They remain asynchronous and do not report execution failures.
 

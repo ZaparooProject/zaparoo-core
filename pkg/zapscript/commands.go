@@ -68,7 +68,10 @@ var (
 	ErrUnknownCommand = errors.New("unknown command")
 	// ErrCommandBlocked is returned for a command denied by configuration.
 	ErrCommandBlocked = errors.New("command blocked")
-	errAmbiguousPath  = errors.New("ambiguous case-insensitive path")
+	// ErrExecuteNotAllowed is returned when a command line is denied by the
+	// allow_execute config.
+	ErrExecuteNotAllowed = errors.New("execute not allowed")
+	errAmbiguousPath     = errors.New("ambiguous case-insensitive path")
 )
 
 // GetLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -584,7 +587,11 @@ func RunCommand(
 		case errors.Is(err, ErrFileNotFound),
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),
-			errors.Is(err, ErrNoHistory):
+			errors.Is(err, ErrNoHistory),
+			// Refusals by configuration are the setting working, not a bug.
+			errors.Is(err, ErrExecuteNotAllowed),
+			errors.Is(err, ErrHTTPNotAllowed),
+			errors.Is(err, ErrRemoteSource):
 			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:
 			log.Error().Err(err).Msgf("error running command: %s", logCmd)

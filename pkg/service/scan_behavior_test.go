@@ -52,19 +52,20 @@ const (
 )
 
 type scanBehaviorEnv struct {
-	st         *state.State
-	cfg        *config.Instance
-	userDB     *testhelpers.MockUserDBI
-	svc        *ServiceContext
-	launchHook *launchHook
-	scanQueue  chan readers.Scan
-	itq        chan tokens.Token
-	clock      *clockwork.FakeClock
-	launchCh   chan string
-	stopCh     chan struct{}
-	keyboardCh chan string
-	historyCh  chan database.HistoryEntry
-	romsDir    string
+	st          *state.State
+	cfg         *config.Instance
+	userDB      *testhelpers.MockUserDBI
+	svc         *ServiceContext
+	launchHook  *launchHook
+	historyHook *historyHook
+	scanQueue   chan readers.Scan
+	itq         chan tokens.Token
+	clock       *clockwork.FakeClock
+	launchCh    chan string
+	stopCh      chan struct{}
+	keyboardCh  chan string
+	historyCh   chan database.HistoryEntry
+	romsDir     string
 }
 
 // launchHook lets a test intercept the mock platform's LaunchMedia for one
@@ -88,6 +89,29 @@ func (h *launchHook) call(path string) {
 	h.mu.Unlock()
 	if fn != nil {
 		fn(path)
+	}
+}
+
+// historyHook intercepts a history write while it is in progress, so a test
+// can prove what has and has not happened by the time it lands. Registered
+// once with the AddHistory expectation for the same reason as launchHook.
+type historyHook struct {
+	fn func(he *database.HistoryEntry)
+	mu syncutil.Mutex
+}
+
+func (h *historyHook) set(fn func(he *database.HistoryEntry)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+func (h *historyHook) call(he *database.HistoryEntry) {
+	h.mu.Lock()
+	fn := h.fn
+	h.mu.Unlock()
+	if fn != nil {
+		fn(he)
 	}
 }
 
@@ -139,8 +163,10 @@ mode = "unrestricted"`))
 
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	histHook := &historyHook{}
 	mockUserDB.On("AddHistory", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		if he, ok := args.Get(0).(*database.HistoryEntry); ok && he != nil {
+			histHook.call(he)
 			select {
 			case historyCh <- *he:
 			default:
@@ -252,19 +278,20 @@ mode = "unrestricted"`))
 	})
 
 	return &scanBehaviorEnv{
-		st:         st,
-		cfg:        cfg,
-		userDB:     mockUserDB,
-		svc:        svc,
-		launchHook: hook,
-		scanQueue:  scanQueue,
-		itq:        itq,
-		clock:      fakeClock,
-		romsDir:    romsDir,
-		launchCh:   launchCh,
-		stopCh:     stopCh,
-		keyboardCh: keyboardCh,
-		historyCh:  historyCh,
+		st:          st,
+		cfg:         cfg,
+		userDB:      mockUserDB,
+		svc:         svc,
+		launchHook:  hook,
+		historyHook: histHook,
+		scanQueue:   scanQueue,
+		itq:         itq,
+		clock:       fakeClock,
+		romsDir:     romsDir,
+		launchCh:    launchCh,
+		stopCh:      stopCh,
+		keyboardCh:  keyboardCh,
+		historyCh:   historyCh,
 	}
 }
 

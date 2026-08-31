@@ -20,6 +20,7 @@
 package service
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -272,4 +273,56 @@ func TestTokenCompletion_ReaderTokensCarryNoCompletion(t *testing.T) {
 	env.sendGameScan("card1", env.gamePath("game1.gba"))
 	env.waitForLaunch(t)
 	assert.Nil(t, env.st.GetActiveCard().Completion)
+}
+
+// A caller released by the completion must be able to read the run back out
+// of tokens.history straight away, so the history write has to land first.
+func TestTokenCompletion_HistoryIsDurableBeforeCompletion(t *testing.T) {
+	t.Parallel()
+	env := setupScanBehavior(t, "tap", 0)
+
+	const script = "**nonexistent.cmd"
+	var enteredOnce, releaseOnce sync.Once
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	// Always unblock the launch goroutine, including on a failed assertion,
+	// so a regression fails the test instead of hanging it.
+	releaseHook := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseHook()
+	env.historyHook.set(func(he *database.HistoryEntry) {
+		if he.TokenValue != script {
+			return
+		}
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+	})
+
+	c := env.sendAPIToken(t, script)
+
+	select {
+	case <-entered:
+	case <-time.After(behaviorTimeout):
+		t.Fatal("history was never written for the failed run")
+	}
+	completedEarly := false
+	select {
+	case <-c.Done():
+		completedEarly = true
+	default:
+	}
+	releaseHook()
+	require.False(t, completedEarly, "run completed before its history entry was written")
+
+	require.ErrorIs(t, assertCompletedOnce(t, c), zapscript.ErrUnknownCommand)
+	assert.False(t, env.waitForHistory(t, script).Success)
+}
+
+// The completion is a channel handle, not token content: logging the token
+// must not print its address.
+func TestTokenForLog_DropsCompletion(t *testing.T) {
+	t.Parallel()
+
+	tok := tokens.Token{Text: "**echo:hi", Completion: tokens.NewCompletion()}
+	assert.Nil(t, tokenForLog(&tok).Completion)
+	assert.NotNil(t, tok.Completion, "the caller's token must be left alone")
 }

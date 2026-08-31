@@ -236,6 +236,24 @@ func TestHandleRunReportsExecutionFailureByCategory(t *testing.T) {
 			message:  "ZapScript execution was blocked",
 		},
 		{
+			name:     "execute denied by allow_execute",
+			cause:    fmt.Errorf("%w: %s", zapscript.ErrExecuteNotAllowed, leakedPath),
+			category: models.ErrorCategoryBlocked,
+			message:  "ZapScript execution was blocked",
+		},
+		{
+			name:     "http denied by allow_http",
+			cause:    fmt.Errorf("%w: %s", zapscript.ErrHTTPNotAllowed, "http://example.com/x"),
+			category: models.ErrorCategoryBlocked,
+			message:  "ZapScript execution was blocked",
+		},
+		{
+			name:     "command refused for a remote source",
+			cause:    zapscript.ErrRemoteSource,
+			category: models.ErrorCategoryBlocked,
+			message:  "ZapScript execution was blocked",
+		},
+		{
 			name:     "playtime limit",
 			cause:    fmt.Errorf("%w: daily (2h0m0s / 1h0m0s)", playtime.ErrLimitReached),
 			category: models.ErrorCategoryPlaytimeLimit,
@@ -321,6 +339,25 @@ func TestHandleRunReturnsUnavailableOnShutdown(t *testing.T) {
 	require.ErrorIs(t, o.err, context.Canceled)
 
 	assert.True(t, tok.Completion.Complete(errors.New("service shutting down")))
+}
+
+// Shutdown stops a running script by cancelling the launcher context, so the
+// completion carries whatever the command made of that cancellation. Reporting
+// it verbatim would blame the caller's script for the service going away.
+func TestHandleRunReportsUnavailableWhenExecutionFailsDuringShutdown(t *testing.T) {
+	t.Parallel()
+
+	env := newRunTestEnv(t)
+	out := startRun(env.requestEnv(context.Background(), "**launch.system:snes"))
+	tok := env.receiveToken(t)
+
+	env.st.StopService()
+	require.True(t, tok.Completion.Complete(
+		fmt.Errorf("failed to run zapscript command: %w", context.Canceled)))
+
+	o := waitRun(t, out)
+	requireCategory(t, o.err, models.ErrorCategoryUnavailable)
+	assert.Equal(t, "service is shutting down", o.err.Error())
 }
 
 func TestHandleRunReturnsUnavailableWhenShutdownPreemptsQueueing(t *testing.T) {
