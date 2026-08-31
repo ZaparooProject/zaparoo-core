@@ -776,6 +776,12 @@ func (tm *LimitsManager) checkLimits() {
 			tm.beforeExit()
 		}
 
+		// The stop is unconditional here, unlike the other before_exit callers,
+		// which skip it when the hook launched media of its own. A limit is not
+		// a request to exit one particular game, so honouring that here would
+		// let any before_exit script defeat it: this loop runs every 30s, so a
+		// hook that launches media would be re-run and re-skipped forever while
+		// play continued past the limit.
 		if err := tm.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 			log.Error().Err(err).Msg("playtime: failed to stop active launcher")
 		}
